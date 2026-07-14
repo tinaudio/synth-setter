@@ -8,7 +8,6 @@ validation code can share one implementation. The application reads
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 from synth_setter.pipeline.schemas.object_storage import (
@@ -259,6 +258,36 @@ class RemoteEntry:
     size: int
 
 
+class _RcloneListEntry(BaseModel):
+    """Strict JSON boundary for one ``rclone lsjson`` file record.
+
+    .. attribute :: model_config
+
+        Strict, frozen parsing configuration for external records.
+
+    .. attribute :: path
+
+        Object key relative to the listed prefix.
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp.
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    path: str = Field(alias="Path")
+    mtime: datetime = Field(alias="ModTime")
+    size: int = Field(alias="Size")
+
+
+_RCLONE_LIST_ADAPTER = TypeAdapter(list[_RcloneListEntry])
+
+
 # Listing probes share rclone's retry/contimeout reliability flags with the
 # transfer helpers; ``--checksum`` and ``--timeout`` don't apply to listings.
 _PROBE_RELIABILITY_FLAGS = ("--retries=3", "--contimeout=30s")
@@ -318,13 +347,14 @@ def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]: 
     stdout = _run_listing_probe(args)
     if stdout is None:
         return []
+    records = _RCLONE_LIST_ADAPTER.validate_json(stdout)
     entries = [
         RemoteEntry(
-            path=item["Path"],
-            mtime=datetime.fromisoformat(item["ModTime"]),
-            size=int(item["Size"]),
+            path=item.path,
+            mtime=item.mtime,
+            size=item.size,
         )
-        for item in json.loads(stdout)
+        for item in records
     ]
     return sorted(entries, key=lambda entry: entry.path)
 

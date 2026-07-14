@@ -352,6 +352,32 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
     assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
 
 
+def test_stage_attempt_rejects_local_shard_with_schema_drift(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A schema-drifted shard cannot publish fragment data or a valid marker.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
+    spec = tiny_lance_spec()
+    shard = spec.shards[0]
+    render = spec.render.model_copy(update={"base_seed": shard.seed})
+    expected = lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
+    drifted = expected.remove_metadata()
+    shard_path = tmp_path / shard.filename
+    write_lance_dataset(
+        shard_path,
+        drifted,
+        [record_batch_from_arrays(shard_arrays(spec, 0), drifted)],
+    )
+
+    with pytest.raises(ValueError, match="schema does not match"):
+        stage_lance_shard_attempt(spec, shard, shard_path, worker_id="pod-a", attempt_uuid="a1b2")
+
+    assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
+
+
 def test_stage_attempt_rejects_shard_exceeding_single_data_file_bound(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

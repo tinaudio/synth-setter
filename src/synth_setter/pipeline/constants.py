@@ -21,6 +21,7 @@ DATASET_CARD_FILENAME = "dataset.json"
 LANCE_FRAGMENT_SIDECAR_SUFFIX = ".fragment.json"
 LANCE_SHARD_STATS_SUFFIX = ".shard-stats.npz"
 ATTEMPT_VALID_SUFFIX = ".valid"
+ATTEMPT_INVALID_SUFFIX = ".invalid"
 ATTEMPT_RENDERING_SUFFIX = ".rendering"
 
 # Welford state arrays a `.shard-stats.npz` sidecar must carry; finalize

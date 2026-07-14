@@ -672,7 +672,7 @@ def _render_one_owned_shard(
         already_present = existing_size > 0
     if already_present:
         state = "already staged" if spec.output_format is OutputFormat.LANCE else "already in R2"
-        logger.info(f"skipping shard {shard.shard_id} — {state}: {shard.filename}")
+        logger.info("skipping shard {} — {}: {}", shard.shard_id, state, shard.filename)
         _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()
@@ -737,7 +737,7 @@ def _render_and_upload_shard(
         else:
             args = []
         args += build_generate_args(spec, shard, work_dir)
-        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
+        logger.info("rendering shard {} -> {}", shard.shard_id, shard.filename)
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):
             try:
@@ -747,8 +747,10 @@ def _render_and_upload_shard(
                 if attempt + 1 == max_attempts:
                     raise
                 logger.warning(
-                    f"shard {shard.shard_id} render failed on attempt "
-                    f"{attempt + 1}/{max_attempts}; retrying"
+                    "shard {} render failed on attempt {}/{}; retrying",
+                    shard.shard_id,
+                    attempt + 1,
+                    max_attempts,
                 )
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
@@ -760,7 +762,7 @@ def _render_and_upload_shard(
                 f"dataset: {shard_path}"
             )
         byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
-        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
         # Worker-side validation gates staging — corrupt renders never earn a
         # .valid marker (design §7.3 shard write protocol).
         shard_errors = validate_shard(shard_path, spec)
@@ -772,7 +774,9 @@ def _render_and_upload_shard(
             spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
         )
         logger.info(
-            f"shard staged: {shard.filename} -> {spec.r2.shard_staging_dir_uri(shard.shard_id)}"
+            "shard staged: {} -> {}",
+            shard.filename,
+            spec.r2.shard_staging_dir_uri(shard.shard_id),
         )
     else:
         if not shard_path.is_file():
@@ -781,9 +785,9 @@ def _render_and_upload_shard(
                 f"file: {shard_path}"
             )
         byte_size = shard_path.stat().st_size
-        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
         _rclone_copy(str(shard_path), r2_dest_prefix)
-        logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+        logger.info("shard uploaded: {} -> {}", shard.filename, r2_dest_prefix)
     return byte_size
 
 

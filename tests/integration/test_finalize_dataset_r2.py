@@ -178,7 +178,11 @@ def test_finalize_lance_commits_staged_fragment_on_real_r2(
 
     :param staged_lance_spec: Fixture-provided spec with one staged Lance attempt on R2.
     """
-    from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+    from synth_setter.data.vst.shapes import (
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        dataset_field_shapes,
+    )
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 
     spec = staged_lance_spec
@@ -188,6 +192,14 @@ def test_finalize_lance_commits_staged_fragment_on_real_r2(
     assert r2_io.object_size(spec.r2.stats_uri()) is not None, (
         f"expected stats.npz at {spec.r2.stats_uri()} after finalize"
     )
+    with r2_io.downloaded_to_tempfile(spec.r2.stats_uri()) as stats_path:
+        with np.load(stats_path) as stats:
+            assert set(stats.files) == {"mean", "std"}
+            expected_shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
+            for key in ("mean", "std"):
+                assert stats[key].shape == expected_shape
+                assert np.issubdtype(stats[key].dtype, np.floating)
+                assert np.isfinite(stats[key]).all()
     assert r2_io.object_size(spec.r2.dataset_card_uri()) is not None, (
         f"expected dataset.json at {spec.r2.dataset_card_uri()} after finalize"
     )

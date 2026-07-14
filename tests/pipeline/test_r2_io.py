@@ -984,6 +984,14 @@ class TestListEntries:
 
         assert [entry.path for entry in entries] == ["top.valid"]
 
+    def test_listing_record_schema_drift_fails_at_strict_json_boundary(self) -> None:
+        """Malformed rclone records fail with the offending field named contextually."""
+        payload = '[{"Path": "a.valid", "ModTime": "2026-01-01T00:00:00Z", "Size": "2"}]'
+
+        with patch.object(r2_io, "_run_listing_probe", return_value=payload):
+            with pytest.raises(ValueError, match="Size"):
+                r2_io.list_entries("r2://bucket/staging/")
+
     def test_listing_failure_other_than_missing_directory_propagates(self) -> None:
         """A genuine rclone failure raises rather than reading as "no attempts staged"."""
         completed = MagicMock(spec=subprocess.CompletedProcess)

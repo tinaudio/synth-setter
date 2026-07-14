@@ -53,6 +53,10 @@ blocks you, ask how to proceed.
   from R2, worker reports). Dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
+- **Lance distributed-write exception:** workers may write only uncommitted
+  fragment data into a split dataset's `data/` directory. Finalize remains the
+  sole writer of Lance manifests, transactions, statistics, audit records, and
+  completion markers; reconciliation artifacts stay under `metadata/workers/`.
 - Run `make format` before committing. Pre-commit (ruff, ruff-format,
   pydoclint, prettier, mdformat, gitlint) is authoritative; suppressing
   rules to make CI green is forbidden — see

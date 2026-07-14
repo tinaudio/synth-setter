@@ -9,17 +9,22 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
-from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
+from synth_setter.pipeline.data.lance_staging import (
+    shard_has_complete_attempt,
+    stage_lance_shard_attempt,
+)
 from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
@@ -72,6 +77,11 @@ def read_columns(uri: Path) -> dict[str, np.ndarray]:
 def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Finalize commits exact staged rows into their assigned split datasets.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -99,6 +109,11 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
 def test_finalize_split_commit_is_one_atomic_manifest_version(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Each split is published as one atomic Lance manifest version.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -112,6 +127,11 @@ def test_finalize_split_commit_is_one_atomic_manifest_version(
 def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Final statistics match a direct recomputation over training mel rows.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -164,6 +184,11 @@ def stage_duplicate_attempt(
 def test_finalize_selects_earliest_valid_marker_among_duplicate_attempts(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """The earliest valid-marker timestamp wins among duplicate attempts.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -182,6 +207,11 @@ def test_finalize_selects_earliest_valid_marker_among_duplicate_attempts(
 def test_finalize_ties_on_valid_mtime_break_by_lexicographic_marker_key(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Lexicographic marker keys deterministically break first-run timestamp ties.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -200,6 +230,11 @@ def test_finalize_ties_on_valid_mtime_break_by_lexicographic_marker_key(
 def test_finalize_rerun_short_circuits_on_complete_marker_with_identical_content(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A completed dataset rerun preserves its version and exact content.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     finalize_from_spec(spec, tmp_path / "work")
@@ -218,6 +253,11 @@ def test_finalize_rerun_short_circuits_on_complete_marker_with_identical_content
 def test_finalize_rerun_after_lost_marker_keeps_winner_despite_later_straggler(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A post-card rerun preserves its winner when a later straggler arrives.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     for shard in spec.shards:
@@ -243,6 +283,11 @@ def test_finalize_rerun_after_lost_marker_keeps_winner_despite_later_straggler(
 def test_finalize_interrupted_before_marker_rerun_rebuilds_without_doubled_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Rerunning an interrupted finalize replaces manifests without duplicate rows.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     finalize_from_spec(spec, tmp_path / "work")
@@ -300,6 +345,11 @@ def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
 def test_finalize_records_selected_attempts_and_valid_keys_in_dataset_json(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """The dataset card records each selected attempt and its valid-marker key.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -334,6 +384,11 @@ def staging_file(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, filenam
 def test_finalize_rejects_sidecar_that_fails_strict_validation(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Strict sidecar validation rejects coercible field-type drift.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -346,6 +401,11 @@ def test_finalize_rejects_sidecar_that_fails_strict_validation(
 def test_finalize_rejects_binary_fragment_sidecar_with_context(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A non-JSON fragment sidecar fails with shard and attempt context.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -358,6 +418,11 @@ def test_finalize_rejects_binary_fragment_sidecar_with_context(
 def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A JSON string that is not Lance fragment metadata is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -372,6 +437,11 @@ def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
 def test_finalize_skips_empty_split_and_still_completes(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """An empty split is omitted while the non-empty dataset still completes.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     # Revalidate a modified dump so cached computed split fields are rebuilt.
     spec = DatasetSpec.model_validate(
         {**tiny_lance_spec().model_dump(mode="json"), "train_val_test_sizes": [4, 2, 0]}
@@ -390,6 +460,11 @@ def test_finalize_skips_empty_split_and_still_completes(
 def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A statistics sidecar missing required Welford arrays is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
@@ -402,6 +477,11 @@ def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
 def test_finalize_rejects_malformed_stats_sidecar_with_context(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A malformed NPZ sidecar fails with shard and attempt context.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
@@ -414,6 +494,11 @@ def test_finalize_rejects_malformed_stats_sidecar_with_context(
 def test_finalize_rejects_stats_count_disagreeing_with_fragment_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A Welford count that disagrees with fragment rows is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
@@ -429,6 +514,11 @@ def test_finalize_rejects_stats_count_disagreeing_with_fragment_rows(
 def test_finalize_rejects_fragment_whose_rows_disagree_with_spec(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Fragment metadata whose row count differs from the spec is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -445,6 +535,11 @@ def test_finalize_rejects_fragment_whose_rows_disagree_with_spec(
 def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A winner referencing an absent fragment file is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     # Shard 2 is val's only shard, so its fragment file is val.lance's only data.
@@ -459,6 +554,11 @@ def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
 def test_finalize_rejects_winner_whose_fragment_data_file_is_truncated_to_zero(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A winner referencing an empty fragment file is rejected.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     val_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
@@ -470,6 +570,7 @@ def test_finalize_rejects_winner_whose_fragment_data_file_is_truncated_to_zero(
 
 
 def test_select_winner_prefers_earliest_valid_mtime() -> None:
+    """Winner selection prioritizes the earliest valid-marker timestamp."""
     from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
 
     early = StagedLanceAttempt(
@@ -489,6 +590,7 @@ def test_select_winner_prefers_earliest_valid_mtime() -> None:
 
 
 def test_select_winner_breaks_mtime_ties_by_lexicographic_key() -> None:
+    """Winner selection breaks equal timestamps by marker key."""
     from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt, select_winner
 
     tied = datetime(2026, 1, 1, tzinfo=UTC)
@@ -501,6 +603,11 @@ def test_select_winner_breaks_mtime_ties_by_lexicographic_key() -> None:
 def test_staged_discovery_skips_non_shard_entries_in_staging_root(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """Discovery ignores stray roots and nested quarantine artifacts.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     from synth_setter.pipeline.data.lance_finalize import staged_complete_attempts
 
     spec = tiny_lance_spec()
@@ -527,6 +634,11 @@ def test_staged_discovery_skips_non_shard_entries_in_staging_root(
 def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
+    """A missing shard is reported before manifests or completion are published.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
     spec = tiny_lance_spec()
     for shard in spec.shards:
         if shard.shard_id == 1:
@@ -542,3 +654,172 @@ def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     assert not (run_root / "dataset.complete").exists()
     assert not (run_root / "train.lance" / "_versions").exists()
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        (lambda arrays: np.array([2], dtype=np.int64), "count must be a scalar int64"),
+        (lambda arrays: arrays["mean"].astype(np.int64), "mean must have a floating dtype"),
+        (lambda arrays: arrays["mean"][0], "mean must have shape"),
+        (lambda arrays: np.full_like(arrays["mean"], np.nan), "mean must contain only finite"),
+        (lambda arrays: -np.ones_like(arrays["m2"]), "m2 must be non-negative"),
+    ],
+)
+def test_finalize_rejects_invalid_welford_arrays(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    replacement: object,
+    message: str,
+) -> None:
+    """Malformed Welford arrays fail before any finalized artifact is published.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    :param replacement: Callable producing the corrupt count, mean, or M2 value.
+    :param message: Expected validation error fragment.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
+    with np.load(stats_path) as stats:
+        arrays = dict(stats)
+    value = replacement(arrays)  # type: ignore[operator]
+    if "count" in message:
+        arrays["count"] = value
+    elif "mean" in message:
+        arrays["mean"] = value
+    else:
+        arrays["m2"] = value
+    np.savez(stats_path, **arrays)
+
+    with pytest.raises(ValueError, match=message):
+        finalize_from_spec(spec, tmp_path / "work")
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert not (run_root / "dataset.complete").exists()
+    assert not (run_root / "dataset.json").exists()
+    assert not (run_root / "stats.npz").exists()
+
+
+def test_finalize_rejects_fragment_path_outside_split_data(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Parent-traversal fragment paths fail before an object probe or commit.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    fragment_meta["files"][0]["path"] = "../outside.lance"
+    payload["fragment_json"] = json.dumps(fragment_meta)
+    sidecar_path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="unsafe fragment data path"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_fragment_file_with_physical_schema_drift(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A fragment file whose physical Arrow schema drifted is never committed.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    target_file = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "train.lance"
+        / "data"
+        / fragment_meta["files"][0]["path"]
+    )
+    bad_dataset = tmp_path / "bad-schema.lance"
+    lance.write_dataset(pa.table({"wrong": pa.array([1, 2], type=pa.int64())}), bad_dataset)
+    bad_file = next((bad_dataset / "data").iterdir())
+    shutil.copyfile(bad_file, target_file)
+
+    with pytest.raises(ValueError, match="physical schema does not match"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_skips_invalid_earliest_attempt_and_commits_next_healthy(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Reconciliation invalidates a corrupt candidate and selects the next healthy one.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="good", value_offset=7000)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-a-u0000", 1_000_000_000.0)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-b-good", 2_000_000_000.0)
+    staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json").write_bytes(b"bad")
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(
+        decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0, value_offset=7000)[MEL_SPEC_FIELD]
+    )
+    assert staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.invalid").exists()
+
+
+def test_finalize_invalidates_only_candidate_so_generation_can_retry(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """An all-invalid shard becomes incomplete and therefore renderable again.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json").write_bytes(b"bad")
+
+    with pytest.raises(ValueError, match="no healthy staged-valid attempt"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+    assert not shard_has_complete_attempt(spec, 0)
+    assert staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.invalid").exists()
+
+
+def test_finalize_rerun_preserves_recorded_winner_across_tied_straggler(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A recorded winner survives a later lexicographically earlier timestamp tie.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    for shard in spec.shards:
+        set_valid_marker_mtime(
+            fake_r2_remote, spec, shard.shard_id, f"pod-a-u{shard.shard_id:04d}", 1_000_000_000.0
+        )
+    finalize_from_spec(spec, tmp_path / "work")
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    (run_root / "dataset.complete").unlink()
+    local = write_local_shard(spec, 0, tmp_path / "tied", value_offset=7000)
+    stage_lance_shard_attempt(
+        spec, spec.shards[0], local, worker_id="pod-0", attempt_uuid="early"
+    )
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-0-early", 1_000_000_000.0)
+
+    finalize_from_spec(spec, tmp_path / "work2")
+
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0)[MEL_SPEC_FIELD])

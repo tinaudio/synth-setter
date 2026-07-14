@@ -8,6 +8,9 @@ uploading the reconciliation contract to the shard's staging directory:
 state), and ``.valid`` strictly last as the staged-attempt commit point.
 Finalize later selects one winner per shard and commits the winners' fragment
 metadata into the split manifests — no row rewrite (design doc §7.2/§7.6).
+
+Typical worker use calls ``write_rendering_marker(...)`` before rendering and
+``stage_lance_shard_attempt(...)`` after local shard validation succeeds.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import numpy as np
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     ATTEMPT_RENDERING_SUFFIX,
+    ATTEMPT_INVALID_SUFFIX,
     ATTEMPT_VALID_SUFFIX,
     LANCE_FRAGMENT_SIDECAR_SUFFIX,
     LANCE_SHARD_STATS_KEYS,
@@ -115,7 +119,12 @@ def stage_lance_shard_attempt(
     # path) never pays the `lance` import cost.
     import lance
 
-    from synth_setter.pipeline.data.lance_shard import LANCE_MAX_BYTES_PER_FILE, lance_fragment
+    from synth_setter.data.vst.shapes import dataset_field_shapes
+    from synth_setter.pipeline.data.lance_shard import (
+        LANCE_MAX_BYTES_PER_FILE,
+        lance_fragment,
+        lance_schema,
+    )
     from synth_setter.pipeline.data.stats import fold_lance_shard_into_welford
 
     dataset = lance.dataset(str(local_shard_path))
@@ -124,6 +133,14 @@ def stage_lance_shard_attempt(
         raise ValueError(
             f"local shard {local_shard_path.name} has {rows} rows; "
             f"spec expects {spec.render.samples_per_shard} per shard"
+        )
+    render = spec.render.model_copy(update={"base_seed": shard.seed})
+    expected_schema = lance_schema(
+        dataset_field_shapes(render, spec.num_params), render.shard_metadata()
+    )
+    if not dataset.schema.equals(expected_schema, check_metadata=True):
+        raise ValueError(
+            f"local shard {local_shard_path.name} schema does not match spec-derived schema"
         )
     # ``LanceFragment.create`` has no ``max_bytes_per_file`` — enforce the S3
     # multipart bound loudly here, not opaquely mid-upload (#1775).
@@ -168,7 +185,7 @@ def complete_attempt_names(entry_paths: Sequence[str]) -> list[str]:
     """Return attempt names (``{worker}-{attempt}``) with a complete staged set.
 
     A Lance attempt is complete iff its sidecar, stats, and ``.valid`` marker
-    are all present (design §7.2); partial uploads stay invisible.
+    are all present and no ``.invalid`` marker excludes it (design §7.2).
 
     :param entry_paths: Filenames from one shard's staging directory listing.
     :returns: Sorted attempt names with all of :data:`COMPLETE_ATTEMPT_SUFFIXES`.
@@ -177,13 +194,34 @@ def complete_attempt_names(entry_paths: Sequence[str]) -> list[str]:
         suffix: {path[: -len(suffix)] for path in entry_paths if path.endswith(suffix)}
         for suffix in COMPLETE_ATTEMPT_SUFFIXES
     }
-    return sorted(name for name in set.intersection(*names_by_suffix.values()) if name)
+    invalid_names = {
+        path[: -len(ATTEMPT_INVALID_SUFFIX)]
+        for path in entry_paths
+        if path.endswith(ATTEMPT_INVALID_SUFFIX)
+    }
+    return sorted(
+        name
+        for name in set.intersection(*names_by_suffix.values())
+        if name and name not in invalid_names
+    )
+
+
+def invalidate_staged_attempt(spec: DatasetSpec, shard_id: int, attempt_name: str) -> None:
+    """Exclude one structurally invalid attempt from reconciliation and resume probes.
+
+    :param spec: Validated dataset spec.
+    :param shard_id: Logical shard owning the attempt.
+    :param attempt_name: Staging basename without an artifact suffix.
+    """
+    _upload_empty_marker(
+        f"{spec.r2.shard_staging_dir_uri(shard_id)}{attempt_name}{ATTEMPT_INVALID_SUFFIX}"
+    )
 
 
 def shard_has_complete_attempt(spec: DatasetSpec, shard_id: int) -> bool:
     """Return whether any staged-valid attempt exists for ``shard_id``.
 
-    The worker skip-probe: presence of a complete attempt set means the shard
+    The worker skip-probe: a complete, non-invalidated attempt means the shard
     is already staged and need not be re-rendered (#750 resumability).
 
     :param spec: Validated dataset spec.

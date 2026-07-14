@@ -7,6 +7,9 @@ metadata; logical identity is derived, not stored (``worker_id``/
 ``attempt_uuid`` from the filename, ``shard_id`` from the staging path,
 ``split`` from the spec), so no field can drift from the path-derived truth
 (design: ``docs/design/data-pipeline.md`` §14.4).
+
+Typical boundary use is ``LanceFragmentSidecar.model_validate_json(payload)``
+before deserializing its opaque Lance fragment metadata.
 """
 
 from __future__ import annotations
