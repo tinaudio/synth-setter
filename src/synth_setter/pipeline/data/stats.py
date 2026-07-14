@@ -5,7 +5,7 @@ import re
 import tarfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeAlias
 
 import dask.array as da
 import h5py
@@ -13,13 +13,13 @@ import numpy as np
 from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.vst_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
+from synth_setter.data.vst_datamodule import VSTDataset
 
 logger = logging.getLogger(__name__)
 
-WelfordValue = np.ndarray | int
-WelfordState = tuple[int, WelfordValue, WelfordValue]
+WelfordValue: TypeAlias = np.ndarray | int
+WelfordState: TypeAlias = tuple[int, WelfordValue, WelfordValue]
 
 _SHARD_GLOB = "shard-*.tar"
 _MEL_SPEC_MEMBER_RE = re.compile(rf"^\d{{8}}\.{re.escape(MEL_SPEC_FIELD)}\.npy$")

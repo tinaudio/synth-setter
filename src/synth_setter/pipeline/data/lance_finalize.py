@@ -18,8 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile
 
@@ -44,8 +43,8 @@ from synth_setter.pipeline.data.lance_staging import (
     invalidate_staged_attempt,
     split_for_shard,
 )
-from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.data.stats import WelfordState, merge_welford
+from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
     LanceFragmentSidecar,

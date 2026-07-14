@@ -25,8 +25,8 @@ import numpy as np
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
-    ATTEMPT_RENDERING_SUFFIX,
     ATTEMPT_INVALID_SUFFIX,
+    ATTEMPT_RENDERING_SUFFIX,
     ATTEMPT_VALID_SUFFIX,
     LANCE_FRAGMENT_SIDECAR_SUFFIX,
     LANCE_SHARD_STATS_KEYS,
