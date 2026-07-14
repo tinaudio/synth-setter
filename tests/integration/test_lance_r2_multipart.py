@@ -65,7 +65,7 @@ def test_lance_write_dataset_large_multipart_object_completes_on_real_r2() -> No
     """
     if not r2_io.is_r2_reachable():
         pytest.skip(
-            "R2 not reachable (rclone missing, RCLONE_CONFIG_R2_* env vars missing, "
+            "R2 not reachable (rclone missing, SYNTH_SETTER_STORAGE_* settings missing, "
             "or rclone lsd r2: failed)"
         )
     r2_io.ensure_r2_env_loaded()

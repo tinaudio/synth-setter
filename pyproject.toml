@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.44.0"
+version = "8.48.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -18,6 +18,7 @@ requires-python = ">=3.11,<3.14"
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
 dependencies = [
   "pydantic>=2",
+  "pydantic-settings>=2",
   "python-dotenv",
   "pyyaml",
 ]
@@ -61,7 +62,7 @@ synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:fr
 synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
-synth-setter-add-mp3-audio = "synth_setter.pipeline.data.add_mp3_audio:main"
+synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
@@ -168,11 +169,13 @@ data = [
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
+  "dawdreamer; python_version < '3.13'",
   "librosa",
+  "mido",
   "pedalboard",
   "pyloudnorm",
-  "mido",
   "scipy>=1.14,<1.15",
+  "torchsynth==1.0.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",
@@ -302,7 +305,7 @@ namespaces = true
   "configs/**/*.yaml",
   "configs/**/*.yml",
   "scripts/*.sh",
-  "data/vst/*_clap_map.json",
+  "data/vst/*_param_map.json",
 ]
 
 

@@ -73,7 +73,7 @@ def staged_wds_spec() -> Iterator[DatasetSpec]:
         "r2": {"bucket": bucket, "prefix": prefix},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
             "sample_rate": 44100,
@@ -133,7 +133,7 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
         "r2": {"bucket": bucket, "prefix": prefix},
         "render": {
             "plugin_path": "/fake/Plugin.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
             "sample_rate": 44100,

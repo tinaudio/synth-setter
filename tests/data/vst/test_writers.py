@@ -26,7 +26,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """Build a syntactically-valid ``RenderConfig`` for CPU-only tests.
 
-    No I/O happens against ``plugin_path`` or ``preset_path`` in these tests
+    No I/O happens against ``plugin_path`` or ``plugin_state_path`` in these tests
     — they only need to be non-blank strings.
 
     :param \\*\\*overrides: Per-call overrides merged into the default kwargs.
@@ -34,7 +34,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """
     kwargs: dict[str, object] = {
         "plugin_path": "plugins/Surge XT.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
+        "plugin_state_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -121,7 +121,7 @@ def _cli_argv(data_file: str) -> list[str]:
         data_file,
         "--plugin_path",
         "plugins/Surge XT.vst3",
-        "--preset_path",
+        "--plugin_state_path",
         "presets/surge-base.vstpreset",
         "--param_spec_name",
         "surge_simple",
@@ -279,7 +279,7 @@ def _stub_render_dependencies(
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> _FakeVSTDataSample:
+    def _fake_generate_sample(**kwargs: object) -> _FakeVSTDataSample:
         captured.append(dict(kwargs))
         return _FakeVSTDataSample()
 
@@ -310,7 +310,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
     returned: list[MagicMock] = []
     captured: list[dict[str, object]] = []
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(returned)}")
         returned.append(sample)
@@ -381,7 +381,7 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
     )
     captured: list[dict[str, object]] = []
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(captured)}")
         # Mirror the real renderer: the sample reports the params it rendered with, so shard
@@ -512,8 +512,41 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     assert len(captured) == n
     cached = cached_plugin_holder[0]
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
     assert sum(len(batch) for batch, _ in flushed) == n
+
+
+@pytest.mark.parametrize(
+    ("cadence", "reload_each_render"),
+    [("once", False), ("render", True)],
+)
+def test_make_renderer_maps_dawdreamer_reload_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+    cadence: str,
+    reload_each_render: bool,
+) -> None:
+    """DawDreamer receives the requested plugin lifecycle policy.
+
+    :param monkeypatch: Replaces renderer construction with a capture seam.
+    :param cadence: Public reload cadence under test.
+    :param reload_each_render: Expected renderer lifecycle flag.
+    """
+    captured: dict[str, object] = {}
+
+    def capture_renderer(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(writers, "DawDreamerRenderer", capture_renderer)
+    render_cfg = _smoke_render_cfg(
+        renderer_backend="dawdreamer",
+        plugin_reload_cadence=cadence,
+        gui_toggle_cadence="never",
+    )
+
+    writers._make_renderer(render_cfg)
+
+    assert captured["reload_plugin_each_render"] is reload_each_render
 
 
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
@@ -552,7 +585,7 @@ def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_rend
     assert load_preset_calls == []
     assert len(captured) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is None
+        assert getattr(call_kwargs["renderer"], "plugin") is None
         assert call_kwargs["warmup"] is False
 
 
@@ -825,7 +858,7 @@ def test_render_in_batches_once_once_warms_once_and_caches_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == 1
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
@@ -866,7 +899,7 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 # Writer-level cross-cut: the previous tests stub ``generate_sample`` itself,
@@ -952,7 +985,7 @@ def _install_writer_level_fakes(
     fake_spec.sample.return_value = fake_spec_payload
     fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fake_render_params)
     monkeypatch.setattr(
         generate_vst_dataset,
         "make_spectrogram",

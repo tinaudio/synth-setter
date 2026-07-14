@@ -41,6 +41,7 @@ from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
@@ -170,7 +171,7 @@ def _run_oracle_eval_subprocess(
         # the round-trip matches it exactly (not the group / CLI defaults).
         "render=surge_simple",
         f"render.param_spec_name={render.param_spec_name}",
-        f"render.preset_path={render.preset_path}",
+        f"render.plugin_state_path={render.plugin_state_path}",
         f"render.plugin_path={render.plugin_path}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
@@ -362,9 +363,10 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
-    :raises RuntimeError: If the worker's plugin version disagrees with
-        ``spec.render.renderer_version``.
+    :raises RuntimeError: If DawDreamer is unavailable on this worker or the
+        plugin version disagrees with ``spec.render.renderer_version``.
     """
+    ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
     try:
         # Inside the try so a helper failure (e.g. tempfile creation in
@@ -936,6 +938,9 @@ def main(cfg: DictConfig) -> None:
     overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
+
+    if sky_cfg.compute_template is None:
+        ensure_dawdreamer_runtime(spec.render.renderer_backend)
 
     if sky_cfg.compute_template is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:

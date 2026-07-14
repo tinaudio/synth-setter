@@ -1,10 +1,9 @@
-"""R2 object-store I/O primitives shared across pipeline stages.
+"""Object-store I/O primitives shared across pipeline stages.
 
 Wraps `rclone` with a small set of typed helpers so worker, launcher, and CI
-validation code can share one implementation. Resolution of `r2:` is left to
-the caller's environment — the standard `RCLONE_CONFIG_R2_*` vars must be set
-when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validate
-+ auth-check entry point callers use to set them up.
+validation code can share one implementation. The application reads
+``SYNTH_SETTER_STORAGE_*`` settings and projects them to rclone's current
+``RCLONE_CONFIG_R2_*`` remote dialect at the subprocess boundary.
 """
 
 from __future__ import annotations
@@ -20,9 +19,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import dotenv_values
+from pydantic import ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+from synth_setter.pipeline.schemas.object_storage import (
+    STORAGE_REQUIRED_ENV_KEYS,
+    StorageConfig,
+    storage_settings_from_sources,
+)
 
 __all__ = [
     "R2_URI_SCHEME",
@@ -48,25 +52,6 @@ __all__ = [
     "upload_to_uri",
 ]
 
-# Keys rclone needs to authenticate to R2. The three below are secrets that must
-# come from a .env file or process env — no built-in default.
-_SECRET_R2_ENV_KEYS: tuple[str, ...] = (
-    "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-    "RCLONE_CONFIG_R2_ENDPOINT",
-)
-
-# Structural keys rclone's env-override convention needs to assemble a complete
-# remote definition. Without them `rclone lsd r2:` reports
-# "didn't find section in config file" even when the three secrets above are
-# populated. Defaulted here (not required from callers) so steps that wire only
-# the secrets — e.g. the skypilot-local matrix in `generate-dataset-shards.yaml`
-# — still get a working `r2:` remote. setdefault preserves caller overrides.
-_R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
-    "RCLONE_CONFIG_R2_TYPE": "s3",
-    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-}
-
 _CHECKOUT_MARKER = ".project-root"
 _WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
 
@@ -88,11 +73,19 @@ def _default_env_file() -> Path:
 
 _DEFAULT_ENV_FILE = _default_env_file()
 
-# rclone ``--timeout`` is the IO idle timeout, not a wall-clock cap. A whole eval
-# run dir — rendered audio, predictions, metrics — can stream far longer than a
-# single shard, so the directory upload bounds it generously rather than tripping
-# a healthy large transfer at the 5-minute default the single-file helpers use.
+# IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
+
+
+def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
+    resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
+    try:
+        return storage_settings_from_sources(resolved_env_file).to_config()
+    except ValidationError as exc:
+        raise RuntimeError(
+            f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
+            f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)}."
+        ) from exc
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
@@ -121,81 +114,42 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     ]
 
 
-def _resolve_env_file(env_file: Path | None) -> Path:
-    """Resolve the dotenv file used by R2 preflight.
-
-    :param env_file: Explicit dotenv path supplied by a caller, or ``None`` for
-        the default dotenv lookup.
-    :returns: The explicit path when provided, otherwise the resolved default dotenv path.
-    """
-    return env_file if env_file is not None else _DEFAULT_ENV_FILE
-
-
-def _load_r2_env_file(env_file: Path) -> None:
-    """Mirror RCLONE_CONFIG_R2_* keys from an existing dotenv file into process env.
-
-    :param env_file: Resolved dotenv path; missing files are intentionally ignored.
-    """
-    if not env_file.is_file():
-        return
-    for key, value in dotenv_values(env_file).items():
-        if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
-            os.environ[key] = value
-
-
-def _env_value_is_set(key: str) -> bool:
-    """Return whether an env var is present with a non-blank value.
-
-    :param key: Environment variable name to inspect.
-    :returns: ``True`` when the key exists and is not empty/whitespace.
-    """
-    return bool(os.environ.get(key, "").strip())
-
-
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
-    """Load ``RCLONE_CONFIG_R2_*`` from dotenv/process env; validate access.
+    """Load storage settings from dotenv/process env into rclone env; validate.
 
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. Mirror every key prefixed with ``RCLONE_CONFIG_R2_`` from ``env_file``
-       into ``os.environ`` when that file exists. If ``env_file`` is ``None``,
-       use the default dotenv lookup: ``$SYNTH_SETTER_WORKSPACE/.env``, the
-       checkout marker root's ``.env``, then cwd ``.env``. Dotenv values
-       overwrite process env, matching the launcher's precedence.
-    2. Default ``RCLONE_CONFIG_R2_TYPE=s3`` and ``RCLONE_CONFIG_R2_PROVIDER=Cloudflare``
-       into ``os.environ`` if unset. rclone's env-override convention needs both to
-       assemble a complete remote definition; without them ``rclone lsd r2:``
-       reports ``didn't find section in config file``. Caller values win.
-    3. Verify the three secret keys in ``_SECRET_R2_ENV_KEYS`` are present in
-       process env, then run ``rclone lsd r2:`` as an auth ping. Either check
-       failing raises ``RuntimeError`` with an actionable message.
+    1. If the resolved dotenv file exists on disk, mirror every non-blank
+       canonical storage key or legacy rclone credential key from it into the
+       storage settings view.
+       ``env_file=None`` means the default dotenv lookup:
+       ``$SYNTH_SETTER_WORKSPACE/.env``, the checkout marker root's ``.env``,
+       then cwd ``.env``. Blank/whitespace values are skipped so a ``.env``
+       line ``KEY=`` never clobbers a real process-env credential.
+    2. Validate the provider-neutral settings and build an env-free
+       :class:`StorageConfig`.
+    3. Write the canonical projection (:meth:`StorageConfig.storage_env`) and
+       the rclone projection (:meth:`StorageConfig.rclone_env`) back into
+       ``os.environ`` so later env-only readers (e.g. :func:`r2_storage_options`
+       with no arguments) and the auth ping both see the normalized values.
+       A non-zero ping exit also raises.
 
-    No-op on the dotenv step if the resolved file doesn't exist; the defaulting
-    + presence+auth checks still run against whatever ``os.environ`` already has.
+    No-op on the dotenv step if the resolved file doesn't exist; the
+    resolution + normalization + auth checks still run against whatever
+    ``os.environ`` already has.
 
-    :param env_file: Optional dotenv file to merge into ``os.environ`` first.
-        ``None`` means the resolved default dotenv path.
-    :raises RuntimeError: A required secret key is unset after the load, or
+    :param env_file: Optional dotenv file to merge into ``os.environ`` first
+        (typically ``sky_cfg.env_file``). ``None`` means the resolved default
+        dotenv path.
+    :raises RuntimeError: A required setting is unset/blank after the load, or
         ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
     """
-    resolved_env_file = _resolve_env_file(env_file)
-    _load_r2_env_file(resolved_env_file)
+    config = _storage_config_from_sources(env_file)
+    os.environ.update({**config.storage_env(), **config.rclone_env()})
 
-    for key, default in _R2_STRUCTURAL_DEFAULTS.items():
-        os.environ.setdefault(key, default)
-
-    missing = [k for k in _SECRET_R2_ENV_KEYS if not _env_value_is_set(k)]
-    if missing:
-        raise RuntimeError(
-            f"R2 credentials missing from process env after dotenv load: {', '.join(missing)}. "
-            f"Set RCLONE_CONFIG_R2_* in process env (e.g. `docker run -e ...=...`) "
-            f"or populate {resolved_env_file}."
-        )
-
-    # Auth ping — fail fast on bad creds instead of letting the first real
-    # operation fail several seconds in. Cheap (<1 RTT to R2) and unambiguous:
-    # `rclone lsd r2:` lists buckets visible to the configured creds.
+    # Auth ping — fail fast on bad creds instead of several seconds into the first
+    # real operation. Cheap (<1 RTT): `rclone lsd r2:` lists visible buckets.
     result = subprocess.run(  # noqa: S603 — args are literal strings
         ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
         capture_output=True,
@@ -220,26 +174,27 @@ def is_r2_reachable() -> bool:
     test then calls :func:`ensure_r2_env_loaded` and hits a hard
     ``RuntimeError`` instead of the intended auto-skip.
 
-    Loads the default dotenv file and structural R2 defaults into process env
-    before checking secrets, matching the preflight mutation semantics.
+    Settings resolve from the default dotenv file and process env, matching
+    the preflight's sources.
 
-    :returns: ``True`` when rclone is on PATH AND all three ``_SECRET_R2_ENV_KEYS``
-        are present with non-blank values after default dotenv loading AND a
+    :returns: ``True`` when rclone is on PATH, storage settings resolve, and a
         credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
         return False
-    _load_r2_env_file(_DEFAULT_ENV_FILE)
-    for key, default in _R2_STRUCTURAL_DEFAULTS.items():
-        os.environ.setdefault(key, default)
-    if not all(_env_value_is_set(key) for key in _SECRET_R2_ENV_KEYS):
+    try:
+        config = _storage_config_from_sources()
+    except RuntimeError:
         return False
     try:
+        # Project the resolved settings into the probe env so a developer's
+        # ambient rclone config can't make the gate pass with wrong settings.
         subprocess.run(  # noqa: S603 — args are literal strings
             ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
+            env={**os.environ, **config.rclone_env()},
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -249,33 +204,13 @@ def is_r2_reachable() -> bool:
 def r2_storage_options() -> dict[str, str]:
     """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
 
-    Reads the same ``RCLONE_CONFIG_R2_*`` vars rclone uses (call
-    :func:`ensure_r2_env_loaded` first); S3-compatible stores require both keys.
+    Reads canonical storage names or legacy rclone credential names and raises
+    ``RuntimeError`` if a required setting is unset or blank.
 
     :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
         for ``lance.dataset`` / ``lance.write_dataset``.
-    :raises RuntimeError: A required secret key is unset in ``os.environ``.
     """
-    # Treat empty/whitespace as missing: a blank env var would otherwise build a
-    # partial dict that fails opaquely on the first S3/Lance call.
-    values = {key: os.environ.get(key, "").strip() for key in _SECRET_R2_ENV_KEYS}
-    missing = [key for key, value in values.items() if not value]
-    if missing:
-        raise RuntimeError(
-            f"R2 credentials missing from process env: {', '.join(missing)}. "
-            "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
-        )
-    endpoint = values["RCLONE_CONFIG_R2_ENDPOINT"]
-    return {
-        "access_key_id": values["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
-        "secret_access_key": values["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
-        "endpoint": endpoint,
-        # Lance detects R2 multipart constraints through the AWS-prefixed alias.
-        "aws_endpoint": endpoint,
-        # R2 ignores region, but object-store requires it set for S3-compatible
-        # stores; "auto" is R2's documented placeholder.
-        "region": "auto",
-    }
+    return _storage_config_from_sources().lance_storage_options()
 
 
 def lance_target(r2_uri: str) -> tuple[str, dict[str, str] | None]:
@@ -413,7 +348,6 @@ def to_rclone_path(r2_uri: str) -> str:
     return f"{RCLONE_REMOTE}:" + r2_uri[len(R2_URI_SCHEME) :]
 
 
-# Backward-compatible alias for the previously-private translator.
 _to_rclone_path = to_rclone_path
 
 

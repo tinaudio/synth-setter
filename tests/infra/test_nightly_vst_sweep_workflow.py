@@ -1,0 +1,99 @@
+"""Pin the marker-driven invariants of ``nightly-vst-sweep.yml`` (#1825).
+
+A future edit that drops the ``requires_vst`` marker or swaps the discovered
+matrix for a static list reintroduces the CI fall-through and fails these tests.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tests.infra.workflow_fixtures import load_workflow
+
+_WORKFLOW = "nightly-vst-sweep.yml"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_WORKFLOW_PATH = _PROJECT_ROOT / ".github" / "workflows" / _WORKFLOW
+_WORKFLOW_TEXT = _WORKFLOW_PATH.read_text(encoding="utf-8")
+_WORKFLOW_YAML = load_workflow(_PROJECT_ROOT, _WORKFLOW)
+
+# Kept in sync with ``make test-vst-cpu`` by
+# test_marker_env_matches_the_makefile_source_of_truth below.
+_CANONICAL_MARKER = "requires_vst and not gpu and not mps"
+
+
+def _step_run(job: str, step_name: str) -> str:
+    """Return the ``run`` body of the named step in the named job.
+
+    :param job: job key under ``jobs:``.
+    :param step_name: the step's ``name:`` value.
+    :returns: the step's ``run:`` script (empty string if it has none).
+    :raises AssertionError: if no step in ``job`` has that name.
+    """
+    for step in _WORKFLOW_YAML["jobs"][job]["steps"]:
+        if step.get("name") == step_name:
+            return step.get("run", "")
+    raise AssertionError(f"{_WORKFLOW}: job {job!r} has no step named {step_name!r}")
+
+
+@pytest.mark.infra
+def test_marker_env_matches_the_makefile_source_of_truth() -> None:
+    """``VST_MARKER`` equals the ``make test-vst-cpu`` marker, so they can't drift.
+
+    Guards the #1353 bug class: the workflow re-spells the marker, so if the Makefile's canonical
+    expression changes this fails until they're re-synced.
+    """
+    assert f'VST_MARKER: "{_CANONICAL_MARKER}"' in _WORKFLOW_TEXT
+    makefile = (_PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert f'pytest -m "{_CANONICAL_MARKER}"' in makefile, (
+        "workflow VST_MARKER drifted from `make test-vst-cpu`"
+    )
+
+
+@pytest.mark.infra
+def test_discover_and_run_both_select_via_the_shared_marker() -> None:
+    """Collection and the per-shard run both filter by ``$VST_MARKER``, not a copy."""
+    collect = _step_run("discover", "Smoke-test plugins and collect requires_vst tests")
+    run = _step_run("vst_sweep", "Run VST sweep shard in Docker")
+    assert "--collect-only" in collect and '-m "$VST_MARKER"' in collect
+    assert '-m "$VST_MARKER"' in run
+
+
+@pytest.mark.infra
+def test_matrix_is_discovered_at_runtime_not_a_static_allowlist() -> None:
+    """The run matrix is the discover job's output, never a literal file list."""
+    sweep = _WORKFLOW_YAML["jobs"]["vst_sweep"]
+    assert sweep["needs"] == "discover"
+    assert sweep["strategy"]["matrix"] == "${{ fromJSON(needs.discover.outputs.matrix) }}", (
+        "a static allowlist is the #1825 fall-through this net prevents"
+    )
+    assert sweep["strategy"]["fail-fast"] is False
+
+
+@pytest.mark.infra
+def test_matrix_is_built_from_collected_ids_by_the_shard_script() -> None:
+    """The matrix step delegates to the tested shard builder, not inline logic."""
+    build = _step_run("discover", "Build shard matrix")
+    assert "scripts/ci/shard_vst_tests.py" in build
+    assert '--splits "$SHARD_TOTAL"' in build
+    assert '"$COLLECTED"' in build
+
+
+@pytest.mark.infra
+def test_runs_in_dev_snapshot_image_under_headless_wrapper() -> None:
+    """The suite runs inside the dev-snapshot image behind the Xvfb wrapper."""
+    assert "tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}" in _WORKFLOW_TEXT
+    assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in _WORKFLOW_TEXT
+
+
+@pytest.mark.infra
+def test_triggers_on_schedule_and_dispatch_only() -> None:
+    """A nightly net triggers on cron + manual dispatch, never on push/PR.
+
+    Asserted on raw text because PyYAML parses the bare ``on:`` key as ``True``.
+    """
+    assert "\n  schedule:\n" in _WORKFLOW_TEXT and "cron:" in _WORKFLOW_TEXT
+    assert "\n  workflow_dispatch:\n" in _WORKFLOW_TEXT
+    for pr_trigger in ("\n  push:\n", "\n  pull_request:\n"):
+        assert pr_trigger not in _WORKFLOW_TEXT

@@ -48,15 +48,15 @@ def _dict_keys(source: str, name: str) -> list[str]:
 
 
 def test_registry_with_spec_adds_key_to_both_dicts() -> None:
-    """The transform registers the spec in ``param_specs`` and ``preset_paths``."""
+    """The transform registers the spec in ``param_specs`` and ``plugin_state_paths``."""
     result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
     assert "fake_synth" in _dict_keys(result, "param_specs")
-    assert "fake_synth" in _dict_keys(result, "preset_paths")
+    assert "fake_synth" in _dict_keys(result, "plugin_state_paths")
 
 
 def test_registry_with_spec_maps_preset_to_conventional_path() -> None:
-    """The ``preset_paths`` entry points at ``presets/<name>-base.vstpreset``."""
+    """The ``plugin_state_paths`` entry points at ``presets/<name>-base.vstpreset``."""
     result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
     assert '"fake_synth": "presets/fake_synth-base.vstpreset",' in result
@@ -138,7 +138,7 @@ def test_render_config_yaml_pins_synth_identity_over_surge_xt_defaults() -> None
     cfg = yaml.safe_load(text)
     assert cfg["defaults"] == ["surge_xt"]
     assert cfg["plugin_path"] == "plugins/fake.vst3"
-    assert cfg["preset_path"] == "presets/fake_synth-base.vstpreset"
+    assert cfg["plugin_state_path"] == "presets/fake_synth-base.vstpreset"
     assert cfg["param_spec_name"] == "fake_synth"
     assert cfg["renderer_version"] == "9.9.9"
 

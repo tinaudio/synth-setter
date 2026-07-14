@@ -31,7 +31,7 @@ param_specs: dict[str, ParamSpec] = {
     "obxf": OBXF_PARAM_SPEC,
 }
 
-preset_paths: dict[str, str] = {
+plugin_state_paths: dict[str, str] = {
     "surge_xt": "presets/surge-base.vstpreset",
     "surge_simple": "presets/surge-simple.vstpreset",
     "surge_4": "presets/surge-mini.vstpreset",

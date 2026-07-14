@@ -50,7 +50,7 @@ _RENDERER_VERSION = "fake-0.0.0"
 def _fake_render_cfg(**overrides: object) -> RenderConfig:
     """Build a ``RenderConfig`` pointing at the fake plugin paths.
 
-    Wraps the canonical ``_render_cfg`` and rebinds ``plugin_path`` / ``preset_path`` /
+    Wraps the canonical ``_render_cfg`` and rebinds ``plugin_path`` / ``plugin_state_path`` /
     ``renderer_version`` to the never-touched fake-plugin strings so the writer runs
     entirely under ``install_fake_plugin``.
 
@@ -63,7 +63,7 @@ def _fake_render_cfg(**overrides: object) -> RenderConfig:
     cfg = _render_cfg(num_samples=num_samples, **overrides)  # type: ignore[arg-type]
     update: dict[str, object] = {
         "plugin_path": _PLUGIN_PATH,
-        "preset_path": _PRESET_PATH,
+        "plugin_state_path": _PRESET_PATH,
         "renderer_version": _RENDERER_VERSION,
     }
     if cadence is not None:
@@ -135,7 +135,7 @@ def test_make_hdf5_dataset_writes_valid_shard_under_fake_plugin(
     ).model_copy(
         update={
             "plugin_path": _PLUGIN_PATH,
-            "preset_path": _PRESET_PATH,
+            "plugin_state_path": _PRESET_PATH,
             "renderer_version": _RENDERER_VERSION,
         }
     )

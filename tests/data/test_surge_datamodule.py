@@ -59,16 +59,16 @@ _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
+_FAKE_PARAM_WIDTH = 3
 
 
 @pytest.fixture()
 def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
 
-    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
-    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
-    ``ensure_r2_env_loaded``'s presence check (their values are unused by the
-    local backend). Skips when ``rclone`` is absent.
+    ``SYNTH_SETTER_STORAGE_RCLONE_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``. Canonical storage settings satisfy the credential
+    check; their rclone projection is unused by the local backend.
 
     :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
     :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
@@ -78,10 +78,10 @@ def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         pytest.skip("rclone binary not available on PATH")
     remote_root = tmp_path / "r2"
     remote_root.mkdir()
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     monkeypatch.chdir(remote_root)
     return remote_root
 
@@ -98,6 +98,7 @@ def _set_up_module(**kwargs: object) -> Iterator[VSTDataModule]:
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: VSTDataModule
     """
+    kwargs.setdefault("param_spec_name", "surge_xt")
     module = VSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -228,13 +229,13 @@ class TestVSTDatasetFakeMode:
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         missing = tmp_path / "does-not-exist.h5"
-        dataset = VSTDataset(missing, batch_size=4, fake=True)
+        dataset = VSTDataset(missing, batch_size=4, fake=True, num_params=_FAKE_PARAM_WIDTH)
         assert dataset.dataset_file is None
 
     def test_fake_mode_len_is_fixed_constant(self) -> None:
         """``__len__`` returns the documented 10000 in fake mode regardless of batch_size."""
-        small = VSTDataset("ignored", batch_size=1, fake=True)
-        large = VSTDataset("ignored", batch_size=8192, fake=True)
+        small = VSTDataset("ignored", batch_size=1, fake=True, num_params=_FAKE_PARAM_WIDTH)
+        large = VSTDataset("ignored", batch_size=8192, fake=True, num_params=_FAKE_PARAM_WIDTH)
         assert len(small) == 10000
         assert len(large) == 10000
 
@@ -245,29 +246,34 @@ class TestVSTDatasetFakeMode:
         ``read_audio`` and ``read_m2l`` both default to False, so their slots
         drop to None — the same flag→slot mapping as real mode.
         """
-        dataset = VSTDataset("ignored", batch_size=3, fake=True)
+        dataset = VSTDataset("ignored", batch_size=3, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
-        num_params = len(param_specs["surge_xt"])
         assert item["audio"] is None
         assert item["m2l"] is None
         assert _unwrap(item["mel_spec"]).shape == (3, 2, 128, 401)
-        assert _unwrap(item["params"]).shape == (3, num_params)
-        assert _unwrap(item["noise"]).shape == (3, num_params)
+        assert _unwrap(item["params"]).shape == (3, _FAKE_PARAM_WIDTH)
+        assert _unwrap(item["noise"]).shape == (3, _FAKE_PARAM_WIDTH)
 
     def test_fake_mode_read_audio_true_returns_audio_tensor(self) -> None:
         """``read_audio=True`` populates the ``audio`` slot, mirroring real mode."""
-        dataset = VSTDataset("ignored", batch_size=2, fake=True, read_audio=True)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_audio=True, num_params=_FAKE_PARAM_WIDTH
+        )
         item = dataset[0]
         assert _unwrap(item["audio"]).shape == (2, 2, 44100 * 4)
 
     def test_fake_mode_read_m2l_returns_m2l_tensor(self) -> None:
         """``read_m2l=True`` populates the ``m2l`` slot with the documented shape."""
-        dataset = VSTDataset("ignored", batch_size=2, fake=True, read_m2l=True)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_m2l=True, num_params=_FAKE_PARAM_WIDTH
+        )
         assert _unwrap(dataset[0]["m2l"]).shape == (2, 128, 42)
 
     def test_fake_mode_read_mel_false_returns_none_mel(self) -> None:
         """``read_mel=False`` drops the ``mel_spec`` slot to ``None``."""
-        dataset = VSTDataset("ignored", batch_size=2, fake=True, read_mel=False)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_mel=False, num_params=_FAKE_PARAM_WIDTH
+        )
         item = dataset[0]
         assert item["mel_spec"] is None
 
@@ -282,6 +288,7 @@ class TestVSTDatasetFakeMode:
             rescale_params=True,
             read_mel=False,
             read_audio=False,
+            num_params=_FAKE_PARAM_WIDTH,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
@@ -300,6 +307,7 @@ class TestVSTDatasetFakeMode:
             rescale_params=False,
             read_mel=False,
             read_audio=False,
+            num_params=_FAKE_PARAM_WIDTH,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= 0.0
@@ -307,20 +315,20 @@ class TestVSTDatasetFakeMode:
 
     def test_fake_mode_noise_matches_param_shape(self) -> None:
         """``noise`` is allocated with ``torch.randn_like(params)``, so shapes match."""
-        dataset = VSTDataset("ignored", batch_size=5, fake=True)
+        dataset = VSTDataset("ignored", batch_size=5, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
         assert _unwrap(item["noise"]).shape == _unwrap(item["params"]).shape
 
     def test_fake_mode_returns_full_key_set(self) -> None:
         """The returned dict always exposes all five keys (some may be ``None``)."""
-        dataset = VSTDataset("ignored", batch_size=2, fake=True)
+        dataset = VSTDataset("ignored", batch_size=2, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
 
-    def test_fake_mode_default_param_width_matches_surge_xt_spec(self) -> None:
-        """With ``num_params`` unset, the fake param width falls back to the surge_xt spec."""
-        dataset = VSTDataset("ignored", batch_size=4, fake=True)
-        assert _unwrap(dataset[0]["params"]).shape == (4, len(param_specs["surge_xt"]))
+    def test_fake_mode_without_num_params_raises_value_error(self) -> None:
+        """Fake datasets require their caller to select a parameter width explicitly."""
+        with pytest.raises(ValueError, match="num_params"):
+            VSTDataset("ignored", batch_size=4, fake=True)
 
     def test_fake_mode_num_params_overrides_param_width(self) -> None:
         """An explicit ``num_params`` sets the fake param width; noise tracks it."""
@@ -734,7 +742,7 @@ class TestNoiseGeneratorSeeding:
             expected = torch.randn(4)
         with torch.random.fork_rng():
             torch.manual_seed(3)
-            VSTDataset("unused.h5", batch_size=2, fake=True)
+            VSTDataset("unused.h5", batch_size=2, fake=True, num_params=_FAKE_PARAM_WIDTH)
             actual = torch.randn(4)
         torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
 
@@ -991,12 +999,20 @@ class TestShiftedBatchSampler:
 class TestVSTDataModule:
     """Lightning datamodule: setup / dataloaders / teardown wiring."""
 
+    def test_init_without_param_spec_name_raises_type_error(self, tmp_path: Path) -> None:
+        """Direct construction requires callers to choose the dataset's parameter spec.
+
+        :param tmp_path: Provides an otherwise-valid dataset root.
+        """
+        with pytest.raises(TypeError, match="param_spec_name"):
+            VSTDataModule(dataset_root=tmp_path)  # type: ignore[call-arg]
+
     def test_init_stores_dataset_root_as_path(self, tmp_path: Path) -> None:
         """``dataset_root`` is normalized to ``pathlib.Path`` even when passed as a str.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        module = VSTDataModule(dataset_root=str(tmp_path))
+        module = VSTDataModule(dataset_root=str(tmp_path), param_spec_name="surge_xt")
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
@@ -1018,6 +1034,7 @@ class TestVSTDataModule:
         module = VSTDataModule(
             dataset_root=str(dataset_root),
             download_dataset_root_uri="r2://intermediate-data/dataset",
+            param_spec_name="surge_xt",
         )
         module.prepare_data()
 
@@ -1036,7 +1053,7 @@ class TestVSTDataModule:
         dataset_root = tmp_path / "downloaded"
         dataset_root.mkdir()
 
-        module = VSTDataModule(dataset_root=str(dataset_root))
+        module = VSTDataModule(dataset_root=str(dataset_root), param_spec_name="surge_xt")
         module.prepare_data()
 
         assert list(dataset_root.iterdir()) == []
@@ -1250,7 +1267,9 @@ class TestVSTDataModule:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        module = VSTDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module = VSTDataModule(
+            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+        )
         module.setup()
         module.teardown()
         # h5py.File's truthiness reflects open-state; after close, the handle is falsy.

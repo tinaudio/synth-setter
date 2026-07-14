@@ -25,7 +25,7 @@ FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
     return {
         "plugin_path": plugin_path,
-        "preset_path": "presets/surge-base.vstpreset",
+        "plugin_state_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -161,6 +161,25 @@ class TestRenderConfig:
         )
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "never"
+
+    @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
+    def test_dawdreamer_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:
+        """DawDreamer's blocking editor API cannot implement toggle cadences.
+
+        :param cadence: Unsupported editor cadence under test.
+        """
+        with pytest.raises(
+            ValidationError,
+            match='DawDreamer requires gui_toggle_cadence="never"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "dawdreamer",
+                    "gui_toggle_cadence": cadence,
+                    "plugin_reload_cadence": "once",
+                }
+            )
 
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
@@ -940,7 +959,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
             "    base_seed=0, r2={'bucket': 'b'},\n"
             "    render={\n"
-            "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
+            "        'plugin_path': '/tmp/x.vst3', 'plugin_state_path': '/tmp/x.vstpreset',\n"
             "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
             "        'sample_rate': 44100, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"

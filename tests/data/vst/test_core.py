@@ -349,7 +349,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", preloaded),
         )
 
@@ -387,7 +387,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
         )
 
         assert load_calls == ["plugins/Surge XT.vst3"]
@@ -416,7 +416,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             warmup=True,
         )
 
@@ -443,7 +443,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", cached),
             warmup=True,
         )

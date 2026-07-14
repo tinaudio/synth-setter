@@ -376,6 +376,58 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
         assert argv[argv.index("--base_seed") + 1] == str(shard.seed)
 
 
+def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composed DawDreamer smoke experiment reaches renderer argv and fake R2.
+
+    :param cfg_dataset_dawdreamer: Hydra cfg composed from the DawDreamer smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract, plugin metadata, and local R2 probe semantics.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset_dawdreamer.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    real_object_size = r2_io.object_size
+
+    def _fake_r2_object_size(r2_uri: str) -> int | None:
+        try:
+            return real_object_size(r2_uri)
+        except subprocess.CalledProcessError:
+            return None
+
+    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_dawdreamer)
+
+    assert spec.render.renderer_backend == "dawdreamer"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "dawdreamer"
+    shard = spec.shards[0]
+    landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+    assert landed.is_file()
+
+
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
     cfg_dataset: DictConfig,
     monkeypatch: pytest.MonkeyPatch,

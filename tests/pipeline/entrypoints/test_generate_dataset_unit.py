@@ -133,7 +133,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         },
         "render": {
             "plugin_path": str(TEST_PLUGIN_VST3),
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": TEST_PLUGIN_VERSION,
             "sample_rate": 44100,
@@ -695,6 +695,38 @@ class TestRun:
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
+
+    def test_dawdreamer_worker_runtime_failure_precedes_render_side_effects(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """An incompatible DawDreamer worker fails before logging or filesystem writes.
+
+        :param monkeypatch: Replaces the runtime guard and first logging side effect.
+        :param spec: Base spec copied to select the DawDreamer backend.
+        :param tmp_path: Work directory that must remain absent.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        dawdreamer_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"renderer_backend": "dawdreamer"})}
+        )
+        log_mock = MagicMock()
+        monkeypatch.setattr(gd, "_log_hyperparams", log_mock)
+        monkeypatch.setattr(
+            gd,
+            "ensure_dawdreamer_runtime",
+            MagicMock(side_effect=RuntimeError("unsupported DawDreamer worker")),
+        )
+        work_dir = tmp_path / "never-created"
+
+        with pytest.raises(RuntimeError, match="unsupported DawDreamer worker"):
+            generate(dawdreamer_spec, work_dir, [])
+
+        log_mock.assert_not_called()
+        assert not work_dir.exists()
 
     def test_aborts_before_render_when_copy_source_spec_is_missing(
         self,
@@ -1912,6 +1944,37 @@ class TestMainDispatchBranches:
         assert isinstance(spec, DatasetSpec)
         assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
 
+    def test_local_dawdreamer_runtime_failure_precedes_spec_write(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A local DawDreamer run validates this process before materializing its spec.
+
+        :param monkeypatch: Selects the DawDreamer experiment and fails its runtime guard.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
+                f"render.plugin_path={TEST_PLUGIN_VST3}",
+            ],
+        )
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+        monkeypatch.setattr(
+            gd,
+            "ensure_dawdreamer_runtime",
+            MagicMock(side_effect=RuntimeError("unsupported DawDreamer worker")),
+        )
+
+        with pytest.raises(RuntimeError, match="unsupported DawDreamer worker"):
+            _call_hydra_main(gd.main)
+
+        gd.write_spec_locally.assert_not_called()
+        gd.upload_spec.assert_not_called()
+
     def test_local_run_applies_extras_writing_tags_and_config_tree(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1999,6 +2062,40 @@ class TestMainDispatchBranches:
             assert override in sky_cfg.cmd, (  # type: ignore[attr-defined]
                 f"override {override!r} missing from worker cmd: {sky_cfg.cmd!r}"  # type: ignore[attr-defined]
             )
+
+    def test_remote_dawdreamer_dispatch_does_not_validate_launcher_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A launcher may dispatch DawDreamer to a compatible worker from Python 3.13.
+
+        :param monkeypatch: Selects remote dispatch and records runtime validation.
+        :param tmp_path: Holds the minimal SkyPilot compute template.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
+                f"render.plugin_path={TEST_PLUGIN_VST3}",
+                f"skypilot_launch.compute_template={template}",
+            ],
+        )
+        runtime_mock = MagicMock(side_effect=AssertionError("launcher runtime was validated"))
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(gd, "ensure_dawdreamer_runtime", runtime_mock)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", dispatch_mock)
+
+        _call_hydra_main(gd.main)
+
+        runtime_mock.assert_not_called()
+        dispatch_mock.assert_called_once()
 
     def test_operator_supplied_cmd_is_rejected(
         self,
@@ -2229,7 +2326,7 @@ class TestMainDispatchBranches:
             # The eval inherits the generate run's datamodule worker count verbatim,
             # so a Darwin override (num_workers=0) reaches the predict DataLoader.
             assert call.kwargs["num_workers"] == observed["num_workers"]
-            assert render_arg.preset_path == "presets/surge-simple.vstpreset"
+            assert render_arg.plugin_state_path == "presets/surge-simple.vstpreset"
             # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
             # proving a non-default plugin flows through to the eval re-render.
             assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
@@ -2279,7 +2376,7 @@ class TestMainDispatchBranches:
         render = spec.render.model_copy(
             update={
                 "param_spec_name": "surge_xt",
-                "preset_path": "presets/surge-base.vstpreset",
+                "plugin_state_path": "presets/surge-base.vstpreset",
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
@@ -2321,7 +2418,7 @@ class TestMainDispatchBranches:
         # is overridden from the generation RenderConfig so the re-render matches it.
         assert "render=surge_simple" in called_argv
         assert "render.param_spec_name=surge_xt" in called_argv
-        assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
+        assert "render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv
@@ -2988,13 +3085,13 @@ class TestMainSpecPersistence:
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
 
-    def test_main_uploads_spec_with_r2_creds_present_in_env(
+    def test_main_uploads_spec_with_projected_rclone_env_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``upload_spec`` sees R2 creds in ``os.environ`` (set by ``ensure_r2_env_loaded``).
+        """``upload_spec`` sees projected rclone env after ``ensure_r2_env_loaded``.
 
-        Asserts the observable invariant — credentials are present in process
-        env when the upload fires — rather than the internal call ORDER. A
+        Asserts the observable invariant — backend env is present in process
+        env when the upload fires — rather than the internal call order. A
         benign re-ordering that still loads creds before uploading passes; a
         regression that uploads before ``ensure_r2_env_loaded`` populates the
         env fails because the stub records an absent key.
@@ -3002,9 +3099,9 @@ class TestMainSpecPersistence:
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
-        from synth_setter.pipeline.r2_io import _SECRET_R2_ENV_KEYS
+        from synth_setter.pipeline.schemas.object_storage import RCLONE_REQUIRED_ENV_KEYS
 
-        probe_key = _SECRET_R2_ENV_KEYS[0]
+        probe_key = RCLONE_REQUIRED_ENV_KEYS[0]
         monkeypatch.delenv(probe_key, raising=False)
 
         argv = [

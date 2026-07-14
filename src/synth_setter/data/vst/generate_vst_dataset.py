@@ -7,12 +7,12 @@ import hdf5plugin
 import librosa
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -26,11 +26,11 @@ from synth_setter.data.vst.shapes import (
     mel_n_fft,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
-from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.spec_io import join_uri, localized_uri
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
@@ -95,18 +95,13 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
 
 
 def generate_sample(
-    plugin_path: str,
+    renderer: AudioRenderer,
     velocity: int,
-    signal_duration_seconds: float,
-    sample_rate: float,
-    channels: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: NoteParams | None = None,
     *,
-    plugin: VST3Plugin | None = None,
     warmup: bool = False,
     seed: SampleSeed | None = None,
 ) -> VSTDataSample:
@@ -126,9 +121,13 @@ def generate_sample(
     reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
     from a fresh non-deterministic generator and uses the default attempt budget.
 
-    :param plugin: Forwarded to ``render_params``; when set, the renderer
-        skips ``load_plugin``/``load_preset``.
-    :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
+    :param renderer: Audio host that renders every sample.
+    :param velocity: MIDI velocity applied to each rendered note.
+    :param min_loudness: Minimum integrated loudness required to accept a render.
+    :param param_spec: Parameter specification used to sample synth and note values.
+    :param fixed_synth_params: Optional synth values that replace sampled values.
+    :param fixed_note_params: Optional note values that replace sampled values.
+    :param warmup: Forwarded to the renderer; runs the backend's optional editor
         warm-up on the plugin used for this render (newly loaded or cached).
         Applied at most once per ``generate_sample`` call — the loudness-gate
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
@@ -157,22 +156,16 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
-        output = render_params(
-            plugin_path,
+        output = renderer.render(
             synth_params,
             note_params["pitch"],
             velocity,
             note_params["note_start_and_end"],
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            preset_path=preset_path,
-            plugin=plugin,
             warmup=warmup,
         )
         warmup = False
 
-        meter = Meter(sample_rate)
+        meter = Meter(renderer.sample_rate)
         loudness = meter.integrated_loudness(output.T)
         logger.debug(f"loudness: {loudness}")
         if loudness < min_loudness:
@@ -190,14 +183,14 @@ def generate_sample(
             continue
 
         logger.debug("making spectrogram")
-        spectrogram = make_spectrogram(output, sample_rate)
+        spectrogram = make_spectrogram(output, renderer.sample_rate)
         return VSTDataSample(
             synth_params=synth_params,
             note_params=note_params,
             audio=output.T,
             mel_spec=spectrogram,
-            sample_rate=sample_rate,
-            channels=channels,
+            sample_rate=renderer.sample_rate,
+            channels=renderer.channels,
             param_spec=param_spec,
             attempt=attempt,
         )
@@ -400,6 +393,7 @@ def main() -> None:
 
     args = CliApp.run(_GenerateCliArgs)
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
+    ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
     fmt = OutputFormat.from_extension(suffix)

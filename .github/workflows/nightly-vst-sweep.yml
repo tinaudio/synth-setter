@@ -1,0 +1,163 @@
+name: Nightly VST Marker Sweep
+
+# Nightly marker-driven safety net: runs every ``requires_vst`` test so a newly
+# added one can't slip past the sibling VST workflows' file allowlists. See #1825.
+
+on:
+  # 04:00 UTC — offset from nightly.yml (06:00) and nightly-parallel-datagen.yml
+  # (05:00) to avoid Docker-pull / runner-queue contention.
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+
+concurrency:
+  group: nightly-vst-sweep-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+  # Single source of the marker for both the discover collect and the per-shard
+  # run, so they can't drift. Mirrors ``make test-vst-cpu``.
+  VST_MARKER: "requires_vst and not gpu and not mps"
+  SHARD_TOTAL: "4"
+
+jobs:
+  discover:
+    name: Discover requires_vst tests and shard them
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.shard.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+
+      # Re-sync the branch's locked deps into the image venv before collection so
+      # a PR-added dep isn't missing (cu128 flags mirror the Dockerfile: keep
+      # torch); the pip install re-adds the editable project the exact sync prunes.
+      - name: Smoke-test plugins and collect requires_vst tests
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e "VST_MARKER=$VST_MARKER" \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
+                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps -e .
+              wrapper=src/synth_setter/scripts/run-linux-vst-headless.sh
+              "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")" >&2
+              "$wrapper" pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
+            ' | tee "${{ runner.temp }}/collected.txt"
+
+      # scripts/ci/shard_vst_tests.py round-robins the collected files into
+      # SHARD_TOTAL shards and exits non-zero on a 0-test selection.
+      - name: Build shard matrix
+        id: shard
+        env:
+          COLLECTED: ${{ runner.temp }}/collected.txt
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/shard_vst_tests.py --splits "$SHARD_TOTAL" < "$COLLECTED"
+
+  vst_sweep:
+    name: VST sweep shard ${{ matrix.shard }}
+    needs: discover
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 90
+    # Neither shard masks the other: every failing VST test must be named in
+    # its own red cell.
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+
+      # Re-sync the branch's locked deps before pytest so a PR-added dep isn't
+      # missing (cu128 flags mirror the Dockerfile: keep torch); the pip install
+      # re-adds the editable project the exact sync prunes (subprocess entrypoints).
+      - name: Run VST sweep shard in Docker
+        env:
+          SHARD_FILES: ${{ matrix.files }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e HYDRA_FULL_ERROR=1 \
+            -e "VST_MARKER=$VST_MARKER" \
+            -e "SHARD_FILES=$SHARD_FILES" \
+            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
+                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps -e .
+              mkdir -p plugins
+              for plugin in /usr/lib/vst3/*.vst3; do
+                ln -sf "$plugin" "plugins/$(basename "$plugin")"
+              done
+              read -ra shard_files <<< "$SHARD_FILES"
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                pytest -vv -s \
+                  --cov=src --cov-branch --cov-report=xml --cov-report=term \
+                  -m "$VST_MARKER" \
+                  "${shard_files[@]}"
+            '
+
+      # Name the failing shard in the log + job summary. A red scheduled run is
+      # the alert (auto-filing a ticket is intentionally omitted, unlike cpu-slow.yml).
+      - name: Annotate shard failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHARD: ${{ matrix.shard }}
+          SHARD_FILES: ${{ matrix.files }}
+        run: |
+          set -euo pipefail
+          echo "::error::VST sweep shard ${SHARD} failed — the failing node ID is in the pytest log"
+          read -ra shard_files <<< "$SHARD_FILES"
+          {
+            echo "### VST sweep shard ${SHARD} failed"
+            echo ""
+            echo "Files in this shard:"
+            for file in "${shard_files[@]}"; do echo "- \`${file}\`"; done
+            echo ""
+            echo "Failing node ID is in the pytest log: ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # coverage.xml is written inside the container at the workspace mount, so
+      # it lands at ${{ github.workspace }}/coverage.xml on the host.
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: vst-nightly-shard-${{ matrix.shard }}
+          token: ${{ secrets.CODECOV_TOKEN }}

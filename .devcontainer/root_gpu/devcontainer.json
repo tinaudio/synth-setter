@@ -17,6 +17,8 @@
     "--gpus",
     "all",
     "--shm-size=16g",
+    "--device=/dev/fuse",
+    "--cap-add=SYS_ADMIN",
     "--env-file",
     ".env"
   ],

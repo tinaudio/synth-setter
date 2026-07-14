@@ -20,7 +20,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.data.vst import core, param_specs, preset_paths
+from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
@@ -322,6 +322,40 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture
+def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a CPU-cheap production TorchSynth config at the entrypoint boundary.
+
+    Composes the production experiment through ``train.yaml``, then shrinks
+    the online splits and trainer loop so the entrypoint test stays CPU-cheap.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :yields: Ready-to-run training configuration.
+    :ytype: DictConfig
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.fast_dev_run=true",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "logger=csv",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+    yield cfg
+    GlobalHydra.instance().clear()
+
+
 @pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
     """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.
@@ -405,6 +439,31 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_dawdreamer(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the DawDreamer smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: DawDreamer smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/surge-xt-dawdreamer-smoke"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -502,7 +561,7 @@ def param_spec_name(request: pytest.FixtureRequest) -> str:
     :param request: Pytest fixture request — when parametrized indirectly, ``request.param``
         carries the spec name; otherwise the default ``"surge_4"`` is used.
 
-    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.preset_paths`.
+    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.plugin_state_paths`.
     """
     return getattr(request, "param", "surge_4")
 
@@ -694,7 +753,7 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
     :param output_path: Destination shard path (``train.h5`` or ``train.lance``); its
         parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     """
     generate_dataset_args = []
     if sys.platform == "linux":
@@ -705,7 +764,7 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
         f"--plugin_path={PLUGIN_PATH}",
-        f"--preset_path={preset_paths[param_spec_name]}",
+        f"--plugin_state_path={plugin_state_paths[param_spec_name]}",
         f"--param_spec_name={param_spec_name}",
         f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
@@ -752,12 +811,12 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     """Build the one-shard fake-plugin ``RenderConfig`` shared by the h5 and Lance smoke renders.
 
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
     """
     return RenderConfig(
         plugin_path=PLUGIN_PATH,
-        preset_path=str(preset_paths[param_spec_name]),
+        plugin_state_path=str(plugin_state_paths[param_spec_name]),
         param_spec_name=param_spec_name,
         renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
@@ -776,7 +835,7 @@ def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
 
     :param train_h5: Destination ``train.h5`` path; its parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     """
     from synth_setter.data.vst.writers import make_hdf5_dataset
 
@@ -788,7 +847,7 @@ def _render_smoke_train_lance_fake(train_lance: Path, param_spec_name: str) -> N
 
     :param train_lance: Destination ``train.lance`` file; its parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
 
@@ -805,7 +864,7 @@ def _build_surge_smoke_datasets(
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :param render_train_h5: Renders ``train.h5`` given ``(train_h5, param_spec_name)``.
 
     :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
@@ -843,7 +902,7 @@ def _build_surge_smoke_lance_datasets(
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :param render_train_lance: Renders ``train.lance`` given ``(train_lance, param_spec_name)``.
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
@@ -874,8 +933,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
-        and ``--preset_path`` for ``generate_vst_dataset``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
+        and ``--plugin_state_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
         dataset.
@@ -895,8 +954,8 @@ def surge_xt_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
-        and ``--preset_path`` for ``generate_vst_dataset``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
+        and ``--plugin_state_path`` for ``generate_vst_dataset``.
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
@@ -920,7 +979,7 @@ def fake_surge_smoke_datasets(
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`); defaults to ``"surge_4"``.
     :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
         for the fake so the render needs no real VST3 binary or display server.
 
@@ -943,7 +1002,7 @@ def fake_surge_smoke_lance_datasets(
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`); defaults to ``"surge_4"``.
     :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
         for the fake so the render needs no real VST3 binary or display server.
 
@@ -1128,7 +1187,7 @@ def cfg_surge_xt_eval(
 
     :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
-    :param param_spec_name: Keys ``preset_paths`` so ``cfg.render`` matches the
+    :param param_spec_name: Keys ``plugin_state_paths`` so ``cfg.render`` matches the
         spec the model was trained against.
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the smoke-test
@@ -1186,7 +1245,7 @@ def _configure_surge_xt_eval_cfg(
         }
         cfg.render = {
             "param_spec_name": param_spec_name,
-            "preset_path": preset_paths[param_spec_name],
+            "plugin_state_path": plugin_state_paths[param_spec_name],
             "plugin_path": plugin_path,
         }
 
@@ -1329,7 +1388,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
         "base_seed": 42,
         "render": {
             "plugin_path": "plugins/fake.vst3",
-            "preset_path": "presets/fake.vstpreset",
+            "plugin_state_path": "presets/fake.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "0.0.0-fake",
             "sample_rate": 44100,

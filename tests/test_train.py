@@ -79,6 +79,45 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+def test_train_torchsynth_experiment_renders_audio_online(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """Run the TorchSynth experiment without a materialized audio dataset.
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
+
+    assert "train/loss" in metric_dict
+    batch = next(iter(object_dict["datamodule"].train_dataloader()))
+    audio, params, *_ = batch
+    assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
+    assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
+    assert torch.isfinite(audio).all()
+
+
+def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """Train two epochs with per-epoch resampling through the real entrypoint.
+
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across
+    epoch boundaries (one ``iter()`` per epoch on the same loader).
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_train)
+    with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
+        cfg_torchsynth_train.trainer.fast_dev_run = False
+        cfg_torchsynth_train.trainer.max_epochs = 2
+    metric_dict, _ = train(cfg_torchsynth_train)
+
+    assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
@@ -482,17 +521,20 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 
 
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run 1 train, val, and test step on CPU reading batches from Lance shards.
+    """Run 1 spawned-worker train, val, and test step reading Lance batches.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint; the Hydra
-    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
+    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
+    fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.num_workers = 1
     HydraConfig().set_config(cfg_train_lance)
     _, object_dict = train(cfg_train_lance)
 

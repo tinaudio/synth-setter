@@ -227,7 +227,7 @@ class ShardSpec(BaseModel):
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
 
-class RenderConfig(BaseModel):
+class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
     Carries every parameter the per-shard writer needs to produce audio +
@@ -243,6 +243,11 @@ class RenderConfig(BaseModel):
     .. attribute :: attempts_per_sample
 
         Loudness-gate retry budget per sampled row before the render fails loudly.
+
+    .. attribute :: plugin_state_path
+
+        Filesystem path to the baseline plugin state.
+        :type: str
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -250,7 +255,7 @@ class RenderConfig(BaseModel):
     plugin_path: str = Field(
         description="Filesystem path to the VST3 plugin bundle the worker loads."
     )
-    preset_path: str = Field(
+    plugin_state_path: str = Field(
         description=(
             "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
             "random parameter override."
@@ -264,6 +269,10 @@ class RenderConfig(BaseModel):
     )
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
+    )
+    renderer_backend: Literal["pedalboard", "dawdreamer"] = Field(
+        default="pedalboard",
+        description="Audio host used to render each sample.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -336,7 +345,8 @@ class RenderConfig(BaseModel):
             "(SIGTRAP after ~3-4 calls, #714); "
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
-            '``"never"`` on Darwin.'
+            '``"never"`` on Darwin. DawDreamer supports only ``"never"`` because '
+            "its editor call blocks the main thread without a close-event API."
         ),
     )
     param_sample_cadence: _ParamSampleCadence = Field(
@@ -389,6 +399,20 @@ class RenderConfig(BaseModel):
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
                 'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences that DawDreamer's blocking API cannot implement.
+
+        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
+        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
+                "call blocks the main thread and exposes no close-event API"
             )
         return self
 

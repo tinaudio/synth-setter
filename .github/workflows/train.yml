@@ -36,8 +36,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Exports RCLONE_CONFIG_R2_* for the docker run -e pass-through below;
-      # rclone itself runs on the SkyPilot worker, not the runner.
+      # Exports canonical storage env plus the rclone projection for the container
+      # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -64,6 +64,12 @@ jobs:
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e SKYPILOT_API_SERVER_ENDPOINT \
             -e RUNPOD_API_KEY \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \

@@ -53,6 +53,7 @@ SAMPLE_RCLONE_OUTPUT = """\
 
 DEFAULT_PREFIX = "r2:intermediate-data/10k_size_205_shard/shards/"
 DEFAULT_THRESHOLD = 1.0
+R2_TEST_BUCKET = "intermediate-data"
 
 
 # ---------------------------------------------------------------------------
@@ -302,13 +303,13 @@ def _r2_reachable() -> bool:
 @pytest.mark.r2
 @pytest.mark.slow
 class TestRunRcloneLsIntegration:
-    """Integration test: write real files to r2:test-bucket, run report, clean up."""
+    """Integration test: write real files to the CI R2 bucket, then clean up."""
 
     def test_end_to_end_report_against_r2(self) -> None:
-        """Upload fake shards to r2:test-bucket, analyze, verify, clean up."""
+        """Upload fake shards to the configured test bucket, analyze, verify, clean up."""
         if not _r2_reachable():
             pytest.skip("R2 not reachable")
-        test_prefix = f"r2:test-bucket/test-{uuid.uuid4().hex[:8]}/"
+        test_prefix = f"r2:{R2_TEST_BUCKET}/test-{uuid.uuid4().hex[:8]}/"
         test_content = b"fake shard data"
 
         try:
