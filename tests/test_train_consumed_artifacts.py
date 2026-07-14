@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.cli.train import _consumed_artifact_refs, _prepare_dataset_for_lineage, train
+from synth_setter.cli.train import _consumed_artifact_refs, train
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
@@ -120,7 +120,7 @@ def test_train_calls_use_input_artifacts_with_discovered_dataset_edge(
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "latest")])
+    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
 
 
 def test_train_calls_use_input_artifacts_with_empty_edges_without_provenance(
@@ -162,7 +162,7 @@ def test_train_records_lineage_when_only_test_is_true(
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "latest")])
+    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
 
 
 def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> None:
@@ -182,13 +182,3 @@ def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> N
 def test_consumed_artifact_refs_missing_dataset_root_returns_empty() -> None:
     """A datamodule without a local root has no dataset artifact to consume."""
     assert _consumed_artifact_refs(OmegaConf.create({"datamodule": {}})) == []
-
-
-def test_prepare_dataset_for_lineage_download_config_hydrates_datamodule() -> None:
-    """A configured remote root is hydrated before its lineage is discovered."""
-    datamodule = MagicMock()
-    cfg = OmegaConf.create({"datamodule": {"download_dataset_root_uri": "r2://data/root"}})
-
-    _prepare_dataset_for_lineage(cfg, datamodule)
-
-    datamodule.prepare_data.assert_called_once_with()

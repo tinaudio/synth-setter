@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from omegaconf import OmegaConf
 
-from synth_setter.cli.eval import _consumed_artifact_refs, _prepare_dataset_for_lineage, evaluate
+from synth_setter.cli.eval import _consumed_artifact_refs, evaluate
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
@@ -74,7 +74,10 @@ def test_evaluate_calls_use_input_artifacts_with_model_edge_before_data_edge(
 
     spy.assert_called_once_with(
         logger_sentinel,
-        [("model-flow-simple", "latest"), ("data-diva-v1", "latest")],
+        [
+            ("model-flow-simple", "latest"),
+            ("data-diva-v1", "diva-v1-20260520T000000000Z"),
+        ],
     )
 
 
@@ -104,7 +107,7 @@ def test_consumed_artifact_refs_model_and_dataset_present_returns_model_then_dat
     )
     assert _consumed_artifact_refs(cfg) == [
         ("model-flow-simple", "latest"),
-        ("data-diva-v1", "latest"),
+        ("data-diva-v1", "diva-v1-20260520T000000000Z"),
     ]
 
 
@@ -144,7 +147,7 @@ def test_consumed_artifact_refs_model_id_absent_returns_dataset_edge_only(
         ),
         tmp_path / "input_spec.json",
     )
-    assert _consumed_artifact_refs(cfg) == [("data-diva-v1", "latest")]
+    assert _consumed_artifact_refs(cfg) == [("data-diva-v1", "diva-v1-20260520T000000000Z")]
 
 
 def test_consumed_artifact_refs_without_model_or_dataset_returns_empty() -> None:
@@ -157,13 +160,3 @@ def test_consumed_artifact_refs_without_model_or_dataset_returns_empty() -> None
     )
 
     assert _consumed_artifact_refs(cfg) == []
-
-
-def test_prepare_dataset_for_lineage_download_config_hydrates_datamodule() -> None:
-    """A configured remote root is hydrated before its lineage is discovered."""
-    datamodule = MagicMock()
-    cfg = OmegaConf.create({"datamodule": {"download_dataset_root_uri": "r2://data/root"}})
-
-    _prepare_dataset_for_lineage(cfg, datamodule)
-
-    datamodule.prepare_data.assert_called_once_with()

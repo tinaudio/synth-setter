@@ -1,28 +1,44 @@
-"""Discover W&B dataset artifacts from a local finalized dataset root."""
+"""Discover immutable W&B dataset artifacts from finalized dataset provenance.
+
+For example, ``dataset_artifact_ref("r2://bucket/run")`` returns the
+``data-<task>:<run_id>`` artifact reference declared by that run's frozen spec.
+"""
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-from loguru import logger
+import structlog
 
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.spec_io import load_spec_from_root
 
+log = structlog.get_logger(__name__)
 
-def dataset_artifact_ref(dataset_root: str | Path) -> tuple[str, str] | None:
-    """Return the W&B dataset artifact declared by a local dataset root.
 
-    :param dataset_root: Local finalized dataset directory containing ``input_spec.json``.
-    :returns: The canonical ``(artifact_name, alias)`` pair, or ``None`` when
-        the root has no readable frozen spec.
+def dataset_artifact_ref(
+    dataset_root: str | Path | None, download_dataset_root_uri: str | None = None
+) -> tuple[str, str] | None:
+    """Return the immutable W&B dataset artifact declared by a finalized root.
+
+    :param dataset_root: Optional local finalized dataset directory.
+    :param download_dataset_root_uri: Optional R2 dataset root; preferred over
+        ``dataset_root`` so lineage discovery does not hydrate a Lightning datamodule.
+    :returns: Canonical ``(artifact_name, immutable_run_id)`` pair, or ``None``
+        when no root has a readable frozen spec.
     """
-    spec_path = Path(dataset_root) / INPUT_SPEC_FILENAME
-    if not spec_path.is_file():
+    source_root = download_dataset_root_uri or dataset_root
+    if source_root is None:
         return None
     try:
-        spec = load_spec_from_root(str(dataset_root))
-    except (FileNotFoundError, KeyError, OSError, ValueError) as exc:
-        logger.warning("dataset lineage unavailable for {}: {}", dataset_root, exc)
+        spec = load_spec_from_root(str(source_root))
+    except (
+        FileNotFoundError,
+        KeyError,
+        OSError,
+        subprocess.CalledProcessError,
+        ValueError,
+    ) as exc:
+        log.warning("dataset_lineage_unavailable", dataset_root=source_root, error=str(exc))
         return None
-    return (f"data-{spec.task_name}", "latest")
+    return (f"data-{spec.task_name}", spec.run_id)

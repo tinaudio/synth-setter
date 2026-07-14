@@ -43,27 +43,17 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 
 def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
-    """Build the dataset lineage edge declared by the datamodule's local root.
+    """Build the dataset lineage edge declared by the datamodule provenance.
 
-    :param cfg: Hydra-composed cfg carrying ``datamodule.dataset_root``.
-    :returns: One W&B dataset-artifact ref when the root carries a readable
-        frozen input spec, else an empty list.
+    :param cfg: Hydra-composed cfg carrying local or remote datamodule roots.
+    :returns: One W&B dataset-artifact ref when the root carries a readable frozen input spec, else
+        an empty list.
     """
-    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
-    if not dataset_root:
-        return []
-    ref = dataset_artifact_ref(dataset_root)
+    ref = dataset_artifact_ref(
+        OmegaConf.select(cfg, "datamodule.dataset_root"),
+        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
+    )
     return [ref] if ref is not None else []
-
-
-def _prepare_dataset_for_lineage(cfg: DictConfig, datamodule: LightningDataModule) -> None:
-    """Hydrate a configured remote dataset before discovering its local provenance.
-
-    :param cfg: Hydra-composed cfg carrying the optional download root URI.
-    :param datamodule: Instantiated datamodule that owns the hydration step.
-    """
-    if OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"):
-        datamodule.prepare_data()
 
 
 def _derive_checkpoint_uri(cfg: DictConfig) -> str:
@@ -234,7 +224,6 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # its input artifact in the W&B DAG (storage-provenance-spec §5). A test-only run
     # (train: False, test: True) consumes the dataset too, so gate on either.
     if cfg.get("train") or cfg.get("test"):
-        _prepare_dataset_for_lineage(cfg, datamodule)
         use_input_artifacts(logger, _consumed_artifact_refs(cfg))
 
     if cfg.get("train"):

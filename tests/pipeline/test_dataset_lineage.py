@@ -26,7 +26,60 @@ def test_dataset_artifact_ref_valid_local_spec_returns_dataset_artifact(
     )
     write_spec_to_path(spec, tmp_path / "input_spec.json")
 
-    assert dataset_artifact_ref(tmp_path) == ("data-surge-simple-lance", "latest")
+    assert dataset_artifact_ref(tmp_path) == (
+        "data-surge-simple-lance",
+        "surge-simple-lance-20260520T000000000Z",
+    )
+
+
+def test_dataset_artifact_ref_repeated_task_uses_frozen_run_id(
+    tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
+) -> None:
+    """A retained dataset links the immutable artifact version from its own spec.
+
+    :param tmp_path: Local dataset root containing the first finalized run's spec.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    """
+    spec = dataset_spec_factory(
+        task_name="surge-simple-lance",
+        run_id="surge-simple-lance-20260713T120000000Z",
+        train_val_test_sizes=[4, 4, 0],
+        r2={"bucket": "intermediate-data"},
+        render={"samples_per_shard": 4},
+    )
+    write_spec_to_path(spec, tmp_path / "input_spec.json")
+
+    assert dataset_artifact_ref(tmp_path) == (
+        "data-surge-simple-lance",
+        "surge-simple-lance-20260713T120000000Z",
+    )
+
+
+def test_dataset_artifact_ref_remote_root_returns_frozen_run_id(
+    fake_r2_remote: Path, dataset_spec_factory: Callable[..., DatasetSpec]
+) -> None:
+    """A remote dataset root supplies lineage without hydrating the datamodule.
+
+    :param fake_r2_remote: Local filesystem backing the fake ``r2:`` remote.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    """
+    spec = dataset_spec_factory(
+        task_name="surge-simple-lance",
+        run_id="surge-simple-lance-20260713T130000000Z",
+        train_val_test_sizes=[4, 4, 0],
+        r2={"bucket": "intermediate-data"},
+        render={"samples_per_shard": 4},
+    )
+    dataset_root_uri = "r2://intermediate-data/lineage-run"
+    write_spec_to_path(
+        spec,
+        fake_r2_remote / "intermediate-data" / "lineage-run" / "input_spec.json",
+    )
+
+    assert dataset_artifact_ref(dataset_root_uri) == (
+        "data-surge-simple-lance",
+        "surge-simple-lance-20260713T130000000Z",
+    )
 
 
 def test_dataset_artifact_ref_missing_spec_returns_none(tmp_path: Path) -> None:

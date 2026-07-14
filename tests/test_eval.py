@@ -265,7 +265,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
-    assert logger.used_artifacts == ["data-lineage-eval:latest"]
+    assert logger.used_artifacts == ["data-lineage-eval:lineage-eval-20260520T000000000Z"]
 
 
 @pytest.mark.requires_vst

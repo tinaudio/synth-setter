@@ -593,7 +593,7 @@ def test_train_lance_records_dataset_lineage_from_local_spec(
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
         train(cfg_train_lance)
 
-    assert logger.used_artifacts == ["data-lineage-lance:latest"]
+    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:

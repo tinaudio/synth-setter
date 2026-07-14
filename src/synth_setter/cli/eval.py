@@ -318,10 +318,10 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
 
     Eval consumes both the model it scores and the dataset it scores it on; the
     model edge is recorded first to match the DAG's left-to-right read. Dataset
-    provenance comes from the datamodule's local dataset root.
+    provenance comes from the datamodule's local or remote dataset root.
 
-    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` and
-        ``datamodule.dataset_root``.
+    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
+        local or remote datamodule root.
     :returns: ``(name, alias)`` refs for the optional model plus the discovered
         dataset, in that order.
     """
@@ -329,20 +329,13 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
         refs.append((f"model-{train_id}", "latest"))
-    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
-    if dataset_root and (ref := dataset_artifact_ref(dataset_root)) is not None:
+    ref = dataset_artifact_ref(
+        OmegaConf.select(cfg, "datamodule.dataset_root"),
+        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
+    )
+    if ref is not None:
         refs.append(ref)
     return refs
-
-
-def _prepare_dataset_for_lineage(cfg: DictConfig, datamodule: LightningDataModule) -> None:
-    """Hydrate a configured remote dataset before discovering its local provenance.
-
-    :param cfg: Hydra-composed cfg carrying the optional download root URI.
-    :param datamodule: Instantiated datamodule that owns the hydration step.
-    """
-    if OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"):
-        datamodule.prepare_data()
 
 
 @task_wrapper
@@ -390,7 +383,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
-    _prepare_dataset_for_lineage(cfg, datamodule)
     use_input_artifacts(logger, _consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
