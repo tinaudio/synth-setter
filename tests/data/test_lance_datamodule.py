@@ -714,10 +714,9 @@ class TestLanceVSTDataModule:
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))
 
     def test_val_dataloader_multi_worker_matches_single_worker(self, dataset_root: Path) -> None:
-        """``num_workers=2`` forked workers read the same batches as in-process loading.
+        """``num_workers=2`` spawned workers read the same batches as in-process loading.
 
-        Lance handles are not fork-safe, so ``LanceShardFile`` reopens per
-        worker — multi-worker loaders (the production default) must produce
+        Lance handles are not fork-safe, so multi-worker loaders must produce
         the same data as ``num_workers=0``.
 
         :param dataset_root: Fixture-provided dataset-root directory.
@@ -734,6 +733,32 @@ class TestLanceVSTDataModule:
                 return torch.cat([_unwrap(b["params"]) for b in module.val_dataloader()])
 
         assert torch.allclose(collect(num_workers=2), collect(num_workers=0))
+
+    def test_dataloaders_multi_worker_use_spawn_context(self, dataset_root: Path) -> None:
+        """Every multi-worker Lance loader starts a clean interpreter per worker.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            num_workers=2,
+            pin_memory=False,
+        ) as module:
+            train_context = module.train_dataloader().multiprocessing_context
+            val_context = module.val_dataloader().multiprocessing_context
+            test_context = module.test_dataloader().multiprocessing_context
+            predict_context = module.predict_dataloader().multiprocessing_context
+
+        assert train_context is not None
+        assert train_context.get_start_method() == "spawn"
+        assert val_context is not None
+        assert val_context.get_start_method() == "spawn"
+        assert test_context is not None
+        assert test_context.get_start_method() == "spawn"
+        assert predict_context is not None
+        assert predict_context.get_start_method() == "spawn"
 
 
 class TestPipelineWriterCompatibility:
