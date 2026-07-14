@@ -1643,7 +1643,7 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
         path,
         {
             # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-            "audio": rng.standard_normal((num_rows, 2, 64)).astype(np.float16),
+            "audio": rng.uniform(-1.0, 1.0, (num_rows, 2, 64)).astype(np.float16),
             "mel_spec": rng.standard_normal((num_rows, *_LANCE_SMOKE_MEL_SHAPE)).astype(
                 np.float32
             ),

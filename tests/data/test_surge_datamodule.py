@@ -157,9 +157,9 @@ def _write_h5_shard(
     with h5py.File(path, "w") as f:
         f.create_dataset(
             "audio",
-            data=rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
-                np.float32
-            ),
+            data=rng.uniform(
+                -1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+            ).astype(np.float32),
         )
         if mel_fill is None:
             mel_data = rng.standard_normal((num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES))

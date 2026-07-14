@@ -2825,7 +2825,7 @@ def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
     param_dtype = DATASET_FIELD_DTYPES["param_array"]
     # Start at 1 so every value is distinct and nonzero (a fill-value zeros read
     # is then unmistakable) while staying in the field dtype — no scalar promotion.
-    audio = np.arange(1, rows * channels * samples + 1, dtype=audio_dtype).reshape(
+    audio = np.linspace(0.1, 0.9, rows * channels * samples, dtype=audio_dtype).reshape(
         rows, channels, samples
     )
     param = np.linspace(0.1, 0.8, rows * num_params, dtype=param_dtype).reshape(rows, num_params)

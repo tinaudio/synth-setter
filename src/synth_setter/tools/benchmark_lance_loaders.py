@@ -178,12 +178,12 @@ def _benchmark_configurations(configured_num_workers: int) -> list[BenchmarkKey]
     :return: Loader, conditioning, and worker-count matrix cells.
     """
     worker_counts = tuple(dict.fromkeys((0, configured_num_workers)))
-    return [
-        (loader, conditioning, num_workers)
-        for loader in ("legacy", "map")
-        for conditioning in ("mel", "m2l")
-        for num_workers in worker_counts
-    ]
+    configurations = []
+    for loader in ("legacy", "map"):
+        for conditioning in ("mel", "m2l"):
+            for num_workers in worker_counts:
+                configurations.append((loader, conditioning, num_workers))
+    return configurations
 
 
 def _run_trials(
@@ -288,7 +288,7 @@ def benchmark_lance_loaders(
     repetitions: int = 3,
     random_seed: int = 0,
 ) -> list[LoaderBenchmarkResult]:
-    """Run the Phase-2 comparison matrix on a local Lance fixture.
+    """Run the legacy/map comparison matrix on local Lance splits.
 
     :param dataset_root: Directory containing local ``train/val/test.lance`` splits.
     :param batch_size: Rows requested per batch.

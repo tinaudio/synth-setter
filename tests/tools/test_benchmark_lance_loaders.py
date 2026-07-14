@@ -15,6 +15,50 @@ from synth_setter.tools.benchmark_lance_loaders import (
 from tests.helpers.lance_fixtures import write_seeded_lance_shard
 
 
+def test_run_trials_seed_controls_complete_matrix_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seed reproduces trial order while each repetition covers every cell.
+
+    :param tmp_path: Arbitrary dataset root accepted by the fake trial.
+    :param monkeypatch: Fixture replacing trial execution with an order recorder.
+    """
+    configurations = benchmark_module._benchmark_configurations(2)
+
+    def order_for_seed(seed: int) -> list[benchmark_module.BenchmarkKey]:
+        calls: list[benchmark_module.BenchmarkKey] = []
+
+        def fake_trial(
+            _root: Path,
+            *,
+            loader: benchmark_module.LoaderName,
+            conditioning: benchmark_module.ConditioningMode,
+            num_workers: int,
+            batch_size: int,
+            max_batches: int,
+        ) -> benchmark_module._Trial:
+            del batch_size, max_batches
+            calls.append((loader, conditioning, num_workers))
+            return benchmark_module._Trial(batches=1, elapsed_seconds=1.0, wait_seconds=1.0)
+
+        monkeypatch.setattr(benchmark_module, "_benchmark_trial", fake_trial)
+        benchmark_module._run_trials(
+            tmp_path,
+            configurations,
+            batch_size=1,
+            max_batches=1,
+            repetitions=2,
+            random_seed=seed,
+        )
+        return calls
+
+    first = order_for_seed(17)
+    assert first == order_for_seed(17)
+    assert first != order_for_seed(23)
+    for start in range(0, len(first), len(configurations)):
+        assert set(first[start : start + len(configurations)]) == set(configurations)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("configured_workers", [0, 1])
 def test_benchmark_lance_loaders_runs_full_local_matrix(

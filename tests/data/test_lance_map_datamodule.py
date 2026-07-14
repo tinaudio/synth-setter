@@ -244,6 +244,26 @@ class TestPrepareBatchCollate:
 
         assert torch.equal(noise_after_seed(), noise_after_seed())
 
+    def test_collate_ddp_ranks_receive_distinct_reproducible_noise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In-process DDP ranks derive distinct reproducible noise streams.
+
+        :param monkeypatch: Fixture controlling the distributed rank reported to the collate.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+        def noise_for_rank(rank: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            torch.manual_seed(1234)
+            collate = PrepareBatchCollate(
+                mean=None, std=None, rescale_params=False, ot=False
+            )
+            return _unwrap(collate(self._raw_batch())["noise"])
+
+        assert not torch.equal(noise_for_rank(0), noise_for_rank(1))
+        assert torch.equal(noise_for_rank(1), noise_for_rank(1))
+
 
 class TestLanceMapDataModuleSetup:
     """``loader`` routing at construction and ``setup`` time."""
@@ -629,7 +649,7 @@ class TestLanceMapDataModuleModes:
 
     @pytest.mark.slow
     def test_val_loader_spawn_workers_match_in_process(self, dataset_root: Path) -> None:
-        """``num_workers=2`` spawn workers read the same rows as in-process loading.
+        """Spawn workers read the same rows as in-process loading.
 
         The map path pickles the dataset and collate into spawned workers (Lance is not fork-safe)
         — parity proves both survive the round-trip.

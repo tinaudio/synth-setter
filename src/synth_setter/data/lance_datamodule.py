@@ -271,7 +271,14 @@ class PrepareBatchCollate:
         if generator is None:
             generator = torch.Generator()
             worker_info = torch.utils.data.get_worker_info()
-            generator.manual_seed(worker_info.seed if worker_info else self._seed)
+            seed = worker_info.seed if worker_info else self._seed
+            if (
+                worker_info is None
+                and torch.distributed.is_available()
+                and torch.distributed.is_initialized()
+            ):
+                seed += torch.distributed.get_rank()
+            generator.manual_seed(seed)
             self._generator = generator
         return generator
 

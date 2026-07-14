@@ -245,7 +245,10 @@ def lance_map_dataloader(
     :param persistent_workers: Whether worker processes survive across iterator resets.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
+    :raises ValueError: If worker persistence is enabled without worker processes.
     """
+    if persistent_workers and num_workers == 0:
+        raise ValueError("persistent_workers requires num_workers > 0")
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
         "lance map dataloader: uri=%s rows=%d columns=%s batch_size=%d num_workers=%d",

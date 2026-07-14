@@ -35,7 +35,9 @@ def make_shard_columns(
     rng = np.random.default_rng(seed)
     return {
         # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-        "audio": rng.standard_normal((num_rows, AUDIO_CHANNELS, AUDIO_SAMPLES)).astype(np.float16),
+        "audio": rng.uniform(-1.0, 1.0, (num_rows, AUDIO_CHANNELS, AUDIO_SAMPLES)).astype(
+            np.float16
+        ),
         "mel_spec": rng.standard_normal((num_rows, *MEL_SHAPE)).astype(np.float32),
         "music2latent": rng.standard_normal((num_rows, M2L_DIM_1, M2L_DIM_2)).astype(np.float32),
         # params in [0, 1) so the rescale_params=True branch lands in [-1, 1).

@@ -80,9 +80,9 @@ def _make_columns(num_rows: int, *, params_seed: int = 0) -> dict[str, np.ndarra
     rng = np.random.default_rng(params_seed)
     return {
         # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-        "audio": rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
-            np.float16
-        ),
+        "audio": rng.uniform(
+            -1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+        ).astype(np.float16),
         "mel_spec": rng.standard_normal(
             (num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
         ).astype(np.float32),

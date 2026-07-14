@@ -47,6 +47,30 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     audio: NotRequired[np.ndarray | None]
 
 
+def _raw_batch_validation_error(raw: RawBatch) -> str | None:
+    """Return the first stored-value contract violation, if any.
+
+    :param raw: Read shard columns to validate.
+    :returns: Validation message, or ``None`` when every stored value is valid.
+    """
+    arrays = {
+        "param_array": raw["param_array"],
+        "mel_spec": raw.get("mel_spec"),
+        "music2latent": raw.get("music2latent"),
+        "audio": raw.get("audio"),
+    }
+    for column, array in arrays.items():
+        if array is not None and not np.isfinite(array).all():
+            return f"{column} contains non-finite values"
+    params = raw["param_array"]
+    if np.any((params < 0) | (params > 1)):
+        return "param_array values must be within [0, 1]"
+    audio = raw.get("audio")
+    if audio is not None and np.any((audio < -1) | (audio > 1)):
+        return "audio values must be within [-1, 1]"
+    return None
+
+
 def prepare_batch(
     raw: RawBatch,
     *,
@@ -78,20 +102,12 @@ def prepare_batch(
     :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` with
         ``float32`` contiguous tensors, ``None`` for unread modalities; ``params``
         and ``noise`` are ``(batch, num_params)``.
-    :raises ValueError: If stored values are non-finite or parameters are outside
-        their normalized ``[0, 1]`` range.
+    :raises ValueError: If stored values are non-finite, parameters are outside
+        ``[0, 1]``, or audio samples are outside ``[-1, 1]``.
     """
-    arrays = {
-        "param_array": raw["param_array"],
-        "mel_spec": raw.get("mel_spec"),
-        "music2latent": raw.get("music2latent"),
-        "audio": raw.get("audio"),
-    }
-    for column, array in arrays.items():
-        if array is not None and not np.isfinite(array).all():
-            raise ValueError(f"{column} contains non-finite values")
-    if np.any((raw["param_array"] < 0) | (raw["param_array"] > 1)):
-        raise ValueError("param_array values must be within [0, 1]")
+    validation_error = _raw_batch_validation_error(raw)
+    if validation_error is not None:
+        raise ValueError(validation_error)
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
 
