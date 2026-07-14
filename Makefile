@@ -109,9 +109,9 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
 	if [ -d .venv ]; then \
 		PY_VER=$$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null); \
-		[ "$$PY_VER" = "3.12" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.12 (rm -rf .venv to recreate)"; exit 1; }; \
+		[ "$$PY_VER" = "3.12.13" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.12.13 (rm -rf .venv to recreate)"; exit 1; }; \
 	else \
-		"$$UV" venv --python 3.12 --prompt synth-setter .venv; \
+		"$$UV" venv --python 3.12.13 --prompt synth-setter .venv; \
 	fi; \
 	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
 	if [ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]; then \

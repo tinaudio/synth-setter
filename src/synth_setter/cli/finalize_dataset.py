@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING
 
 import hydra
 import numpy as np
@@ -45,10 +45,10 @@ from synth_setter.workspace import operator_workspace
 if TYPE_CHECKING:
     import pyarrow as pa
 
-    LanceBatchIterator: TypeAlias = Iterator[pa.RecordBatch]
-    LanceSplitBatches: TypeAlias = tuple[pa.Schema, LanceBatchIterator]
+    LanceBatchIterator = Iterator[pa.RecordBatch]
+    LanceSplitBatches = tuple[pa.Schema, LanceBatchIterator]
 else:
-    LanceSplitBatches: TypeAlias = tuple[object, Iterator[object]]
+    LanceSplitBatches = tuple[object, Iterator[object]]
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.

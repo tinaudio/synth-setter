@@ -32,7 +32,7 @@ def test_dawdreamer_backend_supported_worker_imports_package(
     :param monkeypatch: Pins a supported runtime and records the package import.
     """
     imported: list[str] = []
-    monkeypatch.setattr(sys, "version_info", (3, 11, 9))
+    monkeypatch.setattr(sys, "version_info", (3, 12, 13))
     monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.setattr(
@@ -45,18 +45,22 @@ def test_dawdreamer_backend_supported_worker_imports_package(
     assert imported == ["dawdreamer"]
 
 
-def test_dawdreamer_backend_python_313_raises_actionable_error(
+@pytest.mark.parametrize("version_info", [(3, 11, 15), (3, 13, 1)])
+def test_dawdreamer_backend_noncanonical_python_raises_actionable_error(
     monkeypatch: pytest.MonkeyPatch,
+    version_info: tuple[int, int, int],
 ) -> None:
-    """Python 3.13 workers fail with the supported interpreter range.
+    """Workers outside Python 3.12 fail with the canonical interpreter.
 
-    :param monkeypatch: Pins the worker interpreter to unsupported Python 3.13.
+    :param monkeypatch: Pins the worker interpreter outside Python 3.12.
+    :param version_info: Unsupported worker interpreter version.
     """
-    monkeypatch.setattr(sys, "version_info", (3, 13, 1))
+    monkeypatch.setattr(sys, "version_info", version_info)
     monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
 
-    with pytest.raises(RuntimeError, match=r"DawDreamer.*CPython 3\.11 or 3\.12.*3\.13"):
+    detected = rf"{version_info[0]}\.{version_info[1]}"
+    with pytest.raises(RuntimeError, match=rf"DawDreamer.*CPython 3\.12.*{detected}"):
         ensure_dawdreamer_runtime("dawdreamer")
 
 

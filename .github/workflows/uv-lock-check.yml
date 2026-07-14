@@ -39,16 +39,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+          python-version: "3.12.13"
 
       # `uv lock --check` re-resolves against pyproject.toml; non-zero if drifted.
       - name: Verify lockfile is in sync with pyproject.toml

@@ -6,14 +6,14 @@ This is the authoritative entry point — the CI workflow
 `.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
 cron).
 
-## Requires Python 3.12+
+## Requires Python 3.12
 
 mutmut parses the whole `pyproject.toml`. On Python 3.10 it falls back to the
 legacy `toml` library, which crashes (`IndexError` in `load_array`) on the
-PEP 735 `dev` group's mixed string/inline-table arrays; 3.12+ uses stdlib
-`tomllib`, which parses it cleanly ([#1414](https://github.com/tinaudio/synth-setter/issues/1414)).
-Run `make mutmut` under a 3.12+ interpreter — the CI workflow pins 3.12 for
-this reason.
+PEP 735 `dev` group's mixed string/inline-table arrays. Python 3.11+ provides
+stdlib `tomllib`, which parses it cleanly
+([#1414](https://github.com/tinaudio/synth-setter/issues/1414)). This repository
+standardizes on Python 3.12.13, which the CI workflow pins for reproducibility.
 
 ## `also_copy` covers the full package
 

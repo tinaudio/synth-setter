@@ -21,15 +21,8 @@ fi
 git fetch --depth=1 origin -- "$WORKER_GIT_REF"
 git checkout FETCH_HEAD
 echo "Worker now at: $(git rev-parse HEAD)"
-venv_dir="${VIRTUAL_ENV:-/venv/main}"
-venv_python="$venv_dir/bin/python"
-if [[ ! -x "$venv_python" ]] || ! "$venv_python" -c "import sys; raise SystemExit(sys.version_info[:2] != (3, 12))"; then
-  echo "Recreating $venv_dir with Python 3.12"
-  rm -rf "$venv_dir"
-  uv venv --python 3.12 "$venv_dir"
-  export VIRTUAL_ENV="$venv_dir"
-  export PATH="$venv_dir/bin:$PATH"
-fi
+# shellcheck source=scripts/ensure_worker_python.sh
+source scripts/ensure_worker_python.sh
 # Heavy runtime lives in PEP 735 groups since #1139; `--group runtime` pulls the
 # full stack (torch + everything). This activates neither the cpu nor cu128
 # extra that [tool.uv.sources] keys torch's index routing on, so torch resolves

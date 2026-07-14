@@ -1836,11 +1836,10 @@ class TestBuildWorkerCmd:
 
         cmd = _build_worker_cmd([], spec)
         sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
-        repair_idx = cmd.find('venv_python="$venv_dir/bin/python"')
+        repair_idx = cmd.find("source scripts/ensure_worker_python.sh")
         exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
         assert repair_idx != -1, f"python repair step missing from cmd: {cmd!r}"
-        assert "uv venv --python 3.12" in cmd
-        assert "sys.version_info[:2] != (3, 12)" in cmd
+        assert "rm -rf" not in cmd
         assert sync_idx < repair_idx < exec_idx
 
     def test_cmd_pins_spec_created_at_via_hydra_override(self, spec: DatasetSpec) -> None:
@@ -2084,7 +2083,7 @@ class TestMainDispatchBranches:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """A launcher may dispatch DawDreamer to a compatible worker from Python 3.13.
+        """Remote dispatch defers DawDreamer runtime validation to the worker.
 
         :param monkeypatch: Selects remote dispatch and records runtime validation.
         :param tmp_path: Holds the minimal SkyPilot compute template.

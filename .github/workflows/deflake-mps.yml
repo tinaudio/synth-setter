@@ -39,15 +39,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: "3.12.13"
 
       # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
       # transitively includes `runtime`. No cpu/cu128 extra is active and the

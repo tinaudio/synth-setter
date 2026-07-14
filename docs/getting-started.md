@@ -644,17 +644,18 @@ ______________________________________________________________________
 ## Appendix A: Manual environment setup
 
 `make install` is the canonical path for most users — it installs uv, a
-managed Python 3.12 interpreter, the venv, dependencies, and pre-commit.
+managed Python 3.12.13 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
-(currently `>=3.12,<3.14`; `pip` enforces this).
+(currently `>=3.12,<3.13`; `pip` enforces this). Development and CI use the
+canonical 3.12.13 patch release.
 
 ### A.1. Plain pip + venv
 
 ```bash
-# Use any Python 3.12+ interpreter
+# Use the canonical Python patch release
 python3.12 -m venv .venv
 source .venv/bin/activate
 
@@ -670,7 +671,7 @@ Drop `-e` for a non-editable install.
 ### A.2. conda
 
 ```bash
-conda create -n synth-setter python=3.12
+conda create -n synth-setter python=3.12.13
 conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
@@ -690,7 +691,7 @@ If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
 
 ```bash
-uv venv --python 3.12 --prompt synth-setter .venv
+uv venv --python 3.12.13 --prompt synth-setter .venv
 source .venv/bin/activate
 uv pip install --group dev -e .
 pre-commit install
