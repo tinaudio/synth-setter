@@ -98,7 +98,9 @@ def _reference_prepare_batch(
     param_array = torch.from_numpy(param_raw).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if ot:
-        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
+            noise, param_array, mel_spec, m2l, audio
+        )
 
     return dict(
         mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
@@ -245,6 +247,30 @@ def test_prepare_batch_modality_slots_match_read_flags(
     assert (out["audio"] is not None) == read_audio
     assert _unwrap(out["params"]).shape == (_BATCH, _NUM_PARAMS)
     assert _unwrap(out["noise"]).shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_prepare_batch_ot_keeps_m2l_aligned_with_params() -> None:
+    """Hungarian matching applies the parameter-row permutation to M2L conditioning."""
+    row_ids = np.arange(_BATCH, dtype=np.float32)
+    raw = _make_raw(read_mel=False, read_m2l=True)
+    raw["param_array"] = np.repeat(row_ids[:, None], _NUM_PARAMS, axis=1)
+    raw["music2latent"] = np.broadcast_to(
+        row_ids[:, None, None], _M2L_SHAPE
+    ).copy()
+
+    out = prepare_batch(
+        raw,
+        mean=None,
+        std=None,
+        rescale_params=False,
+        ot=True,
+        generator=torch.Generator().manual_seed(17),
+    )
+
+    params = _unwrap(out["params"])
+    m2l = _unwrap(out["m2l"])
+    assert torch.equal(m2l[:, 0, 0], params[:, 0])
+    assert not torch.equal(params[:, 0], torch.from_numpy(row_ids))
 
 
 @pytest.mark.parametrize(

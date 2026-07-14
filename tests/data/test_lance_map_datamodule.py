@@ -627,17 +627,29 @@ class TestLanceMapDataModuleModes:
         np.testing.assert_array_equal(collect(num_workers=2), collect(num_workers=0))
 
     @pytest.mark.slow
-    def test_ddp_sim_disjoint_shards(self, dataset_root: Path, tmp_path: Path) -> None:
-        """Lightning's default distributed sampler partitions one complete epoch.
+    @pytest.mark.parametrize("num_rows", [15, 16])
+    def test_ddp_sim_default_sampler_covers_epoch(
+        self, tmp_path: Path, num_rows: int
+    ) -> None:
+        """Lightning's default distributed sampler covers divisible and padded epochs.
 
         Uses the same CPU, two-device, ``ddp_spawn`` geometry as
         ``configs/trainer/ddp_sim.yaml``. The map loader deliberately supplies
         no custom sampler, leaving Lightning's default replacement path active.
+        Non-divisible epochs repeat one row so both ranks receive equal work;
+        divisible epochs remain disjoint.
 
-        :param dataset_root: Fixture-provided dataset-root directory.
         :param tmp_path: Directory receiving the spawned ranks' row-index files.
+        :param num_rows: Training rows; odd values exercise sampler padding.
         """
-        source_rows = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for seed, split in enumerate(("train", "val", "test"), start=1):
+            write_seeded_lance_shard(
+                dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed
+            )
+        write_mel_stats(dataset_root)
+        source_rows = make_shard_columns(num_rows, seed=1)["param_array"] * 2 - 1
         output_dir = tmp_path / "rank-indices"
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
@@ -665,8 +677,9 @@ class TestLanceMapDataModuleModes:
         rank_sets = [set(np.load(output_dir / f"rank-{rank}.npy").tolist()) for rank in range(2)]
         assert rank_sets[0]
         assert rank_sets[1]
-        assert rank_sets[0].isdisjoint(rank_sets[1])
         assert rank_sets[0] | rank_sets[1] == set(range(len(source_rows)))
+        overlap = rank_sets[0] & rank_sets[1]
+        assert len(overlap) == num_rows % 2
 
 
 class _FlowProbe(LightningModule):

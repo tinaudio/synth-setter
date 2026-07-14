@@ -92,7 +92,9 @@ def prepare_batch(
     # the generator (randn_like does not), so noise can't land on a foreign device.
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, audio = _hungarian_match(noise, params, mel_spec, audio)
+        noise, params, mel_spec, m2l, audio = _hungarian_match(
+            noise, params, mel_spec, m2l, audio
+        )
 
     return {
         "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,

@@ -29,6 +29,7 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
         batch_size=2,
         configured_num_workers=1,
         max_batches=2,
+        repetitions=2,
     )
 
     assert {(result.loader, result.conditioning, result.num_workers) for result in results} == {
@@ -39,10 +40,19 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
     }
     for result in results:
         assert result.batches == 2
-        assert result.elapsed_seconds > 0
-        assert 0 < result.dataloader_wait_seconds <= result.elapsed_seconds
+        assert result.dataset_root == str(root.resolve())
+        assert result.dataset_version >= 1
+        assert result.dataset_rows == 8
+        assert len(result.git_revision) == 40
+        assert result.batch_size == 2
+        assert result.max_batches == 2
+        assert result.repetitions == 2
+        assert result.median_elapsed_seconds > 0
+        assert 0 < result.median_dataloader_wait_seconds <= result.median_elapsed_seconds
         assert result.batches_per_second > 0
-        assert result.scan_count_per_batch == (2.0 if result.loader == "legacy" else 1.0)
+        assert result.min_batches_per_second <= result.batches_per_second
+        assert result.max_batches_per_second >= result.batches_per_second
+        assert result.expected_reads_per_batch == (2.0 if result.loader == "legacy" else 1.0)
 
 
 @pytest.mark.parametrize(
@@ -51,6 +61,7 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(tmp_path: Path) -> None:
         ({"batch_size": 0}, "batch_size must be positive"),
         ({"configured_num_workers": -1}, "configured_num_workers must be nonnegative"),
         ({"max_batches": 0}, "max_batches must be positive"),
+        ({"repetitions": 0}, "repetitions must be positive"),
     ],
 )
 def test_benchmark_lance_loaders_invalid_numeric_argument_raises(
@@ -102,8 +113,26 @@ def test_main_writes_benchmark_results_as_json(
     :param monkeypatch: Fixture replacing CLI arguments and benchmark execution.
     :param capsys: Fixture capturing the JSON output.
     """
-    result = LoaderBenchmarkResult("map", "mel", 0, 2, 1.0, 0.5, 2.0, 1.0)
-    calls: list[tuple[Path, int, int, int]] = []
+    result = LoaderBenchmarkResult(
+        loader="map",
+        conditioning="mel",
+        num_workers=0,
+        dataset_root="/data",
+        dataset_version=3,
+        dataset_rows=16,
+        git_revision="a" * 40,
+        batch_size=8,
+        max_batches=3,
+        repetitions=2,
+        batches=2,
+        median_elapsed_seconds=1.0,
+        median_dataloader_wait_seconds=0.5,
+        batches_per_second=2.0,
+        min_batches_per_second=1.5,
+        max_batches_per_second=2.5,
+        expected_reads_per_batch=1.0,
+    )
+    calls: list[tuple[Path, int, int, int, int]] = []
 
     def fake_benchmark(
         dataset_root: str | Path,
@@ -111,8 +140,11 @@ def test_main_writes_benchmark_results_as_json(
         batch_size: int,
         configured_num_workers: int,
         max_batches: int,
+        repetitions: int,
     ) -> list[LoaderBenchmarkResult]:
-        calls.append((Path(dataset_root), batch_size, configured_num_workers, max_batches))
+        calls.append(
+            (Path(dataset_root), batch_size, configured_num_workers, max_batches, repetitions)
+        )
         return [result]
 
     monkeypatch.setattr(benchmark_module, "benchmark_lance_loaders", fake_benchmark)
@@ -128,21 +160,32 @@ def test_main_writes_benchmark_results_as_json(
             "2",
             "--max-batches",
             "3",
+            "--repetitions",
+            "2",
         ],
     )
 
     benchmark_module.main()
 
-    assert calls == [(dataset_root, 8, 2, 3)]
+    assert calls == [(dataset_root, 8, 2, 3, 2)]
     assert json.loads(capsys.readouterr().out) == [
         {
             "loader": "map",
             "conditioning": "mel",
             "num_workers": 0,
+            "dataset_root": "/data",
+            "dataset_version": 3,
+            "dataset_rows": 16,
+            "git_revision": "a" * 40,
+            "batch_size": 8,
+            "max_batches": 3,
+            "repetitions": 2,
             "batches": 2,
-            "elapsed_seconds": 1.0,
-            "dataloader_wait_seconds": 0.5,
+            "median_elapsed_seconds": 1.0,
+            "median_dataloader_wait_seconds": 0.5,
             "batches_per_second": 2.0,
-            "scan_count_per_batch": 1.0,
+            "min_batches_per_second": 1.5,
+            "max_batches_per_second": 2.5,
+            "expected_reads_per_batch": 1.0,
         }
     ]
