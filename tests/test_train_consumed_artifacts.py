@@ -17,9 +17,11 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.train import _consumed_artifact_refs, train
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
@@ -137,6 +139,60 @@ def test_train_calls_use_input_artifacts_with_empty_edges_without_provenance(
         train(cfg)
 
     spy.assert_called_once_with(logger_sentinel, [])
+
+
+def test_train_remote_provenance_precedes_local_dataset_spec(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A training run records the configured remote dataset rather than stale local bytes.
+
+    :param tmp_path: Local rclone root and train output directory.
+    :param dataset_spec_factory: Factory producing valid frozen dataset specs.
+    :param monkeypatch: Configures a local rclone backend and bypasses credential setup.
+    """
+    local_root = tmp_path / "local-dataset"
+    remote_root = tmp_path / "intermediate-data" / "remote-dataset"
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="local-lineage",
+            run_id="local-lineage-20260713T170000000Z",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        local_root / "input_spec.json",
+    )
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="remote-lineage",
+            run_id="remote-lineage-20260713T180000000Z",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        remote_root / "input_spec.json",
+    )
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    logger_sentinel = MagicMock(name="loggers")
+    cfg = _seam_cfg(
+        tmp_path,
+        dataset_root=local_root,
+        download_dataset_root_uri="r2://intermediate-data/remote-dataset",
+        train_flag=True,
+        test_flag=False,
+    )
+
+    with _stub_train_collaborators(logger_sentinel) as spy:
+        train(cfg)
+
+    spy.assert_called_once_with(
+        logger_sentinel,
+        [("data-remote-lineage", "remote-lineage-20260713T180000000Z")],
+    )
 
 
 def test_train_records_lineage_when_only_test_is_true(

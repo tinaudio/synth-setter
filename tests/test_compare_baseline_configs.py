@@ -335,7 +335,7 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
     # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.
     "training",
-    # W&B model lineage ref added in #1509; absent in v0.0.0 — provenance, not a model knob.
+    # W&B model lineage ref is provenance, not a model knob.
     "consumed_train_config_id",
 )
 
