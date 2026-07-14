@@ -162,6 +162,25 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "never"
 
+    @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
+    def test_dawdreamer_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:
+        """DawDreamer's blocking editor API cannot implement toggle cadences.
+
+        :param cadence: Unsupported editor cadence under test.
+        """
+        with pytest.raises(
+            ValidationError,
+            match='DawDreamer requires gui_toggle_cadence="never"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "dawdreamer",
+                    "gui_toggle_cadence": cadence,
+                    "plugin_reload_cadence": "once",
+                }
+            )
+
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
 

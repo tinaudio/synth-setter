@@ -189,6 +189,82 @@ class SpectralResidualMLP(ResidualMLP):
         return super().forward(X)
 
 
+def _make_cnn_encoder(
+    *,
+    frontend: Literal["global_fft", "log_mel"],
+    in_dim: int,
+    channels: int,
+    hidden_dim: int,
+    encoder_blocks: int,
+    kernel_size: int,
+    norm: Literal["bn", "ln"],
+    sample_rate: int | None,
+    center: bool,
+    f_min: float,
+    f_max: float | None,
+    n_fft: int | None,
+    hop_length: int | None,
+    n_mels: int,
+    pad_mode: Literal["constant", "reflect"],
+    power: float,
+    mel_norm: Literal["slaney"] | None,
+    mel_scale: Literal["htk", "slaney"],
+    window: Literal["hamming", "hann"],
+    amin: float,
+    top_db: float | None,
+) -> nn.Module:
+    """Construct a validated spectral encoder.
+
+    :param frontend: Spectral representation to construct.
+    :param in_dim: Expected waveform length.
+    :param channels: First convolutional channel count.
+    :param hidden_dim: Encoder output width.
+    :param encoder_blocks: Number of encoder blocks.
+    :param kernel_size: Encoder convolution kernel size.
+    :param norm: Encoder normalization type.
+    :param sample_rate: Waveform sample rate in Hz.
+    :param center: Whether STFT frames are centered.
+    :param f_min: Lowest mel-filter frequency.
+    :param f_max: Highest mel-filter frequency.
+    :param n_fft: Fourier transform size.
+    :param hop_length: Fourier frame stride.
+    :param n_mels: Mel-filter count.
+    :param pad_mode: Centering pad mode.
+    :param power: Magnitude exponent.
+    :param mel_norm: Mel-filter normalization.
+    :param mel_scale: Mel-frequency formula.
+    :param window: Fourier window function.
+    :param amin: Positive logarithm floor.
+    :param top_db: Optional dynamic-range limit.
+    :returns: Configured global-FFT or log-mel encoder.
+    """
+    if frontend == "global_fft":
+        return ResidualEncoder(in_dim, channels, hidden_dim, encoder_blocks, kernel_size, norm)
+    assert sample_rate is not None
+    return LogMelEncoder(
+        in_dim=in_dim,
+        hidden_dim=channels,
+        out_dim=hidden_dim,
+        sample_rate=sample_rate,
+        center=center,
+        f_min=f_min,
+        f_max=f_max,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        n_mels=n_mels,
+        pad_mode=pad_mode,
+        power=power,
+        mel_norm=mel_norm,
+        mel_scale=mel_scale,
+        window=window,
+        amin=amin,
+        top_db=top_db,
+        num_blocks=encoder_blocks,
+        kernel_size=kernel_size,
+        norm=norm,
+    )
+
+
 class CNNResidualMLP(nn.Module):
     """Predict parameters with a spectral CNN encoder and residual MLP trunk.
 
@@ -247,37 +323,33 @@ class CNNResidualMLP(nn.Module):
     ) -> None:
         super().__init__()
 
-        if frontend == "global_fft":
-            self.encoder = ResidualEncoder(
-                in_dim, channels, hidden_dim, encoder_blocks, kernel_size, norm
-            )
-        elif frontend != "log_mel":
+        if frontend not in ("global_fft", "log_mel"):
             raise ValueError(f"Unsupported frontend: {frontend}")
-        elif sample_rate is None:
+        if frontend == "log_mel" and sample_rate is None:
             raise ValueError("sample_rate is required for the log_mel frontend")
-        else:
-            self.encoder = LogMelEncoder(
-                in_dim=in_dim,
-                hidden_dim=channels,
-                out_dim=hidden_dim,
-                sample_rate=sample_rate,
-                center=center,
-                f_min=f_min,
-                f_max=f_max,
-                n_fft=n_fft,
-                hop_length=hop_length,
-                n_mels=n_mels,
-                pad_mode=pad_mode,
-                power=power,
-                mel_norm=mel_norm,
-                mel_scale=mel_scale,
-                window=window,
-                amin=amin,
-                top_db=top_db,
-                num_blocks=encoder_blocks,
-                kernel_size=kernel_size,
-                norm=norm,
-            )
+        self.encoder = _make_cnn_encoder(
+            frontend=frontend,
+            in_dim=in_dim,
+            channels=channels,
+            hidden_dim=hidden_dim,
+            encoder_blocks=encoder_blocks,
+            kernel_size=kernel_size,
+            norm=norm,
+            sample_rate=sample_rate,
+            center=center,
+            f_min=f_min,
+            f_max=f_max,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+            pad_mode=pad_mode,
+            power=power,
+            mel_norm=mel_norm,
+            mel_scale=mel_scale,
+            window=window,
+            amin=amin,
+            top_db=top_db,
+        )
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

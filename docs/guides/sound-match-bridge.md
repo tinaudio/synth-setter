@@ -46,29 +46,21 @@ param map, which otherwise follows `--param-spec-name`. Every run — crashes
 included — appends to `<log-dir>/<uuid>.log` (`--log-dir`, default set per
 deployment next to the checkpoint constant).
 
-## Regenerating the CLAP param maps
+## Regenerating the joint parameter maps
 
-`src/synth_setter/data/vst/<spec>_clap_map.json` (packaged per Surge spec —
-`surge_xt`, `surge_simple`, `surge_4` — and selected by the CLI's
-`--param-spec-name`) maps every spec pyname to its CLAP id/name/range. All are
-built from `surge_xt_clap_info.json`, a raw dump of the installed Surge XT
-CLAP taken by the first-party ctypes host in `data/vst/clap_introspect.py`.
-After a Surge upgrade:
+`src/synth_setter/data/vst/<spec>_param_map.json` stores Pedalboard, CLAP, and
+DawDreamer identities plus version, parameter-count, preset-resource, and
+preset-hash provenance. Capture each host with `build_param_map.py`'s
+`dump-clap`, `dump-pedalboard`, and `dump-dawdreamer` commands, then join the
+three files without loading a plugin runtime:
 
 ```bash
-# 1. Dump the installed CLAP (no display needed)
-python -m synth_setter.tools.build_clap_map dump
-
-# 2. Rebuild each spec's map — loads the VST3 via pedalboard, so on Linux run
-#    under the headless wrapper
-for spec in surge_xt surge_simple surge_4; do
-  src/synth_setter/scripts/run-linux-vst-headless.sh \
-    .venv/bin/python -m synth_setter.tools.build_clap_map build --param-spec-name "$spec"
-done
+python -m synth_setter.tools.build_param_map build \
+  --pedalboard-dump pedalboard.json --clap-dump clap.json \
+  --dawdreamer-dump dawdreamer.json --param-spec-name surge_xt \
+  --out src/synth_setter/data/vst/surge_xt_param_map.json
 ```
 
-`build` joins the dump with pedalboard's base-preset view through the
-patch-invariant parameter index, re-validates that premise elementwise against
-init-state names and `surge_params.csv`, and fails loudly listing every
-unmapped parameter. Commit both JSONs; the completeness tests in
-`tests/data/vst/test_clap_map_completeness.py` pin the result.
+The join hard-fails on incomplete, ambiguous, duplicated, version-skewed, or
+preset-skewed identities. Commit the regenerated map; completeness tests pin
+all three supported Surge specs.

@@ -370,7 +370,7 @@ os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] = ...
 Target pattern:
 
 ```python
-storage_config = StorageSettings(_env_file=env_file).to_config()
+storage_config = storage_settings_from_sources(env_file).to_config()
 worker_env.update(storage_config.rclone_env())
 ```
 

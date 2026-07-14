@@ -3,8 +3,8 @@
 ``PluginFormatMap`` is the committed JSON contract translating this repo's
 pedalboard-normalized parameter world into CLAP parameter ids/names/ranges;
 ``synth_params_to_clap_rows`` converts one decoded prediction into rows in the
-parameters' native CLAP value domain. ``tools/build_clap_map.py`` builds the
-committed map; ``cli/predict_capture.py`` consumes it.
+parameters' native CLAP value domain. The committed joint map supplies this
+projection; ``cli/predict_capture.py`` consumes it.
 """
 
 from __future__ import annotations
