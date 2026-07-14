@@ -238,7 +238,7 @@ pytest -m requires_vst -v
 If the plugin is found, VST-dependent tests will run. If not, they are
 automatically skipped (they are excluded from `make test-fast`).
 
-### 4b. rclone + Cloudflare R2
+### 4b. Cloudflare R2 storage
 
 [rclone](https://rclone.org/) is used for all interactions with Cloudflare R2
 object storage, where pipeline data (shards, specs, metadata) is stored. All
@@ -256,41 +256,33 @@ curl https://rclone.org/install.sh | sudo bash
 # Or see https://rclone.org/install/
 ```
 
-**Configure the R2 remote:**
-
 You need R2 credentials (access key ID, secret access key, and endpoint URL)
 from a project maintainer or your Cloudflare dashboard.
 
-```bash
-rclone config
-```
-
-Follow the prompts to create a new remote named `r2` with provider
-`Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file so rclone can auto-configure
-the `r2` remote — and so `docker run --env-file .env` will work out of
-the box for the synth-setter image. This is the canonical `.env`
-template:
+For synth-setter commands, set the canonical application variables in `.env`:
 
 ```
-# --- rclone (R2) remote definition: type/provider are constants ---
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-# --- R2 credentials (secrets) ---
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
-RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
-# --- Target bucket name (read by pipeline entrypoints) ---
-R2_BUCKET=<bucket-name>
+SYNTH_SETTER_STORAGE_PROVIDER=r2
+SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=<your-access-key>
+SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=<your-secret-key>
+SYNTH_SETTER_STORAGE_ENDPOINT_URL=<your-r2-endpoint-url>
 # --- W&B logging ---
 WANDB_API_KEY=<your-wandb-api-key>
 ```
 
-rclone's native env-var auto-config synthesizes the `r2` remote in-memory
-from the 5 `RCLONE_CONFIG_R2_*` vars each time you invoke `rclone` (locally
-or inside the container). No `rclone.conf` file is written. See
+`SYNTH_SETTER_STORAGE_PROVIDER` is optional because it defaults to `r2`.
+The resolver reads non-blank dotenv values before process-environment values,
+prefers canonical names over the legacy rclone alias within each source, then
+projects rclone's `RCLONE_CONFIG_R2_*` variables for backend calls. Existing
+deployments may continue to use those legacy variables, but new `.env` files
+should use the canonical names above. See
 [docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
-for the canonical enumeration of every var the image expects at runtime.
+for the runtime contract.
+
+For a direct, standalone `rclone` command, configure an `r2` remote with
+`rclone config` or provide rclone's own `RCLONE_CONFIG_R2_*` variables. A
+canonical-only `.env` configures synth-setter; it does not configure a bare
+`rclone` process that bypasses synth-setter's resolver.
 
 The Docker build itself requires no credentials or secrets: the repo is
 public, so source is fetched anonymously at build time.
@@ -298,10 +290,10 @@ public, so source is fetched anonymously at build time.
 **Verify:**
 
 ```bash
-rclone lsd r2:<bucket-name>/
+uv run python -c 'from synth_setter.pipeline.r2_io import ensure_r2_env_loaded; ensure_r2_env_loaded(); print("R2 authentication succeeded")'
 ```
 
-You should see top-level directories like `data/`, `train/`, and `eval/`.
+This authenticates using the same resolver that the pipeline uses.
 
 ### 4c. Weights & Biases (W&B)
 
