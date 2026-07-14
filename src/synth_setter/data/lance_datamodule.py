@@ -31,7 +31,6 @@ from torch.utils.data import DataLoader
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
-    DEFAULT_PARAM_SPEC_NAME,
     RawBatch,
     ShiftedBatchSampler,
     VSTDataModule,
@@ -384,7 +383,8 @@ class LanceVSTDataModule(VSTDataModule):
         predict_file: str | Path | None = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
-        param_spec_name: str = DEFAULT_PARAM_SPEC_NAME,
+        *,
+        param_spec_name: str,
         loader: Literal["legacy", "map"] = "legacy",
     ) -> None:
         """Store the loader selection on top of the base datamodule config.

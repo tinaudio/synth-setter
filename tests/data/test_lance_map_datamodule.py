@@ -72,6 +72,7 @@ def _set_up_map_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
     kwargs.setdefault("loader", "map")
     kwargs.setdefault("num_workers", 0)
     kwargs.setdefault("pin_memory", False)
+    kwargs.setdefault("param_spec_name", "surge_xt")
     module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -202,7 +203,9 @@ class TestLanceMapDataModuleSetup:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        module = LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+        )
         module.setup()
         try:
             assert isinstance(module.train_dataset, LanceVSTDataset)
@@ -236,7 +239,12 @@ class TestLanceMapDataModuleSetup:
         with pytest.raises(ValueError, match="loader"):
             # Hydra configs pass arbitrary strings at runtime, so the guard is
             # the trust boundary the Literal annotation cannot enforce.
-            LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, loader="iterable")  # type: ignore[arg-type]
+            LanceVSTDataModule(
+                dataset_root=dataset_root,
+                batch_size=2,
+                loader="iterable",  # type: ignore[arg-type]
+                param_spec_name="surge_xt",
+            )
 
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
         """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
@@ -247,7 +255,9 @@ class TestLanceMapDataModuleSetup:
         root.mkdir()
         for split in ("train", "val", "test"):
             write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
-        module = LanceVSTDataModule(dataset_root=root, batch_size=2, loader="map")
+        module = LanceVSTDataModule(
+            dataset_root=root, batch_size=2, loader="map", param_spec_name="surge_xt"
+        )
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
 
@@ -268,7 +278,12 @@ class TestLanceMapDataModuleSetup:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         module = LanceVSTDataModule(
-            dataset_root=dataset_root, batch_size=2, loader="map", num_workers=0, pin_memory=False
+            dataset_root=dataset_root,
+            batch_size=2,
+            loader="map",
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name="surge_xt",
         )
         module.setup()
         module.teardown()

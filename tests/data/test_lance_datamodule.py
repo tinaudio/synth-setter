@@ -162,6 +162,7 @@ def _set_up_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: LanceVSTDataModule
     """
+    kwargs.setdefault("param_spec_name", "surge_xt")
     module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -576,10 +577,12 @@ class TestLanceVSTDataset:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        dataset = LanceVSTDataset(tmp_path / "missing.lance", batch_size=3, fake=True)
+        dataset = LanceVSTDataset(
+            tmp_path / "missing.lance", batch_size=3, fake=True, num_params=3
+        )
         assert dataset.dataset_file is None
         item = dataset[0]
-        assert _unwrap(item["params"]).shape == (3, len(param_specs["surge_xt"]))
+        assert _unwrap(item["params"]).shape == (3, 3)
 
 
 class TestLanceVSTDataModule:
@@ -690,7 +693,9 @@ class TestLanceVSTDataModule:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        module = LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+        )
         module.setup()
         module.teardown()
         assert not module.train_dataset.dataset_file
