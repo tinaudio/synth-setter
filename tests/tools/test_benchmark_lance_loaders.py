@@ -1,6 +1,7 @@
 """Tests for the local legacy-versus-map Lance loader benchmark harness."""
 
 import json
+from itertools import product
 from pathlib import Path
 
 import pytest
@@ -36,12 +37,10 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(
         repetitions=2,
     )
 
-    assert {(result.loader, result.conditioning, result.num_workers) for result in results} == {
-        (loader, conditioning, workers)
-        for loader in ("legacy", "map")
-        for conditioning in ("mel", "m2l")
-        for workers in {0, configured_workers}
-    }
+    expected = set(product(("legacy", "map"), ("mel", "m2l"), {0, configured_workers}))
+    assert {
+        (result.loader, result.conditioning, result.num_workers) for result in results
+    } == expected
     for result in results:
         assert result.batches == 2
         assert result.dataset_root == str(root.resolve())
@@ -104,6 +103,28 @@ def test_benchmark_lance_loaders_no_full_batch_raises(tmp_path: Path) -> None:
             configured_num_workers=0,
             max_batches=1,
         )
+
+
+def test_benchmark_trial_map_one_full_batch_succeeds(tmp_path: Path) -> None:
+    """Map warm-up must not remove the only full batch from measurement.
+
+    :param tmp_path: Temporary root for the one-batch Lance fixtures.
+    """
+    root = tmp_path / "data"
+    root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        write_seeded_lance_shard(root / f"{split}.lance", num_rows=2, seed=seed)
+
+    result = benchmark_module._benchmark_trial(
+        root,
+        loader="map",
+        conditioning="mel",
+        num_workers=0,
+        batch_size=2,
+        max_batches=1,
+    )
+
+    assert result.batches == 1
 
 
 def test_main_writes_benchmark_results_as_json(
@@ -230,11 +251,8 @@ def test_main_runs_real_lance_benchmark(
 
     records = json.loads(capsys.readouterr().out)
     assert len(records) == 4
+    expected = set(product(("legacy", "map"), ("mel", "m2l"), (0,)))
     assert {
         (record["loader"], record["conditioning"], record["num_workers"]) for record in records
-    } == {
-        (loader, conditioning, 0)
-        for loader in ("legacy", "map")
-        for conditioning in ("mel", "m2l")
-    }
+    } == expected
     assert all(record["dataset_rows"] == 6 for record in records)

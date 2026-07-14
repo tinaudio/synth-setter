@@ -1,4 +1,10 @@
-"""Benchmark the legacy and map-style Lance dataloaders on local splits."""
+"""Benchmark the legacy and map-style Lance dataloaders on local splits.
+
+Example::
+
+    uv run python -m synth_setter.tools.benchmark_lance_loaders ./data \
+        --batch-size 128 --num-workers 4 --max-batches 100
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import lance
 
@@ -19,7 +25,7 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 
-LoaderName = Literal["legacy", "map"]
+LoaderName: TypeAlias = Literal["legacy", "map"]
 
 
 @dataclass(frozen=True)
@@ -131,11 +137,13 @@ def _benchmark_trial(
     )
     module.setup("fit")
     try:
-        iterator = iter(module.train_dataloader())
+        warm_iterator = iter(module.train_dataloader())
         try:
-            next(iterator)
+            next(warm_iterator)
         except StopIteration as error:
             raise ValueError("benchmark dataset produced no full training batches") from error
+        del warm_iterator
+        iterator = iter(module.train_dataloader())
         batches = 0
         wait_seconds = 0.0
         started = time.perf_counter()
@@ -182,12 +190,11 @@ def benchmark_lance_loaders(
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     worker_counts = tuple(dict.fromkeys((0, configured_num_workers)))
-    configurations: list[tuple[LoaderName, ConditioningMode, int]] = [
-        (loader, conditioning, num_workers)
-        for loader in ("legacy", "map")
-        for conditioning in ("mel", "m2l")
-        for num_workers in worker_counts
-    ]
+    configurations: list[tuple[LoaderName, ConditioningMode, int]] = []
+    for loader in ("legacy", "map"):
+        for conditioning in ("mel", "m2l"):
+            for num_workers in worker_counts:
+                configurations.append((loader, conditioning, num_workers))
     trials: dict[tuple[LoaderName, ConditioningMode, int], list[_Trial]] = {
         configuration: [] for configuration in configurations
     }
