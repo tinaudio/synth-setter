@@ -240,3 +240,14 @@ def test_launcher_cache_key_pins_canonical_python(project_root: Path) -> None:
 
     cache_token = PYTHON_VERSION.replace(".", "")
     assert f"launcher-uv-${{{{ runner.os }}}}-py{cache_token}-" in workflow
+
+
+def test_macos_deflake_installs_into_project_environment(project_root: Path) -> None:
+    """The managed macOS interpreter is not treated as a system installation.
+
+    :param project_root: Repository root fixture.
+    """
+    workflow = (project_root / ".github/workflows/deflake-mps.yml").read_text()
+
+    assert "uv sync --frozen --group dev" in workflow
+    assert "uv pip install --system" not in workflow
