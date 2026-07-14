@@ -163,11 +163,17 @@ class TestRenderConfig:
         assert cfg.gui_toggle_cadence == "never"
 
     @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
-    def test_dawdreamer_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:
+    def test_dawdreamer_gui_toggle_rejects_editor_cadences(
+        self, cadence: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """DawDreamer's blocking editor API cannot implement toggle cadences.
 
         :param cadence: Unsupported editor cadence under test.
+        :param monkeypatch: Pytest fixture used to emulate Darwin validation order.
         """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
         with pytest.raises(
             ValidationError,
             match='DawDreamer requires gui_toggle_cadence="never"',
