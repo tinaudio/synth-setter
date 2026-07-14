@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import pickle
 from collections.abc import Iterator
+from itertools import combinations, product
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -290,16 +291,9 @@ class TestPrepareBatchCollate:
             )
             return _unwrap(collate(self._raw_batch())["noise"])
 
-        first_pass = [
-            noise_for(rank, worker_id)
-            for rank in range(2)
-            for worker_id in range(num_workers)
-        ]
-        second_pass = [
-            noise_for(rank, worker_id)
-            for rank in range(2)
-            for worker_id in range(num_workers)
-        ]
+        rank_worker_pairs = list(product(range(2), range(num_workers)))
+        first_pass = [noise_for(*pair) for pair in rank_worker_pairs]
+        second_pass = [noise_for(*pair) for pair in rank_worker_pairs]
 
         assert all(
             torch.equal(first, second)
@@ -307,8 +301,7 @@ class TestPrepareBatchCollate:
         )
         assert all(
             not torch.equal(left, right)
-            for index, left in enumerate(first_pass)
-            for right in first_pass[index + 1 :]
+            for left, right in combinations(first_pass, 2)
         )
 
 
