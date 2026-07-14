@@ -294,13 +294,14 @@ def test_log_mel_frontend_backward_reaches_every_parameter() -> None:
 
 
 @pytest.mark.slow
-def test_log_mel_frontend_overfits_fixed_spectral_examples() -> None:
-    """The complete frontend and trunk can learn a small fixed inversion batch."""
+def test_log_mel_frontend_overfits_fixed_envelope_examples() -> None:
+    """The complete frontend and trunk can learn temporal-envelope differences."""
     time = torch.arange(4_410) / 44_100
+    carrier = torch.sin(2 * torch.pi * 440 * time)
     audio = torch.stack(
         [
-            torch.sin(2 * torch.pi * 220 * time),
-            torch.sin(2 * torch.pi * 1_760 * time),
+            carrier * torch.linspace(0, 1, 4_410),
+            carrier * torch.linspace(1, 0, 4_410),
         ]
     )
     targets = torch.tensor([[0.0, 1.0], [1.0, 0.0]])

@@ -45,6 +45,9 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
+_TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
+
+
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
@@ -175,7 +178,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/loss"]
     assert torch.isfinite(val_loss)
-    assert val_loss < initial_val_loss
+    assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch[0]).all()
 
