@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1223,7 +1224,7 @@ class TestEnsureR2EnvLoaded:
     """
 
     @pytest.fixture(autouse=True)
-    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         """Drop storage/rclone env and the workspace dotenv so each test starts from a known state.
 
         :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
@@ -1233,6 +1234,10 @@ class TestEnsureR2EnvLoaded:
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
+        yield
+        for key in list(os.environ):
+            if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
+                os.environ.pop(key)
 
     def test_legacy_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
         """Legacy dotenv credentials are projected into the rclone auth-ping env.
