@@ -245,21 +245,14 @@ class TestPrepareBatchCollate:
 
         assert torch.equal(noise_after_seed(), noise_after_seed())
 
-    @pytest.mark.parametrize("worker_seed", [None, 91])
     def test_collate_ddp_ranks_receive_distinct_reproducible_noise(
-        self, monkeypatch: pytest.MonkeyPatch, worker_seed: int | None
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """DDP ranks derive distinct reproducible noise with or without workers.
+        """In-process DDP ranks derive distinct reproducible noise.
 
         :param monkeypatch: Fixture controlling the distributed rank reported to the collate.
-        :param worker_seed: Simulated worker seed, or ``None`` for in-process loading.
         """
         monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
-        monkeypatch.setattr(
-            torch.utils.data,
-            "get_worker_info",
-            lambda: SimpleNamespace(seed=worker_seed) if worker_seed is not None else None,
-        )
 
         def noise_for_rank(rank: int) -> torch.Tensor:
             monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
@@ -271,6 +264,52 @@ class TestPrepareBatchCollate:
 
         assert not torch.equal(noise_for_rank(0), noise_for_rank(1))
         assert torch.equal(noise_for_rank(1), noise_for_rank(1))
+
+    def test_collate_ddp_worker_grid_receives_distinct_reproducible_noise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every distributed rank-worker pair receives its own noise stream.
+
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        base_seed = 91
+        num_workers = 2
+
+        def noise_for(rank: int, worker_id: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            monkeypatch.setattr(
+                torch.utils.data,
+                "get_worker_info",
+                lambda: SimpleNamespace(
+                    seed=base_seed + worker_id, num_workers=num_workers
+                ),
+            )
+            collate = PrepareBatchCollate(
+                mean=None, std=None, rescale_params=False, ot=False
+            )
+            return _unwrap(collate(self._raw_batch())["noise"])
+
+        first_pass = [
+            noise_for(rank, worker_id)
+            for rank in range(2)
+            for worker_id in range(num_workers)
+        ]
+        second_pass = [
+            noise_for(rank, worker_id)
+            for rank in range(2)
+            for worker_id in range(num_workers)
+        ]
+
+        assert all(
+            torch.equal(first, second)
+            for first, second in zip(first_pass, second_pass, strict=True)
+        )
+        assert all(
+            not torch.equal(left, right)
+            for index, left in enumerate(first_pass)
+            for right in first_pass[index + 1 :]
+        )
 
 
 class TestLanceMapDataModuleSetup:
