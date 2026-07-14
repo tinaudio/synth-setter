@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import operator
+from collections.abc import MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
 
 import synth_setter.data.vst.param_spec_registry as param_spec_registry
+from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import (
     default_plugin_path,
     param_specs,
@@ -101,12 +103,13 @@ def test_resolve_param_spec_returns_registered_dynamic_spec(
     monkeypatch.setitem(param_spec_registry._param_specs, dynamic_name, param_specs["surge_4"])
 
     assert resolve_param_spec(dynamic_name) is param_specs["surge_4"]
+    assert param_specs[dynamic_name] is param_specs["surge_4"]
 
 
 def test_public_param_specs_view_rejects_mutation() -> None:
     """The compatibility mapping rejects assignment and deletion."""
     name = ParamSpecName("surge_4")
-    readonly = cast(Any, param_specs)
+    readonly = cast(MutableMapping[str, ParamSpec], param_specs)
 
     with pytest.raises(TypeError):
         operator.setitem(readonly, name, param_specs[name])

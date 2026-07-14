@@ -174,6 +174,126 @@ def test_registry_with_spec_conflicting_existing_key_raises() -> None:
         registry_with_spec(REGISTRY_SOURCE, "surge_xt")
 
 
+def test_registry_with_spec_all_components_conflicting_raises() -> None:
+    """Conflicts in every generated component cannot masquerade as a new spec."""
+    registered = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
+    malformed = (
+        registered.replace(
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC",
+            "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC",
+        )
+        .replace(
+            '    ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,',
+            '    ParamSpecName("fake_synth"): SURGE_XT_PARAM_SPEC,',
+        )
+        .replace(
+            '    "fake_synth": "presets/fake_synth-base.vstpreset",',
+            '    "fake_synth": "presets/other.vstpreset",',
+        )
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_conflicting_commented_import_raises() -> None:
+    """An inline comment cannot hide an import that rebinds the generated constant."""
+    malformed = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC  # conflict",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_single_quoted_conflicting_keys_raise() -> None:
+    """Python-equivalent quoting cannot hide existing registry keys."""
+    malformed = REGISTRY_SOURCE.replace(
+        '    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,',
+        "    ParamSpecName('fake_synth'): SURGE_4_PARAM_SPEC,\n"
+        '    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,',
+    ).replace(
+        '    "surge_xt": "presets/surge-base.vstpreset",',
+        "    'fake_synth': 'presets/other.vstpreset',\n"
+        '    "surge_xt": "presets/surge-base.vstpreset",',
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_ignores_function_local_import() -> None:
+    """A nested constant binding does not conflict with module registry wiring."""
+    source = (
+        REGISTRY_SOURCE
+        + "\ndef helper():\n"
+        + "    from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC\n"
+    )
+
+    result = registry_with_spec(source, "fake_synth")
+
+    assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC' in result
+
+
+def test_registry_with_spec_conflicting_import_alias_raises() -> None:
+    """An alias binding the generated constant is conflicting wiring."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
+
+
+def test_registry_with_spec_ignores_harmless_import_alias() -> None:
+    """Aliasing the generated symbol away does not bind its registry constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import "
+        "FAKE_SYNTH_PARAM_SPEC as OTHER_PARAM_SPEC",
+    )
+
+    result = registry_with_spec(source, "fake_synth")
+
+    assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC' in result
+
+
+def test_registry_with_spec_conditional_import_alias_raises() -> None:
+    """A module-scope conditional can still bind the generated constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "if True:\n"
+        "    from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
+
+
+def test_registry_with_spec_exception_handler_import_alias_raises() -> None:
+    """An exception handler at module scope can bind the generated constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "try:\n"
+        "    pass\n"
+        "except Exception:\n"
+        "    from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
+
+
 def test_registry_with_spec_unrecognized_source_raises() -> None:
     """A source without the registry's dict anchors fails loudly, not silently."""
     with pytest.raises(ValueError, match="param_spec_registry"):
