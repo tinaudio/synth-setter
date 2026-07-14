@@ -667,8 +667,7 @@ def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
         shard filename.
     """
     from synth_setter.pipeline.data.lance_finalize import (
-        load_checked_winner,
-        select_winner,
+        select_checked_winner,
         staged_complete_attempts,
     )
 
@@ -683,7 +682,7 @@ def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
             )
             continue
         try:
-            load_checked_winner(spec, select_winner(shard_attempts))
+            select_checked_winner(spec, shard_attempts)
         except ValueError as exc:
             errors.append(f"{shard.filename}: {exc}")
     return errors

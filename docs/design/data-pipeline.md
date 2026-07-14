@@ -677,7 +677,7 @@ The input spec defines what the run should produce. `dataset.json` is the *outpu
 
 ### 7.7 Concurrency Semantics
 
-This is a single-user research pipeline running 1-2x/week. It is not designed for concurrent operation, but it is **safe** under concurrent operation. Nothing gets corrupted — you just waste compute.
+This is a single-user research pipeline running 1-2x/week. Workers may run concurrently, and finalization may be retried or invoked concurrently **after generation is quiescent**. The standard workflows enforce that barrier (`finalize` needs the completed `generate` job). Running generation against the same run prefix while finalization is publishing canonical outputs is unsupported because R2 does not provide the compare-and-set needed to freeze a winner snapshot.
 
 **Why concurrent operations can't corrupt data:**
 
@@ -696,9 +696,9 @@ Both invocations read the staging prefix, both see the same missing shards, both
 
 **Skip-if-valid optimization:** Workers check the staging directory for an existing valid shard before uploading. If one exists, the worker skips the upload and moves to the next shard. This is an optimization, not a correctness requirement — the staging model is safe even without it.
 
-**Scenario: concurrent `finalize` on the same run_id**
+**Scenario: concurrent `finalize` on the same quiescent run_id**
 
-Two finalize invocations both read the input spec, validate staged attempts, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+Two finalize invocations both read the input spec, validate the same stable attempt set, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
 
 Three properties make this idempotence hold for a *sequential* re-run after a crash, not just concurrent invocations. Winner selection is monotonic (earliest `.valid` `LastModified`), each split is a replace-semantics commit over the full winner set (never an append), and `metadata/dataset.complete` is written last. A finalize that dies after committing `train.lance` but before the marker re-runs to the identical result: the winners are unchanged and the commit rebuilds the manifest rather than appending rows. A straggler attempt that lands after a completed finalize cannot change the outcome either — its later `LastModified` loses to the existing winner.
 
@@ -713,7 +713,7 @@ No data corruption either way.
 
 **Scenario: `generate` while `finalize` is running**
 
-Finalize takes a snapshot of staged shard state during its validation pass. If generate launches new workers that upload to the staging prefix during finalize, those uploads don't affect the canonical `data/shards/` prefix that finalize writes to. Neither case produces a corrupt dataset.
+Unsupported for the same run prefix. A newly completed attempt can change a shard's deterministic winner between concurrent finalizers, so split manifests, statistics, and the audit card would not share one immutable selection. The workflow dependency barrier prevents this overlap; operators repairing a run manually must also wait for all workers to stop before invoking finalize.
 
 **Scenario: `finalize` while workers are still uploading**
 

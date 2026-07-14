@@ -368,6 +368,45 @@ def _recorded_attempt_names(spec: DatasetSpec) -> dict[int, str]:
     return {selected.shard_id: selected.attempt for selected in card.selected_attempts}
 
 
+def select_checked_winner(
+    spec: DatasetSpec,
+    candidates: Sequence[StagedLanceAttempt],
+    *,
+    preferred_name: str | None = None,
+) -> CheckedLanceWinner:
+    """Select the first healthy candidate using finalize's reconciliation contract.
+
+    Structurally invalid candidates are marked invalid and skipped so validation and finalization
+    agree on which attempt can become canonical.
+
+    :param spec: Validated dataset spec.
+    :param candidates: Complete staged attempts for one logical shard.
+    :param preferred_name: Previously recorded winner to try before timestamp order.
+    :returns: The first structurally healthy checked winner.
+    :raises ValueError: No candidate passes structural validation.
+    """
+    ordered = sorted(candidates, key=lambda attempt: (attempt.valid_mtime, attempt.valid_key))
+    if preferred_name is not None:
+        ordered.sort(key=lambda attempt: attempt.name != preferred_name)
+    failures: list[str] = []
+    for candidate in ordered:
+        try:
+            return load_checked_winner(spec, candidate)
+        except ValueError as exc:
+            failures.append(str(exc))
+            invalidate_staged_attempt(spec, candidate.shard_id, candidate.name)
+            logger.warning(
+                "invalidated_staged_attempt",
+                attempt=candidate.name,
+                reason=str(exc),
+                shard_id=candidate.shard_id,
+            )
+    shard_id = candidates[0].shard_id if candidates else "unknown"
+    raise ValueError(
+        f"shard {shard_id} has no healthy staged-valid attempt: " + "; ".join(failures)
+    )
+
+
 def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
     """Reconcile staging, pick one winner per shard, and structural-check each.
 
@@ -387,31 +426,11 @@ def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
     recorded = _recorded_attempt_names(spec)
     winners: dict[int, CheckedLanceWinner] = {}
     for shard in spec.shards:
-        candidates = sorted(
-            attempts[shard.shard_id], key=lambda attempt: (attempt.valid_mtime, attempt.valid_key)
+        winners[shard.shard_id] = select_checked_winner(
+            spec,
+            attempts[shard.shard_id],
+            preferred_name=recorded.get(shard.shard_id),
         )
-        preferred = recorded.get(shard.shard_id)
-        if preferred is not None:
-            candidates.sort(key=lambda attempt: attempt.name != preferred)
-        failures: list[str] = []
-        for candidate in candidates:
-            try:
-                winners[shard.shard_id] = load_checked_winner(spec, candidate)
-                break
-            except ValueError as exc:
-                failures.append(str(exc))
-                invalidate_staged_attempt(spec, shard.shard_id, candidate.name)
-                logger.warning(
-                    "invalidated_staged_attempt",
-                    attempt=candidate.name,
-                    reason=str(exc),
-                    shard_id=shard.shard_id,
-                )
-        else:
-            raise ValueError(
-                f"shard {shard.shard_id} has no healthy staged-valid attempt: "
-                + "; ".join(failures)
-            )
     return winners
 
 
@@ -469,9 +488,10 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa
 
     Each split is one replace-semantics ``Overwrite`` commit over the full
     winner set in shard order — a re-run rebuilds the identical manifest
-    instead of appending. Zero rows are decoded. Precondition: the train
-    split is non-empty — the entrypoint (``finalize_dataset.finalize_lance``)
-    guards it before delegating.
+    instead of appending. Zero rows are decoded. Preconditions: generation
+    for this run prefix is quiescent and the train split is non-empty. The
+    standard workflow enforces the generation barrier, and the entrypoint
+    (``finalize_dataset.finalize_lance``) guards the split before delegating.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
