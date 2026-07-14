@@ -1,4 +1,13 @@
-"""VST shard dataloading: batch-indexed datasets, samplers, and the shared ``prepare_batch``."""
+"""VST shard dataloading and shared batch preparation.
+
+Example::
+
+    module = VSTDataModule(
+        dataset_root="data", param_spec_name=ParamSpecName("surge_xt")
+    )
+    module.setup("fit")
+    batch = next(iter(module.train_dataloader()))
+"""
 
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -69,7 +78,20 @@ def prepare_batch(
     :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` with
         ``float32`` contiguous tensors, ``None`` for unread modalities; ``params``
         and ``noise`` are ``(batch, num_params)``.
+    :raises ValueError: If stored values are non-finite or parameters are outside
+        their normalized ``[0, 1]`` range.
     """
+    arrays = {
+        "param_array": raw["param_array"],
+        "mel_spec": raw.get("mel_spec"),
+        "music2latent": raw.get("music2latent"),
+        "audio": raw.get("audio"),
+    }
+    for column, array in arrays.items():
+        if array is not None and not np.isfinite(array).all():
+            raise ValueError(f"{column} contains non-finite values")
+    if np.any((raw["param_array"] < 0) | (raw["param_array"] > 1)):
+        raise ValueError("param_array values must be within [0, 1]")
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
 

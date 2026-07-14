@@ -10,6 +10,16 @@ subclasses inherit every batching / normalization / OT behavior unchanged.
 :class:`synth_setter.data.lance_torch.LanceMapDataset` into standard
 ``DataLoader`` semantics, with :class:`PrepareBatchCollate` bridging batches
 into :func:`synth_setter.data.vst_datamodule.prepare_batch`.
+
+Example::
+
+    module = LanceVSTDataModule(
+        dataset_root="data",
+        param_spec_name=ParamSpecName("surge_xt"),
+        loader="map",
+    )
+    module.setup("fit")
+    batch = next(iter(module.train_dataloader()))
 """
 
 from __future__ import annotations
@@ -379,6 +389,7 @@ class LanceVSTDataModule(VSTDataModule):
     def __init__(
         self,
         dataset_root: str | Path,
+        *,
         download_dataset_root_uri: str | None = None,
         use_saved_mean_and_variance: bool = True,
         batch_size: int = 1024,
@@ -389,7 +400,6 @@ class LanceVSTDataModule(VSTDataModule):
         predict_file: str | Path | None = None,
         conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
-        *,
         param_spec_name: ParamSpecName,
         loader: Literal["legacy", "map"] = "legacy",
         persistent_workers: bool = False,

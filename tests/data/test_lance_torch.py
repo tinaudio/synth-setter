@@ -322,6 +322,26 @@ class TestMapDataloader:
             tmp_path / "short.lance",
         )
 
+    def test_sampler_overrides_shuffle(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """An explicit sampler controls order even when shuffle is requested.
+
+        :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
+        """
+        dest, arrays = lance_dataset
+        dataset = LanceMapDataset(dest, columns=["param_array"])
+        loader = map_dataloader_over(
+            dataset,
+            batch_size=BATCH_SIZE,
+            sampler=torch.utils.data.SequentialSampler(dataset),
+            shuffle=True,
+        )
+
+        rows = _concat_batches(list(loader), "param_array")
+
+        np.testing.assert_array_equal(rows, arrays["param_array"])
+
     @pytest.mark.slow
     def test_spawn_workers_cover_all_rows(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -332,8 +352,14 @@ class TestMapDataloader:
         """
         dest, arrays = lance_dataset
         loader = lance_map_dataloader(
-            dest, batch_size=BATCH_SIZE, num_workers=2, columns=["param_array"], shuffle=False
+            dest,
+            batch_size=BATCH_SIZE,
+            num_workers=2,
+            columns=["param_array"],
+            shuffle=False,
+            persistent_workers=True,
         )
+        assert loader.persistent_workers
 
         rows = _concat_batches(list(loader), "param_array")
 

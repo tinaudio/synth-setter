@@ -36,6 +36,7 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(
         configured_num_workers=configured_workers,
         max_batches=2,
         repetitions=2,
+        random_seed=17,
     )
 
     expected = set(product(("legacy", "map"), ("mel", "m2l"), {0, configured_workers}))
@@ -51,6 +52,8 @@ def test_benchmark_lance_loaders_runs_full_local_matrix(
         assert result.batch_size == 2
         assert result.max_batches == 2
         assert result.repetitions == 2
+        assert result.random_seed == 17
+        assert result.persistent_workers is (result.num_workers > 0)
         assert result.median_elapsed_seconds > 0
         assert 0 < result.median_dataloader_wait_seconds <= result.median_elapsed_seconds
         assert result.batches_per_second > 0
@@ -149,9 +152,9 @@ def test_benchmark_trial_reuses_persistent_worker_loader(
     class FakeModule:
         instance: "FakeModule | None" = None
 
-        def __init__(self, **_kwargs: object) -> None:
+        def __init__(self, **kwargs: object) -> None:
             self.loader = FakeLoader()
-            self.loader.persistent_workers = bool(_kwargs["persistent_workers"])
+            self.loader.persistent_workers = bool(kwargs["persistent_workers"])
             self.loader_requests = 0
             FakeModule.instance = self
 
@@ -204,6 +207,8 @@ def test_main_writes_benchmark_results_as_json(
         batch_size=8,
         max_batches=3,
         repetitions=2,
+        random_seed=11,
+        persistent_workers=False,
         batches=2,
         median_elapsed_seconds=1.0,
         median_dataloader_wait_seconds=0.5,
@@ -212,7 +217,7 @@ def test_main_writes_benchmark_results_as_json(
         max_batches_per_second=2.5,
         expected_reads_per_batch=1.0,
     )
-    calls: list[tuple[Path, int, int, int, int]] = []
+    calls: list[tuple[Path, int, int, int, int, int]] = []
 
     def fake_benchmark(
         dataset_root: str | Path,
@@ -221,9 +226,17 @@ def test_main_writes_benchmark_results_as_json(
         configured_num_workers: int,
         max_batches: int,
         repetitions: int,
+        random_seed: int,
     ) -> list[LoaderBenchmarkResult]:
         calls.append(
-            (Path(dataset_root), batch_size, configured_num_workers, max_batches, repetitions)
+            (
+                Path(dataset_root),
+                batch_size,
+                configured_num_workers,
+                max_batches,
+                repetitions,
+                random_seed,
+            )
         )
         return [result]
 
@@ -242,12 +255,14 @@ def test_main_writes_benchmark_results_as_json(
             "3",
             "--repetitions",
             "2",
+            "--seed",
+            "11",
         ],
     )
 
     benchmark_module.main()
 
-    assert calls == [(dataset_root, 8, 2, 3, 2)]
+    assert calls == [(dataset_root, 8, 2, 3, 2, 11)]
     assert json.loads(capsys.readouterr().out) == [
         {
             "loader": "map",
@@ -260,6 +275,8 @@ def test_main_writes_benchmark_results_as_json(
             "batch_size": 8,
             "max_batches": 3,
             "repetitions": 2,
+            "random_seed": 11,
+            "persistent_workers": False,
             "batches": 2,
             "median_elapsed_seconds": 1.0,
             "median_dataloader_wait_seconds": 0.5,
@@ -299,6 +316,8 @@ def test_main_runs_real_lance_benchmark(
             "1",
             "--repetitions",
             "1",
+            "--seed",
+            "23",
         ],
     )
 
@@ -311,3 +330,5 @@ def test_main_runs_real_lance_benchmark(
         (record["loader"], record["conditioning"], record["num_workers"]) for record in records
     } == expected
     assert all(record["dataset_rows"] == 6 for record in records)
+    assert all(record["random_seed"] == 23 for record in records)
+    assert not any(record["persistent_workers"] for record in records)

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -19,6 +18,7 @@ from statistics import median
 from typing import Literal, TypeAlias
 
 import lance
+import numpy as np
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
@@ -26,6 +26,7 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 
 LoaderName: TypeAlias = Literal["legacy", "map"]
+BenchmarkKey: TypeAlias = tuple[LoaderName, ConditioningMode, int]
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,10 @@ class LoaderBenchmarkResult:
         Maximum measured batches per trial.
     .. attribute :: repetitions
         Warmed trials summarized by the record.
+    .. attribute :: random_seed
+        Seed used to randomize the per-repetition matrix order.
+    .. attribute :: persistent_workers
+        Whether workers persisted between warm-up and measurement.
     .. attribute :: batches
         Number of materialized batches.
     .. attribute :: median_elapsed_seconds
@@ -78,6 +83,8 @@ class LoaderBenchmarkResult:
     batch_size: int
     max_batches: int
     repetitions: int
+    random_seed: int
+    persistent_workers: bool
     batches: int
     median_elapsed_seconds: float
     median_dataloader_wait_seconds: float
@@ -164,46 +171,45 @@ def _benchmark_trial(
     return _Trial(batches=batches, elapsed_seconds=elapsed, wait_seconds=wait_seconds)
 
 
-def benchmark_lance_loaders(
-    dataset_root: str | Path,
+def _benchmark_configurations(configured_num_workers: int) -> list[BenchmarkKey]:
+    """Build the comparison matrix without duplicate zero-worker cells.
+
+    :param configured_num_workers: Production-like worker count compared with zero.
+    :return: Loader, conditioning, and worker-count matrix cells.
+    """
+    worker_counts = tuple(dict.fromkeys((0, configured_num_workers)))
+    return [
+        (loader, conditioning, num_workers)
+        for loader in ("legacy", "map")
+        for conditioning in ("mel", "m2l")
+        for num_workers in worker_counts
+    ]
+
+
+def _run_trials(
+    root: Path,
+    configurations: list[BenchmarkKey],
     *,
     batch_size: int,
-    configured_num_workers: int,
     max_batches: int,
-    repetitions: int = 3,
-) -> list[LoaderBenchmarkResult]:
-    """Run the Phase-2 comparison matrix on a local Lance fixture.
+    repetitions: int,
+    random_seed: int,
+) -> dict[BenchmarkKey, list[_Trial]]:
+    """Run randomized repetitions for every matrix cell.
 
-    :param dataset_root: Directory containing local ``train/val/test.lance`` splits.
+    :param root: Resolved directory containing local Lance splits.
+    :param configurations: Matrix cells to measure.
     :param batch_size: Rows requested per batch.
-    :param configured_num_workers: Production-like worker count compared with zero.
     :param max_batches: Maximum batches materialized per matrix cell.
-    :param repetitions: Warmed trials per cell used for median and spread.
-    :return: Results for legacy/map, mel/m2l, and zero/configured workers.
-    :raises ValueError: If numeric arguments are invalid or a run yields no batch.
+    :param repetitions: Warmed trials per cell.
+    :param random_seed: Seed controlling cell order within each repetition.
+    :return: Trial timings grouped by matrix cell.
     """
-    if batch_size < 1:
-        raise ValueError("batch_size must be positive")
-    if configured_num_workers < 0:
-        raise ValueError("configured_num_workers must be nonnegative")
-    if max_batches < 1:
-        raise ValueError("max_batches must be positive")
-    if repetitions < 1:
-        raise ValueError("repetitions must be positive")
-    worker_counts = tuple(dict.fromkeys((0, configured_num_workers)))
-    configurations: list[tuple[LoaderName, ConditioningMode, int]] = []
-    for loader in ("legacy", "map"):
-        for conditioning in ("mel", "m2l"):
-            for num_workers in worker_counts:
-                configurations.append((loader, conditioning, num_workers))
-    trials: dict[tuple[LoaderName, ConditioningMode, int], list[_Trial]] = {
-        configuration: [] for configuration in configurations
-    }
-    rng = random.SystemRandom()
-    root = Path(dataset_root).resolve()
+    trials = {configuration: [] for configuration in configurations}
+    rng = np.random.default_rng(random_seed)
     for _ in range(repetitions):
-        round_order = configurations.copy()
-        rng.shuffle(round_order)
+        order = rng.permutation(len(configurations))
+        round_order = [configurations[index] for index in order]
         for loader, conditioning, num_workers in round_order:
             trials[(loader, conditioning, num_workers)].append(
                 _benchmark_trial(
@@ -215,9 +221,34 @@ def benchmark_lance_loaders(
                     max_batches=max_batches,
                 )
             )
+    return trials
 
+
+def _summarize_results(
+    root: Path,
+    configurations: list[BenchmarkKey],
+    trials: dict[BenchmarkKey, list[_Trial]],
+    *,
+    batch_size: int,
+    max_batches: int,
+    repetitions: int,
+    random_seed: int,
+) -> list[LoaderBenchmarkResult]:
+    """Summarize trial timings with dataset and execution provenance.
+
+    :param root: Resolved directory containing local Lance splits.
+    :param configurations: Matrix cells in output order.
+    :param trials: Trial timings grouped by matrix cell.
+    :param batch_size: Rows requested per batch.
+    :param max_batches: Maximum batches materialized per matrix cell.
+    :param repetitions: Warmed trials per cell.
+    :param random_seed: Seed controlling cell order within each repetition.
+    :return: One benchmark record per matrix cell.
+    """
     train = lance.dataset(root / "train.lance")
-    revision = _get_git_sha()
+    dataset_version = train.version
+    dataset_rows = train.count_rows()
+    git_revision = _get_git_sha()
     results = []
     for loader, conditioning, num_workers in configurations:
         cell = trials[(loader, conditioning, num_workers)]
@@ -228,12 +259,14 @@ def benchmark_lance_loaders(
                 conditioning=conditioning,
                 num_workers=num_workers,
                 dataset_root=str(root),
-                dataset_version=train.version,
-                dataset_rows=train.count_rows(),
-                git_revision=revision,
+                dataset_version=dataset_version,
+                dataset_rows=dataset_rows,
+                git_revision=git_revision,
                 batch_size=batch_size,
                 max_batches=max_batches,
                 repetitions=repetitions,
+                random_seed=random_seed,
+                persistent_workers=num_workers > 0,
                 batches=cell[0].batches,
                 median_elapsed_seconds=median(trial.elapsed_seconds for trial in cell),
                 median_dataloader_wait_seconds=median(trial.wait_seconds for trial in cell),
@@ -246,6 +279,55 @@ def benchmark_lance_loaders(
     return results
 
 
+def benchmark_lance_loaders(
+    dataset_root: str | Path,
+    *,
+    batch_size: int,
+    configured_num_workers: int,
+    max_batches: int,
+    repetitions: int = 3,
+    random_seed: int = 0,
+) -> list[LoaderBenchmarkResult]:
+    """Run the Phase-2 comparison matrix on a local Lance fixture.
+
+    :param dataset_root: Directory containing local ``train/val/test.lance`` splits.
+    :param batch_size: Rows requested per batch.
+    :param configured_num_workers: Production-like worker count compared with zero.
+    :param max_batches: Maximum batches materialized per matrix cell.
+    :param repetitions: Warmed trials per cell used for median and spread.
+    :param random_seed: Seed controlling cell order within each repetition.
+    :return: Results for legacy/map, mel/m2l, and zero/configured workers.
+    :raises ValueError: If numeric arguments are invalid or a run yields no batch.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if configured_num_workers < 0:
+        raise ValueError("configured_num_workers must be nonnegative")
+    if max_batches < 1:
+        raise ValueError("max_batches must be positive")
+    if repetitions < 1:
+        raise ValueError("repetitions must be positive")
+    root = Path(dataset_root).resolve()
+    configurations = _benchmark_configurations(configured_num_workers)
+    trials = _run_trials(
+        root,
+        configurations,
+        batch_size=batch_size,
+        max_batches=max_batches,
+        repetitions=repetitions,
+        random_seed=random_seed,
+    )
+    return _summarize_results(
+        root,
+        configurations,
+        trials,
+        batch_size=batch_size,
+        max_batches=max_batches,
+        repetitions=repetitions,
+        random_seed=random_seed,
+    )
+
+
 def main() -> None:
     """Run the local comparison matrix and print JSON records."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -254,6 +336,7 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-batches", type=int, default=100)
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     results = benchmark_lance_loaders(
         args.dataset_root,
@@ -261,6 +344,7 @@ def main() -> None:
         configured_num_workers=args.num_workers,
         max_batches=args.max_batches,
         repetitions=args.repetitions,
+        random_seed=args.seed,
     )
     sys.stdout.write(json.dumps([asdict(result) for result in results], indent=2) + "\n")
 

@@ -187,6 +187,7 @@ def map_dataloader_over(
     if persistent_workers and num_workers == 0:
         raise ValueError("persistent_workers requires num_workers > 0")
     effective_collate = collate_fn or _prebatched_collate
+    effective_shuffle = None if sampler is not None else shuffle
     if num_workers == 0:
         # get_safe_loader requires workers; plain DataLoader supports in-process loading.
         # Cast bridges __getitems__' column dict with DataLoader's list-oriented stub.
@@ -194,7 +195,7 @@ def map_dataloader_over(
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
+            shuffle=effective_shuffle,
             sampler=sampler,
             collate_fn=typed_collate,
             pin_memory=pin_memory,
@@ -205,7 +206,7 @@ def map_dataloader_over(
         dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=shuffle,
+        shuffle=effective_shuffle,
         sampler=sampler,
         collate_fn=effective_collate,
         pin_memory=pin_memory,
@@ -226,6 +227,7 @@ def lance_map_dataloader(
     collate_fn: Callable[[dict[str, torch.Tensor]], object] | None = None,
     pin_memory: bool = False,
     drop_last: bool = False,
+    persistent_workers: bool = False,
 ) -> DataLoader:
     """Build a map-style DataLoader (random access, shuffling, DDP-samplable).
 
@@ -240,6 +242,7 @@ def lance_map_dataloader(
     :param collate_fn: Optional batch transformation after the projected Lance read.
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
+    :param persistent_workers: Whether worker processes survive across iterator resets.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
     """
@@ -261,6 +264,7 @@ def lance_map_dataloader(
         collate_fn=collate_fn,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        persistent_workers=persistent_workers,
     )
 
 

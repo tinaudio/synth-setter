@@ -139,6 +139,54 @@ def _make_raw(
     return raw
 
 
+@pytest.mark.parametrize("column", ["param_array", "mel_spec", "music2latent", "audio"])
+def test_prepare_batch_nonfinite_column_raises_value_error(column: str) -> None:
+    """Non-finite stored values fail before model-facing transformation.
+
+    :param column: Raw column corrupted with a NaN.
+    """
+    raw = _make_raw(read_mel=True, read_m2l=True, read_audio=True)
+    arrays = {
+        "param_array": raw["param_array"],
+        "mel_spec": raw.get("mel_spec"),
+        "music2latent": raw.get("music2latent"),
+        "audio": raw.get("audio"),
+    }
+    array = arrays[column]
+    assert array is not None
+    array.flat[0] = np.nan
+
+    with pytest.raises(ValueError, match=rf"{column} contains non-finite values"):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_prepare_batch_parameter_out_of_range_raises_value_error(value: float) -> None:
+    """Stored parameters outside their normalized range fail before rescaling.
+
+    :param value: Invalid parameter value injected into the raw batch.
+    """
+    raw = _make_raw()
+    raw["param_array"][0, 0] = value
+
+    with pytest.raises(ValueError, match="param_array values must be within \\[0, 1\\]"):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
 def test_prepare_batch_is_pure_and_pinned() -> None:
     """``prepare_batch`` reproduces the frozen pre-refactor golden bit-for-bit."""
     seed = 0
@@ -251,7 +299,7 @@ def test_prepare_batch_modality_slots_match_read_flags(
 
 def test_prepare_batch_ot_keeps_m2l_aligned_with_params() -> None:
     """Hungarian matching applies the parameter-row permutation to M2L conditioning."""
-    row_ids = np.arange(_BATCH, dtype=np.float32)
+    row_ids = np.linspace(0.0, 1.0, _BATCH, dtype=np.float32)
     raw = _make_raw(read_mel=False, read_m2l=True)
     raw["param_array"] = np.repeat(row_ids[:, None], _NUM_PARAMS, axis=1)
     raw["music2latent"] = np.broadcast_to(
