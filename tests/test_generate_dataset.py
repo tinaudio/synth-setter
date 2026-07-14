@@ -73,6 +73,23 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     assert spec.render.samples_per_shard >= 1
 
 
+def test_cfg_dataset_dawdreamer_error_precedes_darwin_guard(
+    cfg_dataset: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generation config reports DawDreamer's backend constraint on Darwin.
+
+    :param cfg_dataset: Function-scoped dataset generation configuration.
+    :param monkeypatch: Stubs platform detection to exercise the overlapping guards.
+    """
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin")
+    with open_dict(cfg_dataset):
+        cfg_dataset.render.renderer_backend = "dawdreamer"
+        cfg_dataset.render.gui_toggle_cadence = "render"
+
+    with pytest.raises(ValueError, match='DawDreamer requires gui_toggle_cadence="never"'):
+        spec_from_cfg(cfg_dataset)
+
+
 def test_cfg_dataset_without_copy_dataset_root_uri_composes_with_no_copy_source(
     cfg_dataset: DictConfig,
 ) -> None:
