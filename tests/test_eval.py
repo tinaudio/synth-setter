@@ -11,9 +11,11 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 import math
 import os
 import subprocess
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -23,11 +25,14 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import seed_everything
+from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import REAL_VST_VARIANTS
@@ -48,6 +53,25 @@ class _FakeOracleDataset(NamedTuple):
 # Smoke bound only: a one-row overfit cannot establish generalization, so this guards
 # against non-finite or divergent held-out loss, not learning quality.
 _TORCHSYNTH_HELD_OUT_LOSS_MAX = 1.0
+
+
+class _RecordingWandbLogger(WandbLogger):
+    """A W&B logger boundary fake that records consumed artifact references."""
+
+    def __init__(self) -> None:
+        self.used_artifacts: list[str] = []
+
+    @property
+    def experiment(self) -> Any:  # type: ignore[override]
+        """Return the recorder without initializing an external W&B run."""
+        return self
+
+    def use_artifact(self, name_alias: str) -> None:
+        """Record the artifact reference the evaluation entrypoint consumes.
+
+        :param name_alias: W&B artifact name with its alias.
+        """
+        self.used_artifacts.append(name_alias)
 
 
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
@@ -180,6 +204,8 @@ _FAKE_ORACLE_DATASETS = [
 def test_evaluate_runs_oracle_with_null_ckpt_path(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fake oracle returns ``batch["params"]`` verbatim, so ``test/param_mse`` is exactly zero.
 
@@ -189,6 +215,8 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
     :param surge_xt_smoke_datasets: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
+    :param monkeypatch: Replaces the external W&B logger boundary.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -214,9 +242,20 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
 
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="lineage-eval",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        surge_xt_smoke_datasets / "input_spec.json",
+    )
     HydraConfig().set_config(cfg)
+    logger = _RecordingWandbLogger()
     try:
-        metric_dict, _ = evaluate(cfg)
+        with patch("synth_setter.cli.eval.instantiate_loggers", return_value=[logger]):
+            metric_dict, _ = evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
 
@@ -226,6 +265,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
+    assert logger.used_artifacts == ["data-lineage-eval:latest"]
 
 
 @pytest.mark.requires_vst
