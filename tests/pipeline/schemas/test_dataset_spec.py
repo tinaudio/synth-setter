@@ -166,13 +166,13 @@ class TestRenderConfig:
     def test_dawdreamer_gui_toggle_rejects_editor_cadences(
         self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """DawDreamer's blocking editor API cannot implement toggle cadences.
+        """DawDreamer's backend contract takes precedence over Darwin's generic guard.
 
-        :param monkeypatch: Isolates the backend contract from Darwin's platform guard.
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
         :param cadence: Unsupported editor cadence under test.
         """
         monkeypatch.setattr(
-            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
         with pytest.raises(
             ValidationError,
