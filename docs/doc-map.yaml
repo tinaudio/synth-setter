@@ -266,12 +266,12 @@ docs:
 
   # ── Eval pipeline design doc ────────────────────────────────────
   - doc: docs/guides/sound-match-bridge.md
-    description: Live sound-match bridge — predict-capture CLI contract and CLAP map rebuild
+    description: Live sound-match bridge — predict-capture CLI contract and joint map rebuild
     sources:
       - pattern: "src/synth_setter/cli/predict_capture.py"
         covers: "Bridge CLI contract: uuid from wav stem, pred-0.pt + atomic params.csv, absence-is-failure semantics, --stats-file normalization, SET ME default checkpoint"
-      - pattern: "src/synth_setter/tools/build_clap_map.py"
-        covers: "dump/build commands, patch-invariant index bridge, init-order + surge_params.csv validation, headless-wrapper requirement for build"
+      - pattern: "src/synth_setter/tools/build_param_map.py"
+        covers: "per-host dump commands and runtime-free joint-map build"
       - pattern: "src/synth_setter/data/vst/clap_introspect.py"
         covers: "First-party ctypes CLAP host used by the dump command"
       - pattern: "src/synth_setter/data/vst/clap_map.py"
@@ -565,3 +565,21 @@ docs:
       - pattern: "Makefile"
         covers: "make mutmut target; macOS fork-safety workaround"
         scope: "mutmut"
+
+  # ── GitHub Actions reference ─────────────────────────────────────
+  - doc: docs/reference/github-actions.md
+    description: Workflow catalog, secrets table, concurrency gotchas
+    sources:
+      - pattern: ".github/workflows/claude-code-review.yml"
+        covers: "Catalog row (Claude /code-review on every PR incl. drafts, posts findings), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+      - pattern: ".github/workflows/claude.yml"
+        covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
+
+  # ── Credential rotation guide ────────────────────────────────────
+  - doc: docs/operations/credential-rotation-guide.md
+    description: Credential inventory + rotation/verification procedures
+    sources:
+      - pattern: ".github/workflows/claude-code-review.yml"
+        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row and Anthropic rotation/verification procedure (review run posting findings)"
+      - pattern: ".github/workflows/claude.yml"
+        covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

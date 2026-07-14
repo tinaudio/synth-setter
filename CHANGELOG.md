@@ -1,6 +1,534 @@
 # CHANGELOG
 
 
+## v8.48.0 (2026-07-14)
+
+### Features
+
+- **data-pipeline**: Add DawDreamer renderer backend
+  ([#1808](https://github.com/tinaudio/synth-setter/pull/1808),
+  [`10e5a68`](https://github.com/tinaudio/synth-setter/commit/10e5a683ee35f5150ced25a2418362914717250f))
+
+* internal-feat(data-pipeline): add DawDreamer renderer backend
+
+* internal-feat(data-pipeline): add DawDreamer dataset backend
+
+* internal-fix(ci): include renderer backend in spec fixtures
+
+* internal-refactor(data): route pedalboard through renderer interface
+
+* internal-feat(data): add DawDreamer Surge experiment
+
+* internal-fix(data-pipeline): run and fix DawDreamer e2e VST test in CI
+
+The test composed render.base_seed / render.attempts_per_sample as Hydra render-group overrides, but
+  those are RenderConfig fields, not render-group config keys, so struct-mode compose raised
+  ConfigAttributeError and the test could never pass. Pin them via model_copy post-validation,
+  mirroring how the launcher injects the per-shard seed (cli/generate_dataset.py).
+
+The test also fell through the surge_xt VST slow-test file allowlist, so CI never ran it and the
+  failure stayed invisible. Register it in pytest_targets.
+
+* internal-fix(data-pipeline): sync branch deps into VST test image
+
+The VST slow-test job mounts the branch source over a pre-built dev-snapshot image and runs pytest
+  against the image's baked venv, which never re-syncs deps. A dependency a PR adds (e.g.
+  dawdreamer) is therefore absent and its tests fail with ModuleNotFoundError even though the code
+  and lockfile are correct. Run 'uv sync --frozen' with the Dockerfile's build-time flags before
+  pytest so new locked deps install into the venv while torch (cu128) and the dev group are
+  preserved.
+
+* fix(vst): make DawDreamer rendering deterministic
+
+Use the committed Surge parameter map for complete one-to-one host dispatch, reject ambiguous or
+  missing mappings, and rebuild the DawDreamer graph for each row so DSP state cannot bleed between
+  samples.
+
+Add driver, MIDI, collision, real-plugin mapping, and populated dataset-audio coverage for review
+  feedback on PR #1808.
+
+* internal-fix(data-pipeline): re-add editable project after VST dep sync
+
+The 'uv sync --no-install-project' added before pytest does an exact sync that prunes the image's
+  editable synth_setter install. In-process tests still import it via pytest's src pythonpath, but
+  subprocess entrypoints (python script.py) fail with ModuleNotFoundError, breaking the
+  parallel-shard-render test. Re-run 'uv pip install --no-deps -e .' after the sync, mirroring the
+  Dockerfile's two-step install.
+
+* internal-fix(data-pipeline): replace runtime VST parameter mapping
+
+* internal-fix(data-pipeline): preserve lazy renderer imports
+
+* fix(data-pipeline): refresh DawDreamer parameter identities
+
+* test(data-pipeline): cover parameter map builder failures
+
+* internal-fix(data-pipeline): resolve DawDreamer review findings
+
+* internal-fix(ci-automation): sync merged lock and formatting
+
+
+## v8.47.0 (2026-07-13)
+
+### Continuous Integration
+
+- Enforce Codecov coverage thresholds ([#1840](https://github.com/tinaudio/synth-setter/pull/1840),
+  [`fa0151e`](https://github.com/tinaudio/synth-setter/commit/fa0151e4bc284884da88e30c523c4dcdedeeae1e))
+
+- Keep auto-approve pending for draft PRs
+  ([#1841](https://github.com/tinaudio/synth-setter/pull/1841),
+  [`a6a5fd7`](https://github.com/tinaudio/synth-setter/commit/a6a5fd7583b93fc64904235114a178d4b6040d47))
+
+* Keep auto-approve pending for draft PRs
+
+* Recheck auto-approve on PR updates
+
+- Make Claude Code Review post findings and review draft PRs
+  ([#1846](https://github.com/tinaudio/synth-setter/pull/1846),
+  [`0dd1824`](https://github.com/tinaudio/synth-setter/commit/0dd182498da3fe7e9170b98e9a2ea752a0f4a049))
+
+* ci: make claude-code-review post findings and cover draft PRs
+
+The Claude Code Review workflow ran green on every PR but never posted anything to GitHub. Two
+  causes in the upstream code-review plugin command:
+
+- Without a --comment argument the plugin prints findings to the terminal and explicitly does not
+  post GitHub comments, and the action hides Claude's terminal output, so every review was
+  discarded. - The plugin's triage step skips draft PRs entirely, producing near-instant no-op runs;
+  this repo wants drafts reviewed too, so the prompt now carries an explicit override.
+
+Also set timeout-minutes and drop the commented-out author-filter boilerplate from the installer
+  template.
+
+Refs #1845
+
+* ci: scope claude-review token for posting and dedupe runs
+
+Address pre-PR review findings: grant pull-requests/issues write so comment posting cannot 403 if
+  the action ever falls back to the job token (posting normally rides the exchanged app installation
+  token), add a per-PR concurrency group so stacked draft pushes cancel stale in-flight reviews, and
+  tighten the prompt comment to the two-line cap.
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+* docs: catalog the Claude review workflows and their credential
+
+Apply the doc-drift advisory for the claude-code-review changes:
+
+- github-actions.md: catalog rows for claude and claude-code-review, CLAUDE_CODE_OAUTH_TOKEN secrets
+  row, PR-number-keyed concurrency gotcha. - credential-rotation-guide.md: mark ANTHROPIC_API_KEY
+  unused, add CLAUDE_CODE_OAUTH_TOKEN inventory row and a present-tense rotation + verification
+  procedure (resolves the stale claude-review.yml TODO). - pr-readiness-loop.md / AGENTS.md /
+  CLAUDE.md: include the Claude CI review among the reviewers whose comments need inline replies. -
+  doc-map.yaml: map both Claude workflows to the two reference docs so this drift class is detected
+  next time.
+
+- Pin claude.yml action refs to commit SHAs
+  ([#1850](https://github.com/tinaudio/synth-setter/pull/1850),
+  [`08fd5d3`](https://github.com/tinaudio/synth-setter/commit/08fd5d350fd915160eb3fe6da59d4edc0ebc15b0))
+
+anthropics/claude-code-action@v1 and actions/checkout@v4 are mutable refs on a job whose app token
+  can write to PRs and issues; a moved tag would change what runs with that access without a
+  reviewable diff. claude-code-review.yml gets the same treatment in a follow-up PR — the action
+  skips runs on PRs that modify the review workflow file, and this PR doubles as the post-merge
+  validation vehicle for #1845.
+
+Refs #1849
+
+- Run R2 VST shard test on standard runner
+  ([#1839](https://github.com/tinaudio/synth-setter/pull/1839),
+  [`8fcc7e9`](https://github.com/tinaudio/synth-setter/commit/8fcc7e9400e349265a971419619e58bdb3e4f978))
+
+### Features
+
+- **data**: Render torchsynth samples online
+  ([#1810](https://github.com/tinaudio/synth-setter/pull/1810),
+  [`7620b2c`](https://github.com/tinaudio/synth-setter/commit/7620b2ce96cd29a29efb0721ec2f16e6647599f4))
+
+* feat(data): render torchsynth samples online
+
+Add an online TorchSynth data module plus train and eval experiments so generated audio stays on the
+  execution machine. Exercise CPU training, GPU rendering, split isolation, and checkpoint
+  validation.\n\nRefs #1757
+
+* fix(data): harden online torchsynth contracts
+
+Configure pitch, isolate split seeds, reuse voices by render geometry and device, enforce numeric
+  bounds, and add focused CPU/GPU plus overfit coverage.\n\nRefs #1757
+
+* refactor(data): address torchsynth review findings
+
+Serialize cached voice mutation, tighten loader types and test structure, and pin deterministic
+  learning bounds for the train-to-eval smoke.\n\nRefs #1757
+
+* refactor(data): make torchsynth rendering reentrant
+
+Encapsulate cached voices with their locks, cover concurrent rendering, name split construction
+  inputs, and keep focused contracts out of CLI suites.\n\nRefs #1757
+
+* refactor(tests): preserve RunIf helper contract
+
+Keep the established shared decorator unchanged and localize the type narrowing to touched
+  entrypoint suites.\n\nRefs #1757
+
+* style(data): finalize torchsynth review cleanup
+
+Apply authoritative formatting and name deterministic smoke thresholds.\n\nRefs #1757
+
+* style(data): format torchsynth renderer
+
+Use the repository's pinned Ruff formatter and document the cached renderer's locking
+  contract.\n\nRefs #1757
+
+* refactor(data): use dataclass for renderer state
+
+Follow the repository's internal typed-container convention for cached TorchSynth voice
+  ownership.\n\nRefs #1757
+
+* refactor(data): inline torchsynth parameter selection
+
+Keep native parameter ordering visible at its use sites and remove a redundant helper
+  contract.\n\nRefs #1757
+
+* style(data): centralize inferable torchsynth modules
+
+Keep keyboard exclusion in one named domain constant and apply the pinned formatter.\n\nRefs #1757
+
+* fix(tests): keep train entrypoint config behind fixture
+
+Move TorchSynth Hydra composition into conftest so test_train exercises only the composed entrypoint
+  contract.\n\nRefs #1757
+
+* style(tests): tighten torchsynth fixture contract
+
+Use the requested one-line opening contract while retaining the fixture-boundary rationale required
+  for stable formatting and pydoclint fields.\n\nRefs #1757
+
+* fix(ci): keep cancelled checks out of auto-approve failures
+
+* Revert "fix(ci): keep cancelled checks out of auto-approve failures"
+
+This reverts commit 8b36a72e57954169b6e180973f300bff3b343e49.
+
+* fix(config): run TorchSynth FFN without compilation
+
+* refactor(data): address PR #1810 review — dedup param logic, harden torchsynth tests
+
+Advisory review response (no blockers). Source cleanups:
+
+- Extract `_inferable_params()` so the "which params are inferable" contract is single-sourced
+  across `render_torchsynth`, `TorchSynthDataset.__init__`, and `setup` — this also removes the
+  duplicate `get_parameters()` call in the render path (iterate the already-fetched mapping). - Name
+  the param-sanitization magic numbers (`_NAN_PARAM_FILL`, `_PARAM_CLAMP_EPS`) to capture the
+  strictly-inside-(0,1) rationale. - Document why the shim uses `setattr` (pyright rejects direct
+  assignment on a dynamic ModuleType).
+
+Test hardening:
+
+- Mark the real 10-epoch train+eval test `@pytest.mark.slow` so it leaves the default fast loop,
+  matching its siblings. - Reframe `_TORCHSYNTH_HELD_OUT_LOSS_MAX`: the single-sample-overfit run
+  can't demonstrate generalization (mean-predictor MSE 1/12 ≈ 0.083 already beats it; observed
+  val/loss ≈ 0.2 sat a hair under the old 0.21), so it is now a documented no-divergence guard, not
+  a brittle learning bound. - Broaden the split-seed disjointness test to several indices per split.
+  - Add a `setup()` num_params-mismatch regression test. - Seed the previously unseeded multirow
+  render params.
+
+* test(data): promote deferred torchsynth review items — coverage + determinism
+
+Follow-up to the PR #1810 review, addressing four items previously deferred:
+
+- ml-test:475 — add a `num_workers>0` dataloader iteration test (slow) so the production
+  multiprocessing render path (per-worker cache / PL-shim re-import, CPU workers feeding a GPU
+  trainer) is exercised, not just num_workers=0. - tdd-impl:296 — add a `setup("test")` +
+  `test_dataloader()` smoke test so the test-split branch and loader method are directly covered. -
+  ml-test:100 — seed `_torchsynth_initial_loss` via `seed_everything(..., workers=True)`, matching
+  train()'s own seeding path (torch/numpy/python) so the "initial" model is training's true start
+  regardless of what model init draws from. - ml-pipeline:180 — add a cross-process determinism test
+  (slow): render fixed params in a fresh interpreter and assert byte-identical audio, pinning that
+  the reproducible=False val/test audio survives a torchsynth upgrade rather than silently shifting.
+  Confirmed deterministic across fresh RNG states.
+
+* docs(data): reference tracking issue #1820 at deferred render-perf sites
+
+Add in-code pointers to #1820 (torchsynth online-render throughput & renderer-cache lifecycle) at
+  the three spots the deferred items touch: the `_make_renderer` cache, the per-sample render /
+  render_fn passthrough in `__getitem__`, and the loader's unset persistent_workers/pin_memory.
+
+* feat(data): pin TorchSynth param identity and ranges in a verified PARAM_SPEC
+
+Implements the ParamSpec proposal from #1757 (issue comment): the previous contract with
+  torchsynth's parameter layout was a count-only check (76), which would let a torchsynth bump that
+  renames, reorders, or re-ranges a parameter — while keeping the count — silently mislabel the
+  model's positional targets.
+
+- TorchSynthParam frozen dataclass: module, name, minimum, maximum, curve, symmetric. - PARAM_SPEC:
+  checked-in snapshot of all 78 Voice params in get_parameters() order (76 inferable + 2 keyboard);
+  INFERABLE_SPEC / NUM_PARAMS derived, so the 76 literal is no longer magic. -
+  _verify_voice_matches_spec: element-by-element comparison (identity exact, range floats via
+  math.isclose), raising with the exact drifted parameter; called once per run in setup(), off the
+  render hot path. - render_torchsynth looks params up by (module, name) in INFERABLE_SPEC order;
+  TorchSynthDataset no longer builds a Voice just to count params;
+  _NON_INFERABLE_MODULES/_inferable_params replaced by the spec. - Drift test (live spec ==
+  PARAM_SPEC) and a perturbed-spec mismatch test. Sanity-verified: perturbing one PARAM_SPEC range
+  fails both the drift test and setup() naming the exact parameter; reverting restores green.
+
+to_human() denormalization from the proposal is deliberately deferred (YAGNI — no consumer yet); the
+  pinned ranges make it a drop-in later.
+
+* fix(data): raise on non-finite TorchSynth params instead of coercing
+
+nan_to_num(0.5) conflated two conditions with opposite semantics. Finite out-of-range values are
+  expected — the flow-matching sampler's raw preds flow unconstrained into synth_fn (metrics.py
+  LogSpectralDistance.update) — and clamping into (0, 1) is the correct render contract for them.
+  NaN/Inf are never legitimate: model divergence would silently render midpoint-0.5 audio and report
+  a plausible val/lsd, and a data-pipeline NaN would be masked entirely (rand-drawn params are
+  finite by construction). clamp alone also swallowed ±Inf by mapping it to the bounds.
+
+Params now mirror the existing finite-audio-out guard: finite in (any range, clamped), finite out;
+  NaN/Inf raise naming the contract. Adds the raise test and an out-of-range-clamps-equivalence
+  test, closing the review's untested-sanitization finding ([tdd-impl:211]) with a stricter
+  contract.
+
+* fix(data): address TorchSynth review feedback
+
+Tighten renderer contracts, keep dataset labels aligned with rendered parameters, and expand focused
+  data-module coverage. Simplify the shared RunIf typing shim and remove brittle test
+  calibration.\n\nAddresses review comments on PR #1810.
+
+* feat(data): online per-epoch resampling, val/lsd checkpointing, 4 s audio
+
+Implements recommendations 1-3 from the PR #1810 experiment log (rising val/loss root-caused to
+  memorization of a fixed finite train split on a task where ~85 % of the MSE target is
+  near-inaudible at 0.1 s):
+
+- resample_train_per_epoch (default off): a train-only sampler yields a never-repeating index block
+  per epoch, so every epoch draws fresh deterministic parameter rows and overfitting a fixed split
+  becomes structurally impossible; val/test stay fixed - checkpoint on val/lsd instead of val/loss:
+  param-space MSE has a high irreducible floor, the audio-domain metric reflects inversion quality -
+  default signal_length to 4 s (176,400 @ 44.1 kHz) so envelope/LFO params become audible; CPU test
+  fixtures pin the old 0.1 s geometry
+
+Refs #1757
+
+* feat(data): enable per-epoch train resampling in the torchsynth experiment
+
+E5 (E2's exact 2 k geometry + resample_train_per_epoch=true) reproduces the E4 result at fixed-split
+  scale: val/loss falls monotonically to 0.0797 (below the 0.0833 mean-predictor baseline E2 never
+  crossed), train tracks val with no memorization gap, and best val/lsd improves 6.48 -> 6.04.
+
+* fix(data): pin torchsynth ffn experiment to 0.1 s until #1848 lands
+
+E6 at the composed 4 s default was memory-killed instantiating the model: ResidualEncoder ends in
+  LazyLinear(in_dim // 2) over flattened conv features, so the raw-waveform head scales O(in_dim**2)
+  — 23 M params at 0.1 s but ~36.9 B (~147 GB) at 4 s. Keep the 4 s datamodule default
+  (identifiability) and pin the experiment's signal_length to the instantiable 0.1 s geometry; the
+  spectral front-end (#1848) is the path to training the FFN on 4 s audio.
+
+* internal-fix(data): correct torchsynth O(L^2) comment to name the FFT head
+
+The FFN already conditions on abs(rfft(x)) inside ResidualEncoder — the same magnitude-FFT flow as
+  ksin/kosc/fm — so 'raw-waveform head' misnamed the blocker. The quadratic scaling comes from the
+  single global spectrum keeping length-proportional resolution into LazyLinear(in_dim // 2); the
+  fix is a time-frequency front-end, tracked in #1848.
+
+* test(data): address codex review round on torchsynth tests
+
+- type _epoch_param_rows loader as DataLoader[TorchSynthBatch] - hoist two_epoch_rows to
+  module-private _two_epoch_resampled_rows (nested function closed over no test-local state) -
+  tighten the held-out-bound comment to its smoke-guard semantic - drop the production num_workers
+  literal from the forked-worker test docstring, keeping the durable rationale
+
+### Internal-Feat
+
+- **docker**: Add Hermes and Pi tools ([#1836](https://github.com/tinaudio/synth-setter/pull/1836),
+  [`01f45c4`](https://github.com/tinaudio/synth-setter/commit/01f45c475ef46415bf7ea6d94cdc503548e6ee6a))
+
+* internal-feat(docker): add Hermes and Pi tools
+
+* fix(docker): use Node 22 for Pi
+
+* fix(docker): isolate pinned Hermes installer
+
+### Internal-Fix
+
+- **ci-automation**: Fail closed in pre-PR gate classifier
+  ([#1851](https://github.com/tinaudio/synth-setter/pull/1851),
+  [`ee40cdb`](https://github.com/tinaudio/synth-setter/commit/ee40cdb2c401d5b47fd1e71f173c807413eb921e))
+
+* internal-fix(ci-automation): gate shell-wrapped PR creation
+
+* internal-fix(ci-automation): cover shell wrapper variants
+
+* internal-fix(ci-automation): fail closed for shell PR wrappers
+
+* internal-fix(ci-automation): reject wrapped PR creation
+
+* internal-fix(ci-automation): close PR creation wrapper bypasses
+
+* internal-fix(ci-automation): recognize PR command wrappers
+
+* internal-fix(ci-automation): classify wrapped PR commands
+
+* internal-fix(ci-automation): normalize PR command continuations
+
+* internal-fix(ci-automation): parse quoted PR command wrappers
+
+* internal-fix(ci-automation): fail closed in PR-create wrapper gate
+
+Extract the embedded wrapper-detection parser into agent/_shared/pr_command_classifier.py
+  (pyright/pytest-visible, single source of truth) and close the review-gate bypasses it shipped
+  with:
+
+- basename-normalize the direct check (/usr/bin/gh, ./gh) - treat backticks as segment boundaries
+  (legacy command substitution) - detect shell stdin feeds (<<< here-strings, << heredocs) -
+  recognize --command=<script> equals-form payloads - fail closed: an unlexable command mentioning
+  gh pr create now blocks instead of crashing the hook into a silent allow; classifier stderr
+  surfaces in the block message
+
+Wrapped-mode rejection now runs before the branch/worktree resolution so the fast-reject path does
+  no git work. The 24-case wrapper loop is parametrized so each variant reports independently, with
+  new regression cases for every closed bypass and for prose mentions staying ungated.
+
+* internal-fix(ci-automation): track GNU env empty-name assignment semantics
+
+GNU env accepts a leading =val token as an assignment and still execs the trailing command, while
+  bash treats the same token as a command name — so the env-prefix skip must accept empty-name
+  assignments the bash-level skip rejects. Also flatten the segment classification into a guard +
+  elif (one basename evaluation) and shrink the classify helper's banner comment to the file's
+  prevailing style.
+
+* internal-fix(ci-automation): close newline and reserved-word gate bypasses
+
+Round-2 review of the classifier found three silent fail-open paths, all verified against the
+  shipped parser:
+
+- a bare newline never separated segments, so a multi-line command with the PR creation on its own
+  line classified as unrelated - pipeline negation (!) at command position hid the executable -
+  if/elif/else/while/until branch bodies were skipped only for then/do
+
+Newlines now inject a segment separator while keeping the real newline so comments still terminate;
+  heredoc bodies therefore classify as the direct invocations they contain. The reserved-word skip
+  covers the full command-position keyword set and interleaves with assignment and prefix skipping.
+  Constants go module-private, lex failures log to stderr, and the
+  wrapped/unparsable/classifier-error blocks print dedicated help instead of the misleading
+  REVIEW_FULL recipe. New tests pin every closed bypass, the CLI's four output modes, documented
+  over-block behaviors, and the non-shell-interpreter non-goal.
+
+* internal-fix(ci-automation): model eval, gh global flags, and shell pipes
+
+Round-3 review reproduced three more fail-open paths:
+
+- eval re-parses its argument string, so the quoted form eval "gh pr create ..." hid the argv; eval
+  is now a wrapper (its joined arguments re-classify) instead of a transparent prefix - gh global
+  flags before the subcommand (-R owner/repo, --repo=...) defeated the fixed-position token match;
+  detection now scans for the adjacent bare pr create pair after gh - piped stdin into a bare shell
+  executed upstream text unseen; a no-payload shell after a pipe now fails closed when any upstream
+  token mentions the recipe
+
+Segments carry their opening separator to support the pipe rule. The prefix table gains nohup,
+  setsid, stdbuf, timeout (with its positional duration), and xargs so those common launchers
+  classify as the direct invocations they exec. Non-goals (non-shell interpreters, source of process
+  substitutions, pipes with no upstream mention) are documented and pinned by tests.
+
+* internal-fix(ci-automation): rebuild env -S argv and skip redirections
+
+GNU env -S splits its string and appends the remaining command-line arguments before exec, so
+  classifying only the quoted token missed forms like env -S "gh" pr create; the reconstructed
+  payload now folds the trailing tokens in, and every env -S hit classifies wrapped (the split
+  string hides words from top-level tokenization, same class as eval). Leading redirection words
+  (2>/dev/null, >out) no longer mask the executable. The shell-payload dispatch moves into a named
+  helper, flattening the classification loop. New tests pin the env -S argv reconstruction,
+  redirection prefixes, and both arms of the hook's classifier-failure fail-closed branch via a
+  broken python3 stub.
+
+* internal-fix(ci-automation): neutralize fd-dup redirects, find prefixed env -S
+
+Round-5 review verified two live bypasses: a fused fd-duplication prefix (2>&1) shattered into
+  tokens whose embedded ampersand opened a bogus segment that hid the executable, and env -S
+  detection required env at the segment head so any benign prefix (sudo, nice, timeout, a
+  redirection) walked right past it. Fd-dup redirections are now blanked before lexing, and the env
+  -S scan reuses the executable-index walk with a stop-at-env halt.
+
+The hook regains its cheap fast path: a pure-bash three-substring check (gh/pr/create) skips the
+  mktemp and classifier spawn for unrelated commands — substring rather than adjacency so gh global
+  flags cannot sidestep it. New pins: fd-dup and input redirections, prefixed env -S, an unlexable
+  env -S payload failing closed, the spaced-redirection over-block, and env -S of unrelated commands
+  staying ungated.
+
+* internal-fix(ci-automation): consume spaced redirection targets
+
+A bare redirection operator (2> /tmp/errlog) skipped only the operator word, so the spaced target
+  became the executable candidate and a real gh pr create behind it went ungated — while the fused
+  form was already handled. A bare operator now consumes its following target word. This also
+  corrects the earlier over-block pin: > gh pr create makes gh the redirect target and bash runs pr,
+  so it now classifies ungated.
+
+* internal-fix(ci-automation): stop fd-dup blanking from crossing quotes
+
+The fd-duplication neutralization ran on the raw string with a target class that did not exclude
+  quote characters, so a 2>&1 sitting inside a quoted argument swallowed the closing quote and
+  desynced the lexer — both a bypass (gh pr "create" ... "... 2>&1" classified ungated) and an
+  over-block (a commit message quoting the recipe near 2>&1 read as unparsable). The target class
+  now stops at quotes, so blanking a quoted fd-dup leaves quoting balanced.
+
+Also harden the hook's mode dispatch to fail closed on any unrecognized classifier output instead of
+  the catch-all exit 0, and pin the quoted fd-dup cases (bypass and over-block directions) plus a |&
+  pipe wrapper.
+
+* internal-fix(ci-automation): exercise the real classifier fail-open branch
+
+The classifier-failure fail-open test used 'ls -la', which the fast substring pre-check
+  short-circuits before the classifier ever runs, so the test passed even when the fail-open arm was
+  inverted (mutation-verified). It now drives an input that clears the pre-check but lacks the gh pr
+  create adjacency, so the fail-open arm actually executes. Also trim a redundant docstring
+  paragraph and cross-reference the duplicated recipe line shared by BLOCK_HELP and WRAPPER_HELP.
+
+* internal-fix(ci-automation): handle fused env -S split-string spellings
+
+GNU env accepts --split-string=VALUE and -SVALUE in addition to the space-separated form, appending
+  the remaining argv to the split value before exec — the same fused-vs-separate split the shell
+  side already handles for --command=. _env_split_string matched only the exact-token spellings, so
+  a gh pr create smuggled through the fused forms (or behind a prefix like sudo) classified ungated
+  and the hook exited 0. All three spellings now reconstruct the payload with the trailing argv
+  folded in. Pins added for each fused form, prefixed and unprefixed, plus an unrelated fused
+  split-string staying ungated. Also tighten the fd-dup comment to the two-line cap.
+
+* internal-fix(ci-automation): scan whole cluster for bundled env -S
+
+GNU env accepts -S bundled behind other short flags (env -vSgh, -iSgh), where -v/-i are no-value
+  flags and -S then takes the rest as its split value. The classifier only recognized -S at the head
+  of a single-dash cluster, so a gh pr create bundled behind a leading flag classified ungated. The
+  cluster is now scanned left to right: it stops at S (rest is the split value) or at a value-taking
+  short option (-u/-C) that would consume the rest first — so -uSgh stays ungated (env unsets Sgh
+  and runs the pr command, no gh). Pins added for -vSgh/-iSgh/-vS wrapped and -uSgh ungated. Also
+  wrap the hook's fail-closed case arm to the 2-line style.
+
+* internal-fix(ci-automation): correct wrapper help text and pin single-line heredoc
+
+WRAPPER_HELP told the user to avoid sudo/exec relays, heredocs, and command substitution, but those
+  classify as direct (allowed, gated normally) — only bash -c, eval, env -S, here-strings, and pipes
+  into a shell produce a wrapped block, so the help now names the real boundary. Also pin the
+  single-line 'bash <<EOF <recipe>' heredoc form (marker and body on one line, no newline split) as
+  wrapped — the multi-line cases reached direct before that branch ran, leaving it uncovered.
+
+* internal-fix(ci-automation): copy pr_command_classifier into the hook test sandbox
+
+agent/hooks/test.sh builds a sandbox repo with agent/hooks/* and agent/_shared/review_sentinel.py,
+  but the gate now also shells out to agent/_shared/pr_command_classifier.py — absent from the
+  sandbox, its python3 call failed with No such file, tripping the fail-closed classifier-error
+  branch on every pre-pr-review-gate case. Copy the classifier in alongside the sentinel helper.
+
+---------
+
+Co-authored-by: Khaled Tinubu <khaledtinubu@users.noreply.github.com>
+
+### Refactoring
+
+- **data-pipeline**: Rename render preset path to plugin state path
+  ([#1807](https://github.com/tinaudio/synth-setter/pull/1807),
+  [`a511613`](https://github.com/tinaudio/synth-setter/commit/a51161382cde81660b3eb56d2f94771de7209b97))
+
+
 ## v8.46.0 (2026-07-12)
 
 ### Automation

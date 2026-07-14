@@ -13,7 +13,7 @@ import os
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import pytest
 import torch
@@ -21,6 +21,8 @@ import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
+from lightning import seed_everything
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -41,6 +43,127 @@ class _FakeOracleDataset(NamedTuple):
     name: str
     fixture: str
     datamodule_group: str | None
+
+
+# Smoke bound only: a one-row overfit cannot establish generalization, so this guards
+# against non-finite or divergent held-out loss, not learning quality.
+_TORCHSYNTH_HELD_OUT_LOSS_MAX = 1.0
+
+
+def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
+    """Compose the deterministic TorchSynth checkpoint smoke run.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        train_cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.max_epochs=10",
+                "+trainer.limit_train_batches=1",
+                "+trainer.limit_val_batches=1",
+                "trainer.val_check_interval=1.0",
+                "trainer.check_val_every_n_epoch=1",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[1,1,1]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "model.compile=false",
+                "model.optimizer.lr=0.0001",
+                "logger=csv",
+            ],
+        )
+    with open_dict(train_cfg):
+        train_cfg.paths.root_dir = str(operator_workspace())
+        train_cfg.paths.output_dir = str(tmp_path)
+        train_cfg.paths.log_dir = str(tmp_path)
+        train_cfg.test = False
+        train_cfg.seed = 123
+    return train_cfg
+
+
+def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
+    """Return the fixed overfit batch's initial model loss.
+
+    :param train_cfg: TorchSynth training configuration.
+    :returns: Initial MSE for the fixed batch.
+    """
+    baseline_datamodule = instantiate(train_cfg.datamodule)
+    baseline_datamodule.setup("fit")
+    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
+    # Seed exactly as train() does (L.seed_everything, covering torch/numpy/python RNG)
+    # so this "initial" model matches training's start regardless of what model init draws.
+    seed_everything(train_cfg.seed, workers=True)
+    baseline_model = instantiate(train_cfg.model)
+    with torch.no_grad():
+        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
+    return loss
+
+
+def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
+    """Compose validation against the trained TorchSynth checkpoint.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :param checkpoint: Trained checkpoint path.
+    :returns: Ready-to-run evaluation configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/eval_ffn",
+                "trainer=cpu",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.ckpt_path = str(checkpoint)
+    return cfg
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None:
+    """Train and validate TorchSynth using audio rendered on the local machine.
+
+    :param tmp_path: Shared training, checkpoint, and evaluation directory.
+    """
+    train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
+    initial_loss = _torchsynth_initial_loss(train_cfg)
+    HydraConfig().set_config(train_cfg)
+    try:
+        train_metrics, train_objects = train(train_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    overfit_loss = train_metrics["train/loss_epoch"].item()
+    assert math.isfinite(overfit_loss)
+    assert overfit_loss < initial_loss
+
+    checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
+    assert checkpoint.is_file()
+    eval_cfg = _compose_torchsynth_eval_cfg(tmp_path, checkpoint)
+    HydraConfig().set_config(eval_cfg)
+    try:
+        metric_dict, eval_objects = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    val_loss = metric_dict["val/loss"]
+    assert torch.isfinite(val_loss)
+    assert val_loss < _TORCHSYNTH_HELD_OUT_LOSS_MAX
+    eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
+    assert torch.isfinite(eval_batch[0]).all()
 
 
 _FAKE_ORACLE_DATASETS = [
@@ -492,7 +615,7 @@ def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
 
     table_payloads = [p for p in logged if "shuffle/permutation" in p]
     assert len(table_payloads) == 1
-    table = table_payloads[0]["shuffle/permutation"]
+    table = cast(wandb.Table, table_payloads[0]["shuffle/permutation"])
     assert isinstance(table, wandb.Table)
     assert table.columns == ["dest_idx", "src_idx"]
     assert table.data == [[0, 1], [1, 0]]

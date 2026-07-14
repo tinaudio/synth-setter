@@ -158,6 +158,8 @@ jobs:
           target: devcontainer-tools
           platforms: ${{ steps.config.outputs.target_platform }}
           push: false
+          load: true
+          tags: synth-setter:devcontainer-tools-validation
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
@@ -165,6 +167,14 @@ jobs:
             SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
           secrets: ""
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+
+      - name: Smoke test devcontainer Codex tooling
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            synth-setter:devcontainer-tools-validation \
+            pytest tests/docker/test_devcontainer_tools.py -v
 
   # Push + smoke tests for push-to-main and workflow_dispatch. Holds the
   # `packages: write` permission so the GHCR mirror push (see #1254) works;
@@ -383,7 +393,6 @@ jobs:
           target: dev-snapshot
           platforms: ${{ steps.config.outputs.target_platform }}
           push: true
-          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

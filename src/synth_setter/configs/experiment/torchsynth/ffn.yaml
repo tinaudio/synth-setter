@@ -1,0 +1,36 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: torchsynth
+  - override /model: ffn
+  - override /callbacks: default
+  - override /trainer: gpu
+  - _self_
+
+experiment_name: torchsynth
+run_name: ffn
+tags: [torchsynth]
+
+# val/loss has a high irreducible floor (near-inaudible params); the audio-domain
+# metric reflects actual inversion quality — see PR #1810 experiment log.
+callbacks:
+  model_checkpoint:
+    monitor: val/lsd
+  early_stopping: null
+
+# Fresh train rows each epoch: E2 vs E5 in the PR #1810 log show the fixed split
+# memorizes (val rises past the 0.0833 prior) while resampling crosses below it.
+# signal_length pins 0.1 s: the encoder's single global abs(rfft) spectrum keeps
+# full length-proportional resolution and feeds LazyLinear(in_dim // 2), so the
+# head is O(in_dim**2); the 4 s default needs a time-frequency front-end (#1848).
+datamodule:
+  resample_train_per_epoch: true
+  signal_length: 4_410
+
+model:
+  compile: false
+  params_per_token: 1
+  loss_fn: mse
+  net:
+    in_dim: ${datamodule.signal_length}
+    out_dim: ${datamodule.num_params}

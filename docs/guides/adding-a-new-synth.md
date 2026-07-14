@@ -41,6 +41,33 @@ so you start from a working spec instead of a blank file.
 - Most Linux-precompiled VST3 synths are x86_64-only, so plan to render and
   validate on an amd64 host.
 
+For direct programmatic rendering, synth-setter exposes the same abstract
+dataclass contract for both hosts:
+
+```python
+from synth_setter.data.vst import DawDreamerRenderer
+
+renderer = DawDreamerRenderer(
+    plugin_path="plugins/MySynth.vst3",
+    preset_path="presets/mysynth-base.vstpreset",
+    sample_rate=44100,
+    channels=2,
+    signal_duration_seconds=4.0,
+)
+audio = renderer.render(
+    params={"cutoff": 0.5},
+    midi_note=60,
+    velocity=100,
+    note_start_and_end=(0.0, 2.0),
+)
+```
+
+`PedalboardRenderer` has the same constructor and `render` contract. DawDreamer
+0.8.3 requires a CPython 3.11 or 3.12 render worker. Its published wheels cover
+Linux x86_64, macOS x86_64/arm64, and Windows x86_64; Linux arm64 is not
+supported. This requirement applies to the worker that renders audio—a newer
+Python launcher can still dispatch to a compatible worker.
+
 ## Step 1 — Scaffold a draft spec
 
 Run the introspection CLI against the bundle. It loads the plugin via

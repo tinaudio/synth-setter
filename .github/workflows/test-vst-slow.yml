@@ -98,6 +98,7 @@ jobs:
             plugin_path: /usr/lib/vst3/Surge XT.vst3
             pytest_targets: >-
               tests/data/vst/test_generate_vst_dataset.py
+              tests/data/vst/test_dawdreamer_dataset_e2e.py
               tests/data/vst/test_always_on_integration.py
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
@@ -152,6 +153,8 @@ jobs:
         #
         # ``matrix.pytest_targets`` is a space-separated node list split into a
         # bash array (``read -ra``); node IDs here carry no spaces or globs.
+        #
+        # Re-sync the mounted branch into the image venv, then reinstall the editable project; mirrors the Dockerfile dependency flags.
         env:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
@@ -171,6 +174,9 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
+                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps -e .
               read -ra targets <<< "$PYTEST_TARGETS"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \

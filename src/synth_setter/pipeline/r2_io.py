@@ -115,7 +115,8 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     in this module:
 
     1. If the resolved dotenv file exists on disk, mirror every non-blank
-       ``SYNTH_SETTER_STORAGE_*`` key from it into the storage settings view.
+       canonical storage key or legacy rclone credential key from it into the
+       storage settings view.
        ``env_file=None`` means the default dotenv lookup:
        ``$SYNTH_SETTER_WORKSPACE/.env``, the checkout marker root's ``.env``,
        then cwd ``.env``. Blank/whitespace values are skipped so a ``.env``
@@ -197,8 +198,8 @@ def is_r2_reachable() -> bool:
 def r2_storage_options() -> dict[str, str]:
     """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
 
-    Reads ``SYNTH_SETTER_STORAGE_*`` and raises ``RuntimeError`` if a required
-    setting is unset or blank.
+    Reads canonical storage names or legacy rclone credential names and raises
+    ``RuntimeError`` if a required setting is unset or blank.
 
     :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
         for ``lance.dataset`` / ``lance.write_dataset``.
