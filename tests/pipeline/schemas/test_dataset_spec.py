@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst import param_specs
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     OutputFormat,
@@ -100,6 +102,18 @@ class TestRenderConfig:
         with pytest.raises(ValidationError):
             RenderConfig(**kwargs)
 
+    def test_param_spec_name_serializes_as_string(self) -> None:
+        """The domain identifier preserves the registry key's JSON shape."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        assert json.loads(cfg.model_dump_json())["param_spec_name"] == "surge_simple"
+
+    def test_param_spec_name_preserves_nonblank_boundary_whitespace(self) -> None:
+        """Nonblank registry keys retain surrounding whitespace."""
+        cfg = RenderConfig(**(_valid_render_kwargs() | {"param_spec_name": "  surge_simple  "}))
+
+        assert cfg.param_spec_name == "  surge_simple  "
+
     @pytest.mark.parametrize(
         ("field", "bad_value", "match"),
         [
@@ -109,7 +123,7 @@ class TestRenderConfig:
             ("signal_duration_seconds", 0.0, "signal_duration_seconds must be positive"),
             ("samples_per_render_batch", 0, "samples_per_render_batch must be positive"),
             ("samples_per_shard", 0, "samples_per_shard must be positive"),
-            ("param_spec_name", "   ", "param_spec_name must not be blank"),
+            ("param_spec_name", "   ", "param spec name must not be blank"),
             ("renderer_version", "", "renderer_version must not be blank"),
         ],
     )
@@ -709,6 +723,24 @@ class TestDatasetSpecComputedFields:
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
         """``num_params`` matches the registry's length for the spec's ``param_spec_name``."""
         spec = DatasetSpec(**_valid_spec_kwargs())
+        assert spec.num_params == len(param_specs["surge_simple"])
+
+    def test_dynamic_param_spec_flows_through_schema_to_num_params(
+        self, monkeypatch: pytest.MonkeyPatch, patch_runtime_io: None
+    ) -> None:
+        """A runtime-registered name survives Pydantic parsing and downstream lookup.
+
+        :param monkeypatch: Adds a temporary typed registry entry.
+        :param patch_runtime_io: Disables filesystem and git probes during construction.
+        """
+        name = ParamSpecName("registered_at_runtime")
+        monkeypatch.setitem(param_spec_registry._param_specs, name, param_specs["surge_simple"])
+        kwargs = _valid_spec_kwargs()
+        kwargs["render"] = {**kwargs["render"], "param_spec_name": str(name)}
+
+        spec = DatasetSpec(**kwargs)
+
+        assert spec.render.param_spec_name == name
         assert spec.num_params == len(param_specs["surge_simple"])
 
     def test_unknown_param_spec_name_raises_at_compute(self, patch_runtime_io: None) -> None:

@@ -135,7 +135,7 @@ def test_register_adds_spec_to_the_registry_module(
     assert "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC" in (
         registry
     )
-    assert '"fake_synth": FAKE_SYNTH_PARAM_SPEC,' in registry
+    assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,' in registry
     assert '"fake_synth": "presets/fake_synth-base.vstpreset",' in registry
     assert_ruff_format_clean(registry)
 
