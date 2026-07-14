@@ -147,9 +147,9 @@ def _benchmark_trial(
                 break
             wait_seconds += time.perf_counter() - wait_started
             batches += 1
+        elapsed = time.perf_counter() - started
     finally:
         module.teardown("fit")
-    elapsed = time.perf_counter() - started
     if batches == 0:
         raise ValueError("benchmark dataset produced no full training batches")
     return _Trial(batches=batches, elapsed_seconds=elapsed, wait_seconds=wait_seconds)
