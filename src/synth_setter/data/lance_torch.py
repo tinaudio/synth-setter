@@ -182,7 +182,10 @@ def map_dataloader_over(
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
     :returns: DataLoader over ``dataset``.
+    :raises ValueError: If worker persistence is enabled without worker processes.
     """
+    if persistent_workers and num_workers == 0:
+        raise ValueError("persistent_workers requires num_workers > 0")
     effective_collate = collate_fn or _prebatched_collate
     if num_workers == 0:
         # get_safe_loader requires workers; plain DataLoader supports in-process loading.

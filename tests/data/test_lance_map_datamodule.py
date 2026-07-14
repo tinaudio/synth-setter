@@ -1,6 +1,6 @@
 """Behavioral tests for the ``loader="map"`` path of ``LanceVSTDataModule``.
 
-Covers the sample-indexed cutover behind the config switch (#1740):
+Covers the sample-indexed path behind the config switch (#1740):
 
 * :class:`PrepareBatchCollate` — the picklable collate that turns
   ``LanceMapDataset.__getitems__``'s pre-collated tensor dict into
@@ -9,10 +9,9 @@ Covers the sample-indexed cutover behind the config switch (#1740):
   ``teardown`` wiring over per-split :class:`LanceMapDataset` instances.
 
 Every test drives real Lance datasets written through the pipeline writer —
-no fakes or mocks of the storage layer anywhere in this module. Fixtures are
-tiny (a handful of rows, ~10-element mel/audio axes): the goal is contract
-coverage on shapes, flags, values, and flow routing, mirroring
-``tests/data/test_lance_datamodule.py``.
+no fakes or mocks of the storage layer anywhere in this module. Fixtures
+remain small; coverage targets shapes, flags, values, and flow routing,
+mirroring ``tests/data/test_lance_datamodule.py``.
 """
 
 from __future__ import annotations
@@ -270,7 +269,7 @@ class TestLanceMapDataModuleSetup:
         """``loader="map"`` loaders carry sample semantics: row-count datasets, real batch size.
 
         The legacy path is batch-indexed (``batch_size=None``, dataset length in
-        batches) — this pins the cutover Lightning sees.
+        batches); this verifies that Lightning receives sample-indexed semantics.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -301,6 +300,23 @@ class TestLanceMapDataModuleSetup:
                 dataset_root=dataset_root,
                 batch_size=2,
                 loader="iterable",  # type: ignore[arg-type]
+                param_spec_name=ParamSpecName("surge_xt"),
+            )
+
+    def test_persistent_workers_without_workers_raises_value_error(
+        self, dataset_root: Path
+    ) -> None:
+        """Worker persistence fails at construction when no workers exist.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with pytest.raises(ValueError, match="persistent_workers requires num_workers > 0"):
+            LanceVSTDataModule(
+                dataset_root=dataset_root,
+                batch_size=2,
+                loader="map",
+                num_workers=0,
+                persistent_workers=True,
                 param_spec_name=ParamSpecName("surge_xt"),
             )
 
@@ -549,9 +565,8 @@ class TestLanceMapDataModuleModes:
     def test_repeat_first_batch_drops_ragged_tail(self, dataset_root: Path) -> None:
         """A row count not divisible by ``batch_size`` never yields a truncated repeat.
 
-        Legacy floor-divides the row count, so the repeated batch must always
-        be the full first ``batch_size`` rows — a 16-row split at batch 5 gives
-        three full batches, not ``[5, 5, 5, 1]``.
+        Legacy floor-divides the row count, so every repeated batch contains
+        the full first ``batch_size`` rows.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -846,10 +861,9 @@ class TestLegacyMapParity:
         """Same root and config: legacy and map eval epochs match batch-for-batch.
 
         Controls isolate loader mechanics: ``ot=False`` (OT permutes rows), eval
-        splits (no shuffle), ``batch_size`` dividing the 6-row splits (legacy
-        floor-divides ragged tails away; map keeps them). Noise generators are
-        seeded independently per path by design, so noise is compared on shape
-        only.
+        splits (no shuffle), and ``batch_size`` dividing each split evenly
+        (legacy floor-divides ragged tails away; map keeps them). Noise generators
+        are seeded independently per path by design, so noise is compared on shape only.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         :param split: Eval split whose dataloader epoch is compared.

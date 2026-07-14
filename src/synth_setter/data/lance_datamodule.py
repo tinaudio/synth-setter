@@ -284,7 +284,7 @@ class PrepareBatchCollate:
         )
 
 
-class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
+class _RepeatFirstBatchSampler(torch.utils.data.Sampler[int]):
     """Repeat the first full batch for each complete batch in an epoch.
 
     Indices fold modulo ``batch_size``; debug-only and not DDP-aware.
@@ -415,10 +415,12 @@ class LanceVSTDataModule(VSTDataModule):
         :param loader: Read path per split: ``"legacy"`` (batch-indexed
             adapter) or ``"map"`` (sample-indexed ``LanceMapDataset``).
         :param persistent_workers: Whether dataloader workers survive iterator resets.
-        :raises ValueError: If ``loader`` names an unknown read path.
+        :raises ValueError: If ``loader`` is unknown or worker persistence has no workers.
         """
         if loader not in ("legacy", "map"):
             raise ValueError(f"loader must be 'legacy' or 'map', got {loader!r}")
+        if persistent_workers and num_workers == 0:
+            raise ValueError("persistent_workers requires num_workers > 0")
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -572,9 +574,9 @@ class LanceVSTDataModule(VSTDataModule):
         )
 
     def train_dataloader(self) -> DataLoader:
-        """Return the training dataloader for the selected loader path.
+        """Shuffle full training batches, dropping the ragged tail on the map path.
 
-        :returns: Dataloader over the training split.
+        :returns: Legacy batch-indexed or map sample-indexed training loader.
         """
         if not self._map_mode:
             return self._legacy_dataloader(
@@ -586,27 +588,27 @@ class LanceVSTDataModule(VSTDataModule):
         return self._map_dataloader("train", shuffle=True, drop_last=True)
 
     def val_dataloader(self) -> DataLoader:
-        """Return the validation dataloader for the selected loader path.
+        """Preserve validation row order and any ragged tail on the map path.
 
-        :returns: Dataloader over the validation split.
+        :returns: Sequential validation loader for the selected storage path.
         """
         if not self._map_mode:
             return self._legacy_dataloader(cast(VSTDataset, self.val_dataset))
         return self._map_dataloader("val", shuffle=False, drop_last=False)
 
     def test_dataloader(self) -> DataLoader:
-        """Return the test dataloader for the selected loader path.
+        """Preserve test row order and any ragged tail on the map path.
 
-        :returns: Dataloader over the test split.
+        :returns: Sequential test loader for the selected storage path.
         """
         if not self._map_mode:
             return self._legacy_dataloader(cast(VSTDataset, self.test_dataset))
         return self._map_dataloader("test", shuffle=False, drop_last=False)
 
     def predict_dataloader(self) -> DataLoader:
-        """Return the prediction dataloader for the selected loader path.
+        """Preserve prediction row order, projected audio, and any ragged tail on the map path.
 
-        :returns: Dataloader over the prediction split.
+        :returns: Sequential prediction loader including ground-truth audio.
         """
         if not self._map_mode:
             return self._legacy_dataloader(cast(VSTDataset, self.predict_dataset))

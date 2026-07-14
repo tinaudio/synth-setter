@@ -27,6 +27,7 @@ from synth_setter.data.lance_torch import (
     _batch_to_shaped_tensors,
     lance_iterable_dataloader,
     lance_map_dataloader,
+    map_dataloader_over,
 )
 from synth_setter.pipeline.data.lance_shard import write_lance_dataset
 from tests.helpers.lance_fixtures import write_lance_shard
@@ -293,6 +294,23 @@ class TestMapDataloader:
 
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
+
+    def test_persistent_workers_without_workers_raises_value_error(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Worker persistence requires at least one worker process.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        with pytest.raises(ValueError, match="persistent_workers requires num_workers > 0"):
+            map_dataloader_over(
+                LanceMapDataset(dest),
+                batch_size=BATCH_SIZE,
+                num_workers=0,
+                persistent_workers=True,
+            )
 
     def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
         """A row count not divisible by ``batch_size`` yields a ragged final batch.
