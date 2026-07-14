@@ -23,6 +23,7 @@ from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
 )
+from synth_setter.param_spec_name import ParamSpecName
 
 
 def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
@@ -35,7 +36,7 @@ def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthPara
     snapshot = BackendSnapshot(plugin_version="", parameter_count=count)
     return SynthParamMap(
         plugin="test",
-        param_spec_name="test",
+        param_spec_name=ParamSpecName("test"),
         preset_resource="",
         preset_sha256="",
         pedalboard=snapshot,

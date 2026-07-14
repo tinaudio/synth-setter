@@ -20,7 +20,6 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from tqdm import trange
 
-from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
@@ -29,6 +28,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -364,7 +364,7 @@ def make_hdf5_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    param_spec = param_specs[render_cfg.param_spec_name]
+    param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     # Validate before opening the file so a bad fixed-params list (e.g. a copy
     # source whose row count != samples_per_shard) fails without leaving an
@@ -435,7 +435,7 @@ def make_wds_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    param_spec = param_specs[render_cfg.param_spec_name]
+    param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
 
@@ -498,7 +498,7 @@ def make_lance_dataset(
         record_batch_from_arrays,
     )
 
-    param_spec = param_specs[render_cfg.param_spec_name]
+    param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
 
