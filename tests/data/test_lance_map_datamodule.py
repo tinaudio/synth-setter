@@ -344,6 +344,19 @@ class TestLanceMapDataModuleSetup:
         finally:
             module.teardown()
 
+    def test_train_loader_exposes_standard_sampler_before_lightning(
+        self, dataset_root: Path
+    ) -> None:
+        """The map loader stays on Lightning's supported sampler-replacement path.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=4) as module:
+            loader = module.train_dataloader()
+
+        assert isinstance(loader.sampler, torch.utils.data.RandomSampler)
+        assert loader.batch_size == 4
+
 
 class TestLanceMapDataModuleFlows:
     """Dataloader semantics per Lightning flow: train / val / test / predict."""

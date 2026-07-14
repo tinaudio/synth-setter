@@ -11,6 +11,7 @@ import warnings
 from collections.abc import Callable
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
 import pytest
@@ -19,6 +20,7 @@ import torch.distributed as dist
 from torch.multiprocessing.spawn import spawn
 from torch.utils.data import DataLoader
 
+from synth_setter.data.lance_datamodule import LanceShardFile
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
     _batch_to_shaped_tensors,
@@ -34,6 +36,28 @@ from tests.helpers.lance_torch_datasets import (
 )
 
 BATCH_SIZE = 8
+
+
+class _TakeRecorder:
+    """Record projected reads while delegating to a real Lance dataset."""
+
+    def __init__(self, dataset: lance.LanceDataset) -> None:
+        """Store the dataset that serves recorded reads.
+
+        :param dataset: Real local Lance dataset.
+        """
+        self.dataset = dataset
+        self.calls: list[tuple[list[int], list[str] | None]] = []
+
+    def take(self, indices: list[int], *, columns: list[str] | None) -> pa.Table:
+        """Record and delegate one projected ``take``.
+
+        :param indices: Requested row indices.
+        :param columns: Requested projection.
+        :return: Lance result table.
+        """
+        self.calls.append((indices, columns))
+        return self.dataset.take(indices, columns=columns)
 
 
 @pytest.fixture(scope="module")
@@ -159,6 +183,35 @@ class TestMapDataloader:
         loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE)
 
         assert len(loader.dataset) == ROWS  # type: ignore[arg-type]
+
+    def test_getitems_matches_legacy_projected_reads_in_one_take(
+        self,
+        lance_dataset: tuple[Path, dict[str, np.ndarray]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One projected read preserves duplicate, out-of-order legacy values.
+
+        :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
+        :param monkeypatch: Fixture installing a recorder over the real dataset.
+        """
+        dest, arrays = lance_dataset
+        columns = list(arrays)
+        indices = [3, 0, 7, 7, 1]
+        dataset = LanceMapDataset(dest, columns=columns)
+        recorder = _TakeRecorder(lance.dataset(dest))
+        monkeypatch.setattr(dataset, "_ds", recorder)
+        legacy = LanceShardFile(dest)
+        try:
+            batch = dataset.__getitems__(indices)
+            for column in columns:
+                expected = legacy[column][indices]
+                np.testing.assert_array_equal(batch[column].numpy(), expected)
+                assert batch[column].numpy().dtype == expected.dtype
+                assert batch[column].shape == expected.shape
+        finally:
+            legacy.close()
+
+        assert recorder.calls == [(indices, columns)]
 
     def test_columns_projection_returns_only_requested_columns(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
