@@ -5,7 +5,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
+from synth_setter.models.components.cnn import MEL_N_MELS, LogMelEncoder, ResidualEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
@@ -201,6 +201,15 @@ class CNNResidualMLP(nn.Module):
     :param norm: Encoder normalization type.
     :param frontend: Spectral representation computed from each waveform.
     :param sample_rate: Waveform sample rate in Hz; required for ``log_mel``.
+    :param n_fft: Fourier transform size for ``log_mel``.
+    :param hop_length: Frame stride for ``log_mel``.
+    :param n_mels: Number of mel-frequency bins.
+    :param power: Exponent applied to the magnitude spectrogram.
+    :param mel_norm: Area normalization applied to mel filter-bank weights.
+    :param mel_scale: Mel-frequency conversion formula.
+    :param window: Fourier-transform window function.
+    :param amin: Lower power bound used before converting to decibels.
+    :param top_db: Dynamic range limit in decibels.
     :raises ValueError: If ``frontend`` is unsupported or log-mel has no sample rate.
     """
 
@@ -214,9 +223,19 @@ class CNNResidualMLP(nn.Module):
         out_dim: int = 16,
         kernel_size: int = 7,
         norm: Literal["bn", "ln"] = "bn",
+        *,
         frontend: Literal["global_fft", "log_mel"] = "global_fft",
         sample_rate: int | None = None,
-    ):
+        n_fft: int | None = None,
+        hop_length: int | None = None,
+        n_mels: int = MEL_N_MELS,
+        power: float = 2.0,
+        mel_norm: Literal["slaney"] | None = "slaney",
+        mel_scale: Literal["htk", "slaney"] = "slaney",
+        window: Literal["hamming", "hann"] = "hamming",
+        amin: float = 1e-10,
+        top_db: float | None = 80.0,
+    ) -> None:
         super().__init__()
 
         if frontend == "global_fft":
@@ -233,6 +252,15 @@ class CNNResidualMLP(nn.Module):
                 hidden_dim=channels,
                 out_dim=hidden_dim,
                 sample_rate=sample_rate,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                n_mels=n_mels,
+                power=power,
+                mel_norm=mel_norm,
+                mel_scale=mel_scale,
+                window=window,
+                amin=amin,
+                top_db=top_db,
                 num_blocks=encoder_blocks,
                 kernel_size=kernel_size,
                 norm=norm,

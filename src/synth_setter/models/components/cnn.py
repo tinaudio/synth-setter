@@ -202,9 +202,19 @@ class LogMelEncoder(nn.Module):
     :param hidden_dim: Channel count in the first convolutional block.
     :param out_dim: Width of the returned embedding.
     :param sample_rate: Waveform sample rate in Hz.
+    :param n_fft: Fourier transform size; defaults to 25 ms of audio.
+    :param hop_length: Frame stride; defaults to 100 frames per second.
+    :param n_mels: Number of mel-frequency bins.
+    :param power: Exponent applied to the magnitude spectrogram.
+    :param mel_norm: Area normalization applied to mel filter-bank weights.
+    :param mel_scale: Mel-frequency conversion formula.
+    :param window: Window function applied before each Fourier transform.
+    :param amin: Lower power bound used before converting to decibels.
+    :param top_db: Dynamic range limit in decibels; ``None`` disables clipping.
     :param num_blocks: Number of convolution and pooling blocks.
     :param kernel_size: Height and width of each convolutional kernel.
     :param norm: Normalization applied after each convolution.
+    :raises ValueError: If ``norm`` or ``window`` is unsupported.
     """
 
     def __init__(
@@ -212,23 +222,39 @@ class LogMelEncoder(nn.Module):
         in_dim: int,
         hidden_dim: int,
         out_dim: int,
+        *,
         sample_rate: int,
+        n_fft: int | None = None,
+        hop_length: int | None = None,
+        n_mels: int = MEL_N_MELS,
+        power: float = 2.0,
+        mel_norm: Literal["slaney"] | None = "slaney",
+        mel_scale: Literal["htk", "slaney"] = "slaney",
+        window: Literal["hamming", "hann"] = "hamming",
+        amin: float = 1e-10,
+        top_db: float | None = 80.0,
         num_blocks: int = 4,
         kernel_size: int = 3,
         norm: Literal["bn", "ln"] = "bn",
     ) -> None:
         super().__init__()
         self.in_dim = in_dim
+        try:
+            window_fn = {"hamming": torch.hamming_window, "hann": torch.hann_window}[window]
+        except KeyError as error:
+            raise ValueError(f"Unsupported window: {window}") from error
         self.mel = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
-            n_fft=mel_n_fft(sample_rate),
-            hop_length=mel_hop_length(sample_rate),
-            n_mels=MEL_N_MELS,
-            window_fn=torch.hamming_window,
-            power=2.0,
-            norm="slaney",
-            mel_scale="slaney",
+            n_fft=n_fft if n_fft is not None else mel_n_fft(sample_rate),
+            hop_length=hop_length if hop_length is not None else mel_hop_length(sample_rate),
+            n_mels=n_mels,
+            window_fn=window_fn,
+            power=power,
+            norm=mel_norm,
+            mel_scale=mel_scale,
         )
+        self.amin = amin
+        self.top_db = top_db
 
         conv_layers: list[nn.Module] = []
         in_channels = 1
@@ -237,8 +263,10 @@ class LogMelEncoder(nn.Module):
             normalizer: nn.Module
             if norm == "bn":
                 normalizer = nn.BatchNorm2d(out_channels)
-            else:
+            elif norm == "ln":
                 normalizer = nn.GroupNorm(1, out_channels)
+            else:
+                raise ValueError(f"Unsupported norm: {norm}")
             conv_layers.extend(
                 [
                     nn.Conv2d(
@@ -258,17 +286,29 @@ class LogMelEncoder(nn.Module):
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.projection = nn.Linear(in_channels, out_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode a mono waveform batch into fixed-width embeddings.
+    def log_mel_spectrogram(self, x: torch.Tensor) -> torch.Tensor:
+        """Return per-waveform log-mel power relative to each waveform's peak.
 
         :param x: Waveforms shaped ``(batch, samples)``.
-        :returns: Embeddings shaped ``(batch, out_dim)``.
+        :returns: Decibel-scaled mel spectrograms shaped ``(batch, mels, frames)``.
         :raises ValueError: If the waveform shape differs from the configured input length.
         """
         if x.ndim != 2 or x.shape[-1] != self.in_dim:
             raise ValueError(
                 f"Expected waveform shape (batch, {self.in_dim}), got {tuple(x.shape)}"
             )
-        mel = torch.log1p(self.mel(x)).unsqueeze(1)
+        log_mel = 10 * torch.log10(torch.clamp(self.mel(x), min=self.amin))
+        log_mel = log_mel - log_mel.amax(dim=(-2, -1), keepdim=True)
+        if self.top_db is not None:
+            log_mel = torch.clamp(log_mel, min=-self.top_db)
+        return log_mel
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode a mono waveform batch into fixed-width embeddings.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Embeddings shaped ``(batch, out_dim)``.
+        """
+        mel = self.log_mel_spectrogram(x).unsqueeze(1)
         features = self.conv_net(mel)
         return self.projection(self.pool(features).flatten(1))

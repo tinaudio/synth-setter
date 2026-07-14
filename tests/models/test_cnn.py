@@ -1,10 +1,19 @@
 """Behavioral tests for waveform encoders."""
 
+import librosa
+import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.residual_mlp import CNNResidualMLP
+
+
+@pytest.fixture(autouse=True)
+def _seed() -> None:
+    """Keep model initialization and synthetic waveforms deterministic."""
+    torch.manual_seed(0)
 
 
 def test_log_mel_frontend_four_second_audio_returns_bounded_embedding() -> None:
@@ -70,3 +79,151 @@ def test_cnn_residual_mlp_unknown_frontend_raises() -> None:
     """An unsupported front-end name fails instead of silently selecting log-mel."""
     with pytest.raises(ValueError, match="Unsupported frontend"):
         CNNResidualMLP(frontend="unknown", sample_rate=44_100)  # type: ignore[arg-type]
+
+
+def test_cnn_residual_mlp_log_mel_without_sample_rate_raises() -> None:
+    """Log-mel configuration fails before constructing an invalid transform."""
+    with pytest.raises(ValueError, match="sample_rate is required"):
+        CNNResidualMLP(frontend="log_mel")
+
+
+@pytest.mark.parametrize("audio", [torch.zeros(2, 1, 4_410), torch.zeros(2, 4_409)])
+def test_log_mel_frontend_invalid_waveform_shape_raises(audio: torch.Tensor) -> None:
+    """Malformed waveform batches fail at the encoder boundary.
+
+    :param audio: Wrong-rank or wrong-length waveform batch.
+    """
+    encoder = LogMelEncoder(
+        in_dim=4_410,
+        hidden_dim=4,
+        out_dim=5,
+        sample_rate=44_100,
+        num_blocks=1,
+        kernel_size=3,
+    )
+
+    with pytest.raises(ValueError, match="Expected waveform shape"):
+        encoder(audio)
+
+
+def test_log_mel_frontend_unknown_norm_raises() -> None:
+    """An unsupported normalization name fails instead of selecting GroupNorm."""
+    with pytest.raises(ValueError, match="Unsupported norm"):
+        LogMelEncoder(
+            in_dim=4_410,
+            hidden_dim=4,
+            out_dim=5,
+            sample_rate=44_100,
+            norm="unknown",  # type: ignore[arg-type]
+        )
+
+
+def test_log_mel_spectrogram_matches_dataset_frontend() -> None:
+    """Interior frames preserve the stored-mel numeric contract."""
+    audio = torch.randn(1, 4_410)
+    encoder = LogMelEncoder(
+        in_dim=4_410,
+        hidden_dim=4,
+        out_dim=5,
+        sample_rate=44_100,
+        num_blocks=1,
+        kernel_size=3,
+    )
+    expected = librosa.power_to_db(
+        librosa.feature.melspectrogram(
+            y=audio[0].numpy(),
+            sr=44_100,
+            n_fft=1_102,
+            hop_length=441,
+            n_mels=128,
+            window="hamming",
+        ),
+        ref=np.max,
+    )
+
+    actual = encoder.log_mel_spectrogram(audio)[0].detach().numpy()
+
+    np.testing.assert_allclose(actual[:, 2:-2], expected[:, 2:-2], atol=1e-3, rtol=1e-3)
+
+
+def test_log_mel_frontend_distinct_spectra_return_distinct_embeddings() -> None:
+    """The encoder responds to spectral content instead of returning a constant."""
+    time = torch.arange(4_410) / 44_100
+    audio = torch.stack(
+        [
+            torch.sin(2 * torch.pi * 220 * time),
+            torch.sin(2 * torch.pi * 1_760 * time),
+        ]
+    )
+    encoder = LogMelEncoder(
+        in_dim=4_410,
+        hidden_dim=4,
+        out_dim=5,
+        sample_rate=44_100,
+        num_blocks=1,
+        kernel_size=3,
+    )
+    encoder.eval()
+
+    with torch.no_grad():
+        embeddings = encoder(audio)
+
+    assert torch.isfinite(embeddings).all()
+    assert not torch.allclose(embeddings[0], embeddings[1])
+
+
+def test_log_mel_frontend_backward_reaches_every_parameter() -> None:
+    """A real prediction loss sends finite, non-zero gradients through the network."""
+    model = CNNResidualMLP(
+        in_dim=4_410,
+        channels=4,
+        encoder_blocks=1,
+        trunk_blocks=1,
+        hidden_dim=8,
+        out_dim=2,
+        kernel_size=3,
+        frontend="log_mel",
+        sample_rate=44_100,
+    )
+
+    F.mse_loss(model(torch.randn(2, 4_410)), torch.rand(2, 2)).backward()
+
+    for name, parameter in model.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+        assert torch.count_nonzero(parameter.grad), name
+
+
+@pytest.mark.slow
+def test_log_mel_frontend_overfits_fixed_spectral_examples() -> None:
+    """The complete frontend and trunk can learn a small fixed inversion batch."""
+    time = torch.arange(4_410) / 44_100
+    audio = torch.stack(
+        [
+            torch.sin(2 * torch.pi * 220 * time),
+            torch.sin(2 * torch.pi * 1_760 * time),
+        ]
+    )
+    targets = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    model = CNNResidualMLP(
+        in_dim=4_410,
+        channels=4,
+        encoder_blocks=1,
+        trunk_blocks=1,
+        hidden_dim=8,
+        out_dim=2,
+        kernel_size=3,
+        frontend="log_mel",
+        sample_rate=44_100,
+    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    initial_loss = F.mse_loss(model(audio), targets).item()
+
+    for _ in range(100):
+        optimizer.zero_grad()
+        loss = F.mse_loss(model(audio), targets)
+        loss.backward()
+        optimizer.step()
+
+    final_loss = F.mse_loss(model(audio), targets).item()
+    assert final_loss < initial_loss / 100

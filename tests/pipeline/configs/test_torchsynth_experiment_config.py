@@ -14,7 +14,7 @@ def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
 
 
 def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
-    """The FFN experiment uses 4 s audio with the bounded log-mel encoder."""
+    """Pin the memory-bounded production configuration that resolves #1848."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/ffn"])
 
@@ -22,12 +22,20 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.model.net.in_dim == 176_400
     assert cfg.model.net.frontend == "log_mel"
+    assert cfg.model.net.hop_length == 441
+    assert cfg.model.net.mel_norm == "slaney"
+    assert cfg.model.net.mel_scale == "slaney"
+    assert cfg.model.net.n_fft == 1_102
+    assert cfg.model.net.n_mels == 128
+    assert cfg.model.net.power == 2.0
     assert cfg.model.net.sample_rate == 44_100
+    assert cfg.model.net.top_db == 80.0
+    assert cfg.model.net.window == "hamming"
     assert cfg.datamodule.resample_train_per_epoch is True
 
 
 def test_torchsynth_ffn_four_second_model_has_bounded_parameter_count() -> None:
-    """The production 4 s network stays well below the former 36.9 B parameters."""
+    """Keep the production network below its memory-safe parameter limit."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/ffn"])
 

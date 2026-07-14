@@ -45,11 +45,6 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
-# Smoke bound only: a one-row overfit cannot establish generalization, so this guards
-# against non-finite or divergent held-out loss, not learning quality.
-_TORCHSYNTH_HELD_OUT_LOSS_MAX = 1.0
-
-
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
@@ -104,6 +99,22 @@ def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
     return loss
 
 
+def _torchsynth_initial_val_loss(eval_cfg: DictConfig) -> float:
+    """Return an untrained model's loss on the evaluation validation batch.
+
+    :param eval_cfg: TorchSynth evaluation configuration.
+    :returns: Initial held-out MSE for the fixed validation batch.
+    """
+    baseline_datamodule = instantiate(eval_cfg.datamodule)
+    baseline_datamodule.setup("validate")
+    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.val_dataloader()))
+    seed_everything(eval_cfg.seed, workers=True)
+    baseline_model = instantiate(eval_cfg.model)
+    with torch.no_grad():
+        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
+    return loss
+
+
 def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
     """Compose validation against the trained TorchSynth checkpoint.
 
@@ -129,6 +140,7 @@ def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.ckpt_path = str(checkpoint)
+        cfg.seed = 123
     return cfg
 
 
@@ -153,6 +165,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
     assert checkpoint.is_file()
     eval_cfg = _compose_torchsynth_eval_cfg(tmp_path, checkpoint)
+    initial_val_loss = _torchsynth_initial_val_loss(eval_cfg)
     HydraConfig().set_config(eval_cfg)
     try:
         metric_dict, eval_objects = evaluate(eval_cfg)
@@ -161,7 +174,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/loss"]
     assert torch.isfinite(val_loss)
-    assert val_loss < _TORCHSYNTH_HELD_OUT_LOSS_MAX
+    assert val_loss < initial_val_loss
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch[0]).all()
 

@@ -28,7 +28,16 @@ model:
   params_per_token: 1
   loss_fn: mse
   net:
+    amin: 1.0e-10
+    hop_length: 441
     in_dim: ${datamodule.signal_length}
+    mel_norm: slaney
+    mel_scale: slaney
+    n_fft: 1_102
+    n_mels: 128
     out_dim: ${datamodule.num_params}
+    power: 2.0
     frontend: log_mel
     sample_rate: ${datamodule.sample_rate}
+    top_db: 80.0
+    window: hamming
