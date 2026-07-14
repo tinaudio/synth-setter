@@ -1,7 +1,7 @@
 import random
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import ClassVar, Literal, NotRequired, Protocol, TypedDict
+from typing import ClassVar, NotRequired, Protocol, TypedDict
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -10,6 +10,7 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
@@ -533,7 +534,7 @@ class VSTDataModule(LightningDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
-        conditioning: Literal["mel", "m2l"] = "mel",
+        conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
         *,
         param_spec_name: ParamSpecName,

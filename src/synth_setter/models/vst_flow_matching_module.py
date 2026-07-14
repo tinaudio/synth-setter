@@ -2,11 +2,13 @@
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import Any
 
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
+
+from synth_setter.conditioning import ConditioningMode
 
 
 def call_with_cfg(
@@ -48,7 +50,7 @@ class VSTFlowMatchingModule(LightningModule):
         vector_field: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
-        conditioning: Literal["mel", "m2l"] = "mel",
+        conditioning: ConditioningMode = "mel",
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
