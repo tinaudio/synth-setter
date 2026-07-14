@@ -100,6 +100,56 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
 
 
+class _DDPIndexRecorder(LightningModule):
+    """Record source-row indices observed by one spawned Lightning rank."""
+
+    def __init__(self, source_rows: np.ndarray, output_dir: Path) -> None:
+        """Store the exact source rows used to recover batch indices.
+
+        :param source_rows: Model-ready parameter rows in source order.
+        :param output_dir: Directory receiving one index file per rank.
+        """
+        super().__init__()
+        self.source_rows: torch.Tensor
+        self.register_buffer("source_rows", torch.from_numpy(source_rows))
+        self.output_dir = output_dir
+        self.scale = torch.nn.Parameter(torch.ones(()))
+        self.seen_indices: list[int] = []
+
+    def training_step(
+        self, batch: dict[str, torch.Tensor | None], batch_idx: int
+    ) -> torch.Tensor:
+        """Recover and retain the source index of every row in this rank's batch.
+
+        :param batch: Model-ready batch from the map dataloader.
+        :param batch_idx: Batch index assigned by Lightning; unused.
+        :return: A zero-valued differentiable loss.
+        :raises AssertionError: If a batch row does not identify one source row.
+        """
+        del batch_idx
+        params = _unwrap(batch["params"])
+        matches = torch.all(params[:, None, :] == self.source_rows[None, :, :], dim=2)
+        if not torch.all(matches.sum(dim=1) == 1):
+            raise AssertionError("each DDP batch row must match exactly one source row")
+        self.seen_indices.extend(matches.to(torch.int64).argmax(dim=1).cpu().tolist())
+        return self.scale * 0
+
+    def on_train_epoch_end(self) -> None:
+        """Persist this rank's observed source indices for the parent assertion."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        np.save(
+            self.output_dir / f"rank-{self.global_rank}.npy",
+            np.asarray(self.seen_indices, dtype=np.int64),
+        )
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        """Return the minimal optimizer required by the Trainer loop.
+
+        :return: SGD over the dummy differentiable scale.
+        """
+        return torch.optim.SGD(self.parameters(), lr=0.0)
+
+
 class TestPrepareBatchCollate:
     """The map path's per-batch semantics owner: a picklable bridge into ``prepare_batch``."""
 
@@ -552,6 +602,48 @@ class TestLanceMapDataModuleModes:
                 return _params_in_order(module.val_dataloader())
 
         np.testing.assert_array_equal(collect(num_workers=2), collect(num_workers=0))
+
+    @pytest.mark.slow
+    def test_ddp_sim_disjoint_shards(self, dataset_root: Path, tmp_path: Path) -> None:
+        """Lightning's default distributed sampler partitions one complete epoch.
+
+        Uses the same CPU, two-device, ``ddp_spawn`` geometry as
+        ``configs/trainer/ddp_sim.yaml``. The map loader deliberately supplies
+        no custom sampler, leaving Lightning's default replacement path active.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        :param tmp_path: Directory receiving the spawned ranks' row-index files.
+        """
+        source_rows = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
+        output_dir = tmp_path / "rank-indices"
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root,
+            batch_size=4,
+            loader="map",
+            num_workers=0,
+            ot=False,
+            pin_memory=False,
+            param_spec_name="surge_xt",
+        )
+        trainer = Trainer(
+            accelerator="cpu",
+            devices=2,
+            strategy="ddp_spawn",
+            max_epochs=1,
+            logger=False,
+            enable_checkpointing=False,
+            enable_model_summary=False,
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
+        )
+
+        trainer.fit(_DDPIndexRecorder(source_rows, output_dir), datamodule=module)
+
+        rank_sets = [set(np.load(output_dir / f"rank-{rank}.npy").tolist()) for rank in range(2)]
+        assert rank_sets[0]
+        assert rank_sets[1]
+        assert rank_sets[0].isdisjoint(rank_sets[1])
+        assert rank_sets[0] | rank_sets[1] == set(range(len(source_rows)))
 
 
 class _FlowProbe(LightningModule):
