@@ -215,16 +215,9 @@ class LanceVSTDataset(VSTDataset):
 
 
 class PrepareBatchCollate:
-    """Picklable ``collate_fn`` bridging ``LanceMapDataset`` batches into ``prepare_batch``.
+    """Adapt pre-collated map batches through ``prepare_batch`` with a process-local RNG.
 
-    ``LanceMapDataset.__getitems__`` already returns one pre-collated column
-    dict per batch, so this receives the whole batch (never a sample list) and
-    must not re-stack it. The noise RNG is created lazily per process: the
-    construction-time seed draw comes from the global RNG (so Lightning's
-    ``seed_everything`` governs it), and inside a dataloader worker the
-    DataLoader-assigned worker seed is used instead so workers don't share a
-    stream. ``torch.Generator`` cannot be pickled, so it is dropped on
-    pickling and re-created lazily — spawn workers each re-derive their own.
+    The RNG is dropped on pickle and lazily seeded from the worker seed or global RNG draw.
     """
 
     def __init__(
@@ -292,13 +285,9 @@ class PrepareBatchCollate:
 
 
 class _RepeatFirstBatchSampler(torch.utils.data.Sampler):
-    """Yield row indices folded into ``[0, batch_size)``, in full batches only.
+    """Repeat the first full batch for each complete batch in an epoch.
 
-    Sample-indexed re-expression of ``repeat_first_batch``: under the loader's
-    sequential batching, every yielded batch is exactly rows ``[0, batch_size)``
-    in order. The index count is floored to a multiple of ``batch_size`` —
-    legacy floor-divides the row count, so the repeated batch is never a
-    truncated tail. Debug-only (overfit-one-batch); not DDP-aware.
+    Indices fold modulo ``batch_size``; debug-only and not DDP-aware.
     """
 
     def __init__(self, num_rows: int, batch_size: int) -> None:
@@ -351,14 +340,9 @@ class _MapSplit:
 
 
 class LanceVSTDataModule(VSTDataModule):
-    """``VSTDataModule`` over ``train/val/test.lance`` splits.
+    """Read Lance splits through either the batch-indexed legacy or sample-indexed map path.
 
-    ``loader`` selects the read path: ``"legacy"`` keeps the batch-indexed
-    ``LanceVSTDataset`` adapter; ``"map"`` builds a sample-indexed
-    :class:`LanceMapDataset` per split behind standard ``DataLoader``
-    semantics (``shuffle`` on train, ragged final batch kept). Fake mode
-    always uses the legacy path — it synthesizes batches in memory and never
-    touches Lance.
+    Fake mode remains in-memory on the legacy path; map evaluation preserves ragged tails.
 
     .. attribute :: dataset_cls
 

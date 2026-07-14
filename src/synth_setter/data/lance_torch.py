@@ -183,9 +183,8 @@ def map_dataloader_over(
     """
     effective_collate = collate_fn or _prebatched_collate
     if num_workers == 0:
-        # get_safe_loader's spawn context and persistent workers require
-        # num_workers > 0; in-process loading is a plain DataLoader.
-        # DataLoader's stub assumes list batches, but ``__getitems__`` supplies a column dict.
+        # get_safe_loader requires workers; plain DataLoader supports in-process loading.
+        # Cast bridges __getitems__' column dict with DataLoader's list-oriented stub.
         typed_collate = cast(Callable[[list[object]], object], effective_collate)
         return DataLoader(
             dataset,
