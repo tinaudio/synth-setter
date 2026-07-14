@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.cli.train import _consumed_artifact_refs, train
+from synth_setter.cli.train import _consumed_artifact_refs, _prepare_dataset_for_lineage, train
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
@@ -28,6 +28,7 @@ def _seam_cfg(
     output_dir: Path,
     *,
     dataset_root: Path,
+    download_dataset_root_uri: str | None = None,
     train_flag: bool,
     test_flag: bool,
 ) -> DictConfig:
@@ -39,6 +40,7 @@ def _seam_cfg(
     :param output_dir: ``paths.output_dir`` — read only by ``task_wrapper``'s
         finally-block log line, never written to.
     :param dataset_root: Local root whose frozen spec declares the dataset ID.
+    :param download_dataset_root_uri: Optional remote root to hydrate before use.
     :param train_flag: ``cfg.train`` — gates ``trainer.fit`` and the lineage edge.
     :param test_flag: ``cfg.test`` — gates ``trainer.test`` and the lineage edge.
     :returns: A ``DictConfig`` accepted by ``train``.
@@ -46,7 +48,11 @@ def _seam_cfg(
     return OmegaConf.create(
         {
             "seed": None,
-            "datamodule": {"_target_": "stub.Datamodule", "dataset_root": str(dataset_root)},
+            "datamodule": {
+                "_target_": "stub.Datamodule",
+                "dataset_root": str(dataset_root),
+                "download_dataset_root_uri": download_dataset_root_uri,
+            },
             "model": {"_target_": "stub.Model"},
             "trainer": {"_target_": "stub.Trainer"},
             "callbacks": None,
@@ -176,3 +182,13 @@ def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> N
 def test_consumed_artifact_refs_missing_dataset_root_returns_empty() -> None:
     """A datamodule without a local root has no dataset artifact to consume."""
     assert _consumed_artifact_refs(OmegaConf.create({"datamodule": {}})) == []
+
+
+def test_prepare_dataset_for_lineage_download_config_hydrates_datamodule() -> None:
+    """A configured remote root is hydrated before its lineage is discovered."""
+    datamodule = MagicMock()
+    cfg = OmegaConf.create({"datamodule": {"download_dataset_root_uri": "r2://data/root"}})
+
+    _prepare_dataset_for_lineage(cfg, datamodule)
+
+    datamodule.prepare_data.assert_called_once_with()

@@ -335,6 +335,16 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
     return refs
 
 
+def _prepare_dataset_for_lineage(cfg: DictConfig, datamodule: LightningDataModule) -> None:
+    """Hydrate a configured remote dataset before discovering its local provenance.
+
+    :param cfg: Hydra-composed cfg carrying the optional download root URI.
+    :param datamodule: Instantiated datamodule that owns the hydration step.
+    """
+    if OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"):
+        datamodule.prepare_data()
+
+
 @task_wrapper
 def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate the given checkpoint on a datamodule testset.
@@ -380,6 +390,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
+    _prepare_dataset_for_lineage(cfg, datamodule)
     use_input_artifacts(logger, _consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
