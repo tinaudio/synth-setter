@@ -12,6 +12,7 @@ from typing import Literal
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
+from synth_setter.param_spec_name import ParamSpecName
 
 LoaderName = Literal["legacy", "map"]
 
@@ -76,7 +77,7 @@ def _benchmark_one(
         num_workers=num_workers,
         conditioning=conditioning,
         pin_memory=False,
-        param_spec_name="surge_xt",
+        param_spec_name=ParamSpecName("surge_xt"),
         loader=loader,
     )
     module.setup("fit")

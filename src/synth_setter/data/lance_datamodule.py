@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
     ShiftedBatchSampler,
@@ -40,6 +40,7 @@ from synth_setter.data.vst_datamodule import (
     load_dataset_statistics,
     prepare_batch,
 )
+from synth_setter.param_spec_name import ParamSpecName
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +386,7 @@ class LanceVSTDataModule(VSTDataModule):
         conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
         *,
-        param_spec_name: str,
+        param_spec_name: ParamSpecName,
         loader: Literal["legacy", "map"] = "legacy",
     ) -> None:
         """Store the loader selection on top of the base datamodule config.
@@ -491,7 +492,6 @@ class LanceVSTDataModule(VSTDataModule):
 
         :param stage: Lightning stage hint; unused because every split is constructed eagerly
             (matching the legacy path).
-        :raises KeyError: If ``param_spec_name`` is not in the registry.
         """
         if not self._map_mode:
             if self.loader == "map" and self.fake:
@@ -500,10 +500,7 @@ class LanceVSTDataModule(VSTDataModule):
                 )
             super().setup(stage)
             return
-        # Legacy-parity fail-fast: an unregistered param_spec_name must error
-        # at setup, not surface later as a silent width mismatch.
-        if self.param_spec_name not in param_specs:
-            raise KeyError(f"unregistered param_spec_name: {self.param_spec_name!r}")
+        resolve_param_spec(self.param_spec_name)
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = None
         if self.use_saved_mean_and_variance:

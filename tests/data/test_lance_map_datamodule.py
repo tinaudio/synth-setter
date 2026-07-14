@@ -33,6 +33,7 @@ from synth_setter.data.lance_datamodule import (
     PrepareBatchCollate,
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.param_spec_name import ParamSpecName
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -72,7 +73,7 @@ def _set_up_map_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
     kwargs.setdefault("loader", "map")
     kwargs.setdefault("num_workers", 0)
     kwargs.setdefault("pin_memory", False)
-    kwargs.setdefault("param_spec_name", "surge_xt")
+    kwargs.setdefault("param_spec_name", ParamSpecName("surge_xt"))
     module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -254,7 +255,10 @@ class TestLanceMapDataModuleSetup:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         module = LanceVSTDataModule(
-            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         module.setup()
         try:
@@ -293,7 +297,7 @@ class TestLanceMapDataModuleSetup:
                 dataset_root=dataset_root,
                 batch_size=2,
                 loader="iterable",  # type: ignore[arg-type]
-                param_spec_name="surge_xt",
+                param_spec_name=ParamSpecName("surge_xt"),
             )
 
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
@@ -306,7 +310,10 @@ class TestLanceMapDataModuleSetup:
         for split in ("train", "val", "test"):
             write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
         module = LanceVSTDataModule(
-            dataset_root=root, batch_size=2, loader="map", param_spec_name="surge_xt"
+            dataset_root=root,
+            batch_size=2,
+            loader="map",
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
@@ -317,7 +324,10 @@ class TestLanceMapDataModuleSetup:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         module = LanceVSTDataModule(
-            dataset_root=dataset_root, batch_size=2, loader="map", param_spec_name="no-such-spec"
+            dataset_root=dataset_root,
+            batch_size=2,
+            loader="map",
+            param_spec_name=ParamSpecName("no-such-spec"),
         )
         with pytest.raises(KeyError, match="no-such-spec"):
             module.setup()
@@ -333,7 +343,7 @@ class TestLanceMapDataModuleSetup:
             loader="map",
             num_workers=0,
             pin_memory=False,
-            param_spec_name="surge_xt",
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         module.setup()
         module.teardown()
@@ -636,7 +646,7 @@ class TestLanceMapDataModuleModes:
             num_workers=0,
             ot=False,
             pin_memory=False,
-            param_spec_name="surge_xt",
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         trainer = Trainer(
             accelerator="cpu",
@@ -761,7 +771,10 @@ class TestTrainerFlowsAcrossParamSpecs:
         write_mel_stats(root)
 
         with _set_up_map_module(
-            dataset_root=root, batch_size=2, ot=True, param_spec_name=param_spec_name
+            dataset_root=root,
+            batch_size=2,
+            ot=True,
+            param_spec_name=ParamSpecName(param_spec_name),
         ) as module:
             probe = _FlowProbe(num_params)
             trainer = Trainer(
