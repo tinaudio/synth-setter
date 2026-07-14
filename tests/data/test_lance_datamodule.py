@@ -19,6 +19,7 @@ ML behavior, mirroring ``tests/data/test_surge_datamodule.py``.
 from __future__ import annotations
 
 import contextlib
+import random
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -713,16 +714,23 @@ class TestLanceVSTDataModule:
             item = next(iter(module.val_dataloader()))
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))
 
-    def test_val_dataloader_multi_worker_matches_single_worker(self, dataset_root: Path) -> None:
-        """``num_workers=2`` spawned workers read the same batches as in-process loading.
-
-        Lance handles are not fork-safe, so multi-worker loaders must produce
-        the same data as ``num_workers=0``.
+    @pytest.mark.parametrize(
+        ("loader_name", "expected_batches"),
+        (("train_dataloader", 3), ("val_dataloader", 4), ("test_dataloader", 4), ("predict_dataloader", 4)),
+    )
+    def test_dataloader_multi_worker_matches_single_worker(
+        self, dataset_root: Path, loader_name: str, expected_batches: int
+    ) -> None:
+        """Each spawned loader returns the same parameter batches as in-process loading.
 
         :param dataset_root: Fixture-provided dataset-root directory.
+        :param loader_name: Public datamodule loader method to exercise.
+        :param expected_batches: Number of batches supplied by that loader.
         """
 
-        def collect(num_workers: int) -> torch.Tensor:
+        def collect(num_workers: int) -> list[dict[str, torch.Tensor | None]]:
+            random.seed(0)
+            np.random.seed(0)
             with _set_up_module(
                 dataset_root=dataset_root,
                 batch_size=2,
@@ -730,9 +738,27 @@ class TestLanceVSTDataModule:
                 num_workers=num_workers,
                 pin_memory=False,
             ) as module:
-                return torch.cat([_unwrap(b["params"]) for b in module.val_dataloader()])
+                loader = getattr(module, loader_name)()
+                if num_workers:
+                    context = loader.multiprocessing_context
+                    assert context is not None
+                    assert context.get_start_method() == "spawn"
+                batches = list(loader)
+            return batches
 
-        assert torch.allclose(collect(num_workers=2), collect(num_workers=0))
+        spawned_batches = collect(num_workers=2)
+        in_process_batches = collect(num_workers=0)
+        assert len(spawned_batches) == expected_batches
+        assert len(in_process_batches) == expected_batches
+        for spawned, in_process in zip(spawned_batches, in_process_batches, strict=True):
+            assert _unwrap(spawned["params"]).shape == (2, _NUM_PARAMS)
+            assert torch.allclose(_unwrap(spawned["params"]), _unwrap(in_process["params"]))
+            if loader_name == "predict_dataloader":
+                assert _unwrap(spawned["audio"]).shape == (
+                    2,
+                    _AUDIO_CHANNELS,
+                    _AUDIO_SAMPLES,
+                )
 
     def test_dataloaders_multi_worker_use_spawn_context(self, dataset_root: Path) -> None:
         """Every multi-worker Lance loader starts a clean interpreter per worker.

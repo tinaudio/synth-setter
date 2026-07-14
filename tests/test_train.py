@@ -521,17 +521,20 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 
 
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run 1 train, val, and test step on CPU reading batches from Lance shards.
+    """Run 1 spawned-worker train, val, and test step reading Lance batches.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint; the Hydra
-    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
+    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
+    fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.num_workers = 1
     HydraConfig().set_config(cfg_train_lance)
     _, object_dict = train(cfg_train_lance)
 
