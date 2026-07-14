@@ -1,6 +1,73 @@
 # CHANGELOG
 
 
+## v8.48.0 (2026-07-14)
+
+### Features
+
+- **data-pipeline**: Add DawDreamer renderer backend
+  ([#1808](https://github.com/tinaudio/synth-setter/pull/1808),
+  [`10e5a68`](https://github.com/tinaudio/synth-setter/commit/10e5a683ee35f5150ced25a2418362914717250f))
+
+* internal-feat(data-pipeline): add DawDreamer renderer backend
+
+* internal-feat(data-pipeline): add DawDreamer dataset backend
+
+* internal-fix(ci): include renderer backend in spec fixtures
+
+* internal-refactor(data): route pedalboard through renderer interface
+
+* internal-feat(data): add DawDreamer Surge experiment
+
+* internal-fix(data-pipeline): run and fix DawDreamer e2e VST test in CI
+
+The test composed render.base_seed / render.attempts_per_sample as Hydra render-group overrides, but
+  those are RenderConfig fields, not render-group config keys, so struct-mode compose raised
+  ConfigAttributeError and the test could never pass. Pin them via model_copy post-validation,
+  mirroring how the launcher injects the per-shard seed (cli/generate_dataset.py).
+
+The test also fell through the surge_xt VST slow-test file allowlist, so CI never ran it and the
+  failure stayed invisible. Register it in pytest_targets.
+
+* internal-fix(data-pipeline): sync branch deps into VST test image
+
+The VST slow-test job mounts the branch source over a pre-built dev-snapshot image and runs pytest
+  against the image's baked venv, which never re-syncs deps. A dependency a PR adds (e.g.
+  dawdreamer) is therefore absent and its tests fail with ModuleNotFoundError even though the code
+  and lockfile are correct. Run 'uv sync --frozen' with the Dockerfile's build-time flags before
+  pytest so new locked deps install into the venv while torch (cu128) and the dev group are
+  preserved.
+
+* fix(vst): make DawDreamer rendering deterministic
+
+Use the committed Surge parameter map for complete one-to-one host dispatch, reject ambiguous or
+  missing mappings, and rebuild the DawDreamer graph for each row so DSP state cannot bleed between
+  samples.
+
+Add driver, MIDI, collision, real-plugin mapping, and populated dataset-audio coverage for review
+  feedback on PR #1808.
+
+* internal-fix(data-pipeline): re-add editable project after VST dep sync
+
+The 'uv sync --no-install-project' added before pytest does an exact sync that prunes the image's
+  editable synth_setter install. In-process tests still import it via pytest's src pythonpath, but
+  subprocess entrypoints (python script.py) fail with ModuleNotFoundError, breaking the
+  parallel-shard-render test. Re-run 'uv pip install --no-deps -e .' after the sync, mirroring the
+  Dockerfile's two-step install.
+
+* internal-fix(data-pipeline): replace runtime VST parameter mapping
+
+* internal-fix(data-pipeline): preserve lazy renderer imports
+
+* fix(data-pipeline): refresh DawDreamer parameter identities
+
+* test(data-pipeline): cover parameter map builder failures
+
+* internal-fix(data-pipeline): resolve DawDreamer review findings
+
+* internal-fix(ci-automation): sync merged lock and formatting
+
+
 ## v8.47.0 (2026-07-13)
 
 ### Continuous Integration
