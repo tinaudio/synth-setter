@@ -128,6 +128,16 @@ def test_log_mel_frontend_invalid_amin_raises(amin: float) -> None:
         LogMelEncoder(4_410, 4, 5, sample_rate=44_100, amin=amin)
 
 
+@pytest.mark.parametrize("power", [0.0, -1.0, float("inf"), float("nan")])
+def test_log_mel_frontend_invalid_power_raises(power: float) -> None:
+    """A non-positive or non-finite magnitude exponent is rejected.
+
+    :param power: Invalid spectrogram exponent.
+    """
+    with pytest.raises(ValueError, match="power"):
+        LogMelEncoder(4_410, 4, 5, sample_rate=44_100, power=power)
+
+
 @pytest.mark.parametrize("top_db", [-1.0, float("inf"), float("nan")])
 def test_log_mel_frontend_invalid_top_db_raises(top_db: float) -> None:
     """A negative or non-finite dynamic range is rejected.
@@ -169,6 +179,35 @@ def test_log_mel_spectrogram_matches_dataset_frontend() -> None:
             hop_length=441,
             n_mels=128,
             window="hamming",
+        ),
+        ref=np.max,
+    )
+
+    actual = encoder.log_mel_spectrogram(audio)[0].detach().numpy()
+
+    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+def test_log_mel_spectrogram_power_one_matches_amplitude_decibels() -> None:
+    """Magnitude spectrograms use amplitude rather than power decibel scaling."""
+    audio = torch.randn(1, 4_410)
+    encoder = LogMelEncoder(
+        in_dim=4_410,
+        hidden_dim=4,
+        out_dim=5,
+        sample_rate=44_100,
+        power=1.0,
+        num_blocks=1,
+    )
+    expected = librosa.amplitude_to_db(
+        librosa.feature.melspectrogram(
+            y=audio[0].numpy(),
+            sr=44_100,
+            n_fft=1_102,
+            hop_length=441,
+            n_mels=128,
+            window="hamming",
+            power=1.0,
         ),
         ref=np.max,
     )
@@ -325,5 +364,7 @@ def test_log_mel_frontend_overfits_fixed_envelope_examples() -> None:
         loss.backward()
         optimizer.step()
 
-    final_loss = F.mse_loss(model(audio), targets).item()
+    model.eval()
+    with torch.no_grad():
+        final_loss = F.mse_loss(model(audio), targets).item()
     assert final_loss < initial_loss / 100

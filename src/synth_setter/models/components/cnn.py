@@ -255,6 +255,8 @@ class LogMelEncoder(nn.Module):
         super().__init__()
         if not math.isfinite(amin) or amin <= 0:
             raise ValueError(f"amin must be positive and finite, got {amin}")
+        if not math.isfinite(power) or power <= 0:
+            raise ValueError(f"power must be positive and finite, got {power}")
         if top_db is not None and (not math.isfinite(top_db) or top_db < 0):
             raise ValueError(f"top_db must be non-negative and finite, got {top_db}")
         self.in_dim = in_dim
@@ -277,6 +279,7 @@ class LogMelEncoder(nn.Module):
             mel_scale=mel_scale,
         )
         self.amin = amin
+        self.db_multiplier = 20.0 / power
         self.top_db = top_db
 
         conv_layers: list[nn.Module] = []
@@ -320,7 +323,7 @@ class LogMelEncoder(nn.Module):
             raise ValueError(
                 f"Expected waveform shape (batch, {self.in_dim}), got {tuple(x.shape)}"
             )
-        log_mel = 10 * torch.log10(torch.clamp(self.mel(x), min=self.amin))
+        log_mel = self.db_multiplier * torch.log10(torch.clamp(self.mel(x), min=self.amin))
         log_mel = log_mel - log_mel.amax(dim=(-2, -1), keepdim=True)
         if self.top_db is not None:
             log_mel = torch.clamp(log_mel, min=-self.top_db)
