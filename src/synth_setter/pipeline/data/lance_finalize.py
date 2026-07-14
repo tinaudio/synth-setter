@@ -280,14 +280,22 @@ def _validate_fragment_files(
                 f"{data_file.path} missing or empty under {split_uri}/data/"
             )
         try:
-            physical_schema = LanceFileReader(
+            reader = LanceFileReader(
                 f"{split_target}/data/{data_file.path}", storage_options=storage_options
-            ).metadata().schema
+            )
+            physical_schema = reader.metadata().schema
+            physical_rows = reader.num_rows()
         except (OSError, ValueError) as exc:
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
                 f"{data_file.path} is not a readable Lance file: {type(exc).__name__}: {exc}"
             ) from exc
+        if physical_rows != fragment.physical_rows:
+            raise ValueError(
+                f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
+                f"{data_file.path} physical row count {physical_rows} does not match "
+                f"sidecar row count {fragment.physical_rows}"
+            )
         if not physical_schema.equals(expected_schema, check_metadata=True):
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment physical schema "

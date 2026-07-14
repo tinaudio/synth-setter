@@ -755,6 +755,37 @@ def test_finalize_rejects_fragment_file_with_physical_schema_drift(
         finalize_from_spec(spec, tmp_path / "work")
 
 
+def test_finalize_rejects_fragment_file_with_fewer_rows_than_sidecar(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Physical file rows must match the fragment sidecar before commit.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    target_file = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "train.lance"
+        / "data"
+        / fragment_meta["files"][0]["path"]
+    )
+    source = lance.dataset(str(tmp_path / "w-0" / "shard-000000.lance"))
+    short_dataset = tmp_path / "short.lance"
+    lance.write_dataset(source.to_table().slice(0, 1), short_dataset)
+    short_file = next((short_dataset / "data").iterdir())
+    shutil.copyfile(short_file, target_file)
+
+    with pytest.raises(ValueError, match="physical row count 1 does not match sidecar row count 2"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
 def test_finalize_skips_invalid_earliest_attempt_and_commits_next_healthy(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
