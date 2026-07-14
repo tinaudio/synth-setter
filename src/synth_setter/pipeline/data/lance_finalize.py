@@ -229,8 +229,8 @@ def _load_welford_state(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Welfo
             if count.shape != () or count.dtype != np.dtype(np.int64):
                 raise ValueError(f"{prefix} count must be a scalar int64")
             for name, value in (("mean", mean), ("m2", m2)):
-                if not np.issubdtype(value.dtype, np.floating):
-                    raise ValueError(f"{prefix} {name} must have a floating dtype")
+                if value.dtype != np.dtype(np.float32):
+                    raise ValueError(f"{prefix} {name} must have dtype float32")
                 if value.shape != expected_shape:
                     raise ValueError(
                         f"{prefix} {name} must have shape {expected_shape}, got {value.shape}"
