@@ -99,16 +99,22 @@ def _torchsynth_initial_loss(
         dataloader = baseline_datamodule.train_dataloader()
     else:
         dataloader = baseline_datamodule.val_dataloader()
-    baseline_audio, baseline_params, *_ = next(iter(dataloader))
     # Seed exactly as train() does (L.seed_everything, covering torch/numpy/python RNG)
     # so this "initial" model matches training's start regardless of what model init draws.
     seed_everything(cfg.seed, workers=True)
     baseline_model = instantiate(cfg.model)
     if split == "val":
         baseline_model.eval()
+    total_squared_error = 0.0
+    total_elements = 0
     with torch.no_grad():
-        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
-    return loss
+        for baseline_audio, baseline_params, *_ in dataloader:
+            squared_error = torch.nn.functional.mse_loss(
+                baseline_model(baseline_audio), baseline_params, reduction="sum"
+            )
+            total_squared_error += squared_error.item()
+            total_elements += baseline_params.numel()
+    return total_squared_error / total_elements
 
 
 def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
