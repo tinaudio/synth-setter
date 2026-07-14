@@ -121,7 +121,6 @@ def stage_lance_shard_attempt(
 
     from synth_setter.data.vst.shapes import dataset_field_shapes
     from synth_setter.pipeline.data.lance_shard import (
-        LANCE_MAX_BYTES_PER_FILE,
         lance_fragment,
         lance_schema,
     )
@@ -142,24 +141,12 @@ def stage_lance_shard_attempt(
         raise ValueError(
             f"local shard {local_shard_path.name} schema does not match spec-derived schema"
         )
-    # ``LanceFragment.create`` has no ``max_bytes_per_file`` — enforce the S3
-    # multipart bound loudly here, not opaquely mid-upload (#1775).
-    shard_bytes = sum(p.stat().st_size for p in local_shard_path.rglob("*") if p.is_file())
-    if shard_bytes > LANCE_MAX_BYTES_PER_FILE:
-        raise ValueError(
-            f"local shard {local_shard_path.name} is {shard_bytes} bytes; a single "
-            f"fragment data file must stay under {LANCE_MAX_BYTES_PER_FILE} bytes "
-            f"(S3 multipart-part ceiling) — reduce render.samples_per_shard"
-        )
     split = split_for_shard(spec, shard.shard_id)
     split_target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
     fragment = lance_fragment(
         split_target,
         dataset.schema,
         dataset.to_batches(),
-        # Stable per (shard, split index) — deliberately not ``write_fragments``'s
-        # commit-time ids: duplicate attempts collide harmlessly, one winner commits.
-        fragment_id=shard.shard_id - spec.split_shard_ranges[split][0],
         storage_options=storage_options,
     )
     count, mean, m2 = fold_lance_shard_into_welford((0, 0, 0), local_shard_path)

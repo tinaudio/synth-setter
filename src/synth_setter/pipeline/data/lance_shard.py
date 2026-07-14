@@ -8,7 +8,6 @@ from pathlib import Path
 import lance
 import numpy as np
 import pyarrow as pa
-from lance.fragment import LanceFragment
 from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
@@ -123,7 +122,6 @@ def lance_fragment(
     uri: Path | str,
     schema: pa.Schema,
     batch: pa.RecordBatch | Iterable[pa.RecordBatch],
-    fragment_id: int,
     *,
     storage_options: dict[str, str] | None = None,
 ) -> lance.fragment.FragmentMetadata:
@@ -136,19 +134,26 @@ def lance_fragment(
     :param schema: Arrow schema shared by every fragment.
     :param batch: One record batch — or an iterable of them, streamed into a
         single fragment — to persist.
-    :param fragment_id: Zero-based fragment index, unique within the committed dataset.
     :param storage_options: Object-store config for a cloud ``uri`` (see
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :returns: Fragment metadata for the commit.
+    :raises ValueError: Lance splits the input into more than one fragment.
     """
-    return LanceFragment.create(
-        str(uri),
+    fragments = lance.fragment.write_fragments(
         batch,
-        fragment_id=fragment_id,
+        str(uri),
         schema=schema,
+        mode="append",
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
         storage_options=storage_options,
     )
+    if len(fragments) != 1:
+        raise ValueError(
+            f"expected one Lance fragment under {uri}, wrote {len(fragments)}; "
+            "reduce the render batch or samples per shard"
+        )
+    return fragments[0]
 
 
 def commit_lance_dataset(

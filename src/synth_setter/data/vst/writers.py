@@ -513,7 +513,7 @@ def make_lance_dataset(
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch, len(fragments)))
+        fragments.append(lance_fragment(lance_dir, schema, record_batch))
 
     # Commit only after a clean render: orphaned fragment data files from a failed
     # run stay uncommitted (no dataset manifest references them).

@@ -660,6 +660,7 @@ def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(
     ("replacement", "message"),
     [
         (lambda arrays: np.array([2], dtype=np.int64), "count must be a scalar int64"),
+        (lambda arrays: np.float32(2), "count must be a scalar int64"),
         (lambda arrays: arrays["mean"].astype(np.int64), "mean must have dtype float32"),
         (lambda arrays: arrays["mean"].astype(np.float64), "mean must have dtype float32"),
         (lambda arrays: arrays["mean"][0], "mean must have shape"),

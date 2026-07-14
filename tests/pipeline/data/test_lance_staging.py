@@ -378,22 +378,20 @@ def test_stage_attempt_rejects_local_shard_with_schema_drift(
     assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
 
 
-def test_stage_attempt_rejects_shard_exceeding_single_data_file_bound(
+def test_stage_attempt_rejects_fragment_split_by_size_bound(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A shard above the single-file bound is rejected before upload.
+    """A shard split by Lance is rejected before publishing a valid marker.
 
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param tmp_path: Pytest fixture providing a fresh local shard directory.
-    :param monkeypatch: Replaces the production size ceiling with a test bound.
+    :param monkeypatch: Simulates Lance splitting the shard into two fragments.
     """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
-    # Shrink the bound rather than materializing a >32 GiB shard; the guard's
-    # comparison is what's under test (#1775).
-    monkeypatch.setattr("synth_setter.pipeline.data.lance_shard.LANCE_MAX_BYTES_PER_FILE", 1024)
+    monkeypatch.setattr(lance.fragment, "write_fragments", lambda *args, **kwargs: [object()] * 2)
 
-    with pytest.raises(ValueError, match="multipart-part ceiling"):
+    with pytest.raises(ValueError, match="expected one Lance fragment"):
         stage_lance_shard_attempt(
             spec, spec.shards[0], local_shard, worker_id="pod-a", attempt_uuid="a1b2"
         )

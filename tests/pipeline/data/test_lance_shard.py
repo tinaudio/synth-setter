@@ -197,8 +197,8 @@ def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Pat
     shard = tmp_path / "shard-000000.lance"
 
     fragments = [
-        lance_fragment(shard, schema, record_batch_from_arrays(first, schema), 0),
-        lance_fragment(shard, schema, record_batch_from_arrays(second, schema), 1),
+        lance_fragment(shard, schema, record_batch_from_arrays(first, schema)),
+        lance_fragment(shard, schema, record_batch_from_arrays(second, schema)),
     ]
     commit_lance_dataset(shard, schema, fragments)
 
@@ -224,7 +224,7 @@ def test_lance_fragment_streams_multiple_batches_into_one_fragment(tmp_path: Pat
         record_batch_from_arrays(second, schema),
     )
 
-    fragment = lance_fragment(shard, schema, iter(batches), 0)
+    fragment = lance_fragment(shard, schema, iter(batches))
     commit_lance_dataset(shard, schema, [fragment])
 
     assert lance.dataset(str(shard)).count_rows() == 4
