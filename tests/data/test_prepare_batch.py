@@ -146,7 +146,7 @@ def test_prepare_batch_nonfinite_column_raises_value_error(
 ) -> None:
     """Non-finite stored values fail before model-facing transformation.
 
-    :param column: Raw column corrupted with a NaN.
+    :param column: Raw column corrupted with a non-finite value.
     :param value: Non-finite value injected into the raw column.
     """
     raw = _make_raw(read_mel=True, read_m2l=True, read_audio=True)
@@ -232,6 +232,29 @@ def test_prepare_batch_audio_out_of_range_raises_value_error(value: float) -> No
             ot=False,
             generator=torch.Generator(),
         )
+
+
+@pytest.mark.parametrize("value", [-1.0, 1.0])
+def test_prepare_batch_audio_range_endpoints_are_valid(value: float) -> None:
+    """The full-scale audio interval includes both endpoints.
+
+    :param value: Inclusive endpoint placed in the raw audio batch.
+    """
+    raw = _make_raw(read_audio=True)
+    audio = raw.get("audio")
+    assert audio is not None
+    audio.flat[0] = value
+
+    batch = prepare_batch(
+        raw,
+        mean=None,
+        std=None,
+        rescale_params=False,
+        ot=False,
+        generator=torch.Generator(),
+    )
+
+    assert _unwrap(batch["audio"]).flatten()[0].item() == value
 
 
 def test_prepare_batch_is_pure_and_pinned() -> None:

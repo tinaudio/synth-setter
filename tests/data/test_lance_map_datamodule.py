@@ -20,6 +20,7 @@ import contextlib
 import pickle
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -244,14 +245,21 @@ class TestPrepareBatchCollate:
 
         assert torch.equal(noise_after_seed(), noise_after_seed())
 
+    @pytest.mark.parametrize("worker_seed", [None, 91])
     def test_collate_ddp_ranks_receive_distinct_reproducible_noise(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, worker_seed: int | None
     ) -> None:
-        """In-process DDP ranks derive distinct reproducible noise streams.
+        """DDP ranks derive distinct reproducible noise with or without workers.
 
         :param monkeypatch: Fixture controlling the distributed rank reported to the collate.
+        :param worker_seed: Simulated worker seed, or ``None`` for in-process loading.
         """
         monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(
+            torch.utils.data,
+            "get_worker_info",
+            lambda: SimpleNamespace(seed=worker_seed) if worker_seed is not None else None,
+        )
 
         def noise_for_rank(rank: int) -> torch.Tensor:
             monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)

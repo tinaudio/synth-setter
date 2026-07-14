@@ -563,7 +563,11 @@ class TestVSTDatasetH5Mode:
         ("mean", "std", "message"),
         [
             (np.nan, 1.0, "mean must contain only finite values"),
+            (np.inf, 1.0, "mean must contain only finite values"),
+            (-np.inf, 1.0, "mean must contain only finite values"),
             (0.0, np.nan, "std must contain only finite values"),
+            (0.0, np.inf, "std must contain only finite values"),
+            (0.0, -np.inf, "std must contain only finite values"),
             (0.0, 0.0, "std values must be positive"),
             (0.0, -1.0, "std values must be positive"),
         ],

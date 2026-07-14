@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
@@ -111,6 +112,37 @@ class _Trial:
     wait_seconds: float
 
 
+def _warm_and_measure(data_loader: Iterable[object], max_batches: int) -> _Trial:
+    """Warm one loader iterator, then measure a fresh iterator.
+
+    :param data_loader: Reusable iterable yielding model-ready batches.
+    :param max_batches: Maximum batches to materialize during measurement.
+    :return: Timing measurements for the warmed loader.
+    :raises ValueError: If the loader produces no full batch.
+    """
+    warm_iterator = iter(data_loader)
+    try:
+        next(warm_iterator)
+    except StopIteration as error:
+        raise ValueError("benchmark dataset produced no full training batches") from error
+    iterator = iter(data_loader)
+    batches = 0
+    wait_seconds = 0.0
+    started = time.perf_counter()
+    for _ in range(max_batches):
+        wait_started = time.perf_counter()
+        try:
+            next(iterator)
+        except StopIteration:
+            break
+        wait_seconds += time.perf_counter() - wait_started
+        batches += 1
+    elapsed = time.perf_counter() - started
+    if batches == 0:
+        raise ValueError("benchmark dataset produced no full training batches")
+    return _Trial(batches=batches, elapsed_seconds=elapsed, wait_seconds=wait_seconds)
+
+
 def _benchmark_trial(
     dataset_root: Path,
     *,
@@ -129,7 +161,6 @@ def _benchmark_trial(
     :param batch_size: Rows requested per batch.
     :param max_batches: Maximum batches to materialize.
     :return: Timing measurements for one warmed run.
-    :raises ValueError: If the training split produces no full batch.
     """
     module = LanceVSTDataModule(
         dataset_root=dataset_root,
@@ -145,30 +176,9 @@ def _benchmark_trial(
     )
     module.setup("fit")
     try:
-        data_loader = module.train_dataloader()
-        warm_iterator = iter(data_loader)
-        try:
-            next(warm_iterator)
-        except StopIteration as error:
-            raise ValueError("benchmark dataset produced no full training batches") from error
-        iterator = iter(data_loader)
-        batches = 0
-        wait_seconds = 0.0
-        started = time.perf_counter()
-        for _ in range(max_batches):
-            wait_started = time.perf_counter()
-            try:
-                next(iterator)
-            except StopIteration:
-                break
-            wait_seconds += time.perf_counter() - wait_started
-            batches += 1
-        elapsed = time.perf_counter() - started
+        return _warm_and_measure(module.train_dataloader(), max_batches)
     finally:
         module.teardown("fit")
-    if batches == 0:
-        raise ValueError("benchmark dataset produced no full training batches")
-    return _Trial(batches=batches, elapsed_seconds=elapsed, wait_seconds=wait_seconds)
 
 
 def _benchmark_configurations(configured_num_workers: int) -> list[BenchmarkKey]:

@@ -249,6 +249,11 @@ class PrepareBatchCollate:
         self.std = std
         self.rescale_params = rescale_params
         self.ot = ot
+        self._rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_available() and torch.distributed.is_initialized()
+            else 0
+        )
         self._seed = draw_generator_seed()
         self._generator: torch.Generator | None = None
 
@@ -271,13 +276,7 @@ class PrepareBatchCollate:
         if generator is None:
             generator = torch.Generator()
             worker_info = torch.utils.data.get_worker_info()
-            seed = worker_info.seed if worker_info else self._seed
-            if (
-                worker_info is None
-                and torch.distributed.is_available()
-                and torch.distributed.is_initialized()
-            ):
-                seed += torch.distributed.get_rank()
+            seed = (worker_info.seed if worker_info else self._seed) + self._rank
             generator.manual_seed(seed)
             self._generator = generator
         return generator
