@@ -13,6 +13,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
     RankedLogger,
@@ -42,22 +43,17 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 
 def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
-    """Build the consumed-artifact lineage edges for a training run (spec §5).
+    """Build the dataset lineage edge declared by the datamodule's local root.
 
-    Training consumes the dataset it trains on. The edge is opt-in:
-    ``consumed_dataset_config_id`` is null by default and yields no edges, so a
-    run without the field set records no lineage and never calls
-    ``use_artifact``.
-
-    :param cfg: Hydra-composed cfg; reads ``consumed_dataset_config_id`` and
-        ``consumed_artifact_alias`` (default ``latest``).
-    :returns: ``[("data-{id}", alias)]`` when the dataset id is set, else ``[]``.
+    :param cfg: Hydra-composed cfg carrying ``datamodule.dataset_root``.
+    :returns: One W&B dataset-artifact ref when the root carries a readable
+        frozen input spec, else an empty list.
     """
-    dataset_id = cfg.get("consumed_dataset_config_id")
-    if not dataset_id:
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    if not dataset_root:
         return []
-    alias = cfg.get("consumed_artifact_alias") or "latest"
-    return [(f"data-{dataset_id}", alias)]
+    ref = dataset_artifact_ref(dataset_root)
+    return [ref] if ref is not None else []
 
 
 def _derive_checkpoint_uri(cfg: DictConfig) -> str:

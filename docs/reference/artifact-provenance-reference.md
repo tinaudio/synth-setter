@@ -87,7 +87,7 @@ for lg in loggers:
 use_input_artifacts(loggers, _consumed_artifact_refs(cfg))  # e.g. [("data-diva-v1", "latest")]
 ```
 
-Consumed edges are opt-in: training reads `consumed_dataset_config_id` (null by default → no edge), so a run without it set records no input lineage and never calls `use_artifact`.
+Dataset edges are discovered from `datamodule.dataset_root/input_spec.json`: its validated `task_name` resolves to `data-{task_name}:latest`. A local dataset without that frozen spec remains usable but records no dataset lineage.
 
 ______________________________________________________________________
 

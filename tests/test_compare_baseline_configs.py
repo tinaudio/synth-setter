@@ -335,10 +335,8 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
     # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.
     "training",
-    # Opt-in W&B lineage refs added in #1509; absent in v0.0.0 — provenance, not a model knob.
+    # W&B model lineage ref added in #1509; absent in v0.0.0 — provenance, not a model knob.
     "consumed_train_config_id",
-    "consumed_dataset_config_id",
-    "consumed_artifact_alias",
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)
@@ -434,7 +432,7 @@ class TestStripDottedKeys:
     def test_absent_path_is_no_op(self) -> None:
         """The asymmetric contract: a key absent on this side leaves the config untouched."""
         cfg = {"keep": 1}
-        assert _strip_dotted_keys(cfg, ("consumed_artifact_alias",)) == {"keep": 1}
+        assert _strip_dotted_keys(cfg, ("consumed_train_config_id",)) == {"keep": 1}
 
     def test_path_through_non_dict_is_no_op(self) -> None:
         """A path whose intermediate segment isn't a dict is skipped, not an error."""
