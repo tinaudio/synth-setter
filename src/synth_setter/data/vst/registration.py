@@ -106,7 +106,7 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     """Return ``source`` with ``spec_name`` registered in both registry dicts.
 
     Inserts the generated module's import (in sorted position, so ruff's I001
-    stays clean) plus one entry each in ``param_specs`` and ``plugin_state_paths``.
+    stays clean) plus one entry each in ``_param_specs`` and ``plugin_state_paths``.
     Re-applying an identical registration is a no-op so ``--force`` re-runs
     converge instead of erroring.
 
@@ -118,12 +118,13 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     """
     module = f"synth_setter.data.vst.{spec_name}_param_spec"
     import_line = f"from {module} import {spec_name.upper()}_PARAM_SPEC"
-    spec_entry = f'    "{spec_name}": {spec_name.upper()}_PARAM_SPEC,'
+    spec_entry = f'    ParamSpecName("{spec_name}"): {spec_name.upper()}_PARAM_SPEC,'
     preset_entry = f'    "{spec_name}": "{preset_repo_path(spec_name)}",'
 
     lines = source.splitlines()
-    if f'"{spec_name}":' in source:
-        if all(line in lines for line in (import_line, spec_entry, preset_entry)):
+    existing_wiring = tuple(line in lines for line in (import_line, spec_entry, preset_entry))
+    if any(existing_wiring):
+        if all(existing_wiring):
             return source
         raise ValueError(
             f"{spec_name!r} is already registered in param_spec_registry with different "
@@ -131,7 +132,7 @@ def registry_with_spec(source: str, spec_name: str) -> str:
         )
 
     lines.insert(_import_insert_index(lines, module), import_line)
-    _insert_dict_entry(lines, "param_specs", spec_entry)
+    _insert_dict_entry(lines, "_param_specs", spec_entry)
     _insert_dict_entry(lines, "plugin_state_paths", preset_entry)
     return "\n".join(lines) + "\n"
 

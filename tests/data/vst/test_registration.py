@@ -30,7 +30,7 @@ REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
 
 
 def _dict_keys(source: str, name: str) -> list[str]:
-    """Extract the literal string keys of module-level dict ``name`` from ``source``.
+    """Extract string or ``ParamSpecName`` keys from module-level dict ``name``.
 
     :param source: Python module source.
     :param name: Name of the module-level dict assignment to read.
@@ -43,15 +43,23 @@ def _dict_keys(source: str, name: str) -> list[str]:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         if any(isinstance(t, ast.Name) and t.id == name for t in targets):
             assert isinstance(node.value, ast.Dict)
-            return [ast.literal_eval(k) for k in node.value.keys if k is not None]
+            keys: list[str] = []
+            for key in node.value.keys:
+                if key is None:
+                    continue
+                if isinstance(key, ast.Call):
+                    assert isinstance(key.func, ast.Name) and key.func.id == "ParamSpecName"
+                    key = key.args[0]
+                keys.append(ast.literal_eval(key))
+            return keys
     raise AssertionError(f"no module-level dict named {name} in source")
 
 
 def test_registry_with_spec_adds_key_to_both_dicts() -> None:
-    """The transform registers the spec in ``param_specs`` and ``plugin_state_paths``."""
+    """The transform registers the spec in ``_param_specs`` and ``plugin_state_paths``."""
     result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
-    assert "fake_synth" in _dict_keys(result, "param_specs")
+    assert "fake_synth" in _dict_keys(result, "_param_specs")
     assert "fake_synth" in _dict_keys(result, "plugin_state_paths")
 
 
@@ -115,6 +123,49 @@ def test_registry_with_spec_already_registered_identically_is_a_noop() -> None:
     once = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
     assert registry_with_spec(once, "fake_synth") == once
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC\n",
+            "",
+        ),
+        (
+            '    ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,\n',
+            "",
+        ),
+        (
+            '    "fake_synth": "presets/fake_synth-base.vstpreset",\n',
+            "",
+        ),
+        (
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC",
+            "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC",
+        ),
+        (
+            'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC',
+            'ParamSpecName("fake_synth"): SURGE_XT_PARAM_SPEC',
+        ),
+        (
+            '"fake_synth": "presets/fake_synth-base.vstpreset"',
+            '"fake_synth": "presets/other.vstpreset"',
+        ),
+    ],
+)
+def test_registry_with_spec_partial_or_conflicting_wiring_raises(old: str, new: str) -> None:
+    """A missing or conflicting generated component raises ValueError.
+
+    :param old: Exact generated component to remove or replace.
+    :param new: Replacement component, or empty text for a missing component.
+    """
+    registered = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
+    malformed = registered.replace(old, new)
+    assert malformed != registered
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
 
 
 def test_registry_with_spec_conflicting_existing_key_raises() -> None:

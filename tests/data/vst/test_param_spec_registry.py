@@ -1,17 +1,34 @@
+# pyright: reportUnnecessaryTypeIgnoreComment=true
 """Tests for the pedalboard-free param-spec registry helpers."""
 
 from __future__ import annotations
 
+import operator
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pytest
 
+import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst.param_spec_registry import (
     default_plugin_path,
     param_specs,
     plugin_state_paths,
+    resolve_param_spec,
 )
+from synth_setter.param_spec_name import ParamSpecName
+
+if TYPE_CHECKING:
+
+    def _param_spec_name_static_contract(plain: str, typed: ParamSpecName) -> None:
+        """Pin nominal separation between registry names and arbitrary strings.
+
+        :param plain: Arbitrary string that must not satisfy the domain contract.
+        :param typed: Explicitly constructed registry name accepted by the resolver.
+        """
+        resolve_param_spec(typed)
+        resolve_param_spec(plain)  # pyright: ignore[reportArgumentType]
 
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _BUNDLED_PATH = "plugins/Surge XT.vst3"
@@ -71,6 +88,30 @@ def test_param_spec_widths_match_known_values() -> None:
     assert len(param_specs["surge_simple"]) == 92
     assert len(param_specs["surge_4"]) == 7
     assert len(param_specs["obxf"]) == 187
+
+
+def test_resolve_param_spec_returns_registered_dynamic_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The typed resolver preserves runtime plugin registration.
+
+    :param monkeypatch: Temporarily adds a registry entry for this test.
+    """
+    dynamic_name = ParamSpecName("registered_at_runtime")
+    monkeypatch.setitem(param_spec_registry._param_specs, dynamic_name, param_specs["surge_4"])
+
+    assert resolve_param_spec(dynamic_name) is param_specs["surge_4"]
+
+
+def test_public_param_specs_view_rejects_mutation() -> None:
+    """The compatibility mapping rejects assignment and deletion."""
+    name = ParamSpecName("surge_4")
+    readonly = cast(Any, param_specs)
+
+    with pytest.raises(TypeError):
+        operator.setitem(readonly, name, param_specs[name])
+    with pytest.raises(TypeError):
+        operator.delitem(readonly, name)
 
 
 def test_every_param_spec_has_a_plugin_state_path() -> None:

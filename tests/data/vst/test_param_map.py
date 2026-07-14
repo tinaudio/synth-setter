@@ -11,6 +11,7 @@ from synth_setter.data.vst.param_map import (
     PedalboardParamRef,
     SynthParamMap,
 )
+from synth_setter.param_spec_name import ParamSpecName
 
 
 def _identity(index: int) -> ParamIdentity:
@@ -33,16 +34,20 @@ def _identity(index: int) -> ParamIdentity:
     )
 
 
-def _param_map(params: dict[str, ParamIdentity]) -> SynthParamMap:
+def _param_map(
+    params: dict[str, ParamIdentity],
+    param_spec_name: ParamSpecName = ParamSpecName("synth"),
+) -> SynthParamMap:
     """Build a joint map around fake identities.
 
     :param params: Identities keyed by pyname.
+    :param param_spec_name: Serialized registry identity; blank values are invalid.
     :returns: Map with the same snapshot metadata for all three backends.
     """
     snapshot = BackendSnapshot(plugin_version="1.2.3", parameter_count=20)
     return SynthParamMap(
         plugin="Synth",
-        param_spec_name="synth",
+        param_spec_name=param_spec_name,
         preset_resource="presets/base.vstpreset",
         preset_sha256="a" * 64,
         pedalboard=snapshot,
@@ -69,3 +74,9 @@ def test_param_map_duplicate_dawdreamer_indices_raise() -> None:
 
     with pytest.raises(ValidationError, match="duplicate dawdreamer"):
         _param_map({"first": first, "second": second})
+
+
+def test_param_map_blank_param_spec_name_raises() -> None:
+    """SynthParamMap rejects a whitespace-only registry key."""
+    with pytest.raises(ValidationError, match="param spec name must not be blank"):
+        _param_map({}, ParamSpecName("   "))
