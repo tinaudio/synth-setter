@@ -154,6 +154,17 @@ def draw_generator_seed() -> int:
     return int(torch.randint(_SEED_BOUND, (1,)).item())
 
 
+def ranked_generator_seed(base_seed: int, rank: int, num_workers: int = 1) -> int:
+    """Namespace a PyTorch generator seed by distributed rank.
+
+    :param base_seed: Process or worker seed before rank namespacing.
+    :param rank: Distributed process rank.
+    :param num_workers: Worker streams reserved per rank.
+    :returns: Rank-specific seed in the range accepted by ``manual_seed``.
+    """
+    return (base_seed + rank * num_workers) % (2**64)
+
+
 def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """Load the mel mean and std saved beside the shard.
 
@@ -287,7 +298,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         )
         self.generator = torch.Generator()
         if not fake:
-            self.generator.manual_seed((draw_generator_seed() + self._rank) % (2**64))
+            self.generator.manual_seed(ranked_generator_seed(draw_generator_seed(), self._rank))
         self._worker_reseed_done = False
 
         self.read_audio = read_audio
@@ -417,7 +428,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         if worker_info is None:
             return
         self._worker_reseed_done = True
-        seed = (worker_info.seed + self._rank * worker_info.num_workers) % (2**64)
+        seed = ranked_generator_seed(worker_info.seed, self._rank, worker_info.num_workers)
         self.generator.manual_seed(seed)
 
     def __getitem__(

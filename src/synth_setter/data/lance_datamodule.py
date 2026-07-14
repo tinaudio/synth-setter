@@ -49,6 +49,7 @@ from synth_setter.data.vst_datamodule import (
     draw_generator_seed,
     load_dataset_statistics,
     prepare_batch,
+    ranked_generator_seed,
 )
 from synth_setter.param_spec_name import ParamSpecName
 
@@ -277,10 +278,12 @@ class PrepareBatchCollate:
             generator = torch.Generator()
             worker_info = torch.utils.data.get_worker_info()
             seed = (
-                worker_info.seed + self._rank * worker_info.num_workers
+                ranked_generator_seed(
+                    worker_info.seed, self._rank, worker_info.num_workers
+                )
                 if worker_info
-                else self._seed + self._rank
-            ) % (2**64)
+                else ranked_generator_seed(self._seed, self._rank)
+            )
             generator.manual_seed(seed)
             self._generator = generator
         return generator
