@@ -10,6 +10,8 @@ so its shim and alias are pinned at the AST level instead. See #1664.
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,22 @@ from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModu
 from synth_setter.models.vst_fake_oracle_module import VSTFakeOracleModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+
+
+def test_vst_flow_matching_import_does_not_initialize_data_vst_package() -> None:
+    """The model's shared conditioning type must not load the VST runtime package."""
+    script = (
+        "import sys\n"
+        "import synth_setter.models.vst_flow_matching_module  # noqa: F401\n"
+        "assert 'synth_setter.data.vst' not in sys.modules\n"
+    )
+    result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
