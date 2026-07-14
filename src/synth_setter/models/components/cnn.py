@@ -209,11 +209,13 @@ class LogMelEncoder(nn.Module):
     :param hidden_dim: Channel count in the first convolutional block.
     :param out_dim: Width of the returned embedding.
     :param sample_rate: Waveform sample rate in Hz.
+    :param center: Whether to pad waveforms so frames are centered on timestamps.
     :param f_min: Lowest frequency included in the mel filter bank, in Hz.
     :param f_max: Highest included frequency, in Hz; ``None`` selects Nyquist.
     :param n_fft: Fourier transform size; defaults to 25 ms of audio.
     :param hop_length: Frame stride; defaults to 100 frames per second.
     :param n_mels: Number of mel-frequency bins.
+    :param pad_mode: Waveform padding mode used when ``center`` is enabled.
     :param power: Exponent applied to the magnitude spectrogram.
     :param mel_norm: Area normalization applied to mel filter-bank weights.
     :param mel_scale: Mel-frequency conversion formula.
@@ -233,11 +235,13 @@ class LogMelEncoder(nn.Module):
         out_dim: int,
         *,
         sample_rate: int,
+        center: bool = True,
         f_min: float = 0.0,
         f_max: float | None = None,
         n_fft: int | None = None,
         hop_length: int | None = None,
         n_mels: int = MEL_N_MELS,
+        pad_mode: Literal["constant", "reflect"] = "constant",
         power: float = 2.0,
         mel_norm: Literal["slaney"] | None = "slaney",
         mel_scale: Literal["htk", "slaney"] = "slaney",
@@ -260,11 +264,13 @@ class LogMelEncoder(nn.Module):
             raise ValueError(f"Unsupported window: {window}") from error
         self.mel = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
+            center=center,
             f_min=f_min,
             f_max=f_max,
             n_fft=n_fft if n_fft is not None else mel_n_fft(sample_rate),
             hop_length=hop_length if hop_length is not None else mel_hop_length(sample_rate),
             n_mels=n_mels,
+            pad_mode=pad_mode,
             window_fn=window_fn,
             power=power,
             norm=mel_norm,

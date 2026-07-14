@@ -202,11 +202,13 @@ class CNNResidualMLP(nn.Module):
     :param norm: Encoder normalization type.
     :param frontend: Spectral representation computed from each waveform.
     :param sample_rate: Waveform sample rate in Hz; required for ``log_mel``.
+    :param center: Whether to pad waveforms so frames are centered on timestamps.
     :param f_min: Lowest frequency included in the mel filter bank, in Hz.
     :param f_max: Highest included frequency, in Hz; ``None`` selects Nyquist.
     :param n_fft: Fourier transform size for ``log_mel``.
     :param hop_length: Frame stride for ``log_mel``.
     :param n_mels: Number of mel-frequency bins.
+    :param pad_mode: Waveform padding mode used when ``center`` is enabled.
     :param power: Exponent applied to the magnitude spectrogram.
     :param mel_norm: Area normalization applied to mel filter-bank weights.
     :param mel_scale: Mel-frequency conversion formula.
@@ -229,11 +231,13 @@ class CNNResidualMLP(nn.Module):
         *,
         frontend: Literal["global_fft", "log_mel"] = "global_fft",
         sample_rate: int | None = None,
+        center: bool = True,
         f_min: float = 0.0,
         f_max: float | None = None,
         n_fft: int | None = None,
         hop_length: int | None = None,
         n_mels: int = MEL_N_MELS,
+        pad_mode: Literal["constant", "reflect"] = "constant",
         power: float = 2.0,
         mel_norm: Literal["slaney"] | None = "slaney",
         mel_scale: Literal["htk", "slaney"] = "slaney",
@@ -257,11 +261,13 @@ class CNNResidualMLP(nn.Module):
                 hidden_dim=channels,
                 out_dim=hidden_dim,
                 sample_rate=sample_rate,
+                center=center,
                 f_min=f_min,
                 f_max=f_max,
                 n_fft=n_fft,
                 hop_length=hop_length,
                 n_mels=n_mels,
+                pad_mode=pad_mode,
                 power=power,
                 mel_norm=mel_norm,
                 mel_scale=mel_scale,
@@ -275,5 +281,10 @@ class CNNResidualMLP(nn.Module):
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict parameters from a batch of mono waveforms.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Parameter predictions shaped ``(batch, out_dim)``.
+        """
         z = self.encoder(x)
         return self.trunk(z)

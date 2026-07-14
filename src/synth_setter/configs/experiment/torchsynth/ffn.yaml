@@ -29,6 +29,7 @@ model:
   loss_fn: mse
   net:
     amin: 1.0e-10
+    center: true
     f_max: null
     f_min: 0.0
     frontend: log_mel
@@ -39,6 +40,7 @@ model:
     n_fft: 1_102
     n_mels: 128
     out_dim: ${datamodule.num_params}
+    pad_mode: constant
     power: 2.0
     sample_rate: ${datamodule.sample_rate}
     top_db: 80.0

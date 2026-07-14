@@ -91,6 +91,7 @@ def test_train_torchsynth_experiment_renders_audio_online(
     metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
     audio, params, *_ = batch
     assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)

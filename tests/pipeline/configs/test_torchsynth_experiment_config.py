@@ -22,6 +22,7 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.model.net.in_dim == 176_400
     assert cfg.model.net.frontend == "log_mel"
+    assert cfg.model.net.center is True
     assert cfg.model.net.f_max is None
     assert cfg.model.net.f_min == 0.0
     assert cfg.model.net.hop_length == 441
@@ -29,6 +30,7 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     assert cfg.model.net.mel_scale == "slaney"
     assert cfg.model.net.n_fft == 1_102
     assert cfg.model.net.n_mels == 128
+    assert cfg.model.net.pad_mode == "constant"
     assert cfg.model.net.power == 2.0
     assert cfg.model.net.sample_rate == 44_100
     assert cfg.model.net.top_db == 80.0

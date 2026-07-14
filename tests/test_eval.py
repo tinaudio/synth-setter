@@ -63,7 +63,6 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
                 "+trainer.limit_val_batches=1",
                 "trainer.val_check_interval=1.0",
                 "trainer.check_val_every_n_epoch=1",
-                "datamodule.signal_length=4410",
                 "datamodule.train_val_test_sizes=[1,1,1]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
@@ -105,6 +104,8 @@ def _torchsynth_initial_loss(
     # so this "initial" model matches training's start regardless of what model init draws.
     seed_everything(cfg.seed, workers=True)
     baseline_model = instantiate(cfg.model)
+    if split == "val":
+        baseline_model.eval()
     with torch.no_grad():
         loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
     return loss
@@ -124,7 +125,6 @@ def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig
             overrides=[
                 "experiment=torchsynth/eval_ffn",
                 "trainer=cpu",
-                "datamodule.signal_length=4410",
                 "datamodule.train_val_test_sizes=[2,2,2]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",

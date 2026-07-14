@@ -175,7 +175,27 @@ def test_log_mel_spectrogram_matches_dataset_frontend() -> None:
 
     actual = encoder.log_mel_spectrogram(audio)[0].detach().numpy()
 
-    np.testing.assert_allclose(actual[:, 2:-2], expected[:, 2:-2], atol=1e-3, rtol=1e-3)
+    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+def test_log_mel_frontend_supported_alternates_return_finite_embedding() -> None:
+    """Supported non-default transform and normalization options remain operational."""
+    encoder = LogMelEncoder(
+        4_410,
+        4,
+        5,
+        sample_rate=44_100,
+        mel_scale="htk",
+        norm="ln",
+        top_db=None,
+        window="hann",
+        num_blocks=1,
+    )
+
+    embedding = encoder(torch.randn(2, 4_410))
+
+    assert embedding.shape == (2, 5)
+    assert torch.isfinite(embedding).all()
 
 
 def test_log_mel_frontend_distinct_spectra_return_distinct_embeddings() -> None:
