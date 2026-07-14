@@ -14,7 +14,7 @@ def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
 
 
 def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
-    """Pin the memory-bounded production configuration that resolves #1848."""
+    """The production experiment uses a memory-bounded four-second frontend."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/ffn"])
 

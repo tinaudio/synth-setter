@@ -60,7 +60,7 @@ def test_log_mel_frontend_sign_inversion_returns_same_embedding() -> None:
 
 
 def test_log_mel_frontend_short_smoke_audio_returns_embedding() -> None:
-    """The 0.1 s CPU smoke-test override survives every pooling block."""
+    """A 0.1-second waveform remains valid through every pooling block."""
     encoder = LogMelEncoder(
         in_dim=4_410,
         hidden_dim=4,
@@ -151,7 +151,7 @@ def test_log_mel_frontend_unknown_window_raises() -> None:
 
 
 def test_log_mel_spectrogram_matches_dataset_frontend() -> None:
-    """Interior frames preserve the stored-mel numeric contract."""
+    """All frames preserve the stored-mel frontend's numeric contract."""
     audio = torch.randn(1, 4_410)
     encoder = LogMelEncoder(
         in_dim=4_410,
@@ -222,6 +222,53 @@ def test_log_mel_frontend_distinct_spectra_return_distinct_embeddings() -> None:
 
     assert torch.isfinite(embeddings).all()
     assert not torch.allclose(embeddings[0], embeddings[1])
+
+
+def test_log_mel_frontend_distinct_envelopes_return_distinct_embeddings() -> None:
+    """The encoder preserves temporal-envelope information for one carrier."""
+    time = torch.arange(4_410) / 44_100
+    carrier = torch.sin(2 * torch.pi * 440 * time)
+    audio = torch.stack(
+        [carrier * torch.linspace(0, 1, 4_410), carrier * torch.linspace(1, 0, 4_410)]
+    )
+    encoder = LogMelEncoder(
+        in_dim=4_410,
+        hidden_dim=4,
+        out_dim=5,
+        sample_rate=44_100,
+        num_blocks=1,
+        kernel_size=3,
+    )
+    encoder.eval()
+
+    with torch.no_grad():
+        embeddings = encoder(audio)
+
+    assert torch.isfinite(embeddings).all()
+    assert not torch.allclose(embeddings[0], embeddings[1])
+
+
+def test_log_mel_frontend_eval_prediction_is_independent_of_batch_peers() -> None:
+    """An example's inference output does not depend on neighboring examples."""
+    model = CNNResidualMLP(
+        in_dim=4_410,
+        channels=4,
+        encoder_blocks=1,
+        trunk_blocks=1,
+        hidden_dim=8,
+        out_dim=2,
+        kernel_size=3,
+        frontend="log_mel",
+        sample_rate=44_100,
+    )
+    model.eval()
+    anchor = torch.randn(4_410)
+
+    with torch.no_grad():
+        first = model(torch.stack([anchor, torch.zeros_like(anchor)]))[0]
+        second = model(torch.stack([anchor, torch.randn_like(anchor)]))[0]
+
+    torch.testing.assert_close(first, second)
 
 
 def test_log_mel_frontend_backward_reaches_every_parameter() -> None:
