@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from synth_setter.models.components.cnn import LogMelEncoder
-from synth_setter.models.components.residual_mlp import CNNResidualMLP
+from synth_setter.models.components.residual_mlp import LogMelCNNResidualMLP
 
 _log_mel_encoder = partial(
     LogMelEncoder,
@@ -21,7 +21,7 @@ _log_mel_encoder = partial(
     kernel_size=3,
 )
 _log_mel_model = partial(
-    CNNResidualMLP,
+    LogMelCNNResidualMLP,
     in_dim=4_410,
     channels=4,
     encoder_blocks=1,
@@ -29,7 +29,6 @@ _log_mel_model = partial(
     hidden_dim=8,
     out_dim=2,
     kernel_size=3,
-    frontend="log_mel",
     sample_rate=44_100,
 )
 
@@ -42,7 +41,7 @@ def _seed() -> None:
 
 def test_log_mel_frontend_four_second_audio_returns_bounded_embedding() -> None:
     """Four-second audio produces predictions without a length-sized linear head."""
-    model = CNNResidualMLP(
+    model = LogMelCNNResidualMLP(
         in_dim=176_400,
         channels=4,
         encoder_blocks=2,
@@ -51,7 +50,6 @@ def test_log_mel_frontend_four_second_audio_returns_bounded_embedding() -> None:
         out_dim=3,
         kernel_size=3,
         norm="bn",
-        frontend="log_mel",
         sample_rate=44_100,
     )
     model.eval()
@@ -83,18 +81,6 @@ def test_log_mel_frontend_short_smoke_audio_returns_embedding() -> None:
     embedding = encoder(torch.zeros(2, 4_410))
 
     assert embedding.shape == (2, 5)
-
-
-def test_cnn_residual_mlp_unknown_frontend_raises() -> None:
-    """An unsupported front-end name fails instead of silently selecting log-mel."""
-    with pytest.raises(ValueError, match="Unsupported frontend"):
-        CNNResidualMLP(frontend="unknown", sample_rate=44_100)  # type: ignore[arg-type]
-
-
-def test_cnn_residual_mlp_log_mel_without_sample_rate_raises() -> None:
-    """Log-mel configuration fails before constructing an invalid transform."""
-    with pytest.raises(ValueError, match="sample_rate is required"):
-        CNNResidualMLP(frontend="log_mel")
 
 
 @pytest.mark.parametrize("audio", [torch.zeros(2, 1, 4_410), torch.zeros(2, 4_409)])

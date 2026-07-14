@@ -21,7 +21,10 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     assert cfg.callbacks.model_checkpoint.monitor == "val/lsd"
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.model.net.in_dim == 176_400
-    assert cfg.model.net.frontend == "log_mel"
+    assert (
+        cfg.model.net._target_
+        == "synth_setter.models.components.residual_mlp.LogMelCNNResidualMLP"
+    )
     assert cfg.model.net.center is True
     assert cfg.model.net.f_max is None
     assert cfg.model.net.f_min == 0.0

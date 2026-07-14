@@ -32,7 +32,7 @@ model:
     center: true
     f_max: null
     f_min: 0.0
-    frontend: log_mel
+    _target_: synth_setter.models.components.residual_mlp.LogMelCNNResidualMLP
     hop_length: 441
     in_dim: ${datamodule.signal_length}
     mel_norm: slaney
