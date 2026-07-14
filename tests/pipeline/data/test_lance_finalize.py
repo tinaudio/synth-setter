@@ -778,6 +778,70 @@ def test_finalize_skips_invalid_earliest_attempt_and_commits_next_healthy(
     assert staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.invalid").exists()
 
 
+def test_finalize_skips_earliest_attempt_with_no_fragment_files(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """An empty fragment file list is invalidated before selecting the next attempt.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="good", value_offset=7000)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-a-u0000", 1_000_000_000.0)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-b-good", 2_000_000_000.0)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    fragment_meta["files"] = []
+    payload["fragment_json"] = json.dumps(fragment_meta)
+    sidecar_path.write_text(json.dumps(payload))
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(
+        decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0, value_offset=7000)[MEL_SPEC_FIELD]
+    )
+    assert staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.invalid").exists()
+
+
+def test_finalize_skips_earliest_attempt_with_malformed_lance_file(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A malformed physical fragment is invalidated before selecting the next attempt.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="good", value_offset=7000)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-a-u0000", 1_000_000_000.0)
+    set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-b-good", 2_000_000_000.0)
+    sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    payload = json.loads(sidecar_path.read_text())
+    fragment_meta = json.loads(payload["fragment_json"])
+    data_path = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "train.lance"
+        / "data"
+        / fragment_meta["files"][0]["path"]
+    )
+    data_path.write_bytes(b"not a Lance file")
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(
+        decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0, value_offset=7000)[MEL_SPEC_FIELD]
+    )
+    assert staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.invalid").exists()
+
+
 def test_finalize_invalidates_only_candidate_so_generation_can_retry(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:

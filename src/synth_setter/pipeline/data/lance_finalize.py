@@ -258,6 +258,10 @@ def _validate_fragment_files(
     split_uri = spec.r2.split_lance_uri(split_for_shard(spec, attempt.shard_id))
     split_target, storage_options = r2_io.lance_target(split_uri)
     expected_schema = _shard_schema(spec, attempt.shard_id)
+    if not fragment.files:
+        raise ValueError(
+            f"shard {attempt.shard_id} attempt {attempt.name}: fragment has no data files"
+        )
     for data_file in fragment.files:
         data_path = PurePosixPath(data_file.path)
         if (
@@ -275,9 +279,15 @@ def _validate_fragment_files(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
                 f"{data_file.path} missing or empty under {split_uri}/data/"
             )
-        physical_schema = LanceFileReader(
-            f"{split_target}/data/{data_file.path}", storage_options=storage_options
-        ).metadata().schema
+        try:
+            physical_schema = LanceFileReader(
+                f"{split_target}/data/{data_file.path}", storage_options=storage_options
+            ).metadata().schema
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"shard {attempt.shard_id} attempt {attempt.name}: fragment data file "
+                f"{data_file.path} is not a readable Lance file: {type(exc).__name__}: {exc}"
+            ) from exc
         if not physical_schema.equals(expected_schema, check_metadata=True):
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment physical schema "
