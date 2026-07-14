@@ -100,9 +100,7 @@ def _benchmark_one(
     if batches == 0:
         raise ValueError("benchmark dataset produced no full training batches")
 
-    # The legacy adapter performs one Lance read per requested column; train
-    # projects params plus one conditioning column. The map path performs one
-    # projected take for the same batch.
+    # Legacy reads projected columns separately; map reads the projection in one take.
     scan_count = 2 * batches if loader == "legacy" else batches
     return LoaderBenchmarkResult(
         loader=loader,
