@@ -333,19 +333,21 @@ def _run_listing_probe(args: Sequence[str]) -> str | None:
     """Run an rclone listing probe, normalizing a missing directory to absent.
 
     S3 backends list a missing key/prefix as empty output; the local backend
-    (local compute mode) errors "directory not found" instead — callers get
-    ``None`` for both so probes behave identically across backends.
+    exits 3 for a missing directory. Only that local-backend result becomes
+    ``None``: on S3 the same exit code can mean a missing bucket, which is an
+    infrastructure failure rather than an absent key.
 
     :param args: Full rclone argv for a listing subcommand (``lsf`` / ``lsjson``).
-    :returns: The probe's stdout, or ``None`` when the target does not exist.
-    :raises subprocess.CalledProcessError: rclone failed for a reason other
-        than a missing directory (auth, network, config).
+    :returns: The probe's stdout, or ``None`` when a local-backend target directory is absent.
+    :raises subprocess.CalledProcessError: Any S3 failure, or a local-backend failure other than
+        a missing directory.
     """
     result = subprocess.run(  # noqa: S603 — args from validated URIs
         args, check=False, capture_output=True, text=True
     )
     if result.returncode != 0:
-        if "directory not found" in result.stderr:
+        remote_type = os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower()
+        if result.returncode == 3 and remote_type == "local":
             return None
         raise subprocess.CalledProcessError(
             result.returncode, args, output=result.stdout, stderr=result.stderr
@@ -368,8 +370,13 @@ def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]: 
     :raises subprocess.CalledProcessError: rclone failed for a reason other
         than a missing directory (auth, network, config).
     """
-    # S607: rclone resolved by the image's PATH.
-    args = ["rclone", "lsjson", "--files-only", *_PROBE_RELIABILITY_FLAGS]  # noqa: S607
+    args = [  # noqa: S607 — rclone resolved by the image's PATH.
+        "rclone",
+        "lsjson",
+        "--files-only",
+        "--use-server-modtime",
+        *_PROBE_RELIABILITY_FLAGS,
+    ]
     if recursive:
         args.append("-R")
     args.append(_to_rclone_path(r2_uri))

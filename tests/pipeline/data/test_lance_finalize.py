@@ -16,8 +16,9 @@ import lance
 import numpy as np
 import pytest
 
+from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
-from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -71,8 +72,6 @@ def read_columns(uri: Path) -> dict[str, np.ndarray]:
 def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -80,7 +79,16 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
 
     expected_split_shards = {"train": [0, 1], "val": [2], "test": [3]}
     for split, shard_ids in expected_split_shards.items():
-        decoded = read_columns(split_dataset_path(fake_r2_remote, spec, split))
+        split_path = split_dataset_path(fake_r2_remote, spec, split)
+        dataset = lance.dataset(str(split_path))
+        first_shard_id = shard_ids[0]
+        worker_shard = lance.dataset(
+            str(tmp_path / f"w-{first_shard_id}" / spec.shards[first_shard_id].filename)
+        )
+        assert dataset.schema == worker_shard.schema
+        assert read_shard_metadata(dataset.schema).base_seed == spec.shards[first_shard_id].seed
+
+        decoded = read_columns(split_path)
         for field in DATASET_FIELD_NAMES:
             expected = np.concatenate(
                 [shard_arrays(spec, sid)[field] for sid in shard_ids], axis=0
@@ -91,8 +99,6 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
 def test_finalize_split_commit_is_one_atomic_manifest_version(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -106,8 +112,6 @@ def test_finalize_split_commit_is_one_atomic_manifest_version(
 def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
 
@@ -160,8 +164,6 @@ def stage_duplicate_attempt(
 def test_finalize_selects_earliest_valid_marker_among_duplicate_attempts(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -180,8 +182,6 @@ def test_finalize_selects_earliest_valid_marker_among_duplicate_attempts(
 def test_finalize_ties_on_valid_mtime_break_by_lexicographic_marker_key(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -200,8 +200,6 @@ def test_finalize_ties_on_valid_mtime_break_by_lexicographic_marker_key(
 def test_finalize_rerun_short_circuits_on_complete_marker_with_identical_content(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     finalize_from_spec(spec, tmp_path / "work")
@@ -220,8 +218,6 @@ def test_finalize_rerun_short_circuits_on_complete_marker_with_identical_content
 def test_finalize_rerun_after_lost_marker_keeps_winner_despite_later_straggler(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     for shard in spec.shards:
@@ -247,8 +243,6 @@ def test_finalize_rerun_after_lost_marker_keeps_winner_despite_later_straggler(
 def test_finalize_interrupted_before_marker_rerun_rebuilds_without_doubled_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     finalize_from_spec(spec, tmp_path / "work")
@@ -298,8 +292,6 @@ def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
 
     monkeypatch.setattr(lance_finalize, "finalize_welford", capture_finalize)
 
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     finalize_from_spec(spec, tmp_path / "work")
 
     assert captured == {"mask_degenerate": flag}
@@ -308,8 +300,6 @@ def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
 def test_finalize_records_selected_attempts_and_valid_keys_in_dataset_json(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stage_duplicate_attempt(spec, tmp_path, 0, attempt_uuid="zzzz", value_offset=7000)
@@ -344,8 +334,6 @@ def staging_file(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, filenam
 def test_finalize_rejects_sidecar_that_fails_strict_validation(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -355,11 +343,21 @@ def test_finalize_rejects_sidecar_that_fails_strict_validation(
         finalize_from_spec(spec, tmp_path / "work")
 
 
+def test_finalize_rejects_binary_fragment_sidecar_with_context(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
+    sidecar.write_bytes(b"\xff")
+
+    with pytest.raises(ValueError, match=r"shard 0 attempt pod-a-u0000: invalid fragment sidecar"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
 def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -374,8 +372,6 @@ def test_finalize_rejects_fragment_json_that_is_not_lance_metadata(
 def test_finalize_skips_empty_split_and_still_completes(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     # train 4 + val 2 samples at 2/shard → 3 shards, test split empty. Rebuilt
     # from a fresh dump so the frozen spec's cached computed fields re-derive.
     spec = DatasetSpec.model_validate(
@@ -395,8 +391,6 @@ def test_finalize_skips_empty_split_and_still_completes(
 def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
@@ -406,11 +400,21 @@ def test_finalize_rejects_stats_sidecar_missing_welford_arrays(
         finalize_from_spec(spec, tmp_path / "work")
 
 
+def test_finalize_rejects_malformed_stats_sidecar_with_context(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
+    stats_path.write_bytes(b"")
+
+    with pytest.raises(ValueError, match=r"shard 0 attempt pod-a-u0000: invalid shard-stats\.npz"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
 def test_finalize_rejects_stats_count_disagreeing_with_fragment_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     stats_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.shard-stats.npz")
@@ -426,8 +430,6 @@ def test_finalize_rejects_stats_count_disagreeing_with_fragment_rows(
 def test_finalize_rejects_fragment_whose_rows_disagree_with_spec(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     sidecar_path = staging_file(fake_r2_remote, spec, 0, "pod-a-u0000.fragment.json")
@@ -444,8 +446,6 @@ def test_finalize_rejects_fragment_whose_rows_disagree_with_spec(
 def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     # Shard 2 is val's only shard, so its fragment file is val.lance's only data.
@@ -460,8 +460,6 @@ def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
 def test_finalize_rejects_winner_whose_fragment_data_file_is_truncated_to_zero(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     val_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
@@ -530,8 +528,6 @@ def test_staged_discovery_skips_non_shard_entries_in_staging_root(
 def test_finalize_with_missing_shard_reports_it_and_writes_no_marker(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
-    from synth_setter.cli.finalize_dataset import finalize_from_spec
-
     spec = tiny_lance_spec()
     for shard in spec.shards:
         if shard.shard_id == 1:

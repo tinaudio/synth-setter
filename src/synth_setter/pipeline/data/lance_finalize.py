@@ -12,15 +12,16 @@ winners' fragment metadata into each split dataset as one atomic
 
 from __future__ import annotations
 
-import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zipfile import BadZipFile
 
 import lance
 import numpy as np
-from loguru import logger
+import structlog
 from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import dataset_field_shapes
@@ -42,6 +43,9 @@ from synth_setter.pipeline.schemas.lance_attempt import (
     LanceFragmentSidecar,
     SelectedLanceAttempt,
 )
+from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
+
+logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -112,7 +116,7 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
     for entry in entries:
         shard_dir, _, filename = entry.path.partition("/")
         if not filename:
-            logger.warning("skipping stray top-level staging object: {}", entry.path)
+            logger.warning("skipping_stray_top_level_staging_object", path=entry.path)
             continue
         # Nested dirs under a shard (e.g. a future quarantine/) never hold
         # staged attempts — only a shard dir's direct children count.
@@ -123,10 +127,10 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
     for shard_dir, files in by_shard_dir.items():
         # Tolerate non-shard entries (stray objects, a future quarantine/ dir):
         # discovery reports what it recognizes rather than aborting finalize.
-        if not re.fullmatch(r"shard-\d{6}", shard_dir):
-            logger.warning("skipping non-shard staging entry: {}", shard_dir)
+        shard_id = parse_shard_staging_dir(shard_dir)
+        if shard_id is None:
+            logger.warning("skipping_non_shard_staging_entry", shard_dir=shard_dir)
             continue
-        shard_id = int(shard_dir.removeprefix("shard-"))
         for name in complete_attempt_names(list(files)):
             valid = files[f"{name}{ATTEMPT_VALID_SUFFIX}"]
             attempts.setdefault(shard_id, []).append(
@@ -140,7 +144,7 @@ def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAtt
     return attempts
 
 
-def select_winner(attempts: list[StagedLanceAttempt]) -> StagedLanceAttempt:
+def select_winner(attempts: Sequence[StagedLanceAttempt]) -> StagedLanceAttempt:
     """Select the winning attempt: earliest ``.valid`` mtime, tie-broken by key.
 
     ``LastModified`` is storage-server-assigned, so the winner is stable — a
@@ -177,7 +181,7 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
         f"{staging_dir}{attempt.name}{LANCE_FRAGMENT_SIDECAR_SUFFIX}"
     ) as sidecar_path:
         try:
-            sidecar = LanceFragmentSidecar.model_validate_json(sidecar_path.read_text())
+            sidecar = LanceFragmentSidecar.model_validate_json(sidecar_path.read_bytes())
         except ValidationError as exc:
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: invalid fragment sidecar: {exc}"
@@ -189,19 +193,30 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
             f"shard {attempt.shard_id} attempt {attempt.name}: fragment_json does not "
             f"deserialize as Lance fragment metadata: {type(exc).__name__}: {exc}"
         ) from exc
-    with (
-        r2_io.downloaded_to_tempfile(
-            f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
-        ) as stats_path,
-        np.load(stats_path) as stats,
-    ):
-        missing_keys = [key for key in LANCE_SHARD_STATS_KEYS if key not in stats]
-        if missing_keys:
+    with r2_io.downloaded_to_tempfile(
+        f"{staging_dir}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
+    ) as stats_path:
+        try:
+            stats_archive = np.load(stats_path)
+        except (BadZipFile, EOFError, OSError, ValueError) as exc:
             raise ValueError(
-                f"shard {attempt.shard_id} attempt {attempt.name}: shard-stats.npz "
-                f"missing arrays {missing_keys}"
-            )
-        welford = (int(stats["count"]), stats["mean"], stats["m2"])
+                f"shard {attempt.shard_id} attempt {attempt.name}: invalid "
+                f"shard-stats.npz: {type(exc).__name__}: {exc}"
+            ) from exc
+        with stats_archive as stats:
+            missing_keys = [key for key in LANCE_SHARD_STATS_KEYS if key not in stats]
+            if missing_keys:
+                raise ValueError(
+                    f"shard {attempt.shard_id} attempt {attempt.name}: shard-stats.npz "
+                    f"missing arrays {missing_keys}"
+                )
+            try:
+                welford = (int(stats["count"]), stats["mean"], stats["m2"])
+            except (BadZipFile, EOFError, OSError, ValueError) as exc:
+                raise ValueError(
+                    f"shard {attempt.shard_id} attempt {attempt.name}: invalid "
+                    f"shard-stats.npz: {type(exc).__name__}: {exc}"
+                ) from exc
     rows = fragment.physical_rows
     if rows != spec.render.samples_per_shard or welford[0] != rows:
         raise ValueError(
@@ -222,10 +237,9 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
 def _split_schema(spec: DatasetSpec, first_shard_id: int) -> pa.Schema:
     """Build a split dataset's Arrow schema from the spec.
 
-    Mirrors the worker writer's construction — shapes from the render config,
-    ``ShardMetadata`` (seeded by the split's first shard, matching the schema
-    the previous row-streaming finalize inherited from shard 0) embedded in
-    schema metadata so consumers keep reading ``sample_rate`` etc. from splits.
+    Mirrors the worker writer's construction: shapes come from the render
+    config, and ``ShardMetadata`` is seeded by the split's first shard so
+    consumers keep reading ``sample_rate`` etc. from splits.
 
     :param spec: Validated dataset spec.
     :param first_shard_id: The split's first shard, whose seed the metadata carries.
@@ -276,7 +290,7 @@ def _reduce_and_upload_stats(
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
+    logger.info("uploaded_stats", uri=spec.r2.stats_uri())
 
 
 def _write_dataset_card(
@@ -304,7 +318,7 @@ def _write_dataset_card(
     card_path = work_dir / DATASET_CARD_FILENAME
     card_path.write_text(card.model_dump_json(indent=2))
     r2_io.upload(card_path, spec.r2.dataset_card_uri())
-    logger.info("uploaded dataset card to {}", spec.r2.dataset_card_uri())
+    logger.info("uploaded_dataset_card", uri=spec.r2.dataset_card_uri())
 
 
 # DOC502: the documented ValueErrors propagate from _select_checked_winners.
@@ -334,7 +348,7 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa
             [winners[shard_id].fragment for shard_id in range(lo, hi)],
             storage_options=storage_options,
         )
-        logger.info("committed {} winner fragments into {} split", hi - lo, split)
+        logger.info("committed_winner_fragments", fragment_count=hi - lo, split=split)
 
     _reduce_and_upload_stats(spec, winners, work_dir)
     _write_dataset_card(spec, winners, work_dir)

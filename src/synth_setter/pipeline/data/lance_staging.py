@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -163,7 +164,7 @@ def stage_lance_shard_attempt(
     _upload_empty_marker(_attempt_uri(ATTEMPT_VALID_SUFFIX))
 
 
-def complete_attempt_names(entry_paths: list[str]) -> list[str]:
+def complete_attempt_names(entry_paths: Sequence[str]) -> list[str]:
     """Return attempt names (``{worker}-{attempt}``) with a complete staged set.
 
     A Lance attempt is complete iff its sidecar, stats, and ``.valid`` marker
@@ -176,7 +177,7 @@ def complete_attempt_names(entry_paths: list[str]) -> list[str]:
         suffix: {path[: -len(suffix)] for path in entry_paths if path.endswith(suffix)}
         for suffix in COMPLETE_ATTEMPT_SUFFIXES
     }
-    return sorted(set.intersection(*names_by_suffix.values()))
+    return sorted(name for name in set.intersection(*names_by_suffix.values()) if name)
 
 
 def shard_has_complete_attempt(spec: DatasetSpec, shard_id: int) -> bool:

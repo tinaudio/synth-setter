@@ -919,6 +919,61 @@ class TestListEntries:
             with pytest.raises(subprocess.CalledProcessError):
                 r2_io.list_entries("r2://bucket/staging/", recursive=True)
 
+    def test_local_missing_directory_exit_lists_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The local backend's exit-code-3 missing directory reads as absent.
+
+        :param monkeypatch: Selects the local rclone backend for the probe.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 3
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            assert r2_io.list_entries("r2://bucket/staging/") == []
+
+    def test_local_non_missing_exit_with_directory_text_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only rclone's missing-directory exit code is normalized for local probes.
+
+        :param monkeypatch: Selects the local rclone backend for the probe.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 1
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://bucket/staging/")
+
+    @pytest.mark.parametrize("remote_type", [None, "s3"])
+    def test_s3_missing_bucket_exit_propagates(
+        self, monkeypatch: pytest.MonkeyPatch, remote_type: str | None
+    ) -> None:
+        """S3's exit-code-3 missing bucket is infrastructure failure, not absence.
+
+        :param monkeypatch: Selects the explicit or default S3 backend.
+        :param remote_type: Explicit ``s3`` or unset, whose default is also S3.
+        """
+        if remote_type is None:
+            monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        else:
+            monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", remote_type)
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 3
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://missing-bucket/staging/")
+
     def test_invokes_rclone_lsjson_with_reliability_flags(self) -> None:
         """Argv pin: the listing probe carries the shared retry/contimeout flags."""
         completed = MagicMock(spec=subprocess.CompletedProcess)
@@ -930,6 +985,7 @@ class TestListEntries:
             "rclone",
             "lsjson",
             "--files-only",
+            "--use-server-modtime",
             "--retries=3",
             "--contimeout=30s",
             "-R",

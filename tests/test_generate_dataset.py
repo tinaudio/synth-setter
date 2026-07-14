@@ -314,6 +314,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
         f"invalid render must not stage a complete attempt, found: {staged}"
     )
     # The attempt-start marker is the only allowed trace of the failed attempt.
+    assert staged
     assert all(name.endswith(".rendering") for name in staged)
 
 

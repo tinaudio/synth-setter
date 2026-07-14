@@ -67,3 +67,23 @@ def test_validate_all_lance_shards_surfaces_structural_check_failures_per_shard(
     assert len(errors) == 1
     assert errors[0].startswith("shard-000003.lance: ")
     assert "invalid fragment sidecar" in errors[0]
+
+
+def test_validate_all_lance_shards_aggregates_malformed_stats_sidecar(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A malformed stats archive reports against its shard instead of aborting validation.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for the local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats = staging_file(fake_r2_remote, spec, 2, "pod-a-u0002.shard-stats.npz")
+    stats.write_bytes(b"")
+
+    errors = validate_all_shards_from_r2(spec)
+
+    assert len(errors) == 1
+    assert errors[0].startswith("shard-000002.lance: shard 2 attempt pod-a-u0002: ")
+    assert "invalid shard-stats.npz" in errors[0]

@@ -21,18 +21,21 @@ from synth_setter.data.vst.shapes import (
     DATASET_FIELD_NAMES,
     dataset_field_shapes,
 )
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
     record_batch_from_arrays,
     write_lance_dataset,
 )
 from synth_setter.pipeline.data.lance_staging import (
+    complete_attempt_names,
     shard_has_complete_attempt,
     split_for_shard,
     stage_lance_shard_attempt,
     write_rendering_marker,
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
+from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
@@ -145,6 +148,16 @@ def test_split_for_shard_out_of_range_raises() -> None:
         split_for_shard(spec, 4)
 
 
+def test_complete_attempt_names_ignores_empty_attempt_name() -> None:
+    """Bare suffix files cannot form a staged attempt with an empty identity."""
+    assert complete_attempt_names([".fragment.json", ".shard-stats.npz", ".valid"]) == []
+
+
+def test_parse_shard_staging_dir_accepts_seven_digit_shard_id() -> None:
+    """Directory parsing stays aligned with ``:06d`` after the minimum width is exceeded."""
+    assert parse_shard_staging_dir("shard-1000000") == 1_000_000
+
+
 def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
@@ -209,6 +222,38 @@ def test_stage_attempt_writes_valid_marker_alongside_sidecars(
     )
 
     assert (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
+
+
+def test_stage_attempt_sidecar_upload_failure_withholds_valid_marker(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed sidecar upload cannot expose the attempt's commit marker.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    :param monkeypatch: Injects a sidecar upload failure after the stats upload.
+    """
+    spec = tiny_lance_spec()
+    local_shard = write_local_shard(spec, 0, tmp_path)
+    real_upload = r2_io.upload
+
+    def _fail_sidecar_upload(source: str | Path, destination_uri: str) -> None:
+        if destination_uri.endswith(".fragment.json"):
+            raise OSError("sidecar upload failed")
+        real_upload(source, destination_uri)
+
+    monkeypatch.setattr(r2_io, "upload", _fail_sidecar_upload)
+
+    with pytest.raises(OSError, match="sidecar upload failed"):
+        stage_lance_shard_attempt(
+            spec, spec.shards[0], local_shard, worker_id="pod-a", attempt_uuid="a1b2"
+        )
+
+    staged = staging_dir(fake_r2_remote, spec, 0)
+    assert (staged / "pod-a-a1b2.shard-stats.npz").exists()
+    assert not (staged / "pod-a-a1b2.valid").exists()
 
 
 def test_write_rendering_marker_records_attempt_start(fake_r2_remote: Path) -> None:

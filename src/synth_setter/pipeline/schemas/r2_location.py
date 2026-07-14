@@ -24,6 +24,7 @@ input shape is promoted to ``r2: R2Location`` — see ``DatasetSpec``'s
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,7 +41,19 @@ from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT
 if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import ShardSpec, Split
 
-__all__ = ["R2Location"]
+__all__ = ["R2Location", "parse_shard_staging_dir"]
+
+_SHARD_STAGING_DIR_PATTERN = re.compile(r"shard-(\d{6,})")
+
+
+def parse_shard_staging_dir(name: str) -> int | None:
+    """Parse a canonical staging directory name into its logical shard id.
+
+    :param name: Directory basename formatted as ``shard-NNNNNN``.
+    :returns: Logical shard id, or ``None`` when ``name`` is not canonical.
+    """
+    match = _SHARD_STAGING_DIR_PATTERN.fullmatch(name)
+    return int(match.group(1)) if match else None
 
 
 class R2Location(BaseModel):

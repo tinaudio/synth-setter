@@ -210,6 +210,29 @@ def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Pat
     np.testing.assert_array_equal(decoded, expected)
 
 
+def test_lance_fragment_streams_multiple_batches_into_one_fragment(tmp_path: Path) -> None:
+    """One fragment preserves every batch from a streamed shard source.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first = _arange_arrays(offset=0)
+    second = _arange_arrays(offset=1000)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    batches = (
+        record_batch_from_arrays(first, schema),
+        record_batch_from_arrays(second, schema),
+    )
+
+    fragment = lance_fragment(shard, schema, iter(batches), 0)
+    commit_lance_dataset(shard, schema, [fragment])
+
+    assert lance.dataset(str(shard)).count_rows() == 4
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
+    np.testing.assert_array_equal(decoded, expected)
+
+
 def test_tensor_array_missing_row_axis_raises_value_error() -> None:
     """A tensor whose ndim equals ``inner_shape``'s (no row axis) raises ValueError.
 

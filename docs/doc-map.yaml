@@ -132,7 +132,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/lance_staging.py"
         covers: "Worker-side Lance attempt staging: fragment write, sidecar/stats/marker upload, and completeness probes"
       - pattern: "src/synth_setter/pipeline/data/lance_finalize.py"
-        covers: "Finalize-side Lance fragment commit: winner selection and structural checks over staged attempts, then the per-split Overwrite commit, stats reduction, and audit record"
+        covers: "Finalize-side Lance fragment commit: selects and checks one winner per staged shard, then commits split manifests with stats and audit outputs"
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Pydantic contracts for the Lance staging/audit trust boundary: the per-attempt fragment sidecar and the dataset.json audit card models"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
