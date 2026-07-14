@@ -13,7 +13,8 @@ from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.ot import _hungarian_match
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 
 # Exclusive ``torch.randint`` bound keeping drawn seeds in signed-int64 range.
@@ -558,7 +559,7 @@ class VSTDataModule(LightningDataModule):
         conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
         *,
-        param_spec_name: str,
+        param_spec_name: ParamSpecName,
     ) -> None:
         """Store dataloader and dataset configuration for later ``setup``.
 
@@ -615,7 +616,7 @@ class VSTDataModule(LightningDataModule):
             unused because every split dataset is constructed eagerly.
         """
         # KeyError here fails fast on an unregistered param_spec_name.
-        num_params = len(param_specs[self.param_spec_name])
+        num_params = len(resolve_param_spec(self.param_spec_name))
         self.train_dataset = self.dataset_cls(
             self.dataset_root / f"train{self.shard_suffix}",
             batch_size=self.batch_size,

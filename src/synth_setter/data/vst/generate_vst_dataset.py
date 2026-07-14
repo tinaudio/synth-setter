@@ -384,7 +384,7 @@ def main() -> None:
     # this CLI entrypoint is invoked, not when callers merely import this
     # module to reach VSTDataSample / generate_sample. (h5py is already a
     # module-level import here, so it is not what the lazy load avoids.)
-    from synth_setter.data.vst.param_spec_registry import param_specs
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
     from synth_setter.data.vst.writers import (
         make_hdf5_dataset,
         make_lance_dataset,
@@ -416,7 +416,7 @@ def main() -> None:
         source_shard_uri = join_uri(args.copy_dataset_root_uri, Path(args.data_file).name)
         with localized_uri(source_shard_uri) as source_shard:
             fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
-                source_shard, param_specs[render_cfg.param_spec_name]
+                source_shard, resolve_param_spec(render_cfg.param_spec_name)
             )
 
     if fmt is OutputFormat.HDF5:

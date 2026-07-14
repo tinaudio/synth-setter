@@ -1,3 +1,4 @@
+# pyright: reportUnnecessaryTypeIgnoreComment=true
 """Behavioral tests for :mod:`synth_setter.data.vst_datamodule`.
 
 Covers the four public symbols exposed by the module:
@@ -30,6 +31,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import h5py
@@ -40,6 +42,7 @@ import torch
 
 from synth_setter.data import vst_datamodule
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst_datamodule import (
     ShiftedBatchSampler,
     ShuffledSampler,
@@ -47,7 +50,7 @@ from synth_setter.data.vst_datamodule import (
     VSTDataset,
     WithinChunkShuffledSampler,
 )
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.param_spec_name import ParamSpecName
 
 _AUDIO_CHANNELS = 2
 _AUDIO_SAMPLES = 16
@@ -57,6 +60,22 @@ _MEL_N_FRAMES = 5
 _M2L_DIM_1 = 6
 _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
+
+if TYPE_CHECKING:
+
+    def _vst_datamodule_param_spec_name_contract(
+        plain: str, typed: ParamSpecName
+    ) -> None:
+        """Pin nominal typing at the base datamodule constructor.
+
+        :param plain: Arbitrary string rejected by the constructor contract.
+        :param typed: Explicitly constructed registry name accepted by the constructor.
+        """
+        VSTDataModule(dataset_root=".", param_spec_name=typed)
+        VSTDataModule(
+            dataset_root=".",
+            param_spec_name=plain,  # pyright: ignore[reportArgumentType]
+        )
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 _FAKE_PARAM_WIDTH = 3
@@ -98,7 +117,7 @@ def _set_up_module(**kwargs: object) -> Iterator[VSTDataModule]:
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: VSTDataModule
     """
-    kwargs.setdefault("param_spec_name", "surge_xt")
+    kwargs.setdefault("param_spec_name", ParamSpecName("surge_xt"))
     module = VSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -1012,7 +1031,9 @@ class TestVSTDataModule:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        module = VSTDataModule(dataset_root=str(tmp_path), param_spec_name="surge_xt")
+        module = VSTDataModule(
+            dataset_root=str(tmp_path), param_spec_name=ParamSpecName("surge_xt")
+        )
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
@@ -1034,7 +1055,7 @@ class TestVSTDataModule:
         module = VSTDataModule(
             dataset_root=str(dataset_root),
             download_dataset_root_uri="r2://intermediate-data/dataset",
-            param_spec_name="surge_xt",
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         module.prepare_data()
 
@@ -1053,7 +1074,9 @@ class TestVSTDataModule:
         dataset_root = tmp_path / "downloaded"
         dataset_root.mkdir()
 
-        module = VSTDataModule(dataset_root=str(dataset_root), param_spec_name="surge_xt")
+        module = VSTDataModule(
+            dataset_root=str(dataset_root), param_spec_name=ParamSpecName("surge_xt")
+        )
         module.prepare_data()
 
         assert list(dataset_root.iterdir()) == []
@@ -1268,7 +1291,10 @@ class TestVSTDataModule:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         module = VSTDataModule(
-            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         module.setup()
         module.teardown()
@@ -1342,7 +1368,7 @@ class TestVSTDataModule:
             ot=False,
             fake=True,
             use_saved_mean_and_variance=False,
-            param_spec_name="does_not_exist",
+            param_spec_name=ParamSpecName("does_not_exist"),
         )
         with pytest.raises(KeyError, match="does_not_exist"):
             module.setup()
