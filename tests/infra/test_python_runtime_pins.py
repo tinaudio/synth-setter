@@ -229,3 +229,14 @@ def test_github_actions_pin_canonical_python_from_any_cwd(
     assert all(
         values and set(values) == {PYTHON_VERSION} for values in literal_versions.values()
     ), literal_versions
+
+
+def test_launcher_cache_key_pins_canonical_python(project_root: Path) -> None:
+    """The launcher environment cache changes with the operational Python pin.
+
+    :param project_root: Repository root fixture.
+    """
+    workflow = (project_root / ".github/workflows/generate-dataset-shards.yaml").read_text()
+
+    cache_token = PYTHON_VERSION.replace(".", "")
+    assert f"launcher-uv-${{{{ runner.os }}}}-py{cache_token}-" in workflow

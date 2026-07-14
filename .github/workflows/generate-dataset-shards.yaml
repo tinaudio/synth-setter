@@ -359,12 +359,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.venv-launcher
-          # hashFiles('uv.lock', 'pyproject.toml') is the cache invalidator —
-          # any pin change there busts the key. Literal version tokens removed
-          # so the key cannot drift from the actual pin set.
-          key: launcher-uv-${{ runner.os }}-py311-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          # hashFiles('uv.lock', 'pyproject.toml') invalidates on any pin change.
+          # py3NNPP is a literal pin — bump it with the operational runtime pin.
+          key: launcher-uv-${{ runner.os }}-py31213-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py311-
+            launcher-uv-${{ runner.os }}-py31213-
 
       # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
       # [project.dependencies], so `--extra cpu` + the default dev group covers
