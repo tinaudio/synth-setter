@@ -11,6 +11,11 @@ Shared agent instructions for Claude and Codex; AGENTS.md is the canonical sourc
 
 </important>
 
+<important if="you hit an error or clearly-wrong behavior outside your current task's scope">
+
+Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, stale doc, misfiring hook)? Don't fix it inline (scope creep) or drop it silently — **file a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none fits), then continue your task; note what you saw, expected, and how to reproduce, and surface the `[#N](…)` in your reply. The higher the impact, the more this matters. If it blocks you, ask how to proceed.
+</important>
+
 <important if="you need to run commands to build, test, lint, or format">
 
 | Command              | What it does                           |
