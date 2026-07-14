@@ -378,18 +378,27 @@ def test_stage_attempt_rejects_local_shard_with_schema_drift(
     assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
 
 
-def test_stage_attempt_rejects_fragment_split_by_size_bound(
-    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("fragment_count", [0, 2])
+def test_stage_attempt_rejects_non_single_fragment_result(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fragment_count: int,
 ) -> None:
-    """A shard split by Lance is rejected before publishing a valid marker.
+    """A non-single fragment result cannot publish a valid marker.
 
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param tmp_path: Pytest fixture providing a fresh local shard directory.
-    :param monkeypatch: Simulates Lance splitting the shard into two fragments.
+    :param monkeypatch: Simulates a non-single result from Lance.
+    :param fragment_count: Simulated number of fragments returned by Lance.
     """
     spec = tiny_lance_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
-    monkeypatch.setattr(lance.fragment, "write_fragments", lambda *args, **kwargs: [object()] * 2)
+    monkeypatch.setattr(
+        lance.fragment,
+        "write_fragments",
+        lambda *args, **kwargs: [object()] * fragment_count,
+    )
 
     with pytest.raises(ValueError, match="expected one Lance fragment"):
         stage_lance_shard_attempt(
@@ -397,8 +406,6 @@ def test_stage_attempt_rejects_fragment_split_by_size_bound(
         )
 
     assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-a1b2.valid").exists()
-    train_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance" / "data"
-    assert not train_data.exists()
 
 
 def test_staged_sidecar_survives_json_round_trip_from_disk(

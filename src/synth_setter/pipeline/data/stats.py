@@ -222,8 +222,6 @@ def merge_welford(
     :param other: Welford state to fold in.
     :returns: Combined Welford state over both inputs' rows.
     Both non-identity states must carry identically shaped mean and M2 arrays.
-
-    :rtype: WelfordState
     """
     count_a, mean_a, m2_a = existing
     count_b, mean_b, m2_b = other
@@ -381,7 +379,6 @@ def fold_lance_shard_into_welford(
     :param shard_uri: One ``shard-*.lance`` dataset (local path or ``s3://`` URI).
     :param storage_options: Object-store config for a cloud ``shard_uri``; ``None`` local.
     :returns: Updated Welford state after every readable mel row was folded.
-    :rtype: WelfordState
     :raises ValueError: The shard carried no readable ``mel_spec`` rows.
     """
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
