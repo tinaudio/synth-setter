@@ -38,9 +38,17 @@ on:
       - "src/synth_setter/configs/image/**"
       - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/ci/load_image_config.py"
+      - "src/synth_setter/scripts/load_vst3_check.py"
+      - "src/synth_setter/scripts/run-linux-vst-headless.sh"
       - ".github/workflows/docker-build-validation.yml"
       - "pyproject.toml"
       - "tests/docker/**"
+
+# Force-push cancels the PR's stale build (30-60 min each, would otherwise queue);
+# push/dispatch runs get a unique run_id group so main builds are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # PR-only validation: build the image with `push: false` to prove the
@@ -50,7 +58,9 @@ jobs:
   docker-validate:
     name: Validate Docker image build
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest-4core
+    # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
+    # CPU/RAM as the paused paid `ubuntu-latest-4core` label (#1824).
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -60,6 +70,21 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # Standard runners ship ~25 GiB of unused toolchains; the cu128 torch
+      # layers need that disk. Logs RAM/CPU/disk for exit-137 (OOM) triage.
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::toolchain cleanup failed, continuing"
+          sudo docker image prune --all --force \
+            || echo "::warning::docker image prune failed, continuing"
+          df -h /
+          free -h
+          nproc
+
       - name: Resolve checked-out commit SHA
         id: source
         run: |
@@ -68,7 +93,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -95,8 +120,14 @@ jobs:
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number }}'
 
+      # max-parallelism 2: BuildKit otherwise runs independent Dockerfile
+      # stages concurrently, stacking their RAM peaks past the 16 GiB runner.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
 
       - name: Build Docker image (validation only — no push)
         uses: docker/build-push-action@v6
@@ -127,6 +158,8 @@ jobs:
           target: devcontainer-tools
           platforms: ${{ steps.config.outputs.target_platform }}
           push: false
+          load: true
+          tags: synth-setter:devcontainer-tools-validation
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
@@ -135,13 +168,23 @@ jobs:
           secrets: ""
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
 
+      - name: Smoke test devcontainer Codex tooling
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            synth-setter:devcontainer-tools-validation \
+            pytest tests/docker/test_devcontainer_tools.py -v
+
   # Push + smoke tests for push-to-main and workflow_dispatch. Holds the
   # `packages: write` permission so the GHCR mirror push (see #1254) works;
   # gated by `if:` so PR runs never enter this job and never see the token.
   docker-push:
     name: Build and push Docker image
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest-4core
+    # Standard runner: on this public repo it is 4 vCPU / 16 GiB RAM — same
+    # CPU/RAM as the paused paid `ubuntu-latest-4core` label (#1824).
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -155,6 +198,21 @@ jobs:
           # don't cause one run to build a later main commit (and skip the
           # immutable dev-snapshot-<sha> tag for the triggering one).
           ref: ${{ github.event.inputs.git_ref || github.sha }}
+
+      # This job additionally `load:`s the built image for the smoke tests, so
+      # it needs the reclaimed disk even more than docker-validate does.
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::toolchain cleanup failed, continuing"
+          sudo docker image prune --all --force \
+            || echo "::warning::docker image prune failed, continuing"
+          df -h /
+          free -h
+          nproc
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
@@ -243,7 +301,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -278,8 +336,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # max-parallelism 2: BuildKit otherwise runs independent Dockerfile
+      # stages concurrently, stacking their RAM peaks past the 16 GiB runner.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
 
       - name: Verify Docker Hub push access
         env:
@@ -329,7 +393,6 @@ jobs:
           target: dev-snapshot
           platforms: ${{ steps.config.outputs.target_platform }}
           push: true
-          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -379,11 +442,13 @@ jobs:
             "$SMOKE_IMAGE" \
             pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
 
-      - name: Smoke test — VST loads under headless X11
+      # Marker selection (not node IDs) so the per-synth loads added by the
+      # vst3-synths-fetch stage are covered alongside Surge XT.
+      - name: Smoke test — VSTs load under headless X11
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
           docker run --rm \
             "$SMOKE_IMAGE" \
             src/synth_setter/scripts/run-linux-vst-headless.sh \
-              pytest tests/docker/test_smoke.py::test_surge_xt_loads -v
+              pytest tests/docker/test_smoke.py -m "docker_smoke and requires_vst" -v

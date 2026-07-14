@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Iterator
@@ -24,6 +24,7 @@ from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.generate_vst_dataset import fixed_params_from_dataset
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_hdf5_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -33,19 +34,28 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from tests._vst import (
+    PLUGIN_PATH,
+    TEST_PARAM_SPEC_NAME,
+    TEST_PRESET_PATH,
+    TEST_RENDERER_VERSION,
+)
 
 log = logging.getLogger(__name__)
 
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
-_PRESET_PATH = "presets/surge-base.vstpreset"
+# Env-driven (Surge XT default) so the synth-agnostic ``test_make_dataset``
+# renders a second synth in CI; the Surge-specific tests below are deselected there.
+# Preset, spec name, and renderer version all track the selected synth so the
+# OB-Xf cell pins OB-Xf's version, not Surge XT's.
+_PRESET_PATH = TEST_PRESET_PATH
 _NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
 _CHANNELS = 2
 _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
-_SPEC_NAME = "surge_xt"
-_RENDERER_VERSION = "1.3.4"
+_SPEC_NAME = TEST_PARAM_SPEC_NAME
+_RENDERER_VERSION = TEST_RENDERER_VERSION
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
@@ -79,8 +89,8 @@ def _render_cfg(
     :return: ``RenderConfig`` populated with the module's test defaults.
     """
     return RenderConfig(
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
+        plugin_path=PLUGIN_PATH,
+        plugin_state_path=_PRESET_PATH,
         param_spec_name=_SPEC_NAME,
         renderer_version=_RENDERER_VERSION,
         sample_rate=int(_SAMPLE_RATE),
@@ -123,10 +133,6 @@ _AUDIO_PEAK_SILENCE_FLOOR = 1e-4
 #   - `_SURGE_MEL_SHAPE` in `tests/conftest.py` — mirror, keep in sync.
 _PER_SAMPLE_MEL_SHAPE = (2, 128, 401)
 
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
 
 # Known-good loudness-passing patch captured from a prior random-sampled run
 # (sample 4 of a 5-sample candidates dataset for the surge_xt spec). Used by
@@ -374,7 +380,9 @@ def _patched_sample(
     replay_iter = iter(replay)
     pull_count = [0]
 
-    def fake_sample() -> tuple[dict[str, float], NoteParams]:
+    def fake_sample(
+        _rng: np.random.Generator | None = None,
+    ) -> tuple[dict[str, float], NoteParams]:
         pull_count[0] += 1
         return next(replay_iter)
 
@@ -752,7 +760,6 @@ def _assert_round_trip_matches(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
 ) -> None:
@@ -834,7 +841,6 @@ def test_datasets_from_hardcoded_params_are_identical(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     """make_hdf5_dataset reproduces a previous dataset row-for-row when params are replayed.
 
@@ -940,7 +946,6 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_dataset(tmp_path: Path) -> None:
     """make_hdf5_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
@@ -959,7 +964,6 @@ def test_make_dataset(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
     """``show_editor`` warm-up in ``load_plugin`` does not change rendered audio.
 
@@ -985,7 +989,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
     def _render_n(n: int) -> list[np.ndarray]:
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -993,7 +997,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n)
         ]
@@ -1016,7 +1020,6 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_reload_per_render_matches_cached_plugin() -> None:
     """Cached-plugin renders match reload-per-render renders within audio thresholds.
 
@@ -1031,7 +1034,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
     def _render_n_reload() -> list[np.ndarray]:
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -1039,17 +1042,17 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
             )
             for _ in range(n_renders)
         ]
 
     def _render_n_cached() -> list[np.ndarray]:
-        plugin = load_plugin(_PLUGIN_PATH)
+        plugin = load_plugin(PLUGIN_PATH)
         load_preset(plugin, _PRESET_PATH)
         return [
             render_params(
-                _PLUGIN_PATH,
+                PLUGIN_PATH,
                 _HARDCODED_SYNTH_PARAMS,
                 pitch,
                 _VELOCITY,
@@ -1057,7 +1060,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
                 _DURATION,
                 _SAMPLE_RATE,
                 _CHANNELS,
-                preset_path=_PRESET_PATH,
+                plugin_state_path=_PRESET_PATH,
                 plugin=plugin,
             )
             for _ in range(n_renders)
@@ -1127,6 +1130,20 @@ def _loud_audio() -> np.ndarray:
     return np.stack([sine, sine], axis=0)
 
 
+def _pedalboard_renderer() -> PedalboardRenderer:
+    """Build the renderer used by loudness-loop unit tests.
+
+    :returns: Renderer whose calls use monkeypatched ``core.render_params``.
+    """
+    return PedalboardRenderer(
+        plugin_path=PLUGIN_PATH,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        signal_duration_seconds=_DURATION,
+        plugin_state_path=_PRESET_PATH,
+    )
+
+
 def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1140,18 +1157,14 @@ def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
     from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _silent_audio())
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=_PLUGIN_PATH,
+            renderer=_pedalboard_renderer(),
             velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=None,
         )
@@ -1164,18 +1177,14 @@ def test_generate_sample_raises_when_both_fixed_renders_silent(
     from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _silent_audio())
 
     with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
         generate_vst_dataset.generate_sample(
-            plugin_path=_PLUGIN_PATH,
+            renderer=_pedalboard_renderer(),
             velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
             min_loudness=_MIN_LOUDNESS,
             param_spec=spec,
-            preset_path=_PRESET_PATH,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=_HARDCODED_NOTE_PARAMS,
         )
@@ -1196,9 +1205,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
 
     render_outputs = iter([_silent_audio(), _loud_audio()])
     monkeypatch.setattr(
-        generate_vst_dataset,
-        "render_params",
-        lambda *a, **kw: next(render_outputs),
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
     )
 
     sample_returns = iter(
@@ -1207,17 +1214,13 @@ def test_generate_sample_retries_when_only_fixed_note_params(
             (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
         ]
     )
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
 
     sample = generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
     )
@@ -1258,10 +1261,10 @@ def _install_fake_render_params(
             warmup_mock()
         return next(render_outputs)
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fake_render_params)
 
     sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * (num_retries + 1))
-    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
     return warmup_mock
 
 
@@ -1287,14 +1290,10 @@ def test_generate_sample_warmups_once_regardless_of_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,
@@ -1321,14 +1320,10 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=num_retries)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=False,
@@ -1354,14 +1349,10 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
     warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
 
     generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_pedalboard_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        preset_path=_PRESET_PATH,
         fixed_synth_params=None,
         fixed_note_params=_HARDCODED_NOTE_PARAMS,
         warmup=True,
@@ -1371,7 +1362,6 @@ def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_make_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
@@ -1685,36 +1675,31 @@ def test_main_copy_dataset_root_uri_feeds_decoded_params_to_writer(
 
 
 def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_r2_remote: Path
 ) -> None:
     """An ``r2://`` copy root URI downloads the same-named shard before decoding it.
 
-    The rclone subprocess is stubbed to copy the local fixture into the tempfile
-    ``localized_uri`` requests, so the assertion is that the worker resolves an
-    ``r2://`` root to a local shard and feeds its decoded params to the writer.
+    Drives the real ``rclone`` binary through ``fake_r2_remote`` (local-backed
+    ``r2:``) so actual argv/flag construction is exercised; asserts the worker
+    resolves the ``r2://`` root to a local shard and feeds its decoded params to
+    writer.
 
-    :param tmp_path: Pytest temp dir holding the source fixture and output path.
-    :param monkeypatch: Patches ``sys.argv``, the writer, and rclone.
+    :param tmp_path: Pytest temp dir holding the output path.
+    :param monkeypatch: Patches ``sys.argv`` and the writer.
+    :param fake_r2_remote: Local-backed ``r2:`` remote root (``<root>/<bucket>/<key>``).
     """
     from synth_setter.data.vst import generate_vst_dataset, writers
-    from synth_setter.pipeline import r2_io
 
     spec = param_specs[_SPEC_NAME]
     num_rows = 3
     rows = [spec.encode(*spec.sample()) for _ in range(num_rows)]
-    fixture_shard = tmp_path / "fixture" / "shard-000000.h5"
-    fixture_shard.parent.mkdir()
-    _write_param_array_shard(fixture_shard, np.stack(rows).astype(np.float32))
-    expected_synth, expected_note = fixed_params_from_dataset(fixture_shard, spec)
-
-    rclone_args: dict[str, list[str]] = {}
-
-    def _fake_check_call(args: list[str]) -> None:
-        # rclone copyto <remote> <dest>; serve the fixture as the downloaded shard.
-        rclone_args["args"] = args
-        shutil.copy(fixture_shard, args[-1])
-
-    monkeypatch.setattr(r2_io.subprocess, "check_call", _fake_check_call)
+    # Materialize the source shard where rclone resolves r2://<bucket>/<key>; the
+    # local path and the URI must encode the same key, so derive one from the other.
+    copy_root_uri = "r2://bucket/prefix/task/run"
+    source_shard = fake_r2_remote / copy_root_uri.removeprefix("r2://") / "shard-000000.h5"
+    source_shard.parent.mkdir(parents=True)
+    _write_param_array_shard(source_shard, np.stack(rows).astype(np.float32))
+    expected_synth, expected_note = fixed_params_from_dataset(source_shard, spec)
 
     captured: dict[str, object] = {}
 
@@ -1730,20 +1715,53 @@ def test_main_copy_dataset_root_uri_downloads_r2_source_shard(
 
     monkeypatch.setattr(writers, "make_hdf5_dataset", _fake_make_hdf5_dataset)
 
-    out = tmp_path / "shard-000000.h5"
+    out = tmp_path / "out" / "shard-000000.h5"
     argv = ["generate_vst_dataset", str(out)]
     for key, value in _render_cfg(num_rows).model_dump().items():
         argv += [f"--{key}", str(value)]
-    argv += ["--copy_dataset_root_uri", "r2://bucket/prefix/task/run"]
+    argv += ["--copy_dataset_root_uri", copy_root_uri]
     monkeypatch.setattr(sys, "argv", argv)
 
     generate_vst_dataset.main()
 
-    # rclone must target the shard joined under the root (basename preserved); r2_io
-    # rewrites the r2:// URI to rclone's r2: remote syntax.
-    assert "r2:bucket/prefix/task/run/shard-000000.h5" in rclone_args["args"]
     assert captured["fixed_synth_params_list"] == expected_synth
     assert captured["fixed_note_params_list"] == expected_note
+
+
+def test_main_copy_dataset_root_uri_propagates_r2_fetch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-zero rclone exit fetching the ``r2://`` source shard surfaces out of main().
+
+    The per-shard fetch sits on the renderer hot path; a transient object-store
+    failure must propagate (fail-fast) rather than be swallowed into a silent
+    re-render with no copied params.
+
+    :param tmp_path: Pytest temp dir for the would-be output path.
+    :param monkeypatch: Patches ``sys.argv`` and rclone.
+    """
+    from synth_setter.data.vst import generate_vst_dataset, writers
+    from synth_setter.pipeline import r2_io
+
+    def _fail_rclone(args: list[str]) -> NoReturn:
+        raise subprocess.CalledProcessError(7, args)
+
+    monkeypatch.setattr(r2_io.subprocess, "check_call", _fail_rclone)
+
+    def _writer_must_not_run(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("writer ran despite a failed copy-source fetch")
+
+    monkeypatch.setattr(writers, "make_hdf5_dataset", _writer_must_not_run)
+
+    out = tmp_path / "shard-000000.h5"
+    argv = ["generate_vst_dataset", str(out)]
+    for key, value in _render_cfg(2).model_dump().items():
+        argv += [f"--{key}", str(value)]
+    argv += ["--copy_dataset_root_uri", "r2://bucket/prefix/task/run"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate_vst_dataset.main()
 
 
 def test_main_copy_dataset_root_uri_rejects_wds_output(
@@ -1837,7 +1855,7 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
         seen_synth.append(dict(synth_params))
         return _loud_audio()
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _capture_render)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -1851,7 +1869,6 @@ def test_make_hdf5_resume_indexes_fixed_params_by_absolute_row(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
     """A copy run re-renders a source dataset's params, reproducing its param_array.
 
@@ -1890,6 +1907,31 @@ def test_copy_dataset_reproduces_source_param_array(tmp_path: Path) -> None:
         atol=_ABSOLUTE_TOLERANCE,
         err_msg="copied dataset param_array does not match source",
     )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_same_seed_real_plugin_renders_bitwise_identical_param_arrays(tmp_path: Path) -> None:
+    """Two real Surge XT renders with the same seed produce byte-identical params.
+
+    :param tmp_path: Pytest temp dir holding both rendered shards.
+    """
+    num_samples = 2
+    render_cfg = _render_cfg(num_samples, min_loudness=float("-inf")).model_copy(
+        update={"base_seed": 8675309}
+    )
+    first = tmp_path / "first.h5"
+    second = tmp_path / "second.h5"
+
+    make_hdf5_dataset(hdf5_file=first, render_cfg=render_cfg)
+    make_hdf5_dataset(hdf5_file=second, render_cfg=render_cfg)
+
+    with h5py.File(first, "r") as first_h5, h5py.File(second, "r") as second_h5:
+        first_params = first_h5[PARAM_ARRAY_FIELD]
+        second_params = second_h5[PARAM_ARRAY_FIELD]
+        assert isinstance(first_params, h5py.Dataset)
+        assert isinstance(second_params, h5py.Dataset)
+        assert np.array_equal(first_params[...], second_params[...])
 
 
 # HDF5 resume correctness: output row i renders fixed_*_params_list[i] by absolute
@@ -2004,14 +2046,14 @@ def test_make_hdf5_resume_indexes_note_params_by_absolute_row(
 
     seen_pitch: list[int] = []
 
-    # pitch is the third positional arg generate_sample passes to render_params.
+    # PedalboardRenderer passes pitch as render_params' third positional argument.
     def _capture_render(
         plugin_path: str, synth_params: dict[str, float], pitch: int, *a: object, **kw: object
     ) -> np.ndarray:
         seen_pitch.append(pitch)
         return _loud_audio()
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture_render)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _capture_render)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -2057,7 +2099,7 @@ def test_make_hdf5_resume_preserves_already_written_rows(
         mel_fill=head_mel_fill,
     )
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
 
     make_hdf5_dataset(hdf5_file=out, render_cfg=_render_cfg(num_samples))
 
@@ -2100,7 +2142,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
     render_cfg = _render_cfg(num_samples, samples_per_render_batch=1)
 
     single_shot = tmp_path / "single_shot.h5"
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
     make_hdf5_dataset(
         hdf5_file=single_shot,
         render_cfg=render_cfg,
@@ -2119,7 +2161,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
         return _loud_audio()
 
     resumed = tmp_path / "resumed.h5"
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _crash_after_start_idx)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _crash_after_start_idx)
     with pytest.raises(RuntimeError, match="simulated renderer crash"):
         make_hdf5_dataset(
             hdf5_file=resumed,
@@ -2134,7 +2176,7 @@ def test_make_hdf5_crash_then_resume_copy_reproduces_single_shot_param_array(
         assert isinstance(crashed_param_ds, h5py.Dataset)
         assert generate_vst_dataset.get_first_unwritten_idx(crashed_param_ds) == start_idx
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
     make_hdf5_dataset(
         hdf5_file=resumed,
         render_cfg=render_cfg,
@@ -2175,7 +2217,7 @@ def test_make_hdf5_rerun_on_complete_shard_renders_nothing(
     def _fail_if_called(*a: object, **kw: object) -> NoReturn:
         raise AssertionError("render_params called on a complete shard")
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fail_if_called)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fail_if_called)
 
     make_hdf5_dataset(
         hdf5_file=out,
@@ -2215,7 +2257,7 @@ def test_make_hdf5_resume_across_batch_boundary_indexes_by_absolute_row(
     out = tmp_path / "resume_batched.h5"
     _prewrite_resumable_head(out, spec, num_samples, start_idx, full_params[:start_idx])
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _loud_audio())
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: _loud_audio())
 
     make_hdf5_dataset(
         hdf5_file=out,

@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - /experiment/torchsynth/ffn
+  - override /callbacks: default
+  - _self_
+
+mode: validate
+ckpt_path: ???

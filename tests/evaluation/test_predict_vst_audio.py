@@ -3,7 +3,9 @@
 Covers the three pure helpers (``make_spectrogram``, ``write_spectrograms``,
 ``params_to_csv``) and the click ``main`` entrypoint with the VST3 render call
 patched out — so the suite stays CPU-only and deterministic and runs under
-``make test-fast``.
+``make test-fast``. Exact decoded values are pinned by
+``tests/data/vst/test_param_spec.py``, not here — ``main`` tests assert only
+file shape and finiteness.
 """
 
 from __future__ import annotations
@@ -24,11 +26,16 @@ from click.testing import CliRunner, Result  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
+from synth_setter.data.vst.param_spec_registry import (  # noqa: E402
+    default_plugin_path,
+    plugin_state_paths,
+)
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     main,
     make_spectrogram,
     params_to_csv,
+    resolve_plugin_state_path,
     write_spectrograms,
 )
 from tests.helpers.audio_utils import noise as _noise  # noqa: E402
@@ -43,6 +50,22 @@ _SAMPLES = 1024
 
 def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:
     return sine(freq=freq, channels=channels, sr=sr, samples=samples)
+
+
+def test_resolve_plugin_state_path_explicit_path_wins() -> None:
+    """An explicit preset path is returned verbatim, ignoring the registry."""
+    assert resolve_plugin_state_path("/custom/my.vstpreset", "surge_xt") == "/custom/my.vstpreset"
+
+
+def test_resolve_plugin_state_path_none_falls_back_to_registry() -> None:
+    """``None`` resolves to the registry's hardcoded preset for the given spec."""
+    assert resolve_plugin_state_path(None, "surge_simple") == "presets/surge-simple.vstpreset"
+
+
+def test_resolve_plugin_state_path_unknown_spec_raises_key_error() -> None:
+    """A ``None`` path with an unregistered spec raises ``KeyError``."""
+    with pytest.raises(KeyError, match="does_not_exist"):
+        resolve_plugin_state_path(None, "does_not_exist")
 
 
 # ---------- make_spectrogram ----------
@@ -188,7 +211,7 @@ def _write_batch(
     :param with_target_params: When True, also write ``target-params-<index>.pt``.
     """
     rng = np.random.default_rng(index)
-    # ``main`` rescales pred params via ``(x + 1) / 2`` — so the fixture must live on [-1, 1].
+    # decode_model_output rescales pred params from [-1, 1] — the fixture must live on that range.
     encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
     torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
 
@@ -319,10 +342,10 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     :param out_dir: Parametrized ``out_dir`` value under test.
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """
-    calls: list[object] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    def _counting_render(*args: object, **_kwargs: object) -> np.ndarray:
-        calls.append(args)
+    def _counting_render(*args: object, **kwargs: object) -> np.ndarray:
+        calls.append((args, kwargs))
         return _fake_render()
 
     monkeypatch.setattr(predict_vst_audio, "render_params", _counting_render)
@@ -335,10 +358,38 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     assert result.exit_code == 0, result.output
     # One render for pred + one for the re-synthesised target, per sample.
     assert len(calls) == batch_size * 2
+    # The CLI passes no --plugin_path / --plugin_state_path, so both must resolve from
+    # the registry: plugin_path from the click default, plugin_state_path from the spec.
+    for args, kwargs in calls:
+        assert args[0] == default_plugin_path()
+        assert kwargs["plugin_state_path"] == plugin_state_paths[_PARAM_SPEC_NAME]
     for j in range(batch_size):
         df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
         assert bool(df["pred"].notna().all())
         assert bool(df["target"].notna().all())
+
+
+def test_main_rerender_target_accepts_float64_target_params(
+    runner: CliRunner, pred_dir: Path, out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A float64 target-params tensor still decodes — the call site casts to float32.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    """
+    monkeypatch.setattr(predict_vst_audio, "render_params", lambda *a, **k: _fake_render())
+
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True)
+    target_path = pred_dir / "target-params-0.pt"
+    torch.save(torch.load(target_path, weights_only=True).to(torch.float64), target_path)
+
+    result = _invoke_main(runner, pred_dir, out_dir, "--rerender_target", "--skip-spectrogram")
+
+    assert result.exit_code == 0, result.output
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert bool(df["target"].notna().all())
 
 
 def test_main_target_params_on_disk_without_rerender_does_not_crash(

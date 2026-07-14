@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: surge
+  - override /render: surge_xt
+  - _self_
+
+task_name: surge-xt-lance-10k-2k-1k
+
+output_format: lance
+
+train_val_test_sizes: [10000, 2000, 1000]
+
+r2:
+  bucket: experiments
+
+render:
+  # Smaller shards than the inherited default for parallelism at experiment scale.
+  samples_per_shard: 1000

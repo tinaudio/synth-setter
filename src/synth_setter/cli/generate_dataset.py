@@ -7,6 +7,11 @@ Two console-script surfaces:
   ``cfg.skypilot_launch.compute_template``.
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
   entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
+
+``synth-setter-generate-dataset-from-spec-uri`` (see
+:mod:`synth_setter.cli.generate_dataset_from_spec_uri`) is the spec-first
+counterpart: it renders an already-materialized ``input_spec.json`` by URI
+instead of composing one.
 """
 
 from __future__ import annotations
@@ -19,8 +24,9 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import h5py
 import hydra
 import wandb
 from hydra.core.hydra_config import HydraConfig
@@ -32,6 +38,7 @@ from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     INPUT_SPEC_FILENAME,
@@ -50,6 +57,11 @@ from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
 )
+
+# Imported under the module-local name tests already patch as the render /
+# rclone / eval subprocess seam (see tests/helpers/render_subprocess.py).
+from synth_setter.pipeline.subprocess_stream import check_call_streamed as _check_call_streamed
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -67,8 +79,10 @@ register_resolvers()
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
-# Smoke-shard-sized; longer eval runs belong on the dispatch path, not inline.
-_ORACLE_EVAL_TIMEOUT_SECONDS = 600
+# The inline eval (predict + re-render + metrics over a whole split) scales its
+# timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
+_ORACLE_EVAL_TIMEOUT_OVERHEAD_SECONDS = 600.0
+_ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS = 120.0
 
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
@@ -86,8 +100,8 @@ def _run_oracle_eval_subprocess(
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
-    ``check=True`` so a non-zero eval exit (or wall-clock timeout) propagates
-    to the caller.
+    ``_check_call_streamed`` raises on a non-zero eval exit or wall-clock
+    timeout, so either propagates to the caller.
 
     :param dataset_root: Dir holding the finalized HDF5 splits, their source
         shards, and ``stats.npz``. The splits are virtual datasets that
@@ -106,7 +120,7 @@ def _run_oracle_eval_subprocess(
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
-        workers pickle the dataset, but ``SurgeXTDataset`` holds an open h5py
+        workers pickle the dataset, but ``VSTDataset`` holds an open h5py
         handle that cannot be pickled.
     :param predict_file: HDF5 split file for the datamodule's predict dataloader
         (e.g. ``dataset_root / "train.h5"``).
@@ -148,7 +162,7 @@ def _run_oracle_eval_subprocess(
         # the round-trip matches it exactly (not the group / CLI defaults).
         "render=surge_simple",
         f"render.param_spec_name={render.param_spec_name}",
-        f"render.preset_path={render.preset_path}",
+        f"render.plugin_state_path={render.plugin_state_path}",
         f"render.plugin_path={render.plugin_path}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
@@ -158,7 +172,7 @@ def _run_oracle_eval_subprocess(
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
         "+logger.wandb.resume=must",
-        # SurgeXTDataset floors len to samples // batch_size; the 128 default
+        # VSTDataset floors len to samples // batch_size; the 128 default
         # would yield zero batches on the smoke-sized test split (4 samples),
         # so predict_step never runs and no audio/* metric is logged — see #1331.
         "datamodule.batch_size=1",
@@ -174,8 +188,20 @@ def _run_oracle_eval_subprocess(
     # (test split) leaves keys bare so existing sweeps/dashboards keep resolving.
     if metric_prefix:
         argv.append(f"+evaluation.metric_prefix={metric_prefix}")
+    # Budget scales with the split's sample count (predict + re-render + metrics
+    # all run over it); the finalized split exposes it as the audio row count.
+    # cast narrows h5py's Group|Dataset|Datatype union — "audio" is always a Dataset.
+    with h5py.File(predict_file, "r") as split_h5:
+        num_samples = int(cast(h5py.Dataset, split_h5["audio"]).shape[0])
     logger.info(f"oracle_eval_inline subprocess: {argv}")
-    subprocess.run(argv, check=True, timeout=_ORACLE_EVAL_TIMEOUT_SECONDS)  # noqa: S603
+    _check_call_streamed(
+        argv,
+        timeout=scaled_timeout(
+            num_samples,
+            overhead_seconds=_ORACLE_EVAL_TIMEOUT_OVERHEAD_SECONDS,
+            per_sample_seconds=_ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS,
+        ),
+    )
 
 
 def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
@@ -203,33 +229,22 @@ def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
 
 
 def _rclone_copy(src: str, dest: str) -> None:
-    """Upload a file to R2 via rclone with checksum verification.
+    """Upload a file to R2 via ``rclone copy`` with the shared reliability flags.
 
-    Connection-level timeouts and retries are rclone's job, not ours:
-      --contimeout=30s   bound the TCP connect phase
-      --timeout=300s     bound any single HTTP request (PUT, list, etc.)
-      --retries=3        retry the whole copy on transient failure
-      -vv                emit per-request debug log so a failure leaves
-                         actionable evidence in the worker stdout
-    A non-zero rclone exit raises CalledProcessError and the run fails — we
-    do not silently accept partial uploads behind a Python wall-clock.
+    Connect/IO timeouts and retries come from :func:`r2_io._rclone_argv`, so a
+    transient blip retries instead of leaving a partial upload behind a Python
+    wall-clock. A non-zero rclone exit raises ``CalledProcessError`` and the run
+    fails.
+
+    :param src: Local source path passed to rclone verbatim.
+    :param dest: R2 destination passed to rclone verbatim.
     """
-    args = [  # noqa: S607 — rclone resolved by the image's PATH
-        "rclone",
-        "copy",
-        "-vv",
-        "--checksum",
-        "--contimeout=30s",
-        "--timeout=300s",
-        "--retries=3",
-        src,
-        dest,
-    ]
-    subprocess.check_call(args)  # noqa: S603 — args from validated spec
+    args = r2_io._rclone_argv("copy", src, dest)
+    _check_call_streamed(args)
     # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
     # at a glance whether the rclone subprocess actually exited (vs. hanging
-    # post-upload — see #735). If the upload itself failed, check_call already
-    # raised before we got here.
+    # post-upload — see #735). If the upload itself failed, _check_call_streamed
+    # already raised before we got here.
     logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
@@ -250,7 +265,10 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
     ]
-    for key, value in spec.render.model_dump().items():
+    # Each subprocess renders a distinct, reproducible per-sample stream keyed by
+    # its shard's seed (#884), so override the render default before dumping flags.
+    render_args = spec.render.model_copy(update={"base_seed": shard.seed}).model_dump()
+    for key, value in render_args.items():
         args.extend([f"--{key}", str(value)])
     if spec.copy_dataset_root_uri is not None:
         args.extend(["--copy_dataset_root_uri", spec.copy_dataset_root_uri])
@@ -336,9 +354,10 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
-    :raises RuntimeError: If the worker's plugin version disagrees with
-        ``spec.render.renderer_version``.
+    :raises RuntimeError: If DawDreamer is unavailable on this worker or the
+        plugin version disagrees with ``spec.render.renderer_version``.
     """
+    ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
     try:
         # Inside the try so a helper failure (e.g. tempfile creation in
@@ -632,12 +651,16 @@ def _render_one_owned_shard(
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
-    existing_size = r2_io.object_size(spec.r2.shard_uri(shard))
-    if existing_size is not None and existing_size > 0:
-        logger.info(
-            f"skipping shard {shard.shard_id} — already in R2 "
-            f"({existing_size} bytes): {shard.filename}"
-        )
+    if spec.output_format.is_directory:
+        # Probe the _versions/ manifest, not bare data/ files: a render that
+        # crashed before commit leaves orphan fragments that must not be skipped.
+        already_present = r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions")
+        existing_size = 0
+    else:
+        existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
+        already_present = existing_size > 0
+    if already_present:
+        logger.info(f"skipping shard {shard.shard_id} — already in R2: {shard.filename}")
         _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()
@@ -683,7 +706,7 @@ def _render_and_upload_shard(
         max_attempts = spec.render.max_retries + 1
         for attempt in range(max_attempts):
             try:
-                subprocess.check_call(args)  # noqa: S603 — args built from validated spec
+                _check_call_streamed(args)
                 break
             except subprocess.CalledProcessError:
                 if attempt + 1 == max_attempts:
@@ -694,15 +717,32 @@ def _render_and_upload_shard(
                 )
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
-    # downstream rclone "source not found".
-    if not shard_path.is_file():
-        raise RuntimeError(
-            f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
-        )
-    byte_size = shard_path.stat().st_size
-    logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
-    _rclone_copy(str(shard_path), r2_dest_prefix)
-    logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+    # downstream rclone "source not found". Lance shards are directories.
+    if spec.output_format.is_directory:
+        if not shard_path.is_dir():
+            raise RuntimeError(
+                "generate_vst_dataset.py exited 0 but did not write expected shard "
+                f"dataset: {shard_path}"
+            )
+        byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        # Upload data first, then the _versions/ manifest last (rclone copy has no
+        # ordering guarantee). The resume skip-probe checks _versions/, so a crash
+        # mid-upload must never leave a manifest whose data files are absent.
+        dest = spec.r2.shard_uri(shard)
+        r2_io.upload_dir(shard_path, dest, exclude="_versions/**")
+        r2_io.upload_dir(shard_path / "_versions", f"{dest}/_versions")
+    else:
+        if not shard_path.is_file():
+            raise RuntimeError(
+                "generate_vst_dataset.py exited 0 but did not write expected shard "
+                f"file: {shard_path}"
+            )
+        byte_size = shard_path.stat().st_size
+        dest = r2_dest_prefix
+        logger.info(f"shard rendered: {shard_path} ({byte_size} bytes)")
+        _rclone_copy(str(shard_path), dest)
+    logger.info(f"shard uploaded: {shard.filename} -> {dest}")
     return byte_size
 
 
@@ -858,6 +898,9 @@ def main(cfg: DictConfig) -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
+    if sky_cfg.compute_template is None:
+        ensure_dawdreamer_runtime(spec.render.renderer_backend)
+
     if sky_cfg.compute_template is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:
             raise ValueError(
@@ -874,7 +917,7 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
-                "SurgeDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
+                "VSTDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))

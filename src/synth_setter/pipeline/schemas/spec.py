@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -34,6 +34,7 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -58,12 +59,11 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
 }
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     """Shard container format; the enum value is the on-disk / JSON token.
 
-    Subclasses ``str`` (rather than 3.11's ``StrEnum``, unavailable on the
-    ``>=3.10`` floor) so a value compares equal to and serializes as its plain
-    string token across the Hydra / R2-JSON boundary.
+    Member values are persisted as R2 / ``input_spec.json`` keys — renaming or
+    removing one requires a data migration.
 
     .. attribute :: HDF5
 
@@ -72,15 +72,28 @@ class OutputFormat(str, Enum):
     .. attribute :: WDS
 
         WebDataset container; shards are written as ``.tar`` archives.
+
+    .. attribute :: LANCE
+
+        Lance container; shards are written as ``.lance`` dataset directories.
     """
 
     HDF5 = "hdf5"
     WDS = "wds"
+    LANCE = "lance"
 
     @property
     def extension(self) -> str:
         """Shard filename suffix for this format, leading dot included."""
         return _OUTPUT_FORMAT_EXTENSIONS[self]
+
+    @property
+    def is_directory(self) -> bool:
+        """Whether a shard is a directory tree (Lance dataset) rather than one file.
+
+        Drives directory-vs-file handling in the worker upload and existence probes.
+        """
+        return self is OutputFormat.LANCE
 
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:
@@ -97,6 +110,7 @@ class OutputFormat(str, Enum):
 _OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
     OutputFormat.HDF5: ".h5",
     OutputFormat.WDS: ".tar",
+    OutputFormat.LANCE: ".lance",
 }
 
 # Reverse map for suffix dispatch, derived from the forward map. The import
@@ -159,7 +173,7 @@ def _is_repo_dirty() -> bool:
 
 def _utc_now() -> datetime:
     """Return the current time as a timezone-aware UTC datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _current_platform() -> str:
@@ -218,13 +232,27 @@ class ShardSpec(BaseModel):
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
 
-class RenderConfig(BaseModel):
+class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
     Carries every parameter the per-shard writer needs to produce audio +
     parameter arrays for its assigned shard. ``param_spec_name`` is resolved
     against the in-process registry inside the writer (not at the launcher),
     so launcher-side construction stays interpreter-only.
+
+    .. attribute :: base_seed
+
+        Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each
+        shard renders a distinct, reproducible per-sample stream (#884).
+
+    .. attribute :: attempts_per_sample
+
+        Loudness-gate retry budget per sampled row before the render fails loudly.
+
+    .. attribute :: plugin_state_path
+
+        Filesystem path to the baseline plugin state.
+        :type: str
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -232,7 +260,7 @@ class RenderConfig(BaseModel):
     plugin_path: str = Field(
         description="Filesystem path to the VST3 plugin bundle the worker loads."
     )
-    preset_path: str = Field(
+    plugin_state_path: str = Field(
         description=(
             "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
             "random parameter override."
@@ -246,6 +274,10 @@ class RenderConfig(BaseModel):
     )
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
+    )
+    renderer_backend: Literal["pedalboard", "dawdreamer"] = Field(
+        default="pedalboard",
+        description="Audio host used to render each sample.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -269,6 +301,24 @@ class RenderConfig(BaseModel):
         description=(
             "Per-shard retry budget for transient renderer-subprocess failures "
             "(CalledProcessError). 0 keeps strict fail-fast."
+        ),
+    )
+    base_seed: int = Field(
+        default=0,
+        description=(
+            "Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each "
+            "shard renders a distinct stream. Row ``i`` draws from "
+            "``seed_for_sample(base_seed, i, attempt)``, making every sample reproducible "
+            "regardless of worker, order, or retry history (#884)."
+        ),
+    )
+    attempts_per_sample: int = Field(
+        default=DEFAULT_ATTEMPTS_PER_SAMPLE,
+        ge=1,
+        description=(
+            "Loudness-gate retry budget per sampled row before the render fails loudly. "
+            "Each attempt re-derives the seed from its attempt index, so the accepted "
+            "draw is deterministic given the silence threshold."
         ),
     )
     parallel: bool = Field(
@@ -300,7 +350,8 @@ class RenderConfig(BaseModel):
             "(SIGTRAP after ~3-4 calls, #714); "
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
-            '``"never"`` on Darwin.'
+            '``"never"`` on Darwin. DawDreamer supports only ``"never"`` because '
+            "its editor call blocks the main thread without a close-event API."
         ),
     )
     param_sample_cadence: _ParamSampleCadence = Field(
@@ -310,8 +361,9 @@ class RenderConfig(BaseModel):
             'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
             "first sample, via the normal loudness-gated path) and reuses it for the "
             "rest of the shard — one identical patch per shard, a probe for the "
-            "per-patch render variance tracked in #489. The patch is drawn fresh each "
-            "run (no seeding), so shard cadence is not reproducible across runs."
+            "per-patch render variance tracked in #489. The shared patch is the row-0 "
+            "seeded draw (``seed_for_sample(base_seed, 0, attempt)``), so shard cadence "
+            "is reproducible across runs (#884)."
         ),
     )
 
@@ -352,6 +404,20 @@ class RenderConfig(BaseModel):
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
                 'plugin reloads (#714). Use "once" or "never" on Darwin.'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences that DawDreamer's blocking API cannot implement.
+
+        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
+        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
+                "call blocks the main thread and exposes no close-event API"
             )
         return self
 
@@ -601,8 +667,10 @@ class DatasetSpec(BaseModel):
     train_val_test_seeds: tuple[int, int, int] | None = Field(
         default=None,
         description=(
-            "Reserved for per-sample seeding (#884); must be ``None`` until implemented — "
-            "any non-None value raises ``NotImplementedError`` at construction."
+            "Reserved for per-split independent seed streams (distinct train/val/test "
+            "masters); must be ``None`` until implemented — any non-None value raises "
+            "``NotImplementedError``. Per-sample reproducibility itself ships via "
+            "``base_seed`` → ``ShardSpec.seed`` → ``seed_for_sample`` (#884)."
         ),
     )
     base_seed: int = Field(
@@ -830,8 +898,9 @@ class DatasetSpec(BaseModel):
         """
         if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
             raise NotImplementedError(
-                "train_val_test_seeds is reserved for per-sample seeding (#884) "
-                "and is not yet implemented; omit the field"
+                "train_val_test_seeds is reserved for per-split independent seed streams "
+                "and is not yet implemented; omit the field. Per-sample reproducibility "
+                "ships via base_seed (#884)."
             )
         return data
 
@@ -895,9 +964,8 @@ class DatasetSpec(BaseModel):
         """Parse an ISO 8601 string into a tz-aware UTC ``datetime``.
 
         Strict-mode Python validation rejects str → datetime coercion, so JSON inputs (where
-        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z``
-        offset that ``model_dump_json`` emits for UTC, which Python 3.10's ``fromisoformat``
-        does not accept (3.11+ does).
+        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z`` UTC
+        designator that ``model_dump_json`` emits to an explicit ``+00:00`` offset before parsing.
 
         Rejects naive datetimes and non-UTC offsets so error attribution stays at the
         ``created_at`` boundary rather than surfacing later as a ``run_id`` derivation crash

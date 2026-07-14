@@ -11,9 +11,9 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 import math
 import os
 import subprocess
-from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import NamedTuple, cast
 
 import pytest
 import torch
@@ -21,31 +21,158 @@ import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
+from lightning import seed_everything
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
-from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
+from tests.conftest import REAL_VST_VARIANTS
+from tests.helpers.eval_fakes import (
+    FAKE_METRICS_CSV,
+    fake_postprocessing_subprocess,
+)
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
-# Public worker module names the predict-postprocessing subprocesses run; matched
-# as argv substrings so the fake ``subprocess.run`` can route render vs metrics
-# without importing eval.py's private ``_*_MODULE`` constants (forbidden here by
-# ``tests/_meta/test_entrypoint_test_modules.py``).
-_PREDICT_VST_AUDIO_FRAGMENT = "predict_vst_audio"
-_COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
 
-# Aggregated audio-metrics CSV the fake metrics subprocess writes; one row per
-# metric, columns mean/std — the shape ``_load_audio_metrics`` flattens.
-_FAKE_AGGREGATED_METRICS_CSV = (
-    ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
-)
-# Per-sample metrics CSV the fake metrics subprocess writes alongside the aggregated
-# CSV; one row per sample, columns matching ``compute_audio_metrics`` output.
-_FAKE_METRICS_CSV = ",mss,wmfcc,sot,rms\n0,0.1,0.2,0.3,0.4\n1,0.5,0.6,0.7,0.8\n"
+class _FakeOracleDataset(NamedTuple):
+    name: str
+    fixture: str
+    datamodule_group: str | None
+
+
+# Smoke bound only: a one-row overfit cannot establish generalization, so this guards
+# against non-finite or divergent held-out loss, not learning quality.
+_TORCHSYNTH_HELD_OUT_LOSS_MAX = 1.0
+
+
+def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
+    """Compose the deterministic TorchSynth checkpoint smoke run.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        train_cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.max_epochs=10",
+                "+trainer.limit_train_batches=1",
+                "+trainer.limit_val_batches=1",
+                "trainer.val_check_interval=1.0",
+                "trainer.check_val_every_n_epoch=1",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[1,1,1]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "model.compile=false",
+                "model.optimizer.lr=0.0001",
+                "logger=csv",
+            ],
+        )
+    with open_dict(train_cfg):
+        train_cfg.paths.root_dir = str(operator_workspace())
+        train_cfg.paths.output_dir = str(tmp_path)
+        train_cfg.paths.log_dir = str(tmp_path)
+        train_cfg.test = False
+        train_cfg.seed = 123
+    return train_cfg
+
+
+def _torchsynth_initial_loss(train_cfg: DictConfig) -> float:
+    """Return the fixed overfit batch's initial model loss.
+
+    :param train_cfg: TorchSynth training configuration.
+    :returns: Initial MSE for the fixed batch.
+    """
+    baseline_datamodule = instantiate(train_cfg.datamodule)
+    baseline_datamodule.setup("fit")
+    baseline_audio, baseline_params, *_ = next(iter(baseline_datamodule.train_dataloader()))
+    # Seed exactly as train() does (L.seed_everything, covering torch/numpy/python RNG)
+    # so this "initial" model matches training's start regardless of what model init draws.
+    seed_everything(train_cfg.seed, workers=True)
+    baseline_model = instantiate(train_cfg.model)
+    with torch.no_grad():
+        loss = torch.nn.functional.mse_loss(baseline_model(baseline_audio), baseline_params).item()
+    return loss
+
+
+def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig:
+    """Compose validation against the trained TorchSynth checkpoint.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :param checkpoint: Trained checkpoint path.
+    :returns: Ready-to-run evaluation configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/eval_ffn",
+                "trainer=cpu",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.ckpt_path = str(checkpoint)
+    return cfg
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None:
+    """Train and validate TorchSynth using audio rendered on the local machine.
+
+    :param tmp_path: Shared training, checkpoint, and evaluation directory.
+    """
+    train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
+    initial_loss = _torchsynth_initial_loss(train_cfg)
+    HydraConfig().set_config(train_cfg)
+    try:
+        train_metrics, train_objects = train(train_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    overfit_loss = train_metrics["train/loss_epoch"].item()
+    assert math.isfinite(overfit_loss)
+    assert overfit_loss < initial_loss
+
+    checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
+    assert checkpoint.is_file()
+    eval_cfg = _compose_torchsynth_eval_cfg(tmp_path, checkpoint)
+    HydraConfig().set_config(eval_cfg)
+    try:
+        metric_dict, eval_objects = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    val_loss = metric_dict["val/loss"]
+    assert torch.isfinite(val_loss)
+    assert val_loss < _TORCHSYNTH_HELD_OUT_LOSS_MAX
+    eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
+    assert torch.isfinite(eval_batch[0]).all()
+
+
+_FAKE_ORACLE_DATASETS = [
+    pytest.param(_FakeOracleDataset("h5", "fake_surge_smoke_datasets", None), id="h5"),
+    pytest.param(
+        _FakeOracleDataset("lance", "fake_surge_smoke_lance_datasets", "surge_lance"),
+        id="lance",
+    ),
+]
 
 
 @pytest.mark.requires_vst
@@ -103,11 +230,12 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
 def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_subprocess(
-    cfg_surge_xt: DictConfig,
-    cfg_surge_xt_eval: DictConfig,
+    cfg_surge_real_train: DictConfig,
+    cfg_surge_real_eval: DictConfig,
 ) -> None:
-    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail.
+    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail, for both dataset formats.
 
     Drives the real train→eval roundtrip end-to-end with ``shuffle_seed=7``,
     exercising the ``evaluate()`` → ``_run_predict_postprocessing`` →
@@ -118,20 +246,20 @@ def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_su
     ``evaluate()`` boundary — confirming the gate is wired through the real
     entrypoint (#489).
 
-    :param cfg_surge_xt: Surge XT smoke-test training config.
-    :param cfg_surge_xt_eval: Matching predict-mode eval config (render + metrics on),
+    :param cfg_surge_real_train: Surge XT smoke-test training config (h5 or Lance arm).
+    :param cfg_surge_real_eval: Matching predict-mode eval config (render + metrics on),
         sharing ``tmp_path`` so eval reads the checkpoint training writes.
     """
-    HydraConfig().set_config(cfg_surge_xt)
-    train(cfg_surge_xt)
-    assert Path(cfg_surge_xt_eval.ckpt_path).exists()
+    HydraConfig().set_config(cfg_surge_real_train)
+    train(cfg_surge_real_train)
+    assert Path(cfg_surge_real_eval.ckpt_path).exists()
 
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.evaluation.shuffle_seed = 7
+    with open_dict(cfg_surge_real_eval):
+        cfg_surge_real_eval.evaluation.shuffle_seed = 7
 
-    HydraConfig().set_config(cfg_surge_xt_eval)
+    HydraConfig().set_config(cfg_surge_real_eval)
     with pytest.raises(subprocess.CalledProcessError):
-        evaluate(cfg_surge_xt_eval)
+        evaluate(cfg_surge_real_eval)
 
 
 @pytest.mark.gpu
@@ -210,6 +338,7 @@ def _compose_fake_oracle_eval_cfg(
     *,
     mode: str,
     param_spec_name: str = "surge_4",
+    datamodule: str | None = None,
 ) -> DictConfig:
     """Compose ``eval.yaml`` with the CPU ``surge/fake_oracle`` experiment, pinned to a dataset.
 
@@ -221,25 +350,30 @@ def _compose_fake_oracle_eval_cfg(
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         predict-mode ``PredictionWriter`` writes ``predictions/`` beneath it.
-    :param dataset_root: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param dataset_root: Holds the ``{train,val,test}`` splits (``.h5`` or
+        ``.lance`` per the selected ``datamodule``) + ``stats.npz``.
     :param mode: ``cfg.mode`` under test (``test`` / ``validate`` / ``val`` /
         ``predict`` / an unknown spelling).
     :param param_spec_name: Param spec the dataset was rendered with; drives the
         inline ``render`` group and the per-param-MSE callback's spec.
+    :param datamodule: Optional datamodule group override (e.g. ``surge_lance``);
+        ``None`` keeps the experiment's HDF5 ``surge`` group.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"mode={mode}"],
+            overrides=["experiment=surge/fake_oracle", f"mode={mode}"]
+            + ([f"datamodule={datamodule}"] if datamodule else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.predict_file = str(dataset_root / "test.h5")
+        # None lets the datamodule derive ``test.<its shard suffix>`` under dataset_root.
+        cfg.datamodule.predict_file = None
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.datamodule.use_saved_mean_and_variance = True
@@ -254,46 +388,42 @@ def _compose_fake_oracle_eval_cfg(
         # so render_vst has a config and the per-param-MSE labels line up.
         cfg.render = {
             "param_spec_name": param_spec_name,
-            "preset_path": str(preset_paths[param_spec_name]),
+            "plugin_state_path": str(plugin_state_paths[param_spec_name]),
             "plugin_path": "plugins/fake.vst3",
         }
     return cfg
 
 
-def _fake_postprocessing_subprocess(
-    audio_metrics_csv: str,
-) -> Callable[[list[str]], None]:
-    """Build a fake ``subprocess.run`` that materializes the render/metrics outputs.
+def _compose_parametrized_fake_oracle_eval_cfg(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
+    *,
+    mode: str,
+) -> DictConfig:
+    """Compose the fake-oracle eval cfg for the parametrized H5/Lance dataset.
 
-    Routes on the worker module name in argv: the render call creates the ``audio/``
-    output dir (its second positional) so the metrics branch's existence check
-    passes; the metrics call writes ``aggregated_metrics.csv`` under its output dir.
-    No real VST or Python subprocess is launched.
-
-    :param audio_metrics_csv: CSV body the fake metrics subprocess writes.
-    :returns: A ``subprocess.run``-compatible callable for ``monkeypatch.setattr``.
+    :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``.
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
+    :param mode: Eval mode to compose.
+    :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
-
-    def _fake_run(args: list[str], **_kwargs: object) -> None:
-        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
-        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
-        if not (is_render or is_metrics):
-            return
-        # Both worker argvs are ``[... -m <module> <in_dir> <out_dir> ...]``; the
-        # output dir is 3 past ``-m`` (module, in_dir, out_dir), robust to the
-        # Linux headless-wrapper prefix that shifts the leading entries.
-        out_dir = Path(args[args.index("-m") + 3])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if is_metrics:
-            (out_dir / "aggregated_metrics.csv").write_text(audio_metrics_csv)
-
-    return _fake_run
+    dataset_root = request.getfixturevalue(dataset_variant.fixture)
+    return _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        dataset_root,
+        mode=mode,
+        datamodule=dataset_variant.datamodule_group,
+    )
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``mode=predict`` runs the oracle's predict + postprocessing and merges audio metrics.
@@ -307,14 +437,17 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
     :param tmp_path: Hydra ``output_dir``; ``predictions/`` / ``audio/`` / ``metrics/``
         are derived beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
     :param monkeypatch: Stubs the render/metrics subprocesses and the headless
         wrapper extraction so no real VST host or Python subprocess launches.
     """
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_variant, mode="predict"
+    )
     monkeypatch.setattr(
         "synth_setter.cli.eval.subprocess.run",
-        _fake_postprocessing_subprocess(_FAKE_AGGREGATED_METRICS_CSV),
+        fake_postprocessing_subprocess(),
     )
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
@@ -337,9 +470,11 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``mode=predict`` with an active wandb run uploads ``metrics.csv`` as a wandb.Table.
@@ -350,7 +485,8 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
     verifies the per-sample Table arrives under ``audio/per_sample_metrics``.
 
     :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
     :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
     """
     logged: list[dict[str, object]] = []
@@ -378,19 +514,13 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
             """
             return lambda *_args, **_kwargs: None
 
-    def _fake_run_with_metrics(args: list[str], **_kwargs: object) -> None:
-        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
-        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
-        if not (is_render or is_metrics):
-            return
-        out_dir = Path(args[args.index("-m") + 3])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if is_metrics:
-            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
-            (out_dir / "metrics.csv").write_text(_FAKE_METRICS_CSV)
-
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
-    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_metrics)
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_variant, mode="predict"
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.subprocess.run",
+        fake_postprocessing_subprocess(per_sample_metrics_csv=FAKE_METRICS_CSV),
+    )
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
         "synth_setter.cli.eval.as_file",
@@ -413,9 +543,86 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
+def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode=predict`` uploads the render-order probe permutation as a ``shuffle/permutation`` Table.
+
+    Exercises the ``_log_shuffle_permutation_to_wandb`` call-through via the real
+    ``evaluate`` entrypoint: the fake metrics subprocess writes ``aggregated_metrics.csv``
+    and ``shuffle_permutation.csv``; a spy on ``wandb.run.log`` verifies the permutation
+    Table arrives under ``shuffle/permutation`` (#1669).
+
+    :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
+    :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
+    """
+    permutation_csv = "dest_idx,src_idx\n0,1\n1,0\n"
+    logged: list[dict[str, object]] = []
+
+    class _Spy:
+        """Stand-in for ``wandb.run`` that records ``log`` payloads; no-ops SDK lifecycle calls.
+
+        ``__getattr__`` absorbs wandb SDK cleanup methods (e.g. ``finish``,
+        ``summary``) that Lightning triggers after predict — they are irrelevant to
+        this test's contract.
+        """
+
+        def log(self, payload: dict[str, object]) -> None:
+            """Record one ``wandb.run.log`` call's argument.
+
+            :param payload: The dict passed to ``wandb.run.log``.
+            """
+            logged.append(payload)
+
+        def __getattr__(self, _name: str) -> object:
+            """Return a no-op callable for any undeclared wandb SDK method.
+
+            :param _name: Unused; any undeclared attribute resolves to the no-op.
+            :returns: A callable accepting any args and returning ``None``.
+            """
+            return lambda *_args, **_kwargs: None
+
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_variant, mode="predict"
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.subprocess.run",
+        fake_postprocessing_subprocess(shuffle_permutation_csv=permutation_csv),
+    )
+    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.as_file",
+        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
+    )
+    monkeypatch.setattr(wandb, "run", _Spy())
+    monkeypatch.setattr(wandb, "finish", lambda *_args, **_kwargs: None)
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    table_payloads = [p for p in logged if "shuffle/permutation" in p]
+    assert len(table_payloads) == 1
+    table = cast(wandb.Table, table_payloads[0]["shuffle/permutation"])
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]
+    assert table.data == [[0, 1], [1, 0]]
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
 def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
 ) -> None:
     """``mode=val`` (legacy spelling) routes to ``trainer.validate`` and logs zero MSE.
 
@@ -425,9 +632,12 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     verbatim, so ``val/param_mse`` is exactly zero.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
     """
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="val")
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_variant, mode="val"
+    )
 
     HydraConfig().set_config(cfg)
     try:
@@ -438,6 +648,32 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
+
+
+def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
+    tmp_path: Path,
+) -> None:
+    """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
+
+    ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
+    fake/real param width; an unknown spec must surface as a ``KeyError`` at the
+    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
+    registry-lookup contract is wired through the real eval entrypoint. The lookup
+    precedes any dataset open, so no dataset (and no fake plugin) is materialized.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; the dataset root
+        points at a nonexistent subdirectory that is never read.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(tmp_path, tmp_path / "missing-datasets", mode="validate")
+    with open_dict(cfg):
+        cfg.datamodule.param_spec_name = "does_not_exist"
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(KeyError, match="does_not_exist"):
+            evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
 
 
 @pytest.mark.fake_vst
@@ -467,9 +703,11 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
 def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
     tmp_path: Path,
-    fake_surge_smoke_datasets: Path,
+    request: pytest.FixtureRequest,
+    dataset_variant: _FakeOracleDataset,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Merges ``shuffled_audio/*`` keys when the metrics subprocess also writes the shuffled CSV.
@@ -482,24 +720,19 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
     is wired through the real ``evaluate()`` entrypoint (#489).
 
     :param tmp_path: Hydra ``output_dir``; output files are derived beneath it.
-    :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
+    :param request: Fetches the parametrized dataset fixture.
+    :param dataset_variant: Dataset fixture and datamodule override under test.
     :param monkeypatch: Stubs render/metrics subprocesses; no real VST launches.
     """
     _SHUFFLED_CSV = ",mean,std\nmss,0.8,0.05\nwmfcc,0.4,0.03\nsot,0.3,0.02\nrms,0.7,0.01\n"
 
-    def _fake_run_with_shuffled(args: list[str], **_kwargs: object) -> None:
-        is_render = any(_PREDICT_VST_AUDIO_FRAGMENT in a for a in args)
-        is_metrics = any(_COMPUTE_AUDIO_METRICS_FRAGMENT in a for a in args)
-        if not (is_render or is_metrics):
-            return
-        out_dir = Path(args[args.index("-m") + 3])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if is_metrics:
-            (out_dir / "aggregated_metrics.csv").write_text(_FAKE_AGGREGATED_METRICS_CSV)
-            (out_dir / "aggregated_metrics_shuffled.csv").write_text(_SHUFFLED_CSV)
-
-    cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="predict")
-    monkeypatch.setattr("synth_setter.cli.eval.subprocess.run", _fake_run_with_shuffled)
+    cfg = _compose_parametrized_fake_oracle_eval_cfg(
+        tmp_path, request, dataset_variant, mode="predict"
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.eval.subprocess.run",
+        fake_postprocessing_subprocess(shuffled_metrics_csv=_SHUFFLED_CSV),
+    )
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
         "synth_setter.cli.eval.as_file",
@@ -525,7 +758,7 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
     """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
 
     ``_run_predict_postprocessing`` reads ``cfg.render.param_spec_name`` /
-    ``preset_path`` / ``plugin_path`` to build the renderer argv. This composition
+    ``plugin_state_path`` / ``plugin_path`` to build the renderer argv. This composition
     test pins that both shipped render groups supply all three keys, so a future
     rename in a ``render/*.yaml`` surfaces here rather than mid-eval.
 
@@ -539,7 +772,7 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
         )
     try:
         assert cfg.render.param_spec_name
-        assert cfg.render.preset_path
+        assert cfg.render.plugin_state_path
         assert cfg.render.plugin_path
     finally:
         GlobalHydra.instance().clear()
@@ -578,19 +811,21 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     ckpt = Path(cfg_surge_xt_eval.ckpt_path)
     assert ckpt.is_file(), "train step did not write the checkpoint"
 
-    ref = publish_checkpoint_artifact(ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb")
+    # Body runs inside the ``with`` so the resolver downloads before the artifact/run teardown.
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full-eval", tmp_path / "wandb"
+    ) as ref:
+        # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
+        # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
+        monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        operator_workspace.cache_clear()
+        register_resolvers()
+        with open_dict(cfg_surge_xt_eval):
+            cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
 
-    # Contain the resolver's download cache under tmp_path so each run fetches fresh (a warm
-    # self-hosted runner must not reuse a stale cached ckpt for the same :latest ref).
-    monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    operator_workspace.cache_clear()
-    register_resolvers()
-    with open_dict(cfg_surge_xt_eval):
-        cfg_surge_xt_eval.ckpt_path = "${wandb:" + ref + "}"
-
-    HydraConfig().set_config(cfg_surge_xt_eval)
-    evaluate(cfg_surge_xt_eval)
+        HydraConfig().set_config(cfg_surge_xt_eval)
+        evaluate(cfg_surge_xt_eval)
 
     assert (tmp_path / ".cache" / "checkpoints").is_dir(), "resolver did not download the artifact"
     predictions_dir = tmp_path / "predictions"
@@ -600,3 +835,31 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     for pred_file in preds:
         tensor = torch.load(pred_file, weights_only=True)
         assert torch.isfinite(tensor).all(), f"{pred_file.name} contains NaN/Inf"
+
+
+@pytest.mark.fake_vst
+def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
+    tmp_path: Path,
+    fake_surge_smoke_lance_datasets: Path,
+) -> None:
+    """``datamodule=surge_lance`` drives ``evaluate`` end-to-end over Lance splits.
+
+    The oracle returns params verbatim, so ``val/param_mse`` is exactly zero —
+    the same contract as the HDF5 leg, with every batch read from Lance.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_lance_datasets: Natively-generated Lance smoke dataset.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path, fake_surge_smoke_lance_datasets, mode="validate", datamodule="surge_lance"
+    )
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    param_mse = metric_dict["val/param_mse"]
+    assert isinstance(param_mse, torch.Tensor)
+    assert param_mse.item() == 0.0

@@ -9,13 +9,12 @@ load_preset().
 Regression for: https://github.com/tinaudio/synth-setter/issues/225
 """
 
-import os
 import sys
-from pathlib import Path
 
 import pytest
 
-PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
+from tests._vst import PLUGIN_PATH
+
 PRESET_PATH = "presets/surge-base.vstpreset"
 
 # pedalboard.VST3Plugin.parameters is a dynamic C extension attribute that
@@ -23,10 +22,6 @@ PRESET_PATH = "presets/surge-base.vstpreset"
 # type: ignore[attr-defined] for this reason.
 
 requires_vst = pytest.mark.requires_vst
-skip_no_vst = pytest.mark.skipif(
-    not Path(PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {PLUGIN_PATH}",
-)
 
 skip_linux = pytest.mark.skipif(
     sys.platform == "linux",
@@ -35,7 +30,6 @@ skip_linux = pytest.mark.skipif(
 
 
 @requires_vst
-@skip_no_vst
 def test_preset_dependent_params_accessible_after_flush():
     """Preset-dependent params (e.g. sawtooth) exist after load + flush + reset."""
     from pedalboard import VST3Plugin
@@ -51,7 +45,6 @@ def test_preset_dependent_params_accessible_after_flush():
 
 
 @requires_vst
-@skip_no_vst
 def test_preset_dependent_params_missing_without_flush():
     """Without flush+reset after load_preset, dynamic params are not exposed."""
     from pedalboard import VST3Plugin
@@ -63,7 +56,6 @@ def test_preset_dependent_params_missing_without_flush():
 
 
 @requires_vst
-@skip_no_vst
 @skip_linux
 def test_render_params_sets_preset_dependent_param():
     """render_params must successfully set preset-dependent params without raising."""
@@ -84,7 +76,7 @@ def test_render_params_sets_preset_dependent_param():
         signal_duration_seconds=1.0,
         sample_rate=44100.0,
         channels=2,
-        preset_path=PRESET_PATH,
+        plugin_state_path=PRESET_PATH,
     )
 
     assert np.isfinite(output).all()

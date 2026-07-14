@@ -12,6 +12,7 @@ defaults:
   - paths: default
   - extras: default
   - hydra: default
+  - r2: default # bucket the train-end model artifact uploads/references its checkpoint under
 
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
@@ -55,6 +56,7 @@ consumed_dataset_config_id: null
 consumed_artifact_alias: latest
 
 training:
-  # Opt-in `r2://bucket/prefix` for the checkpoint location the model W&B
-  # artifact references; null logs a lineage-only artifact (R2 ckpt upload is #92).
+  # Optional `r2://bucket/key` override for the checkpoint upload target the model
+  # W&B artifact references; null auto-derives
+  # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
   upload_checkpoints_uri: null

@@ -1,15 +1,15 @@
-"""Behavioral tests for :mod:`synth_setter.data.surge_datamodule`.
+"""Behavioral tests for :mod:`synth_setter.data.vst_datamodule`.
 
 Covers the four public symbols exposed by the module:
 
-* :class:`SurgeXTDataset` — both the ``fake`` synthetic path and the real
+* :class:`VSTDataset` — both the ``fake`` synthetic path and the real
   HDF5-backed path, with the three boolean read flags (``read_audio`` /
   ``read_mel`` / ``read_m2l``), OT matching toggle, parameter rescaling, the
   ``repeat_first_batch`` mode, and the sibling-``stats.npz`` loader.
 * :class:`WithinChunkShuffledSampler`, :class:`ShuffledSampler`,
   :class:`ShiftedBatchSampler` — three batch-index samplers with distinct
   shuffle/strict-locality invariants.
-* :class:`SurgeDataModule` — Lightning ``setup`` / dataloader / ``teardown``
+* :class:`VSTDataModule` — Lightning ``setup`` / dataloader / ``teardown``
   wiring, including the ``conditioning`` mel-vs-m2l switch and the
   ``predict_file`` optional split.
 
@@ -26,8 +26,10 @@ from __future__ import annotations
 import contextlib
 import random
 import shutil
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import h5py
@@ -36,13 +38,16 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.surge_datamodule import (
+from synth_setter.data import vst_datamodule
+from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst_datamodule import (
     ShiftedBatchSampler,
     ShuffledSampler,
-    SurgeDataModule,
-    SurgeXTDataset,
+    VSTDataModule,
+    VSTDataset,
     WithinChunkShuffledSampler,
 )
+from synth_setter.data.vst.param_spec_registry import param_specs
 
 _AUDIO_CHANNELS = 2
 _AUDIO_SAMPLES = 16
@@ -54,16 +59,16 @@ _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
+_FAKE_PARAM_WIDTH = 3
 
 
 @pytest.fixture()
 def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Back the ``r2:`` rclone remote with the local filesystem for real-binary e2e.
 
-    ``RCLONE_CONFIG_R2_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
-    ``<cwd>/<bucket>/<key>``, and the three secret keys satisfy
-    ``ensure_r2_env_loaded``'s presence check (their values are unused by the
-    local backend). Skips when ``rclone`` is absent.
+    ``SYNTH_SETTER_STORAGE_RCLONE_TYPE=local`` resolves ``r2://<bucket>/<key>`` to
+    ``<cwd>/<bucket>/<key>``. Canonical storage settings satisfy the credential
+    check; their rclone projection is unused by the local backend.
 
     :param tmp_path: Pytest tmp dir; the returned subdir is the fake R2 root.
     :param monkeypatch: Sets the rclone env vars and chdirs into the remote root.
@@ -73,27 +78,28 @@ def local_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         pytest.skip("rclone binary not available on PATH")
     remote_root = tmp_path / "r2"
     remote_root.mkdir()
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "stub")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     monkeypatch.chdir(remote_root)
     return remote_root
 
 
 @contextlib.contextmanager
-def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
-    """Construct a ``SurgeDataModule`` from ``**kwargs``, ``setup``, yield, then ``teardown``.
+def _set_up_module(**kwargs: object) -> Iterator[VSTDataModule]:
+    """Construct a ``VSTDataModule`` from ``**kwargs``, ``setup``, yield, then ``teardown``.
 
     Encapsulates the setup/teardown try/finally pattern every
-    ``TestSurgeDataModule`` test needs so a forgotten ``teardown`` can't leak
+    ``TestVSTDataModule`` test needs so a forgotten ``teardown`` can't leak
     h5py handles into the next test.
 
-    :param \\*\\*kwargs: Forwarded to ``SurgeDataModule``.
+    :param \\*\\*kwargs: Forwarded to ``VSTDataModule``.
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
-    :ytype: SurgeDataModule
+    :ytype: VSTDataModule
     """
-    module = SurgeDataModule(**kwargs)  # type: ignore[arg-type]
+    kwargs.setdefault("param_spec_name", "surge_xt")
+    module = VSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
         yield module
@@ -102,19 +108,10 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
-    """Assert ``maybe_tensor`` is non-None and return it as a ``torch.Tensor``.
-
-    The dataset's ``__getitem__`` returns a dict where every value is typed
-    ``Tensor | None`` (mel/audio/m2l really are optional depending on read
-    flags; params/noise are unconditionally populated but share the same
-    dict type). Tests that exercise the populated keys go through this
-    helper so pyright narrows the type once, instead of every test
-    inlining ``assert x is not None``.
+    """Assert ``maybe_tensor`` is non-None and narrow it for pyright.
 
     :param maybe_tensor: The dict value to narrow.
-
     :return: The same tensor, now typed as non-None.
-    :rtype: torch.Tensor
     """
     assert maybe_tensor is not None
     return maybe_tensor
@@ -127,7 +124,7 @@ def _write_h5_shard(
     params_seed: int = 0,
     mel_fill: float | None = None,
 ) -> None:
-    """Write a tiny HDF5 shard with the four datasets ``SurgeXTDataset`` reads.
+    """Write a tiny HDF5 shard with the four datasets ``VSTDataset`` reads.
 
     :param path: Output file path.
     :param num_rows: Number of rows along the first axis of every dataset.
@@ -210,7 +207,7 @@ def dataset_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def single_h5(tmp_path: Path) -> Path:
-    """Write a single ``train.h5`` + sibling ``stats.npz`` for SurgeXTDataset-only tests.
+    """Write a single ``train.h5`` + sibling ``stats.npz`` for VSTDataset-only tests.
 
     :param tmp_path: Per-test tmpdir.
 
@@ -223,12 +220,7 @@ def single_h5(tmp_path: Path) -> Path:
     return h5_path
 
 
-# --------------------------------------------------------------------------- #
-# SurgeXTDataset — fake mode                                                  #
-# --------------------------------------------------------------------------- #
-
-
-class TestSurgeXTDatasetFakeMode:
+class TestVSTDatasetFakeMode:
     """``fake=True`` skips HDF5 entirely and returns randomly-generated tensors."""
 
     def test_fake_mode_does_not_open_h5_file(self, tmp_path: Path) -> None:
@@ -237,13 +229,13 @@ class TestSurgeXTDatasetFakeMode:
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         missing = tmp_path / "does-not-exist.h5"
-        dataset = SurgeXTDataset(missing, batch_size=4, fake=True)
+        dataset = VSTDataset(missing, batch_size=4, fake=True, num_params=_FAKE_PARAM_WIDTH)
         assert dataset.dataset_file is None
 
     def test_fake_mode_len_is_fixed_constant(self) -> None:
         """``__len__`` returns the documented 10000 in fake mode regardless of batch_size."""
-        small = SurgeXTDataset("ignored", batch_size=1, fake=True)
-        large = SurgeXTDataset("ignored", batch_size=8192, fake=True)
+        small = VSTDataset("ignored", batch_size=1, fake=True, num_params=_FAKE_PARAM_WIDTH)
+        large = VSTDataset("ignored", batch_size=8192, fake=True, num_params=_FAKE_PARAM_WIDTH)
         assert len(small) == 10000
         assert len(large) == 10000
 
@@ -254,62 +246,68 @@ class TestSurgeXTDatasetFakeMode:
         ``read_audio`` and ``read_m2l`` both default to False, so their slots
         drop to None — the same flag→slot mapping as real mode.
         """
-        dataset = SurgeXTDataset("ignored", batch_size=3, fake=True)
+        dataset = VSTDataset("ignored", batch_size=3, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
         assert item["audio"] is None
         assert item["m2l"] is None
         assert _unwrap(item["mel_spec"]).shape == (3, 2, 128, 401)
-        assert _unwrap(item["params"]).shape == (3, 189)
-        assert _unwrap(item["noise"]).shape == (3, 189)
+        assert _unwrap(item["params"]).shape == (3, _FAKE_PARAM_WIDTH)
+        assert _unwrap(item["noise"]).shape == (3, _FAKE_PARAM_WIDTH)
 
     def test_fake_mode_read_audio_true_returns_audio_tensor(self) -> None:
         """``read_audio=True`` populates the ``audio`` slot, mirroring real mode."""
-        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_audio=True)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_audio=True, num_params=_FAKE_PARAM_WIDTH
+        )
         item = dataset[0]
         assert _unwrap(item["audio"]).shape == (2, 2, 44100 * 4)
 
     def test_fake_mode_read_m2l_returns_m2l_tensor(self) -> None:
         """``read_m2l=True`` populates the ``m2l`` slot with the documented shape."""
-        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_m2l=True)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_m2l=True, num_params=_FAKE_PARAM_WIDTH
+        )
         assert _unwrap(dataset[0]["m2l"]).shape == (2, 128, 42)
 
     def test_fake_mode_read_mel_false_returns_none_mel(self) -> None:
         """``read_mel=False`` drops the ``mel_spec`` slot to ``None``."""
-        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True, read_mel=False)
+        dataset = VSTDataset(
+            "ignored", batch_size=2, fake=True, read_mel=False, num_params=_FAKE_PARAM_WIDTH
+        )
         item = dataset[0]
         assert item["mel_spec"] is None
 
     def test_fake_mode_rescale_params_maps_into_minus_one_to_one(self) -> None:
         """``rescale_params=True`` rescales ``torch.rand`` from [0, 1) into [-1, 1)."""
-        # read_mel=False + read_audio=False skips the ~190 MB mel/audio
-        # allocations that fake mode would otherwise build at batch_size=128;
-        # this test only inspects params.
-        dataset = SurgeXTDataset(
+        # batch_size=128 with mel/audio enabled allocates ~190 MB; disable both
+        # since this test only inspects params.
+        dataset = VSTDataset(
             "ignored",
             batch_size=128,
             fake=True,
             rescale_params=True,
             read_mel=False,
             read_audio=False,
+            num_params=_FAKE_PARAM_WIDTH,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= -1.0
         assert params.max().item() < 1.0
-        # With 128*189 samples from rand()*2 - 1 we will reach into [-1, 0) and
-        # [0, 1) with vanishing probability of staying on one side — pin the
-        # rescaling behavior, not just the bounds.
+        # 128*num_params samples make staying on one side vanishingly unlikely;
+        # assert both to pin the rescaling, not just the bounds.
         assert params.min().item() < 0.0
         assert params.max().item() > 0.0
 
     def test_fake_mode_no_rescale_params_stays_in_zero_to_one(self) -> None:
         """``rescale_params=False`` leaves params in ``torch.rand``'s native [0, 1) range."""
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             "ignored",
             batch_size=128,
             fake=True,
             rescale_params=False,
             read_mel=False,
             read_audio=False,
+            num_params=_FAKE_PARAM_WIDTH,
         )
         params = _unwrap(dataset[0]["params"])
         assert params.min().item() >= 0.0
@@ -317,23 +315,30 @@ class TestSurgeXTDatasetFakeMode:
 
     def test_fake_mode_noise_matches_param_shape(self) -> None:
         """``noise`` is allocated with ``torch.randn_like(params)``, so shapes match."""
-        dataset = SurgeXTDataset("ignored", batch_size=5, fake=True)
+        dataset = VSTDataset("ignored", batch_size=5, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
         assert _unwrap(item["noise"]).shape == _unwrap(item["params"]).shape
 
     def test_fake_mode_returns_full_key_set(self) -> None:
         """The returned dict always exposes all five keys (some may be ``None``)."""
-        dataset = SurgeXTDataset("ignored", batch_size=2, fake=True)
+        dataset = VSTDataset("ignored", batch_size=2, fake=True, num_params=_FAKE_PARAM_WIDTH)
         item = dataset[0]
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
 
+    def test_fake_mode_without_num_params_raises_value_error(self) -> None:
+        """Fake datasets require their caller to select a parameter width explicitly."""
+        with pytest.raises(ValueError, match="num_params"):
+            VSTDataset("ignored", batch_size=4, fake=True)
 
-# --------------------------------------------------------------------------- #
-# SurgeXTDataset — real HDF5 mode                                             #
-# --------------------------------------------------------------------------- #
+    def test_fake_mode_num_params_overrides_param_width(self) -> None:
+        """An explicit ``num_params`` sets the fake param width; noise tracks it."""
+        dataset = VSTDataset("ignored", batch_size=2, fake=True, num_params=92)
+        item = dataset[0]
+        assert _unwrap(item["params"]).shape == (2, 92)
+        assert _unwrap(item["noise"]).shape == (2, 92)
 
 
-class TestSurgeXTDatasetH5Mode:
+class TestVSTDatasetH5Mode:
     """HDF5-backed path: indexing, type conversion, OT routing, normalization."""
 
     def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_h5: Path) -> None:
@@ -341,7 +346,19 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(single_h5, batch_size=3, ot=False)
+        dataset = VSTDataset(single_h5, batch_size=3, ot=False)
+        assert len(dataset) == 8 // 3
+
+    def test_len_counts_param_array_rows_without_audio_column(self, tmp_path: Path) -> None:
+        """``__len__`` counts rows off ``param_array`` so an audio-less shard still works.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=8)
+        with h5py.File(h5_path, "a") as f:
+            del f["audio"]
+        dataset = VSTDataset(h5_path, batch_size=3, ot=False, use_saved_mean_and_variance=False)
         assert len(dataset) == 8 // 3
 
     def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:
@@ -349,9 +366,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
-            single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
-        )
+        dataset = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
         item = dataset[1]
         assert _unwrap(item["params"]).shape[0] == 2
         assert _unwrap(item["mel_spec"]).shape[0] == 2
@@ -361,9 +376,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
-            single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
-        )
+        dataset = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
         item = dataset[(1, 5)]
         assert _unwrap(item["params"]).shape[0] == 4
 
@@ -372,9 +385,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
-            single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
-        )
+        dataset = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
         item = dataset[[0, 2, 4]]
         assert _unwrap(item["params"]).shape[0] == 3
 
@@ -383,7 +394,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             single_h5,
             batch_size=3,
             ot=False,
@@ -399,7 +410,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
@@ -417,7 +428,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
@@ -435,9 +446,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
-            single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
-        )
+        dataset = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
         item = dataset[0]
         assert item["audio"] is None
 
@@ -446,7 +455,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(single_h5, batch_size=2, ot=False, read_mel=False)
+        dataset = VSTDataset(single_h5, batch_size=2, ot=False, read_mel=False)
         item = dataset[0]
         assert item["mel_spec"] is None
 
@@ -455,7 +464,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
@@ -469,14 +478,14 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset_raw = SurgeXTDataset(
+        dataset_raw = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
             use_saved_mean_and_variance=False,
             rescale_params=False,
         )
-        dataset_rescaled = SurgeXTDataset(
+        dataset_rescaled = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
@@ -495,7 +504,7 @@ class TestSurgeXTDatasetH5Mode:
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4, mel_fill=3.0)
         _write_stats(tmp_path, mean=1.0, std=2.0)
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             h5_path,
             batch_size=2,
             ot=False,
@@ -512,7 +521,7 @@ class TestSurgeXTDatasetH5Mode:
         """
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4)
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             h5_path,
             batch_size=2,
             ot=False,
@@ -529,7 +538,7 @@ class TestSurgeXTDatasetH5Mode:
         h5_path = tmp_path / "train.h5"
         _write_h5_shard(h5_path, num_rows=4)
         with pytest.raises(FileNotFoundError, match="stats.npz"):
-            SurgeXTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
+            VSTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
 
     def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:
         """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout.
@@ -537,22 +546,22 @@ class TestSurgeXTDatasetH5Mode:
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
         # str input
-        assert SurgeXTDataset.get_stats_file_path(str(tmp_path / "train.h5")) == (
+        assert VSTDataset.get_stats_file_path(str(tmp_path / "train.h5")) == (
             tmp_path / "stats.npz"
         )
         # Path input
-        assert SurgeXTDataset.get_stats_file_path(tmp_path / "val.h5") == tmp_path / "stats.npz"
+        assert VSTDataset.get_stats_file_path(tmp_path / "val.h5") == tmp_path / "stats.npz"
         # Nested path
         nested = tmp_path / "shard0" / "data.h5"
-        assert SurgeXTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
+        assert VSTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
 
     def test_no_ot_does_not_call_hungarian_match(self, single_h5: Path) -> None:
         """``ot=False`` short-circuits before ``_hungarian_match`` is invoked.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        with patch("synth_setter.data.surge_datamodule._hungarian_match") as mock_match:
-            dataset = SurgeXTDataset(
+        with patch("synth_setter.data.vst_datamodule._hungarian_match") as mock_match:
+            dataset = VSTDataset(
                 single_h5,
                 batch_size=2,
                 ot=False,
@@ -561,54 +570,16 @@ class TestSurgeXTDatasetH5Mode:
             _ = dataset[0]
         mock_match.assert_not_called()
 
-    def test_ot_true_calls_hungarian_match_with_all_four_tensors(self, single_h5: Path) -> None:
-        """``ot=True`` routes through ``_hungarian_match(noise, params, mel_spec, audio)``.
-
-        :param single_h5: Fixture-provided single-shard HDF5 path.
-        """
-        with patch(
-            "synth_setter.data.surge_datamodule._hungarian_match",
-            side_effect=lambda noise, params, *args: (noise, params, *args),
-        ) as mock_match:
-            dataset = SurgeXTDataset(
-                single_h5,
-                batch_size=2,
-                ot=True,
-                use_saved_mean_and_variance=False,
-                read_audio=True,
-            )
-            _ = dataset[0]
-        mock_match.assert_called_once()
-        positional = mock_match.call_args.args
-        assert len(positional) == 4
-        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
-        # shape so a regression that swaps positions is caught — bare arity does
-        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
-        noise, params, mel_spec, audio = positional
-        assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
-        assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
-        assert isinstance(mel_spec, torch.Tensor) and mel_spec.shape == (
-            2,
-            _MEL_CHANNELS,
-            _MEL_N_MELS,
-            _MEL_N_FRAMES,
-        )
-        assert isinstance(audio, torch.Tensor) and audio.shape == (
-            2,
-            _AUDIO_CHANNELS,
-            _AUDIO_SAMPLES,
-        )
-
     def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:
         """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
         with patch(
-            "synth_setter.data.surge_datamodule._hungarian_match",
+            "synth_setter.data.vst_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
         ) as mock_match:
-            dataset = SurgeXTDataset(
+            dataset = VSTDataset(
                 single_h5,
                 batch_size=2,
                 ot=True,
@@ -632,7 +603,7 @@ class TestSurgeXTDatasetH5Mode:
 
         :param single_h5: Fixture-provided single-shard HDF5 path.
         """
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             single_h5,
             batch_size=2,
             ot=False,
@@ -642,9 +613,236 @@ class TestSurgeXTDatasetH5Mode:
         assert set(item.keys()) == set(_ALL_TENSOR_KEYS)
 
 
-# --------------------------------------------------------------------------- #
-# WithinChunkShuffledSampler                                                  #
-# --------------------------------------------------------------------------- #
+def _reference_getitem(
+    dataset: VSTDataset, idx: int | list[int] | tuple[int, int], *, seed: int
+) -> dict[str, torch.Tensor | None]:
+    """Apply the batch math against the same shard independently of ``__getitem__``.
+
+    Draws noise via ``torch.randn`` on a fresh generator seeded by ``seed``; a
+    same-seeded ``VSTDataset.generator`` reproduces this bit-for-bit (equivalence
+    guarded by ``test_noise_draw_apis_same_seed_bit_identical`` in
+    ``test_prepare_batch.py``), so a match proves the delegation is a no-op.
+    Deliberately white-box: it reads ``dataset.dataset_file`` and calls the
+    private ``_index_dataset`` so the golden mirrors the production read path —
+    renaming those members must update this helper in the same change.
+
+    :param dataset: Open HDF5-backed dataset to read columns from.
+    :param idx: Batch index, ``(start, stop)`` pair, or explicit row list.
+    :param seed: Seed for the golden's own noise generator.
+    :raises ValueError: If ``dataset`` has no open shard handle.
+    :returns: The batch dict ``__getitem__`` is expected to return.
+    """
+    shard = dataset.dataset_file
+    if shard is None:
+        raise ValueError("dataset has no open shard handle")
+    if dataset.read_audio:
+        audio = dataset._index_dataset(shard["audio"], idx)
+        audio = torch.from_numpy(audio).to(dtype=torch.float32)
+    else:
+        audio = None
+
+    if dataset.read_mel:
+        mel_spec = dataset._index_dataset(shard["mel_spec"], idx)
+        if dataset.mean is not None and dataset.std is not None:
+            mel_spec = (mel_spec - dataset.mean) / dataset.std
+        mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
+    else:
+        mel_spec = None
+
+    if dataset.read_m2l:
+        m2l = dataset._index_dataset(shard["music2latent"], idx)
+        m2l = torch.from_numpy(m2l).to(dtype=torch.float32)
+    else:
+        m2l = None
+
+    param_array = dataset._index_dataset(shard["param_array"], idx)
+    if dataset.rescale_params:
+        param_array = param_array * 2 - 1
+    param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
+    noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
+    if dataset.ot:
+        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+
+    return dict(
+        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
+        m2l=m2l.contiguous() if m2l is not None else None,
+        params=param_array.contiguous(),
+        noise=noise.contiguous(),
+        audio=audio.contiguous() if audio is not None else None,
+    )
+
+
+class TestGetitemNoOpAfterExtraction:
+    """The post-extraction ``__getitem__`` matches the independent golden."""
+
+    @pytest.mark.parametrize("idx", [0, 1, [0, 2, 5, 7], (2, 6)])
+    def test_getitem_unchanged_after_extraction(
+        self, single_h5: Path, idx: int | list[int] | tuple[int, int]
+    ) -> None:
+        """Seeding ``dataset.generator`` reproduces the golden at each index form.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param idx: Batch index, row list, or ``(start, stop)`` pair — every
+            index shape ``_index_dataset`` documents, so a regression in any
+            slicing branch (or an off-by-one past the first batch) surfaces.
+        """
+        seed = 0
+        dataset = VSTDataset(
+            single_h5,
+            batch_size=4,
+            ot=True,
+            use_saved_mean_and_variance=True,
+            read_audio=True,
+            read_mel=True,
+            read_m2l=True,
+        )
+        golden = _reference_getitem(dataset, idx, seed=seed)
+        dataset.generator.manual_seed(seed)
+        out = dataset[idx]
+        for key in _ALL_TENSOR_KEYS:
+            if golden[key] is None:
+                assert out[key] is None, key
+                continue
+            # atol=rtol=0: the extraction is a pure structural move, so output
+            # must be bit-identical under the matched seed.
+            torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
+
+
+class TestNoiseGeneratorSeeding:
+    """Production seeding contract: the global seed governs the noise generator."""
+
+    def test_getitem_noise_same_global_seed_reproduces(self, single_h5: Path) -> None:
+        """Datasets built under the same global seed draw identical batch noise.
+
+        Pins that ``seed_everything(cfg.seed)`` governs the production noise
+        path (via the constructor's global-RNG draw) exactly as the
+        pre-refactor global-RNG ``randn_like`` did.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        draws = []
+        for _ in range(2):
+            with torch.random.fork_rng():
+                torch.manual_seed(7)
+                dataset = VSTDataset(
+                    single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False
+                )
+                draws.append(dataset[0]["noise"])
+        torch.testing.assert_close(draws[0], draws[1], atol=0.0, rtol=0.0)
+
+    def test_fake_mode_construction_leaves_global_rng_untouched(self) -> None:
+        """Constructing a fake dataset must not consume from the global RNG.
+
+        Fake noise never uses ``self.generator``, so the constructor skips the
+        global-RNG seed draw in fake mode — otherwise fake-mode runs would see
+        a shifted global stream for no benefit.
+        """
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            expected = torch.randn(4)
+        with torch.random.fork_rng():
+            torch.manual_seed(3)
+            VSTDataset("unused.h5", batch_size=2, fake=True, num_params=_FAKE_PARAM_WIDTH)
+            actual = torch.randn(4)
+        torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+    def test_generator_unseeded_constructions_get_distinct_seeds(self, single_h5: Path) -> None:
+        """Back-to-back real datasets without any seeding must not share a noise stream.
+
+        Guards the constructor against regressing to a bare ``torch.Generator()``,
+        whose fixed default seed would silently make every run's noise identical.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+        first = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
+        second = VSTDataset(single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False)
+        assert first.generator.initial_seed() != second.generator.initial_seed()
+
+    @pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="needs forked workers: spawn (macOS default) would have to pickle the "
+        "open h5py handle; production multi-worker runs are Linux/fork",
+    )
+    def test_dataloader_two_workers_reproduce_and_decorrelate_noise(self, single_h5: Path) -> None:
+        """Real forked workers draw seed-reproducible yet per-worker-distinct noise.
+
+        Two epochs under one global seed must yield a bit-identical noise stream (the DataLoader
+        base seed derives from the global RNG), while batches from different workers must differ —
+        without the per-worker re-seed, every fork would inherit identical generator state and the
+        first batch of worker 0 and worker 1 would be bit-equal.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        """
+
+        def collect_noise() -> list[torch.Tensor]:
+            with torch.random.fork_rng():
+                torch.manual_seed(11)
+                dataset = VSTDataset(
+                    single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+                )
+                loader = torch.utils.data.DataLoader(dataset, batch_size=None, num_workers=2)
+                draws = []
+                for batch in loader:
+                    noise = batch["noise"]
+                    assert noise is not None
+                    draws.append(noise.clone())
+                return draws
+
+        first_epoch = collect_noise()
+        second_epoch = collect_noise()
+        for ours, theirs in zip(first_epoch, second_epoch, strict=True):
+            torch.testing.assert_close(ours, theirs, atol=0.0, rtol=0.0)
+        # Sequential batches alternate workers round-robin, so index 0 vs 1 is
+        # worker 0's first draw vs worker 1's first draw.
+        assert not torch.equal(first_epoch[0], first_epoch[1])
+
+    def test_parent_read_before_fork_does_not_disarm_worker_reseed(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parent-process read must not latch the once-per-worker re-seed flag.
+
+        If it did, workers forked afterwards would inherit the latched flag, skip re-seeding, and
+        draw correlated noise — e.g. after a debugging or preflight batch read in the parent before
+        the DataLoader forks.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
+        dataset[0]  # parent read: get_worker_info() is genuinely None here
+        worker_info = SimpleNamespace(seed=777)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
+        noise = dataset[0]["noise"]
+        assert noise is not None
+        expected = torch.randn(noise.shape, generator=torch.Generator().manual_seed(777))
+        torch.testing.assert_close(noise, expected, atol=0.0, rtol=0.0)
+
+    def test_getitem_in_worker_reseeds_generator_once_from_worker_seed(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inside a dataloader worker, the first read re-seeds the forked generator.
+
+        ``DataLoader`` hands each worker a distinct ``seed`` (``base_seed +
+        worker_id``); re-seeding from it on first access decorrelates the noise
+        the forked generator copies would otherwise draw identically. Later
+        reads must continue that stream, not re-pin it per batch.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
+        worker_info = SimpleNamespace(seed=777)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
+        first = dataset[0]["noise"]
+        second = dataset[1]["noise"]
+        assert first is not None and second is not None
+        expected_stream = torch.Generator().manual_seed(777)
+        torch.testing.assert_close(
+            first, torch.randn(first.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
+        torch.testing.assert_close(
+            second, torch.randn(second.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
 
 
 class TestWithinChunkShuffledSampler:
@@ -704,11 +902,6 @@ class TestWithinChunkShuffledSampler:
         assert len(rows) == 5
 
 
-# --------------------------------------------------------------------------- #
-# ShuffledSampler                                                             #
-# --------------------------------------------------------------------------- #
-
-
 class TestShuffledSampler:
     """Global random permutation sampler — no locality guarantees."""
 
@@ -737,11 +930,6 @@ class TestShuffledSampler:
         sampler = ShuffledSampler(batch_size=batch_size, num_batches=num_batches)
         flat = [int(idx) for row in sampler for idx in row]
         assert sorted(flat) == list(range(batch_size * num_batches))
-
-
-# --------------------------------------------------------------------------- #
-# ShiftedBatchSampler                                                         #
-# --------------------------------------------------------------------------- #
 
 
 class TestShiftedBatchSampler:
@@ -780,9 +968,8 @@ class TestShiftedBatchSampler:
 
     def test_offset_can_vary_across_epochs(self) -> None:
         """A fresh ``iter()`` redraws the offset — over many epochs we see >1 distinct value."""
-        # Seed Python's random + numpy so the test is deterministic but still
-        # exercises the redraw. Save/restore the global states so other tests
-        # in the same pytest-xdist worker don't see a leaked seed.
+        # Seed global RNGs for determinism; save/restore so xdist workers don't
+        # see a leaked state.
         py_state = random.getstate()
         np_state = np.random.get_state()
         try:
@@ -809,20 +996,23 @@ class TestShiftedBatchSampler:
         assert pair_indices == list(range(num_batches - 1))
 
 
-# --------------------------------------------------------------------------- #
-# SurgeDataModule                                                             #
-# --------------------------------------------------------------------------- #
-
-
-class TestSurgeDataModule:
+class TestVSTDataModule:
     """Lightning datamodule: setup / dataloaders / teardown wiring."""
+
+    def test_init_without_param_spec_name_raises_type_error(self, tmp_path: Path) -> None:
+        """Direct construction requires callers to choose the dataset's parameter spec.
+
+        :param tmp_path: Provides an otherwise-valid dataset root.
+        """
+        with pytest.raises(TypeError, match="param_spec_name"):
+            VSTDataModule(dataset_root=tmp_path)  # type: ignore[call-arg]
 
     def test_init_stores_dataset_root_as_path(self, tmp_path: Path) -> None:
         """``dataset_root`` is normalized to ``pathlib.Path`` even when passed as a str.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        module = SurgeDataModule(dataset_root=str(tmp_path))
+        module = VSTDataModule(dataset_root=str(tmp_path), param_spec_name="surge_xt")
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
 
@@ -841,9 +1031,10 @@ class TestSurgeDataModule:
         (remote_prefix / "stats.npz").write_bytes(b"stats-bytes")
         dataset_root = tmp_path / "downloaded"
 
-        module = SurgeDataModule(
+        module = VSTDataModule(
             dataset_root=str(dataset_root),
             download_dataset_root_uri="r2://intermediate-data/dataset",
+            param_spec_name="surge_xt",
         )
         module.prepare_data()
 
@@ -862,7 +1053,7 @@ class TestSurgeDataModule:
         dataset_root = tmp_path / "downloaded"
         dataset_root.mkdir()
 
-        module = SurgeDataModule(dataset_root=str(dataset_root))
+        module = VSTDataModule(dataset_root=str(dataset_root), param_spec_name="surge_xt")
         module.prepare_data()
 
         assert list(dataset_root.iterdir()) == []
@@ -873,9 +1064,9 @@ class TestSurgeDataModule:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
-            assert isinstance(module.train_dataset, SurgeXTDataset)
-            assert isinstance(module.val_dataset, SurgeXTDataset)
-            assert isinstance(module.test_dataset, SurgeXTDataset)
+            assert isinstance(module.train_dataset, VSTDataset)
+            assert isinstance(module.val_dataset, VSTDataset)
+            assert isinstance(module.test_dataset, VSTDataset)
 
     def test_setup_without_predict_file_defaults_to_test_split(self, dataset_root: Path) -> None:
         """No ``predict_file``: ``predict_dataset`` defaults to the ``test.h5`` split.
@@ -884,7 +1075,7 @@ class TestSurgeDataModule:
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert module.predict_file == dataset_root / "test.h5"
-            assert isinstance(module.predict_dataset, SurgeXTDataset)
+            assert isinstance(module.predict_dataset, VSTDataset)
 
     def test_setup_with_predict_file_builds_predict_dataset_with_audio(
         self, dataset_root: Path
@@ -899,7 +1090,7 @@ class TestSurgeDataModule:
             ot=False,
             predict_file=str(dataset_root / "test.h5"),
         ) as module:
-            assert isinstance(module.predict_dataset, SurgeXTDataset)
+            assert isinstance(module.predict_dataset, VSTDataset)
             assert module.predict_dataset.read_audio is True
 
     def test_setup_val_and_test_force_ot_false(self, dataset_root: Path) -> None:
@@ -1007,6 +1198,33 @@ class TestSurgeDataModule:
                 assert loader.num_workers == 2
                 assert loader.pin_memory is True
 
+    def test_dataloaders_leave_worker_init_fn_unset_for_lightning(
+        self, dataset_root: Path
+    ) -> None:
+        """No split's DataLoader installs a custom ``worker_init_fn``.
+
+        Lightning's ``seed_everything(workers=True)`` auto-adds
+        ``pl_worker_init_function`` only while ``worker_init_fn is None``; a
+        custom hook here would silently displace it and de-seed worker global
+        RNGs (fake mode's noise). The dataset re-seeds its own generator lazily
+        in ``__getitem__`` instead.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            predict_file=str(dataset_root / "test.h5"),
+        ) as module:
+            for loader in (
+                module.train_dataloader(),
+                module.val_dataloader(),
+                module.test_dataloader(),
+                module.predict_dataloader(),
+            ):
+                assert loader.worker_init_fn is None
+
     def test_predict_dataloader_returns_dataloader_when_predict_file_set(
         self, dataset_root: Path
     ) -> None:
@@ -1049,7 +1267,9 @@ class TestSurgeDataModule:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        module = SurgeDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module = VSTDataModule(
+            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+        )
         module.setup()
         module.teardown()
         # h5py.File's truthiness reflects open-state; after close, the handle is falsy.
@@ -1090,5 +1310,51 @@ class TestSurgeDataModule:
         ) as module:
             loader = module.train_dataloader()
             item = next(iter(loader))
-            assert _unwrap(item["params"]).shape == (2, 189)
+            assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))
             assert _unwrap(item["mel_spec"]).shape == (2, 2, 128, 401)
+
+    def test_fake_mode_param_spec_name_sizes_param_width(self, tmp_path: Path) -> None:
+        """``param_spec_name`` selects the registry spec that sizes fake param width.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        with _set_up_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name="surge_simple",
+        ) as module:
+            item = next(iter(module.train_dataloader()))
+            assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_simple"]))
+
+    def test_setup_unknown_param_spec_name_raises_key_error(self, tmp_path: Path) -> None:
+        """An unregistered ``param_spec_name`` fails fast at ``setup()`` with ``KeyError``.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        module = VSTDataModule(
+            dataset_root=tmp_path,
+            batch_size=2,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+            param_spec_name="does_not_exist",
+        )
+        with pytest.raises(KeyError, match="does_not_exist"):
+            module.setup()
+
+
+class TestBackCompatAliases:
+    """The old Surge-prefixed names remain bound to the renamed classes."""
+
+    def test_surge_data_module_alias_is_vst_data_module(self) -> None:
+        """``SurgeDataModule`` resolves to ``VSTDataModule`` so old ``_target_``s load."""
+        assert vst_datamodule.SurgeDataModule is VSTDataModule
+
+    def test_surge_xt_dataset_alias_is_vst_dataset(self) -> None:
+        """``SurgeXTDataset`` resolves to ``VSTDataset`` so old ``_target_``s load."""
+        assert vst_datamodule.SurgeXTDataset is VSTDataset

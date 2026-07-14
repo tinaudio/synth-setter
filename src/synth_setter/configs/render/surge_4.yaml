@@ -1,0 +1,5 @@
+defaults:
+  - surge_xt
+
+param_spec_name: surge_4
+plugin_state_path: presets/surge-mini.vstpreset

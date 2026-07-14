@@ -8,24 +8,22 @@ with whatever override combinations you want to pin.
 
 from __future__ import annotations
 
-import os
 import shlex
 import subprocess
 
 import pytest
 
+from tests._vst import PLUGIN_PATH
+
 _ENTRYPOINT = "synth-setter-generate-dataset"
 
-# ``render/surge_xt.yaml`` hardcodes ``plugin_path``, so the env var only
-# reaches the CLI when baked into the override string below. Matches the
-# convention in ``tests/data/vst/test_preset_params.py`` and friends.
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
-
+# ``render/surge_xt.yaml`` hardcodes ``plugin_path``, so the path only reaches
+# the CLI when baked into the override string below.
 OVERRIDE_ARGS: list[str] = [
     # ``--help`` still walks the defaults list, so an ``experiment=`` override
     # is required even for the cheapest invocation.
     "experiment=generate_dataset/smoke-shard --help",
-    f"experiment=generate_dataset/smoke-shard render.plugin_path={shlex.quote(_PLUGIN_PATH)}",
+    f"experiment=generate_dataset/smoke-shard render.plugin_path={shlex.quote(PLUGIN_PATH)}",
 ]
 
 

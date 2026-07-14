@@ -8,7 +8,7 @@ defaults:
   - /experiment/generate_dataset/smoke-shard-with-finalize@_global_
   - _self_
 
-# Pin non-zero val/test splits: SurgeDataModule.setup() opens
+# Pin non-zero val/test splits: VSTDataModule.setup() opens
 # {train,val,test}.h5 (and the predict split) unconditionally, so a zero-sized
 # val or test split would raise FileNotFoundError during the inline oracle eval.
 # Sizes must be multiples of render.samples_per_shard=4.

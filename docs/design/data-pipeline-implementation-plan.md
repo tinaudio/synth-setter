@@ -129,7 +129,7 @@ splits:
   test: 2
 
 # Generation params (needed by generate_vst_dataset)
-preset_path: presets/surge-simple.vstpreset
+plugin_state_path: presets/surge-simple.vstpreset
 channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
@@ -197,7 +197,7 @@ ______________________________________________________________________
 - `src/synth_setter/cli/train.py` — minor fixes (resolver registration)
 - `src/synth_setter/utils/utils.py` — minor fixes
 - `src/synth_setter/data/ksin_datamodule.py` — pin_memory fix
-- `src/synth_setter/data/surge_datamodule.py` — fix
+- `src/synth_setter/data/vst_datamodule.py` — fix
 - `tests/conftest.py` — register resolvers, lr_monitor fix
 - `tests/helpers/package_available.py` — importlib.metadata migration
 - `tests/helpers/run_if.py` — fix
@@ -273,7 +273,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `DatasetPipelineSpec` (frozen, strict): `run_id`,
   `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
-  `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
+  `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `plugin_state_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
   `samples_per_render_batch`, `shards` (tuple of `ShardSpec`).
   **Note:** `num_shards` is a derived property (not a stored field).
@@ -281,8 +281,10 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
-- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`).
+- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed`.
   `shard_id` is int in schema; formatted to string for paths via `shard_dir_name(shard_id) -> str`.
+  Current row-level seed derivation is documented in
+  [deterministic-seeding.md](deterministic-seeding.md).
   **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`.
   Fields `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`,
   `param_shape` from the original plan are not yet implemented.
@@ -312,7 +314,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
 - ~~`base_seed` not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
-- ~~Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
+- ~~Generation params (plugin_state_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
 - `shard_manifest` not in `DatasetCard` schema §14.2 (mentioned in §7.6 prose)
 
 **Unit tests (write first):**
@@ -744,7 +746,11 @@ ______________________________________________________________________
   - `hdf5`: virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`) — implements fresh
     resharding using `VirtualLayout`/`VirtualSource` pattern, reading actual shard dimensions
     from HDF5 metadata. Does NOT call `reshard_data.py` (it hardcodes 10k shard size).
-  - `wds`: WebDataset tar archives (`train-{shard}.tar`, etc.) via `Sample` dataclass
+  - `wds`: WebDataset tar shards stay in place; finalize streams train-shard `mel_spec`
+    arrays into `stats.npz`.
+  - `lance`: Lance dataset-directory shards (`shard-000000.lance/`) are streamed
+    from R2 into non-empty split directories (`train.lance`, `val.lance`, `test.lance`),
+    and finalize streams train-shard `mel_spec` tensors into `stats.npz`.
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
 - Upload finalized outputs to R2 storage
@@ -757,7 +763,7 @@ ______________________________________________________________________
 
 **Unit tests:** Promotes, rejects missing/corrupt, idempotent, stale marker recovery,
 lexicographic shard selection with multiple attempts, `.promoted` markers written,
-`dataset.complete` content verified, card contents, both output formats, `--dry-run`,
+`dataset.complete` content verified, card contents, all output formats, `--dry-run`,
 mock-W&B test verifying all 7 metrics logged
 
 **Reference tests:**
@@ -942,10 +948,10 @@ ______________________________________________________________________
     Child process imports `make_hdf5_dataset` directly (`from synth_setter.data.vst.writers import make_hdf5_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
-    For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
-    (`random.seed()` + `np.random.seed()`) for reproducibility (#100, P3). Provides
-    OS-level crash isolation (SIGSEGV/OOM kill only one shard), per-shard timeout, and
-    clean VST plugin state. See design doc §7.8.1
+    Seed derivation is documented in
+    [deterministic-seeding.md](deterministic-seeding.md). The process boundary
+    provides OS-level crash isolation (SIGSEGV/OOM kill only one shard),
+    per-shard timeout, and clean VST plugin state. See design doc §7.8.1
 08. Entrypoint gets `MODE=generate-shards`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
@@ -1014,5 +1020,5 @@ Several fields in the design doc §14 schemas need updating to match the impleme
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard`)
 - `base_seed` not in `DatasetPipelineSpec` schema (referenced in §14.1 text)
-- Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema
+- Generation params (plugin_state_path, channels, etc.) not in `DatasetPipelineSpec` schema
 - `shard_manifest` not in `DatasetCard` schema (mentioned in §7.6 prose)

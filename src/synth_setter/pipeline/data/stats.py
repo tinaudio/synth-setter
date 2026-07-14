@@ -13,7 +13,7 @@ import numpy as np
 from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.surge_datamodule import SurgeXTDataset
+from synth_setter.data.vst_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
             logger.info("Computed mean and std (shapes %s, %s)", mean.shape, std.shape)
 
     logger.info("Saving stats to file")
-    out_file = SurgeXTDataset.get_stats_file_path(filename)
+    out_file = VSTDataset.get_stats_file_path(filename)
     if mask_degenerate:
         std = _fix_degenerate_bins(std)
     else:
@@ -336,6 +336,64 @@ def stream_stats_wds(
         folded_any = True
     if not folded_any:
         raise FileNotFoundError("stream_stats_wds received no shard paths")
+    return finalize(existing, mask_degenerate=mask_degenerate)
+
+
+def _fold_lance_shard_into_welford(
+    existing: tuple[int, Any, Any],
+    shard_uri: str | Path,
+    *,
+    storage_options: dict[str, str] | None = None,
+) -> tuple[int, Any, Any]:
+    """Fold every Lance ``mel_spec`` row from one shard into Welford state.
+
+    :param existing: Welford state ``(count, mean, M2)`` before this shard.
+    :param shard_uri: One ``shard-*.lance`` dataset (local path or ``s3://`` URI).
+    :param storage_options: Object-store config for a cloud ``shard_uri``; ``None`` local.
+    :returns: Updated Welford state after every readable mel row was folded.
+    :rtype: tuple[int, Any, Any]
+    :raises ValueError: The shard carried no readable ``mel_spec`` rows.
+    """
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+
+    shard_rows = 0
+    for row in iter_lance_column_rows(shard_uri, MEL_SPEC_FIELD, storage_options=storage_options):
+        existing = update(existing, row)
+        shard_rows += 1
+    if shard_rows == 0:
+        raise ValueError(
+            f"shard {Path(str(shard_uri)).name} contained no readable {MEL_SPEC_FIELD!r} "
+            "rows; aborting so partial stats are never written silently"
+        )
+    return existing
+
+
+def stream_stats_lance(
+    shard_uris: Iterable[str | Path],
+    mask_degenerate: bool = False,
+    *,
+    storage_options: dict[str, str] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stream Welford mean/std across an iterable of ``shard-*.lance`` datasets.
+
+    :param shard_uris: Iterable of Lance shard datasets in fold order (local
+        paths or ``s3://`` URIs).
+    :param mask_degenerate: See :func:`get_stats_wds`.
+    :param storage_options: Object-store config for cloud ``shard_uris``; ``None`` local.
+    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
+    :rtype: tuple[np.ndarray, np.ndarray]
+    :raises FileNotFoundError: ``shard_uris`` yielded zero entries.
+    """
+    existing: tuple[int, Any, Any] = (0, 0, 0)
+    folded_any = False
+    for shard_uri in shard_uris:
+        logger.info(f"Processing {Path(str(shard_uri)).name}...")
+        existing = _fold_lance_shard_into_welford(
+            existing, shard_uri, storage_options=storage_options
+        )
+        folded_any = True
+    if not folded_any:
+        raise FileNotFoundError("stream_stats_lance received no shard URIs")
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 

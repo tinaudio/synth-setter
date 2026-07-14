@@ -49,7 +49,7 @@ def _smoke_spec() -> DatasetSpec:
     """A minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
     render_cfg = RenderConfig(
         plugin_path="plugins/Surge XT.vst3",
-        preset_path="presets/surge-base.vstpreset",
+        plugin_state_path="presets/surge-base.vstpreset",
         param_spec_name="surge_simple",
         renderer_version="1.3.4",
         sample_rate=44100,
@@ -87,7 +87,10 @@ def test_build_generate_args_roundtrips_through_cli_parser() -> None:
         **parsed.model_dump(exclude={"data_file", "copy_dataset_root_uri"})
     )
 
-    assert reconstructed == spec.render
+    # build_generate_args overrides base_seed with the shard's seed (#884), so the
+    # round-tripped config matches spec.render with that one field substituted.
+    expected = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
+    assert reconstructed == expected
     assert parsed.data_file == "/tmp/shard-000000.h5"
     # No copy source on this spec, so the CLI flag is absent and parses to None.
     assert parsed.copy_dataset_root_uri is None

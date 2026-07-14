@@ -1,0 +1,96 @@
+name: Test Generate Dataset From Spec URI
+
+# PR-tier e2e for the ``synth-setter-generate-dataset-from-spec-uri`` operator
+# CLI (tests/integration/test_generate_dataset_from_spec_uri_r2.py): uploads
+# a real spec to Cloudflare R2, then drives the real CLI subprocess with the
+# ``r2://`` (and ``s3://``) URI — real network spec fetch, real Surge XT
+# render, real shard uploads, real R2 probes. No stubs.
+#
+# Runs inside the ``tinaudio/synth-setter:dev-snapshot`` Docker image because
+# the production render path needs the baked Surge XT VST3 + headless X11
+# stack (same rationale as test-vst-slow.yml — bare runners flake on Xvfb),
+# and R2 creds are injected as ``RCLONE_CONFIG_R2_*`` container env (same
+# secret set as test-local-launcher-roundtrip.yml, which keeps covering the
+# Hydra-compose launcher form with a stubbed renderer).
+#
+# Required secrets: RCLONE_CONFIG_R2_ACCESS_KEY_ID,
+# RCLONE_CONFIG_R2_SECRET_ACCESS_KEY, RCLONE_CONFIG_R2_ENDPOINT.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/cli/generate_dataset_from_spec_uri.py"
+      - "src/synth_setter/pipeline/spec_io.py"
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "tests/integration/test_generate_dataset_from_spec_uri_r2.py"
+      - ".github/workflows/test-generate-dataset-from-spec-uri.yml"
+
+permissions:
+  contents: read
+
+# Coalesce stacked PR pushes; run_id keeps manual dispatch re-runs from
+# self-cancelling (same pattern as test-local-launcher-roundtrip.yml).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  spec-uri-e2e:
+    name: Spec-URI CLI -> real R2 e2e (Docker + VST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Fork PRs can't see the R2 secrets; skip rather than burn a runner on
+    # guaranteed auto-skips (same gating as test-local-launcher-roundtrip.yml).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      # setup-r2 exports canonical storage env plus the current rclone projection.
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+
+      # Real network, real R2, real VST: the test needs all three; the Python
+      # test reads canonical storage settings and the container's rclone reads
+      # the projected remote env.
+      - name: Run spec-URI e2e in Docker
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e HYDRA_FULL_ERROR=1 \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                pytest -vv -s tests/integration/test_generate_dataset_from_spec_uri_r2.py
+            '

@@ -8,16 +8,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.30.0"
+version = "8.48.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 # Lite import closure for the lite CI sites (validate_spec, ensure_r2_env_loaded,
 # load_image_config); heavy runtime is in [dependency-groups]. Pinned by
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
 dependencies = [
   "pydantic>=2",
+  "pydantic-settings>=2",
   "python-dotenv",
   "pyyaml",
 ]
@@ -58,8 +59,14 @@ synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
+synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
+synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
+synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
+synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
+synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
@@ -102,6 +109,16 @@ synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 
+
+
+
+
+
+
+
+
+
+
 [dependency-groups]
 docs = [
   "mkdocs",
@@ -118,6 +135,11 @@ torch = [
   "torchaudio>=2.0.0",
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
+  # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
+  # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
+  # music2latent ships its own torch-backed encoder.
+  "transformers>=5.0.0",
+  "music2latent>=0.1.8",
 ]
 config = [
   "hydra-core==1.3.2",
@@ -125,7 +147,6 @@ config = [
   "hydra-optuna-sweeper==1.2.0",
   "omegaconf",
   "pydantic-settings>=2",
-  "tomli; python_version < '3.11'",
 ]
 # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
 # keeps `uv sync --frozen` self-sufficient.
@@ -143,15 +164,18 @@ data = [
   "webdataset",
   "pandas",
   "numpy",
+  "pylance>=7.0.0",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
+  "dawdreamer; python_version < '3.13'",
   "librosa",
+  "mido",
   "pedalboard",
   "pyloudnorm",
-  "mido",
   "scipy>=1.14,<1.15",
+  "torchsynth==1.0.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",
@@ -159,6 +183,10 @@ metrics = [
   "kymatio==0.3.0",
   "POT",
   "einops",
+]
+notebooks = [
+  "duckdb>=1.5.4",
+  "smoosense[jupyter]",
 ]
 util = [
   "click<8.2",
@@ -198,6 +226,7 @@ dev = [
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "notebooks" },
   { include-group = "runtime" },
 ]
 
@@ -276,6 +305,7 @@ namespaces = true
   "configs/**/*.yaml",
   "configs/**/*.yml",
   "scripts/*.sh",
+  "data/vst/*_param_map.json",
 ]
 
 
@@ -299,7 +329,7 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
-  "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
+  "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
@@ -314,7 +344,7 @@ testpaths = "tests/"
 
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 99
 exclude = ["logs", "data"]
 # Legacy files excluded until per-file lint cleanup is done (see issue #25).
@@ -334,6 +364,11 @@ select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
           "D100", "D101", "D102", "D103", "D107", "D205", "D401"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
+
+[tool.ruff.lint.isort]
+# W&B runs drop an untracked ./wandb dir that flips ruff's first-party detection,
+# making local `make format` reorder imports CI then rejects.
+known-third-party = ["wandb"]
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001", "D102", "D103", "D107"]
@@ -355,7 +390,6 @@ ignore = ["E501", "S101"]
 "src/synth_setter/data/fm_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/kosc_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/ksin_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/surge_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/core.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/generate_vst_dataset.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/param_spec.py" = ["D102", "D103", "D107"]
@@ -385,10 +419,10 @@ ignore = ["E501", "S101"]
 "src/synth_setter/models/components/vae.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vector_field.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_ff_module.py" = ["F821", "D102", "D103", "D107"]
-"src/synth_setter/models/surge_ff_module.py" = ["F821", "D102", "D103", "D107"]
+"src/synth_setter/models/vst_ff_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flowvae_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flow_matching_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flowvae_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/train.py" = ["E402", "D102", "D103", "D107"]
 "src/synth_setter/utils/__init__.py" = ["F401"]
 "src/synth_setter/utils/callbacks.py" = ["F821", "T201", "ANN001", "D102", "D103", "D107"]

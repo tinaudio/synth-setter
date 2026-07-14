@@ -4,7 +4,7 @@ Operator ask on PR #1202: "Write a helper to verify the metrics. You should
 use the fake oracle model. See test_train.py for reference."
 
 The Surge XT fake oracle's ``predict_step`` returns ``batch["params"]``
-verbatim (see :mod:`synth_setter.models.surge_fake_oracle_module`). The
+verbatim (see :mod:`synth_setter.models.vst_fake_oracle_module`). The
 strongest invariant the oracle pins is therefore ``pred == target_params``
 exactly — ``test_train.py::test_train_eval_surge_xt`` pins this at the
 "oracle pred != target-params" assertion. Loss is exactly zero by
@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import tarfile
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -107,6 +109,22 @@ def _load_param_array_from_hdf5(local_h5: Path) -> np.ndarray:
         return np.asarray(dataset[...], dtype=np.float32)  # type: ignore[index]
 
 
+def _load_param_array_from_lance(local_lance: Path) -> np.ndarray:
+    """Read the ``param_array`` column out of a finalized Lance split.
+
+    Reads through ``LanceShardFile`` — the adapter the train/eval dataloader
+    uses — so the bytes match what a model would consume.
+
+    :param local_lance: ``train.lance`` split as a downloaded Lance dataset directory.
+    :returns: Float32 ``param_array`` of shape ``(N, P)``, rows in shard order.
+    """
+    from synth_setter.data.lance_datamodule import LanceShardFile
+    from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+
+    with closing(LanceShardFile(local_lance)) as shard:
+        return np.asarray(shard[PARAM_ARRAY_FIELD][:], dtype=np.float32)
+
+
 def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
     """Concatenate every ``param_array.npy`` member of a wds shard into a single array.
 
@@ -136,24 +154,32 @@ def _load_param_array_from_wds_tar(local_tar: Path) -> np.ndarray:
 
 
 def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, str]:
-    """Probe the finalized prefix for ``train.h5`` (hdf5) or the lowest-shard tar (wds).
+    """Probe the finalized prefix for a ``train`` split file or the lowest-shard tar.
 
-    Tries ``train.h5`` first — that's the hdf5 layout finalize writes. When
-    absent, falls back to listing the prefix and grabbing the first
-    ``shard-*.tar`` (wds layout). Either way returns the local download path
-    plus the format tag so the caller can branch on how to read params.
+    Tries the per-split files finalize writes — ``train.h5`` (hdf5) then
+    ``train.lance`` (lance) — and falls back to listing the prefix for the first
+    ``shard-*.tar`` (wds, which leaves shards in place). Returns the local
+    download path plus the format tag so the caller can branch on how to read
+    params.
 
     :param prefix: Rclone-form prefix; must end with ``/``.
     :param work_dir: Local scratch dir for the download.
-    :returns: ``(local_path, format)`` where ``format`` is ``"hdf5"`` or ``"wds"``.
+    :returns: ``(local_path, format)`` where ``format`` is ``"hdf5"``,
+        ``"lance"``, or ``"wds"``.
     :raises FileNotFoundError: No recognized finalize artifact under ``prefix``.
     """
-    train_h5_uri = _prefix_to_r2_uri(prefix, "train.h5")
-    if r2_io.object_size(train_h5_uri) is not None:
+    h5_uri = _prefix_to_r2_uri(prefix, "train.h5")
+    if r2_io.object_size(h5_uri) is not None:
         local = work_dir / "train.h5"
-        r2_io.download_to_path(train_h5_uri, local)
+        r2_io.download_to_path(h5_uri, local)
         return local, "hdf5"
-    import subprocess
+
+    # Lance splits are dataset directories: probe + download the tree, not a file.
+    lance_uri = _prefix_to_r2_uri(prefix, "train.lance")
+    if r2_io.r2_directory_exists(lance_uri):
+        local = work_dir / "train.lance"
+        r2_io.download_dir_no_overwrite(lance_uri, local)
+        return local, "lance"
 
     listing = subprocess.run(  # noqa: S603
         ["rclone", "lsf", prefix, "--include", "shard-*.tar"],  # noqa: S607
@@ -164,7 +190,7 @@ def _download_first_train_artifact(prefix: str, work_dir: Path) -> tuple[Path, s
     candidates = sorted(line.strip() for line in listing.stdout.splitlines() if line.strip())
     if not candidates:
         raise FileNotFoundError(
-            f"no finalize artifact under {prefix}: looked for train.h5 and shard-*.tar"
+            f"no finalize artifact under {prefix}: expected train.h5, train.lance, or shard-*.tar"
         )
     leaf = candidates[0]
     local = work_dir / leaf
@@ -176,10 +202,10 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
     """``surge/fake_oracle`` predict_step returns finalized params verbatim.
 
     Downloads the first finalize-written train artifact at
-    ``$FINALIZE_RUN_PREFIX`` (``train.h5`` for the hdf5 row, the lowest-index
-    ``shard-*.tar`` for the wds row), runs the oracle's ``predict_step`` /
-    eval step over the loaded ``param_array``, and pins three invariants the
-    oracle leg of ``tests/test_train.py`` already requires:
+    ``$FINALIZE_RUN_PREFIX`` (``train.h5`` for hdf5, ``train.lance`` for lance,
+    the lowest-index ``shard-*.tar`` for wds), runs the oracle's
+    ``predict_step`` / eval step over the loaded ``param_array``, and pins three
+    invariants the oracle leg of ``tests/test_train.py`` already requires:
 
       1. ``predict_step`` returns ``batch["params"]`` bit-identically.
       2. ``per_param_mse`` is exactly zero (no float drift).
@@ -196,14 +222,15 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
     prefix = _finalize_prefix_from_env()
     assert prefix is not None
 
+    loaders = {
+        "hdf5": _load_param_array_from_hdf5,
+        "lance": _load_param_array_from_lance,
+        "wds": _load_param_array_from_wds_tar,
+    }
     with tempfile.TemporaryDirectory() as raw_work_dir:
         work_dir = Path(raw_work_dir)
         local_artifact, fmt = _download_first_train_artifact(prefix, work_dir)
-
-        if fmt == "hdf5":
-            param_array = _load_param_array_from_hdf5(local_artifact)
-        else:
-            param_array = _load_param_array_from_wds_tar(local_artifact)
+        param_array = loaders[fmt](local_artifact)
 
     assert param_array.size > 0, (
         f"finalized {fmt} artifact at {prefix} carries no param_array rows"

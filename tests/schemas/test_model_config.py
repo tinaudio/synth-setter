@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hydra.utils import get_class
 from pydantic import ValidationError
 
 from synth_setter.resources import configs_dir
@@ -48,6 +49,28 @@ class TestModelConfigAcceptsEveryConfig:
         model_subtree = compose_subtree("model", model_name)
         parsed = ModelConfig.model_validate(model_subtree)
         assert parsed.target_
+
+
+class TestSurgeModelTargetsResolve:
+    """Each renamed ``VST*`` ``_target_`` string must resolve to a real class."""
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ["surge_ffn", "surge_flow", "surge_flowmlp", "surge_fake_oracle"],
+    )
+    def test_target_resolves_to_class(self, model_name: str) -> None:
+        """``hydra.utils.get_class`` resolves the composed ``_target_`` string.
+
+        Guards the hand-edited class paths in the renamed model YAMLs — a typo
+        passes schema validation (``extra="allow"``) and fails only at launch.
+        ``surge_flowvae`` is excluded: its module needs the undeclared optional
+        ``nflows`` dependency, so its alias is pinned at the AST level in
+        ``tests/models/test_vst_module_aliases.py`` instead.
+
+        :param model_name: Parametrized YAML stem under ``configs/model/``.
+        """
+        target = compose_subtree("model", model_name)["_target_"]
+        assert isinstance(get_class(target), type)
 
 
 class TestModelConfigCommonFields:

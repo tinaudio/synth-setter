@@ -1,0 +1,586 @@
+"""Behavior tests for the preview-column adder (``audio_mp3`` + ``audio_uuid``).
+
+Encoded bytes are validated structurally (MP3 frame sync, decoded sample rate / channel count)
+rather than byte-for-byte, since LAME output is not promised to be bit-reproducible across
+pedalboard builds. The decode side uses pedalboard's reader — never the encoder under test — so a
+sample-rate or channel bug can't corrupt both sides identically and pass.
+"""
+
+from __future__ import annotations
+
+import io
+import uuid
+from pathlib import Path
+
+import lance
+import numpy as np
+import pyarrow as pa
+import pytest
+from click.testing import CliRunner
+from pedalboard.io import AudioFile
+
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+)
+from synth_setter.pipeline.data.add_preview_columns import (
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    _encode_preview_columns,
+    add_preview_columns,
+    audio_uuid,
+    encode_audio_to_mp3,
+    main,
+)
+from synth_setter.pipeline.data.lance_shard import (
+    lance_schema,
+    record_batch_from_arrays,
+    write_lance_dataset,
+)
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+
+_SAMPLE_RATE = 8000
+_CHANNELS = 2
+_DURATION_SECONDS = 0.1
+_TIME_SAMPLES = int(_SAMPLE_RATE * _DURATION_SECONDS)
+_ROWS = 3
+
+# A full second at CD rate: enough frames that the 320-vs-128 kbps size
+# difference shows. Sub-second clips are dominated by MP3 header/reservoir overhead.
+_BITRATE_PROBE_RATE = 44100
+
+# Concert-pitch A; an audible test tone, value not otherwise significant.
+_A4_HZ = 440.0
+
+# Source columns the backfill must preserve untouched.
+_SOURCE_FIELDS = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+
+# Inner shapes (without the leading row axis) are arbitrary for mel/param here —
+# only ``audio`` is read by the column adder.
+_FIELD_SHAPES: dict[str, tuple[int, ...]] = {
+    AUDIO_FIELD: (_ROWS, _CHANNELS, _TIME_SAMPLES),
+    MEL_SPEC_FIELD: (_ROWS, 2, 3, 4),
+    PARAM_ARRAY_FIELD: (_ROWS, 7),
+}
+
+
+def _sine_rows(sample_rate: int = _SAMPLE_RATE) -> np.ndarray:
+    """Build ``(_ROWS, _CHANNELS, T)`` float16 sine audio, one pitch per row.
+
+    :param sample_rate: Rate used to space the time axis so the tone is real.
+    :returns: Float16 audio with a distinct frequency per row.
+    """
+    t = np.arange(_TIME_SAMPLES) / sample_rate
+    rows = [np.sin(2 * np.pi * freq * t) for freq in (220.0, 440.0, 660.0)]
+    mono = np.stack(rows)[:, None, :]
+    # broadcast_to returns a read-only view; the trailing .astype materializes a
+    # fresh writable float16 copy.
+    return np.broadcast_to(mono, (_ROWS, _CHANNELS, _TIME_SAMPLES)).astype(np.float16)
+
+
+def _write_smoke_dataset(path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None:
+    """Write a smoke Lance dataset: real sine ``audio`` plus zeroed mel/param tensors.
+
+    :param path: Filesystem location the ``.lance`` dataset is written to.
+    :param sample_rate: Sample rate embedded in the shard metadata.
+    """
+    metadata = ShardMetadata(
+        velocity=100,
+        # Derive from the fixed frame count so duration stays consistent with the
+        # written tensor at any sample_rate (_TIME_SAMPLES is sized for 8 kHz).
+        signal_duration_seconds=_TIME_SAMPLES / sample_rate,
+        sample_rate=sample_rate,
+        channels=_CHANNELS,
+        min_loudness=-55.0,
+    )
+    schema = lance_schema(_FIELD_SHAPES, metadata)
+    arrays = {
+        AUDIO_FIELD: _sine_rows(sample_rate),
+        MEL_SPEC_FIELD: np.zeros(_FIELD_SHAPES[MEL_SPEC_FIELD], dtype=np.float32),
+        PARAM_ARRAY_FIELD: np.zeros(_FIELD_SHAPES[PARAM_ARRAY_FIELD], dtype=np.float32),
+    }
+    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema)])
+
+
+def _decode_mp3(payload: bytes) -> tuple[np.ndarray, int]:
+    """Decode MP3 bytes back to samples via pedalboard's reader.
+
+    :param payload: A complete MP3 bitstream as produced by ``encode_audio_to_mp3``.
+    :returns: ``(samples, sample_rate)`` with ``samples`` shaped ``(channels, frames)``.
+    """
+    with AudioFile(io.BytesIO(payload)) as f:
+        return f.read(f.frames), int(f.samplerate)
+
+
+def _read_mp3_binary_values(uri: Path, indices: list[int]) -> list[bytes]:
+    """Read back ``audio_mp3`` cells as raw MP3 bytes through the normal Arrow path.
+
+    :param uri: The ``.lance`` dataset directory.
+    :param indices: Row indices to fetch, in the order returned.
+    :returns: Per-row MP3 byte strings, in ``indices`` order.
+    """
+    dataset = lance.dataset(str(uri))
+    table = dataset.take(indices, columns=[AUDIO_MP3_FIELD])
+    return table.column(AUDIO_MP3_FIELD).to_pylist()
+
+
+def test_encode_audio_to_mp3_contains_frame_sync() -> None:
+    """A valid MP3 stream carries the 11-bit frame-sync word (0xFF 0xEy/0xFy).
+
+    Scans the head rather than asserting offset 0: an MP3 may legally lead with
+    an ID3 tag or padding before the first frame.
+    """
+    payload = encode_audio_to_mp3(_sine_rows()[0], _SAMPLE_RATE, 128)
+
+    assert len(payload) > 0
+    head = payload[:1024]
+    assert any(head[i] == 0xFF and head[i + 1] & 0xE0 == 0xE0 for i in range(len(head) - 1))
+
+
+def test_encode_audio_to_mp3_higher_bitrate_yields_larger_payload() -> None:
+    """320 kbps encodes the same signal to more bytes than 128 kbps.
+
+    Uses a full second of 44.1 kHz audio: a sub-second low-rate clip is dominated by header/padding
+    frames that mask the bitrate difference.
+    """
+    t = np.arange(_BITRATE_PROBE_RATE) / _BITRATE_PROBE_RATE
+    row = np.sin(2 * np.pi * _A4_HZ * t).astype(np.float16)[None, :]
+
+    assert len(encode_audio_to_mp3(row, _BITRATE_PROBE_RATE, 320)) > len(
+        encode_audio_to_mp3(row, _BITRATE_PROBE_RATE, 128)
+    )
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_encode_audio_to_mp3_accepts_any_float_dtype(dtype: type[np.floating]) -> None:
+    """The documented "any float dtype" contract holds for float16/32/64 input.
+
+    :param dtype: Float dtype the audio row is built with.
+    """
+    t = np.arange(_TIME_SAMPLES) / _SAMPLE_RATE
+    row = np.sin(2 * np.pi * _A4_HZ * t).astype(dtype)[None, :]
+
+    payload = encode_audio_to_mp3(row, _SAMPLE_RATE, 128)
+
+    # Scan for the frame-sync word, not byte 0: an MP3 may legally lead with an
+    # ID3 tag, so a dtype-coercion bug emitting only a stray 0xFF would not pass.
+    head = payload[:1024]
+    assert any(head[i] == 0xFF and head[i + 1] & 0xE0 == 0xE0 for i in range(len(head) - 1))
+
+
+def test_encode_audio_to_mp3_mono_input_decodes_to_one_channel() -> None:
+    """A mono ``(1, T)`` row (mono-only plugins) encodes and decodes to one channel."""
+    t = np.arange(_TIME_SAMPLES) / _SAMPLE_RATE
+    mono = np.sin(2 * np.pi * _A4_HZ * t).astype(np.float16)[None, :]
+
+    samples, _ = _decode_mp3(encode_audio_to_mp3(mono, _SAMPLE_RATE, 128))
+
+    assert samples.shape[0] == 1
+
+
+def test_encode_audio_to_mp3_silent_input_yields_valid_stream() -> None:
+    """All-zero audio (a silent patch) still encodes to a finite-decoding MP3 stream."""
+    silence = np.zeros((_CHANNELS, _TIME_SAMPLES), dtype=np.float16)
+
+    samples, _ = _decode_mp3(encode_audio_to_mp3(silence, _SAMPLE_RATE, 128))
+
+    assert np.isfinite(samples).all()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(_TIME_SAMPLES,), (0, _TIME_SAMPLES), (_CHANNELS, 0)],
+    ids=["1d-no-channel-axis", "empty-channel-axis", "empty-time-axis"],
+)
+def test_encode_audio_to_mp3_malformed_shape_raises(shape: tuple[int, ...]) -> None:
+    """Non-2-D or empty-axis audio is rejected before reaching the encoder.
+
+    :param shape: A malformed audio shape the guard must reject.
+    """
+    with pytest.raises(ValueError, match="2-D"):
+        encode_audio_to_mp3(np.zeros(shape, dtype=np.float16), _SAMPLE_RATE, 128)
+
+
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 44100])
+def test_encode_audio_to_mp3_preserves_sample_rate_and_channels(sample_rate: int) -> None:
+    """The decoded stream reports the sample rate and channel count it was encoded with.
+
+    :param sample_rate: Rate the row is encoded at and expected to decode back to.
+    """
+    t = np.arange(_TIME_SAMPLES) / sample_rate
+    row = np.broadcast_to(
+        np.sin(2 * np.pi * _A4_HZ * t)[None, :], (_CHANNELS, _TIME_SAMPLES)
+    ).astype(np.float16)
+
+    samples, decoded_rate = _decode_mp3(encode_audio_to_mp3(row, sample_rate, 128))
+
+    assert decoded_rate == sample_rate
+    assert samples.shape[0] == _CHANNELS
+
+
+def test_audio_uuid_is_deterministic_for_equal_bytes() -> None:
+    """Identical audio bytes hash to the same uuid, even across distinct array objects.
+
+    The contract is content-addressing: re-running the tool on the same dataset
+    must reproduce the id, so equal bytes (not array identity) drive it.
+    """
+    row = _sine_rows()[0]
+    twin = np.array(row, copy=True)
+
+    assert audio_uuid(row) == audio_uuid(twin)
+
+
+def test_audio_uuid_ignores_array_memory_layout() -> None:
+    """A non-contiguous view hashes identically to its C-contiguous copy.
+
+    ``tobytes`` canonicalizes to C order, so a transposed/sliced view that holds
+    the same logical samples must not change the id.
+    """
+    row = _sine_rows()[0]
+    non_contiguous = np.asfortranarray(row)
+
+    assert not non_contiguous.flags["C_CONTIGUOUS"]
+    assert audio_uuid(non_contiguous) == audio_uuid(np.ascontiguousarray(row))
+
+
+def test_audio_uuid_differs_for_different_audio() -> None:
+    """Two different waveforms map to different uuids (no trivial constant)."""
+    rows = _sine_rows()
+
+    assert audio_uuid(rows[0]) != audio_uuid(rows[1])
+
+
+def test_audio_uuid_returns_canonical_version5_uuid() -> None:
+    """The returned string parses as a version-5 UUID under the project namespace."""
+    parsed = uuid.UUID(audio_uuid(_sine_rows()[0]))
+
+    assert parsed.version == 5
+
+
+def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
+    """A fixed input hashes to a hardcoded uuid, pinning the namespace + hex-input format.
+
+    Computed independently of production code, so a change to the namespace, the
+    ``tobytes().hex()`` input, or the uuid version would break this — the
+    on-disk ids are a stable contract that must not drift silently.
+    """
+    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
+
+
+def test__encode_preview_columns_non_tensor_audio_column_raises() -> None:
+    """A non-tensor ``audio`` column is rejected before any row is encoded.
+
+    The guard is unreachable through a real Lance round-trip (the projection
+    always yields a ``FixedShapeTensorArray``), so a direct call pins the
+    contract and the type named in its message.
+    """
+    batch = pa.record_batch([pa.array([[1.0, 2.0], [3.0, 4.0]])], names=[AUDIO_FIELD])
+
+    with pytest.raises(ValueError, match="fixed-shape tensor"):
+        _encode_preview_columns(batch, _SAMPLE_RATE, 128)
+
+
+def test__encode_preview_columns_row_failure_names_offending_row_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row that fails to encode raises a ValueError naming that row's index.
+
+    The wrapper is the only place the offending row index is surfaced, and a valid shard never
+    trips it, so the failure is injected into the per-row encoder. The assertion is on the real
+    wrapped message, not the stub.
+
+    :param monkeypatch: Pytest fixture replacing the per-row MP3 encoder so the second row raises
+        mid-batch.
+    """
+    batch = pa.record_batch(
+        [pa.FixedShapeTensorArray.from_numpy_ndarray(_sine_rows())], names=[AUDIO_FIELD]
+    )
+    outcomes = iter([b"ok", RuntimeError("boom"), b"ok"])
+
+    def _encode_with_second_row_failing(*_args: object) -> bytes:
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_preview_columns.encode_audio_to_mp3",
+        _encode_with_second_row_failing,
+    )
+
+    with pytest.raises(ValueError, match="row 1"):
+        _encode_preview_columns(batch, _SAMPLE_RATE, 128)
+
+
+def test_add_preview_columns_adds_binary_column_for_every_row(tmp_path: Path) -> None:
+    """Every row gains decodable ``audio_mp3`` bytes; source columns and row count unchanged.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    before = {f: lance.dataset(str(uri)).schema.field(f).type for f in _SOURCE_FIELDS}
+
+    add_preview_columns(uri)
+
+    ds = lance.dataset(str(uri))
+    for field in _SOURCE_FIELDS:
+        assert ds.schema.field(field).type == before[field]
+    assert ds.schema.field(AUDIO_MP3_FIELD).type == pa.binary()
+    assert ds.count_rows() == _ROWS
+    payloads = _read_mp3_binary_values(uri, list(range(_ROWS)))
+    assert all(len(p) > 0 for p in payloads)
+    # A decodable cell proves the batch_udf wrote a real MP3, not arbitrary bytes.
+    samples, _ = _decode_mp3(payloads[0])
+    assert samples.shape[0] == _CHANNELS
+    assert samples.shape[1] > 0
+
+
+def test_add_preview_columns_adds_uuid_column_matching_per_row_audio(tmp_path: Path) -> None:
+    """Each row gains a string ``audio_uuid`` equal to ``audio_uuid`` of its own audio tensor.
+
+    Ties the persisted column to the pure helper so a regression in the batch path (wrong row
+    order, wrong source bytes) can't pass.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    audio_rows = _sine_rows()
+
+    add_preview_columns(uri)
+
+    ds = lance.dataset(str(uri))
+    assert ds.schema.field(AUDIO_UUID_FIELD).type == pa.string()
+    stored = ds.to_table(columns=[AUDIO_UUID_FIELD]).column(AUDIO_UUID_FIELD).to_pylist()
+    assert stored == [audio_uuid(row) for row in audio_rows]
+    # Distinct pitches => distinct fingerprints; no row collapses onto another.
+    assert len(set(stored)) == _ROWS
+
+
+def test_add_preview_columns_tags_field_with_audio_mime_type(tmp_path: Path) -> None:
+    """The added column carries ``mime_type: audio/mpeg`` so Lance viewers auto-play it.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+
+    add_preview_columns(uri)
+
+    field = lance.dataset(str(uri)).schema.field(AUDIO_MP3_FIELD)
+    assert field.metadata == {b"mime_type": b"audio/mpeg"}
+
+
+def test_add_preview_columns_uses_sample_rate_from_metadata(tmp_path: Path) -> None:
+    """The encoded column honors the shard metadata's sample rate, not a hardcoded value.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri, sample_rate=16000)
+
+    add_preview_columns(uri)
+
+    first = _read_mp3_binary_values(uri, [0])[0]
+    _, decoded_rate = _decode_mp3(first)
+    assert decoded_rate == 16000
+
+
+def test_add_preview_columns_existing_column_raises(tmp_path: Path) -> None:
+    """A second add onto a dataset that already has the preview columns fails fast.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    add_preview_columns(uri)
+
+    with pytest.raises(ValueError, match=AUDIO_MP3_FIELD):
+        add_preview_columns(uri)
+
+
+def test_add_preview_columns_partial_existing_column_raises(tmp_path: Path) -> None:
+    """A dataset with only ``audio_uuid`` (a crashed half-add) is still rejected.
+
+    The realistic post-crash state has one preview column present, not both. The
+    guard names the offending column, so the error must mention ``audio_uuid``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    # Seed only the uuid column, mimicking a run that died before audio_mp3.
+    lance.dataset(str(uri)).add_columns({AUDIO_UUID_FIELD: "'seed'"})
+
+    with pytest.raises(ValueError, match=AUDIO_UUID_FIELD):
+        add_preview_columns(uri)
+
+
+def test_add_preview_columns_missing_audio_column_raises(tmp_path: Path) -> None:
+    """A dataset without the source audio column raises a clear error.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    # The audio-column guard precedes the metadata read, so no shard metadata
+    # is needed to reach it.
+    uri = tmp_path / "no-audio.lance"
+    lance.write_dataset(pa.table({"other": [1, 2]}), str(uri), mode="overwrite")
+
+    with pytest.raises(ValueError, match=AUDIO_FIELD):
+        add_preview_columns(uri)
+
+
+def test_main_adds_column_and_reports_success(tmp_path: Path) -> None:
+    """The CLI entrypoint adds both preview columns and echoes a success line naming each.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+
+    result = CliRunner().invoke(main, [str(uri)])
+
+    assert result.exit_code == 0
+    assert AUDIO_MP3_FIELD in result.output
+    assert AUDIO_UUID_FIELD in result.output
+    schema_names = lance.dataset(str(uri)).schema.names
+    assert AUDIO_MP3_FIELD in schema_names
+    assert AUDIO_UUID_FIELD in schema_names
+
+
+def test_main_existing_column_exits_nonzero_with_message(tmp_path: Path) -> None:
+    """A re-run via the CLI surfaces the duplicate-column error as a non-zero exit.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+    add_preview_columns(uri)
+
+    result = CliRunner().invoke(main, [str(uri)])
+
+    assert result.exit_code != 0
+    assert AUDIO_MP3_FIELD in result.output
+
+
+def test_add_preview_columns_missing_shard_metadata_raises(tmp_path: Path) -> None:
+    """An ``audio`` column with no embedded ShardMetadata raises a clear error.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "no-metadata.lance"
+    audio = pa.FixedShapeTensorArray.from_numpy_ndarray(_sine_rows())
+    # Plain schema with no SHARD_METADATA_SCHEMA_KEY, so read_shard_metadata fails.
+    lance.write_dataset(pa.table({AUDIO_FIELD: audio}), str(uri), mode="overwrite")
+
+    with pytest.raises(ValueError, match="metadata"):
+        add_preview_columns(uri)
+
+
+def test_main_rejects_out_of_range_bitrate(tmp_path: Path) -> None:
+    """A non-positive ``--bitrate-kbps`` is rejected at the Click layer, not the encoder.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+
+    result = CliRunner().invoke(main, [str(uri), "--bitrate-kbps", "0"])
+
+    assert result.exit_code != 0
+    assert "bitrate-kbps" in result.output
+
+
+def test_main_bitrate_option_threads_through(tmp_path: Path) -> None:
+    """The ``--bitrate-kbps`` option is accepted and the column is still produced.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    uri = tmp_path / "shard-000000.lance"
+    _write_smoke_dataset(uri)
+
+    result = CliRunner().invoke(main, [str(uri), "--bitrate-kbps", "64"])
+
+    assert result.exit_code == 0
+    assert AUDIO_MP3_FIELD in lance.dataset(str(uri)).schema.names
+
+
+def test_main_rewrites_r2_uri_and_forwards_storage_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``r2://`` URI is rewritten to ``s3://`` and env credentials reach the column adder.
+
+    :param monkeypatch: Pytest fixture stubbing the r2_io helpers and the column adder.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.is_r2_uri", lambda uri: True)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.to_s3_uri", lambda uri: "s3://bucket/key.lance"
+    )
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.r2_storage_options", lambda: {"aws_secret": "x"}
+    )
+
+    def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
+        captured.update(uri=uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
+
+    result = CliRunner().invoke(main, ["r2://bucket/key.lance", "--bitrate-kbps", "192"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "uri": "s3://bucket/key.lance",
+        "bitrate_kbps": 192,
+        "storage_options": {"aws_secret": "x"},
+    }
+
+
+def test_main_credentials_bare_s3_uri_as_r2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare ``s3://`` URI is treated as R2 and credentialed, matching add_embeddings.
+
+    R2 datasets are commonly referenced as ``s3://`` in this repo, so an ``s3://``
+    input must still receive ``r2_storage_options`` rather than relying on ambient
+    AWS env config.
+
+    :param monkeypatch: Pytest fixture stubbing the r2_io helpers and the column adder.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.is_r2_uri", lambda uri: False)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.r2_storage_options", lambda: {"aws_secret": "x"}
+    )
+
+    def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
+        captured.update(uri=uri, bitrate_kbps=bitrate_kbps, storage_options=storage_options)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
+
+    result = CliRunner().invoke(main, ["s3://bucket/key.lance"])
+
+    assert result.exit_code == 0
+    assert captured["uri"] == "s3://bucket/key.lance"
+    assert captured["storage_options"] == {"aws_secret": "x"}
+
+
+def test_main_local_path_passes_no_storage_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local path is opened without storage options.
+
+    :param monkeypatch: Pytest fixture stubbing the r2_io helpers and the column adder.
+    """
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.is_r2_uri", lambda uri: False)
+
+    def _spy(uri: str, *, bitrate_kbps: int, storage_options: dict[str, str] | None) -> None:
+        captured.update(uri=uri, storage_options=storage_options)
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_preview_columns.add_preview_columns", _spy)
+
+    result = CliRunner().invoke(main, ["/local/path/key.lance"])
+
+    assert result.exit_code == 0
+    assert captured == {"uri": "/local/path/key.lance", "storage_options": None}

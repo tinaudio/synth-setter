@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -7,12 +7,13 @@ import hdf5plugin
 import librosa
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_N_MELS,
@@ -25,11 +26,37 @@ from synth_setter.data.vst.shapes import (
     mel_n_fft,
     param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
 from synth_setter.pipeline.spec_io import join_uri, localized_uri
+
+# Loudness-gate retry ceiling when a caller does not override it (#884).
+DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
+
+
+@dataclass(frozen=True)
+class SampleSeed:
+    """Per-sample seeding inputs for ``generate_sample`` (#884).
+
+    .. attribute :: master_seed
+
+        Per-shard master seed (``ShardSpec.seed``), folded into every draw.
+
+    .. attribute :: sample_idx
+
+        Absolute row index, folded into the per-sample seed.
+
+    .. attribute :: max_attempts
+
+        Loudness-gate retry budget before the row fails loudly.
+    """
+
+    master_seed: int
+    sample_idx: int = 0
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
 
 
 @dataclass
@@ -44,9 +71,11 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
-    param_array: np.ndarray = None
+    param_array: np.ndarray = field(init=False)
+    # Loudness-gate attempt the accepted draw came from (#884).
+    attempt: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -66,21 +95,17 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
 
 
 def generate_sample(
-    plugin_path: str,
+    renderer: AudioRenderer,
     velocity: int,
-    signal_duration_seconds: float,
-    sample_rate: float,
-    channels: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: NoteParams | None = None,
     *,
-    plugin: VST3Plugin | None = None,
     warmup: bool = False,
+    seed: SampleSeed | None = None,
 ) -> VSTDataSample:
-    """Render a single VST sample.
+    """Render a single VST sample, retrying silent draws up to the attempt budget.
 
     When ``fixed_synth_params`` and/or ``fixed_note_params`` are supplied, they take
     precedence over the values drawn from ``param_spec.sample()`` for deterministic
@@ -88,43 +113,59 @@ def generate_sample(
     ``fixed_note_params``), the function raises ``ValueError`` on loudness fail
     rather than retrying — the synth patch is the dominant determinant of loudness,
     so re-sampling note params alone almost never lifts a silent patch above
-    ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
-    is supplied, the synth is re-sampled each retry and the loop remains meaningful.
+    ``min_loudness``. When only ``fixed_note_params`` (or nothing) is supplied, the
+    synth is re-sampled per attempt and the loop is meaningful.
 
-    :param plugin: Forwarded to ``render_params``; when set, the renderer
-        skips ``load_plugin``/``load_preset``.
-    :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
+    With ``seed`` set, sampling draws from
+    ``rng_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
+    reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
+    from a fresh non-deterministic generator and uses the default attempt budget.
+
+    :param renderer: Audio host that renders every sample.
+    :param velocity: MIDI velocity applied to each rendered note.
+    :param min_loudness: Minimum integrated loudness required to accept a render.
+    :param param_spec: Parameter specification used to sample synth and note values.
+    :param fixed_synth_params: Optional synth values that replace sampled values.
+    :param fixed_note_params: Optional note values that replace sampled values.
+    :param warmup: Forwarded to the renderer; runs the backend's optional editor
         warm-up on the plugin used for this render (newly loaded or cached).
         Applied at most once per ``generate_sample`` call — the loudness-gate
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
+    :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :returns: The accepted sample, with ``attempt`` set to the winning retry.
+    :raises ValueError: If the attempt budget is nonpositive, or a
+        ``fixed_synth_params`` render fell below ``min_loudness``.
+    :raises RuntimeError: The sampling path stayed silent for the whole attempt budget.
     """
-    while True:
+    max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    for attempt in range(max_attempts):
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
-            sampled_synth, sampled_note = param_spec.sample()
+            rng = (
+                rng_for_sample(seed.master_seed, seed.sample_idx, attempt)
+                if seed is not None
+                else None
+            )
+            sampled_synth, sampled_note = param_spec.sample(rng)
             synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
         else:
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
-        output = render_params(
-            plugin_path,
+        output = renderer.render(
             synth_params,
             note_params["pitch"],
             velocity,
             note_params["note_start_and_end"],
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            preset_path=preset_path,
-            plugin=plugin,
             warmup=warmup,
         )
         warmup = False
 
-        meter = Meter(sample_rate)
+        meter = Meter(renderer.sample_rate)
         loudness = meter.integrated_loudness(output.T)
         logger.debug(f"loudness: {loudness}")
         if loudness < min_loudness:
@@ -141,19 +182,29 @@ def generate_sample(
             logger.debug("loudness too low, skipping")
             continue
 
-        break
+        logger.debug("making spectrogram")
+        spectrogram = make_spectrogram(output, renderer.sample_rate)
+        return VSTDataSample(
+            synth_params=synth_params,
+            note_params=note_params,
+            audio=output.T,
+            mel_spec=spectrogram,
+            sample_rate=renderer.sample_rate,
+            channels=renderer.channels,
+            param_spec=param_spec,
+            attempt=attempt,
+        )
 
-    logger.debug("making spectrogram")
-    spectrogram = make_spectrogram(output, sample_rate)
-
-    return VSTDataSample(
-        synth_params=synth_params,
-        note_params=note_params,
-        audio=output.T,
-        mel_spec=spectrogram,
-        sample_rate=sample_rate,
-        channels=channels,
-        param_spec=param_spec,
+    failed_idx = str(seed.sample_idx) if seed is not None else "<unseeded>"
+    seed_hint = (
+        "Production callers should pass SampleSeed/base_seed for reproducibility; "
+        if seed is None
+        else ""
+    )
+    raise RuntimeError(
+        f"sample {failed_idx} stayed below min_loudness {min_loudness:.2f} dB "
+        f"after {max_attempts} attempts. {seed_hint}Raise the per-sample attempt budget "
+        f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 
 
@@ -316,9 +367,9 @@ def main() -> None:
     """Entry point — parse CLI args into a ``RenderConfig`` and render one shard.
 
     The writer is dispatched on ``data_file``'s suffix via
-    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
-    suffix raises ``SystemExit`` rather than silently producing a half-written
-    file in the wrong format.
+    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds,
+    ``.lance`` → Lance). An unknown suffix raises ``SystemExit`` rather than
+    silently producing a half-written file in the wrong format.
 
     When ``--copy_dataset_root_uri`` is set, the params of the same-named source
     shard under that root URI are decoded into fixed synth/note lists and
@@ -326,7 +377,7 @@ def main() -> None:
     path, ``file://`` URI, or ``r2://`` URI (an ``r2://`` shard is downloaded to
     a tempfile for the decode). The source is read as an HDF5 ``param_array``, so
     copy is supported for hdf5 output only (a ``.tar`` output has no same-named
-    HDF5 source); a wds output with ``--copy_dataset_root_uri`` raises
+    HDF5 source); a non-hdf5 output with ``--copy_dataset_root_uri`` raises
     ``SystemExit``.
     """
     # Import lazily so that the writer module's webdataset dep only loads when
@@ -334,10 +385,15 @@ def main() -> None:
     # module to reach VSTDataSample / generate_sample. (h5py is already a
     # module-level import here, so it is not what the lazy load avoids.)
     from synth_setter.data.vst.param_spec_registry import param_specs
-    from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
+    from synth_setter.data.vst.writers import (
+        make_hdf5_dataset,
+        make_lance_dataset,
+        make_wds_dataset,
+    )
 
     args = CliApp.run(_GenerateCliArgs)
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
+    ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
     fmt = OutputFormat.from_extension(suffix)
@@ -370,8 +426,15 @@ def main() -> None:
             fixed_synth_params_list=fixed_synth_params_list,
             fixed_note_params_list=fixed_note_params_list,
         )
-    else:  # fmt is OutputFormat.WDS, validated above
+    elif fmt is OutputFormat.WDS:
         make_wds_dataset(
+            args.data_file,
+            render_cfg,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+        )
+    else:
+        make_lance_dataset(
             args.data_file,
             render_cfg,
             fixed_synth_params_list=fixed_synth_params_list,

@@ -28,7 +28,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,6 +122,7 @@ def ci_r2_prefix() -> Iterator[str]:
     [
         "generate_dataset/smoke-shard",
         "generate_dataset/smoke-shard-wds",
+        "generate_dataset/smoke-shard-lance",
     ],
 )
 def test_launcher_roundtrip_with_stubbed_renderer(
@@ -137,8 +138,8 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     upload, and finally the existing ``pipeline.ci`` validators downloading
     everything back from R2 and confirming structural correctness.
 
-    :param experiment: Hydra experiment id (parametrized to cover both
-        ``hdf5`` and ``wds`` formats).
+    :param experiment: Hydra experiment id (parametrized to cover the ``hdf5``,
+        ``wds``, and ``lance`` formats).
     :param ci_r2_prefix: Unique R2 prefix per CI run; finalizer purges it.
     :param monkeypatch: Pytest fixture used to set env vars and patch
         ``sys.argv`` for the ``main()`` invocation.
@@ -160,7 +161,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     #   - created_at → fixed timestamp for determinism (``+`` because the key
     #     is not in ``configs/dataset.yaml``; matches how the production
     #     launcher pins it on the worker side in ``_build_worker_cmd``).
-    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=UTC).isoformat()
     argv = [
         "synth-setter-generate-dataset",
         f"experiment={experiment}",
@@ -187,7 +188,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
 
     side_effect = stub_renderer(expected_spec)
     with patch(
-        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        "synth_setter.cli.generate_dataset._check_call_streamed",
         side_effect=side_effect,
     ):
         gd.main()
@@ -221,7 +222,7 @@ def test_launcher_roundtrip_with_stubbed_renderer(
         side_effect(args)
 
     with patch(
-        "synth_setter.cli.generate_dataset.subprocess.check_call",
+        "synth_setter.cli.generate_dataset._check_call_streamed",
         side_effect=_no_renderer_side_effect,
     ):
         gd.main()
@@ -239,7 +240,7 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     Complements ``test_launcher_roundtrip_with_stubbed_renderer`` (which
     runs ``gd.main()`` in-process) by exercising the real CLI binary
     across a process boundary, which an in-process ``patch`` of
-    ``subprocess.check_call`` cannot reach. ``hydra.run.dir`` is pinned to
+    ``_check_call_streamed`` cannot reach. ``hydra.run.dir`` is pinned to
     a known location under ``tmp_path`` so the spec-mirror file path is
     deterministic; the negative assertion catches a silent re-introduction
     of the operator-workspace anchor. The render subprocess crashes here
@@ -255,7 +256,7 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
 
     import synth_setter.cli.generate_dataset as gd
 
-    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=UTC).isoformat()
     hydra_run_dir = tmp_path / "run"
     overrides = [
         "experiment=generate_dataset/smoke-shard",

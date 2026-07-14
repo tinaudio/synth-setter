@@ -40,6 +40,8 @@ docs:
       - pattern: "Makefile"
         covers: "docker-build-* targets (dev-snapshot, devcontainer-tools), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
         scope: "docker"
+      - pattern: "src/synth_setter/scripts/load_vst3_check.py"
+        covers: "Per-synth VST3 load check run at image build and as the in-image smoke test"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
@@ -50,7 +52,7 @@ docs:
     description: W&B logging, auth, metrics, and artifact reference
     sources:
       - pattern: "src/synth_setter/configs/logger/wandb.yaml"
-        covers: "Entity, project, log_model setting, offline mode"
+        covers: "Entity, project, log_model setting, offline mode, console capture (`wrap` + `console_multipart`)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
       - pattern: "src/synth_setter/cli/train.py"
@@ -59,6 +61,8 @@ docs:
         covers: "Checkpoint resolution from W&B, evaluation logging"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append per-split-namespaced audio rows (test bare audio/*; train/val under <split>/audio/* via +evaluation.metric_prefix)"
+      - pattern: "src/synth_setter/pipeline/subprocess_stream.py"
+        covers: "`check_call_streamed` — exit-keyed streamed subprocess runner that tees generate_dataset's renderer / shard-upload rclone / inline-eval child output through the `console=wrap`-captured `sys.stderr` (other rclone call sites bypass capture)"
       - pattern: "src/synth_setter/configs/dataset.yaml"
         covers: "Default `logger: wandb` for dataset generation; entity/project sourced from logger/wandb.yaml"
       - pattern: "sweeps/**"
@@ -67,6 +71,21 @@ docs:
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
         covers: "W&B callback integrations, visualization uploads"
+
+  # ── W&B artifact & provenance reference ─────────────────────────
+  - doc: docs/reference/artifact-provenance-reference.md
+    description: W&B artifact patterns, lineage DAG, and ${wandb:…} resolver recipe
+    sources:
+      - pattern: "src/synth_setter/cli/finalize_dataset.py"
+        covers: "build_dataset_artifact / _log_dataset_artifact: data-{id} artifact, s3:// references, metadata (shard_count, n_samples, git_sha)"
+      - pattern: "src/synth_setter/cli/train.py"
+        covers: "build_model_artifact / _log_model_artifact: model-{config_id} artifact, opt-in upload_checkpoints_uri reference; _consumed_artifact_refs lineage edges"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "build_eval_results_artifact / _log_eval_results_artifact: eval-{id} artifact, output-dir reference, summary-metric metadata"
+      - pattern: "src/synth_setter/utils/logging_utils.py"
+        covers: "use_input_artifacts lineage edges; pin_wandb_run_id; log_wandb_provenance"
+      - pattern: "src/synth_setter/utils/utils.py"
+        covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
 
   # ── Data pipeline design doc ────────────────────────────────────
   - doc: docs/design/data-pipeline.md
@@ -81,7 +100,7 @@ docs:
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
         covers: "Finalize @hydra.main entry config; required `dataset_root_uri` (run prefix) loads the persisted DatasetSpec from `input_spec.json` under it (file://, r2://, or bare path); overrides `hydra.run.dir` (task_name/run_name absent here); composes `logger: wandb` for best-effort dataset-artifact logging"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
-        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches on `spec.output_format` (wds → `finalize_wds`, hdf5 → `finalize_hdf5`), warns (never aborts) on a non-canonical R2 prefix, writes the `dataset.complete` marker last for idempotency, then logs the canonical `data-{config_id}` dataset W&B artifact with s3:// R2 references"
+        covers: "Finalize entrypoint: loads the frozen DatasetSpec, dispatches by `spec.output_format` across hdf5/wds/lance, writes `dataset.complete` last, and logs the canonical dataset W&B artifact."
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
@@ -91,23 +110,59 @@ docs:
       - pattern: "src/synth_setter/pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation, and spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
       - pattern: "src/synth_setter/pipeline/r2_io.py"
-        covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
+        covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe, directory-existence probe, and the Lance object-store `storage_options` builder; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
         covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `load_spec_from_root`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, same value `generate()` uses for shard scratch) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `load_spec_from_root` joins `INPUT_SPEC_FILENAME` onto a run-prefix URI and delegates to `load_spec_from_uri`; it is the reader the finalize entrypoint (`cli/finalize_dataset.py`) uses. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); surge_simple.yaml inherits from it"
+        covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); the other files in `configs/render/` inherit from it and pin a param spec + preset"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename, rclone remote name, and canonical `r2://` URI scheme constants"
       - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
         covers: "`R2Location` nested R2-storage model (bucket + prefix_root + prefix) plus `uri()` / `rclone_prefix()` / `shard_uri()` helpers — the single source of R2 URI construction"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec (carries a nested `R2Location` via the `r2` field), RenderConfig, ShardSpec; `OutputFormat` str-enum carrying the format↔suffix dispatch via its `.extension` property and `.from_extension()` reverse lookup (DatasetSpec is built from a Hydra-composed cfg by the `DatasetSpec.from_hydra_cfg` classmethod, which masks the cfg to `model_fields` before `resolve=True`; `cli/generate_dataset.spec_from_cfg` is a thin wrapper over it; the suffix dispatch is consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, resolves it via OutputFormat.from_extension, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
+        covers: "DatasetSpec, RenderConfig, ShardSpec, and `OutputFormat` suffix dispatch (`.extension` / `.from_extension()`) plus `.is_directory` (directory-vs-file shard handling), consumed by the renderer CLI for hdf5/wds/lance writer selection."
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
-        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json and into HDF5 shards as audio.attrs; mirrored across both formats by make_hdf5_dataset / make_wds_dataset in writers.py."
+        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json, into HDF5 shards as audio.attrs, and into Lance schema metadata; mirrored across shard formats by make_hdf5_dataset / make_wds_dataset / make_lance_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
-        covers: "make_hdf5_dataset + make_wds_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
+        covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by writers + (planned) shard validator — DATASET_FIELD_NAMES, mel-front-end constants, audio_dataset_shape / mel_dataset_shape / param_array_dataset_shape."
+        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+      - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
+        covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
+      - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
+        covers: "`synth-setter-add-embeddings` CLI — appends a `clap` (LAION-CLAP) `FixedSizeList<float32,512>` vector column (with an optional IVF_PQ index for `nearest=` search) and an `m2l` (music2latent) fixed-shape-tensor column to a finalized Lance dataset via `lance.batch_udf`, with injected/lazy-loaded encoders and row-count + dim + finiteness validation (post-finalize augmenter)."
+      - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
+        covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass that adds an `audio_mp3` Arrow binary preview column and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes (neither a training input)."
+      - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
+        covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
+
+  # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
+  - doc: docs/design/legacy/hdf5-wds-formats.md
+    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/reshard.py"
+        covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"
+
+  # ── Deterministic data-generation seeding design ─────────────────
+  - doc: docs/design/deterministic-seeding.md
+    description: Canonical data-generation seed flow, guarantees, current status, and tracked follow-up work
+    sources:
+      - pattern: "src/synth_setter/data/vst/seeding.py"
+        covers: "seed_for_sample / rng_for_sample deterministic row-seed derivation"
+      - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
+        covers: "SampleSeed, attempt-budget handling, generate_sample retry semantics, and accepted-attempt reporting"
+      - pattern: "src/synth_setter/data/vst/param_spec.py"
+        covers: "Explicit numpy Generator parameter sampling used by seeded dataset rows"
+      - pattern: "src/synth_setter/data/vst/writers.py"
+        covers: "Writer loop passing SampleSeed per row and projecting seed provenance into shard metadata"
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "DatasetSpec base_seed, ShardSpec seed derivation, attempts_per_sample, and reserved train_val_test_seeds"
+      - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
+        covers: "ShardMetadata seed provenance fields and legacy sidecar defaults"
+      - pattern: "src/synth_setter/pipeline/ci/validate_shard.py"
+        covers: "HDF5, WDS, and Lance seed-provenance validation"
+      - pattern: "tests/data/vst/test_*seeding*.py"
+        covers: "Seed derivation, generate_sample retry semantics, writer repeatability, and metadata regression tests"
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
@@ -116,7 +171,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`)."
       - pattern: "src/synth_setter/configs/compute/runpod-template.yaml"
-        covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
+        covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (currently projected rclone env for the worker backend), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
       - pattern: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then invokes `synth-setter-generate-dataset-from-hydra` against the synced checkout."
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
@@ -132,7 +187,7 @@ docs:
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
-        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
+        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies canonical storage settings project into the worker backend env."
       - pattern: "src/synth_setter/configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: "src/synth_setter/configs/compute/local-template.yaml"
@@ -151,7 +206,7 @@ docs:
         covers: "Run ID format, shard ID format, prefix construction rules"
       - pattern: "src/synth_setter/pipeline/data/r2_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
-      - pattern: "src/synth_setter/configs/dataset/*.yaml"
+      - pattern: "src/synth_setter/configs/r2/*.yaml"
         covers: "`r2` group (`bucket` + `prefix_root`) for the nested `R2Location` field on `DatasetSpec`"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
@@ -160,6 +215,24 @@ docs:
         covers: "`input_spec.json` writers — `write_spec_locally` materializes the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, anticipating §3a's `metadata/` target layout); `upload_spec` writes the R2 copy at `spec.r2.input_spec_uri()` (flat MVP path per #385)."
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
+
+  # ── Object storage credential centralization design doc ─────────
+  - doc: docs/design/r2-credential-centralization.md
+    description: Provider-neutral object-storage credential settings and backend projections
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/object_storage.py"
+        covers: "Canonical `SYNTH_SETTER_STORAGE_*` settings, strict frozen `StorageConfig`, `ObjectLocation`, rclone env projection, Lance `storage_options` projection, and the small rclone-backed `ObjectStorage` facade"
+
+  # ── Provider-neutral object storage contracts ───────────────────
+  - doc: docs/design/object-storage-contracts.md
+    description: Target provider-neutral storage settings, location, layout, and facade contracts
+    sources:
+      - pattern: "src/synth_setter/pipeline/r2_io.py"
+        covers: "Current rclone-backed transfer/probe helpers and Lance storage_options projection that migrate behind ObjectStorage"
+      - pattern: "src/synth_setter/pipeline/schemas/r2_location.py"
+        covers: "Current R2Location layout helpers that migrate to DatasetStorageLayout returning ObjectLocation"
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "Current DatasetSpec.r2 field that becomes DatasetSpec.storage with storage.root {bucket, key}"
 
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md
@@ -171,6 +244,8 @@ docs:
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
       - pattern: "src/synth_setter/data/**"
         covers: "Data modules, dataset classes, VST rendering, data loading"
+      - pattern: "src/synth_setter/data/lance_torch.py"
+        covers: "Native lance.torch dataloader factories (lance_map_dataloader / lance_iterable_dataloader) — direct Lance→tensor loading, R2 streaming via storage_options, DDP sharding (§6.1)"
       - pattern: "src/synth_setter/configs/train.yaml"
         covers: "Top-level training config, Hydra defaults list, config groups"
       - pattern: "src/synth_setter/configs/trainer/**"
@@ -184,12 +259,26 @@ docs:
       - pattern: "src/synth_setter/configs/experiment/**"
         covers: "Experiment overrides, hyperparameter combinations, ablation configs"
       - pattern: "src/synth_setter/configs/logger/wandb.yaml"
-        covers: "W&B entity, project, log_model for checkpoint durability"
+        covers: "W&B entity, project, log_model (False — best ckpt to R2, not W&B)"
       - pattern: "docker/**"
         covers: "Training Docker image, GPU support, environment portability"
         scope: "training"
 
   # ── Eval pipeline design doc ────────────────────────────────────
+  - doc: docs/guides/sound-match-bridge.md
+    description: Live sound-match bridge — predict-capture CLI contract and joint map rebuild
+    sources:
+      - pattern: "src/synth_setter/cli/predict_capture.py"
+        covers: "Bridge CLI contract: uuid from wav stem, pred-0.pt + atomic params.csv, absence-is-failure semantics, --stats-file normalization, SET ME default checkpoint"
+      - pattern: "src/synth_setter/tools/build_param_map.py"
+        covers: "per-host dump commands and runtime-free joint-map build"
+      - pattern: "src/synth_setter/data/vst/clap_introspect.py"
+        covers: "First-party ctypes CLAP host used by the dump command"
+      - pattern: "src/synth_setter/data/vst/clap_map.py"
+        covers: "PluginFormatMap schema and native-domain CSV row conversion"
+      - pattern: "src/synth_setter/data/vst/surge_xt_clap_*.json"
+        covers: "Committed raw dump + packaged pyname->CLAP map the CLI loads by default"
+
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
@@ -198,7 +287,7 @@ docs:
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
-        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv)"
+        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv + shuffle_permutation.csv)"
       - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
         covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs; auto-invoked by compute_audio_metrics.main() when params_are_uniform returns True. params_are_uniform is also the gating predicate imported by compute_audio_metrics."
       - pattern: "renderscript.sh"
@@ -212,7 +301,7 @@ docs:
       - pattern: "jobs/predict/*.sh"
         covers: "Per-variant predict launchers — compose `experiment=surge/wandb_checkpoint/<x>` (config-pinned `${wandb:...}` ckpt_path) plus `mode=predict`"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group composed by eval.yaml defaults; supplies param_spec_name, preset_path, optional plugin_path consumed by _run_predict_postprocessing in cli/eval.py"
+        covers: "Render-group composed by eval.yaml defaults; supplies param_spec_name, plugin_state_path, optional plugin_path consumed by _run_predict_postprocessing in cli/eval.py"
       - pattern: "src/synth_setter/configs/callbacks/eval_surge.yaml"
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "src/synth_setter/configs/callbacks/prediction_writer.yaml"
@@ -229,7 +318,7 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), SURGE_XT_VERSION + related vars"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), install-plugins (aggregate) + install-dexed/install-obxf/install-six-sines (sha256-pinned fetched synths mirroring the Dockerfile ARGs; x86_64 Linux only, exit-0 skip elsewhere), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), link-skills (project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery), SURGE_XT_VERSION + DEXED_*/OBXF_*/SIX_SINES_* pin vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
@@ -239,13 +328,17 @@ docs:
         covers: "Root-user GPU dev container variant — remoteUser defaults to root, docker-in-docker + act features, --gpus all, VS Code terminal profile defaulting to zellij (tmux still selectable)"
       - pattern: ".devcontainer/tmux.conf"
         covers: "tmux config installed to ~/.tmux.conf by post-create.sh — mouse mode, true color, 1-indexed windows, larger scrollback, vi copy mode, intuitive split keys (no session-persistence plugins)"
+      - pattern: ".devcontainer/zellij.kdl"
+        covers: "zellij config installed to ~/.config/zellij/config.kdl by post-create.sh — silences first-run popups, binds terminals to the shared main session"
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
-        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf for both root and dev users"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf and ~/.config/zellij/config.kdl for both root and dev users, best-effort skill projection into ~/.agents/skills via scripts/dev/link-skills.sh (#1561), seed agent full-auto defaults (~/.codex/config.toml approval/sandbox keys when absent + agy --dangerously-skip-permissions bashrc wrapper)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
+      - pattern: ".claude/settings.json"
+        covers: "Claude Code harness config — enabledPlugins + extraKnownMarketplaces (tinaudio-skills, openai-codex), documented in §4f"
 
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md
@@ -290,11 +383,17 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+      - pattern: "tests/claude_hooks/conftest.py"
+        covers: "Autouse gate-override env scrub (GATE_OVERRIDE_ENV_VARS) so hook subprocesses see their documented default modes"
+      - pattern: "tests/_vst.py"
+        covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
+      - pattern: "tests/helpers/lance_fixtures.py"
+        covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures and the lance_torch dataloader test datasets (tests/helpers/lance_torch_datasets.py)"
       - pattern: "tests/helpers/run_if.py"
         covers: "RunIf decorator (min_gpus, etc.)"
       - pattern: ".github/workflows/test.yml"
@@ -318,11 +417,40 @@ docs:
       - pattern: "tests/_meta/**"
         covers: "AST-based meta-tests enforcing structural invariants on other test modules (e.g., no Hydra config-initializer imports in canonical entrypoint test files)"
       - pattern: "tests/infra/**"
-        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity"
       - pattern: "tests/integration/**"
-        covers: "Three classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess (`integration_r2` marker) — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; and (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`."
+        covers: "Four classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` (path-scoped) on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`; and (4) real-R2 streaming round-trips for pipeline/dataloader reads (`test_lance_r2_multipart.py`, `test_lance_torch_r2.py`, `test_finalize_dataset_r2.py`, `test_add_embeddings_r2.py`; `integration_r2`+`r2`+`slow`) that run wherever R2 credentials are provisioned. The `integration_r2` marker spans classes 1 and 4 — it gates on credentials, it does not identify a class."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
         covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `generate()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
+      - pattern: ".github/workflows/test-generate-dataset-from-spec-uri.yml"
+        covers: "PR-tier e2e for the spec-URI operator CLI (`synth-setter-generate-dataset-from-spec-uri <uri>`): real spec upload to R2, real CLI subprocess driven by the `r2://` / `s3://` URI inside the dev-snapshot Docker image (real Surge render, real shard uploads, real R2 probes; no stubs) — `tests/integration/test_generate_dataset_from_spec_uri_r2.py`. Same-repo PRs only; unique per-run R2 prefix + best-effort rclone purge teardown."
+
+  # ── Agent harness parity (Claude + Codex) ───────────────────────
+  - doc: docs/reference/agent-harness-parity.md
+    description: Claude/Codex hook-enforcement divergence, per-hook CI backstops, skill-discovery parity
+    sources:
+      - pattern: "agent/hooks/_lib.sh"
+        covers: "has_skill discovery globs for the Claude marketplace and Codex plugin-manifest layouts"
+      - pattern: "scripts/dev/link-skills.sh"
+        covers: "Projects the installed tinaudio/skills marketplace into ~/.agents/skills so Agent-Skills-standard CLIs (Gemini, Antigravity) discover the full pack; wired via make link-skills + post-create.sh"
+      - pattern: "agent/hooks/worktree-guard.sh"
+        covers: "WORKTREE_GUARD_MODE block/warn/off tiering (local-safety, no CI backstop)"
+      - pattern: "agent/hooks/no-baseline-additions.sh"
+        covers: "Pydoclint-baseline-row block; CI runs pydoclint but does not gate on baseline-row growth"
+      - pattern: "agent/hooks/git-commit-trailer-check.sh"
+        covers: "Co-Authored-By / attribution-trailer block; no dedicated CI gate, PR-title gitlint is the residual"
+      - pattern: "agent/hooks/no-yaml-run-comments.sh"
+        covers: "YAML run/setup block-scalar comment block; CI backstop via test-act.yaml + test_workflows_under_act.py"
+      - pattern: "agent/hooks/pre-pr-review-gate.sh"
+        covers: "Pre-PR review-sentinel gate; CI backstop via test.yml + code-quality-pr.yaml + pr-metadata-gate.yaml"
+      - pattern: "agent/hooks/pr-readiness-stop.sh"
+        covers: "Stop-gate on red CI / non-mergeable; CI backstop via branch protection + required checks"
+      - pattern: "agent/hooks/test.sh"
+        covers: "Bash hook test harness: registry/runner, sandbox stubs, startup gate-override env scrub (GATE_OVERRIDE_ENV_VARS)"
+      - pattern: "tests/claude_hooks/**"
+        covers: "Hook wiring + exit-contract tests (settings.json wiring, gate tests, skill-discovery parity) and the autouse gate-override env scrub conftest"
+      - pattern: "tests/infra/test_agent_hooks_suite.py"
+        covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
@@ -350,6 +478,30 @@ docs:
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Source of truth for the (channels, n_mels, n_frames) trailing-dims of mel_spec output and (channels, time_samples) trailing-dims of audio output written by make_hdf5_dataset"
         scope: "interactive"
+
+  - doc: docs/guides/adding-a-new-synth.md
+    description: Onboard a new VST3 synth — introspect, hand-tune the spec, register, generate
+    sources:
+      - pattern: "src/synth_setter/cli/introspect_plugin.py"
+        covers: "synth-setter-introspect-plugin CLI contract and its draft-spec, baseline-preset, and CSV-triage outputs"
+      - pattern: "src/synth_setter/data/vst/introspect.py"
+        covers: "Draft generation behind the CLI: parameter classification and emission of the draft spec module, baseline preset, and CSV triage table"
+      - pattern: "src/synth_setter/data/vst/registration.py"
+        covers: "The --register wiring that registers a drafted spec into the checkout: registry entries, render config, and artifact paths"
+      - pattern: "src/synth_setter/data/vst/verification.py"
+        covers: "The --verify post-draft battery that gates a freshly registered spec and fails on any BLOCK"
+      - pattern: "src/synth_setter/data/vst/param_spec_registry.py"
+        covers: "The param_specs and plugin_state_paths registries keyed by synth name, plus default_plugin_path / SYNTH_SETTER_PLUGIN_PATH plugin resolution"
+      - pattern: "src/synth_setter/data/vst/param_spec.py"
+        covers: "ParamSpec and the parameter-type constructors a hand-tuned spec is built from"
+      - pattern: "src/synth_setter/configs/render/**"
+        covers: "Per-synth render config selected by the render=<name> override; inherits the base surge_xt render config and pins this synth's identity fields"
+      - pattern: "src/synth_setter/data/vst/*_param_spec.py"
+        covers: "Hand-tuned reference specs and the per-synth synth_params and encoded-width counts"
+      - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
+        covers: "Headless X11/Xvfb wrapper for GUI-heavy VST3 plugins that need a display during introspection or rendering"
+      - pattern: "docker/ubuntu22_04/Dockerfile"
+        covers: "vst3-synths-fetch stage — sha256-pinned amd64-only synth fetch + headless-X11 load check + plugins/ symlink referenced by the optional Docker baking step"
 
   # ── Config reference (autogenerated mkdocstrings pages) ────────
   - doc: docs/config_reference/dataset_spec.md
@@ -413,3 +565,21 @@ docs:
       - pattern: "Makefile"
         covers: "make mutmut target; macOS fork-safety workaround"
         scope: "mutmut"
+
+  # ── GitHub Actions reference ─────────────────────────────────────
+  - doc: docs/reference/github-actions.md
+    description: Workflow catalog, secrets table, concurrency gotchas
+    sources:
+      - pattern: ".github/workflows/claude-code-review.yml"
+        covers: "Catalog row (Claude /code-review on every PR incl. drafts, posts findings), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+      - pattern: ".github/workflows/claude.yml"
+        covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
+
+  # ── Credential rotation guide ────────────────────────────────────
+  - doc: docs/operations/credential-rotation-guide.md
+    description: Credential inventory + rotation/verification procedures
+    sources:
+      - pattern: ".github/workflows/claude-code-review.yml"
+        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row and Anthropic rotation/verification procedure (review run posting findings)"
+      - pattern: ".github/workflows/claude.yml"
+        covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

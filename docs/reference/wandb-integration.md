@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
+> **Code version**: `b389c72` (2026-06-11, `fix/1604-exit-keyed-subprocess-streaming`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -21,16 +21,18 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                                                                                                          | File                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                                                                                 | `src/synth_setter/configs/logger/wandb.yaml`                    |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                                                                              | `src/synth_setter/configs/logger/wandb.yaml:10,13`              |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                                                                          | `src/synth_setter/configs/logger/many_loggers.yaml`             |
-| Run ID            | `null` (W&B auto-generates)                                                                                                                                                           | `src/synth_setter/configs/logger/wandb.yaml:8`                  |
-| Checkpoint upload | `log_model: "all"`                                                                                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml:11`                 |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                        | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Console capture   | `wandb.Settings(console="wrap")` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (empty UI Logs tab); `wrap` is the only mode that reaches the server | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings` |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                      | `src/synth_setter/utils/utils.py:98-108`                        |
+| Concern           | How it works                                                                                                                                                                                                                                                                                      | File                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)                                                                                                                                                                                             | `src/synth_setter/configs/logger/wandb.yaml`                      |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`                                                                                                                                                                                          | `src/synth_setter/configs/logger/wandb.yaml` § `entity`/`project` |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                                                                                                                                                                                                                      | `src/synth_setter/configs/logger/many_loggers.yaml`               |
+| Run ID            | `null` (W&B auto-generates)                                                                                                                                                                                                                                                                       | `src/synth_setter/configs/logger/wandb.yaml` § `id`               |
+| Checkpoint upload | `log_model: False` — no checkpoint files to W&B; the best ckpt is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact                                                                                                                                                  | `src/synth_setter/configs/logger/wandb.yaml` § `log_model`        |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                                                                                                                                                                                                                    | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
+| Console capture   | `wandb.Settings(console="wrap", console_multipart=True)` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (#1465); `wrap` reaches the server but sees only this process's Python-level writes. Subprocess tee + multipart semantics: see the note below this table | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                                                                                                                                  | `src/synth_setter/utils/utils.py` § `task_wrapper`                |
+
+**Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → finalize → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`.
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -62,31 +64,31 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                    | Metric                                                   | Step | Epoch |
-| ------------------------- | -------------------------------------------------------- | ---- | ----- |
-| `SurgeFlowMatchingModule` | `train/loss`                                             | yes  | yes   |
-|                           | `train/penalty`                                          | yes  | yes   |
-|                           | `val/param_mse`                                          | —    | yes   |
-|                           | `test/param_mse`                                         | —    | yes   |
-|                           | `vector_field/*_norm`                                    | yes  | —     |
-|                           | `encoder/*_norm`                                         | yes  | —     |
-| `KSinFlowMatchingModule`  | `train/loss`                                             | yes  | yes   |
-|                           | `train/penalty`                                          | yes  | yes   |
-|                           | `val/lsd`, `val/chamfer`                                 | —    | yes   |
-|                           | `test/param_mse`, `test/lsd`, `test/chamfer`, `test/lad` | —    | yes   |
-|                           | `vector_field/*_norm`, `encoder/*_norm`                  | yes  | yes   |
-| `SurgeFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`      | yes  | yes   |
-|                           | `train/{reconstruction,latent,param}_loss`               | yes  | yes   |
-|                           | `train/beta`                                             | yes  | —     |
-|                           | `val/{reconstruction,latent,param}_loss`                 | —    | yes   |
-|                           | `val/param_mean`, `val/param_std`                        | —    | yes   |
-|                           | `test/{reconstruction,latent,param}_loss`                | —    | yes   |
-|                           | `net/*` gradient norms                                   | yes  | —     |
-| `SurgeFeedForwardModule`  | `train/loss`                                             | yes  | yes   |
-|                           | `val/param_mse`, `test/param_mse`                        | —    | yes   |
-| `KSinFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
-|                           | `val/lsd`, `val/chamfer`, `val/loss`                     | —    | yes   |
-|                           | `test/*` metrics                                         | —    | yes   |
+| Module                   | Metric                                                   | Step | Epoch |
+| ------------------------ | -------------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule`  | `train/loss`                                             | yes  | yes   |
+|                          | `train/penalty`                                          | yes  | yes   |
+|                          | `val/param_mse`                                          | —    | yes   |
+|                          | `test/param_mse`                                         | —    | yes   |
+|                          | `vector_field/*_norm`                                    | yes  | —     |
+|                          | `encoder/*_norm`                                         | yes  | —     |
+| `KSinFlowMatchingModule` | `train/loss`                                             | yes  | yes   |
+|                          | `train/penalty`                                          | yes  | yes   |
+|                          | `val/lsd`, `val/chamfer`                                 | —    | yes   |
+|                          | `test/param_mse`, `test/lsd`, `test/chamfer`, `test/lad` | —    | yes   |
+|                          | `vector_field/*_norm`, `encoder/*_norm`                  | yes  | yes   |
+| `VSTFlowVAEModule`       | `train/loss`, `train/param_mean`, `train/param_std`      | yes  | yes   |
+|                          | `train/{reconstruction,latent,param}_loss`               | yes  | yes   |
+|                          | `train/beta`                                             | yes  | —     |
+|                          | `val/{reconstruction,latent,param}_loss`                 | —    | yes   |
+|                          | `val/param_mean`, `val/param_std`                        | —    | yes   |
+|                          | `test/{reconstruction,latent,param}_loss`                | —    | yes   |
+|                          | `net/*` gradient norms                                   | yes  | —     |
+| `VSTFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
+|                          | `val/param_mse`, `test/param_mse`                        | —    | yes   |
+| `KSinFeedForwardModule`  | `train/loss`                                             | yes  | yes   |
+|                          | `val/lsd`, `val/chamfer`, `val/loss`                     | —    | yes   |
+|                          | `test/*` metrics                                         | —    | yes   |
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
@@ -108,7 +110,7 @@ only; with `logger=wandb` they go to W&B only.
 
 | Callback              | What it does                                           | Config                                                      |
 | --------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `src/synth_setter/configs/callbacks/model_checkpoint.yaml`  |
+| `ModelCheckpoint`     | Saves `.ckpt` locally (best ckpt later uploaded to R2) | `src/synth_setter/configs/callbacks/model_checkpoint.yaml`  |
 | `LearningRateMonitor` | Logs LR to Lightning logger                            | `src/synth_setter/configs/callbacks/lr_monitor.yaml`        |
 | `RichProgressBar`     | Terminal display only                                  | `src/synth_setter/configs/callbacks/rich_progress_bar.yaml` |
 | `ModelSummary`        | Prints param summary to console                        | `src/synth_setter/configs/callbacks/model_summary.yaml`     |
@@ -162,7 +164,7 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/rms_std`            | Same, standard deviation                                                                                                    |
 | `audio/per_sample_metrics` | Per-sample metrics from `metrics.csv` as a `wandb.Table`; columns match `compute_audio_metrics` output (one row per sample) |
 
-When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
+When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`, and the drawn permutation is logged as a `shuffle/permutation` `wandb.Table` from `shuffle_permutation.csv` via `_log_shuffle_permutation_to_wandb` (`src/synth_setter/cli/eval.py`) — skipped when `shuffle_permutation.csv` is absent or `wandb.run` is unset, with wandb errors swallowed. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
 The aggregated scalar metrics dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`; the `audio/per_sample_metrics` Table is W&B-only and is not included in that dict. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
@@ -170,14 +172,14 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model checkpoints        | `ModelCheckpoint` + `log_model: "all"`                                                           | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately                                                                                                            |
-| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                            |
-| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                  |
-| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                      |
-| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test; type `model`, metadata `git_sha`; opt-in `s3://` R2 reference (`checksum=False`) when `training.upload_checkpoints_uri` is set, else lineage-only (R2 ckpt upload is #92) |
-| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                          |
+| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` (best ckpt → R2; `log_model: False`)                                           | Best + last + every-5000-step `.ckpt` written locally; only the best is uploaded to R2 at train end (no checkpoint files go to W&B)                                                                                                                                                             |
+| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                                                                                                                       |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                                                                                                             |
+| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                                                                                                                 |
+| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test (global-zero); type `model`, metadata `git_sha`; the best ckpt is uploaded to `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and referenced as an `s3://` URI (`checksum=False`); degrades to lineage-only when R2 is unreachable or no ckpt was written (#92) |
+| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                                                                                                                     |
 
 ______________________________________________________________________
 
@@ -278,9 +280,11 @@ split so they don't overwrite each other's run summary: `test` keeps the bare
 `audio/*` key, while `train`/`val` are logged under `train/audio/*` and
 `val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The prefix applies to
 every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
-etc. too. The eval subprocess
+and the `shuffle/permutation` Table becomes `train/shuffle/permutation`, etc. too. The eval subprocess
 inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
-the parent's.
+the parent's. Console logs survive the split-by-split resumes via
+`console_multipart=True`: each session uploads its own `logs/output_*.log`
+rather than overwriting a single server-side `output.log`.
 
 ______________________________________________________________________
 
@@ -292,7 +296,7 @@ ______________________________________________________________________
 | 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`.                                                                                          | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
 | 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                                                                                                              | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
 | 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                                                                                                                | Manual lookup to match runs to issues                                                               | #263     |
-| 5   | ~~**`log_model: true` vs `"all"`**~~ **RESOLVED** — changed to `log_model: "all"` for crash resilience (every checkpoint uploaded immediately)                                                                                                                                | —                                                                                                   | —        |
+| 5   | ~~**`log_model` checkpoint upload to W&B**~~ **RESOLVED** — set to `log_model: False`; no checkpoint files go to W&B (5 GB budget). The best ckpt is uploaded to R2 and referenced by the `model-{config_id}` artifact                                                        | —                                                                                                   | #92      |
 | 6   | ~~**Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction~~ **RESOLVED** — callbacks now dispatch through `_log_figure` to whichever Lightning loggers are attached (WandbLogger and/or TensorBoardLogger); CSV-only setups are silent | ~~Breaks if logger is swapped; step alignment relies on `trainer.global_step`~~                     | #614     |
 | 7   | **`torch.compile` crashes test-stage `setup()`** — eval after training fails                                                                                                                                                                                                  | Post-training test metrics never logged to W&B                                                      | #248     |
 | 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                                                                                                               | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |

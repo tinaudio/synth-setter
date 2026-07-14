@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +23,7 @@ def _spec_kwargs() -> dict[str, object]:
     return {
         "task_name": "test-task",
         "run_id": "test-task-20260519T120000000Z",
-        "created_at": datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
@@ -34,7 +35,7 @@ def _spec_kwargs() -> dict[str, object]:
         },
         "render": {
             "plugin_path": "plugins/Surge XT.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
             "sample_rate": 44100,
@@ -374,10 +375,31 @@ class TestReadSpecText:
 
         assert spec_io.read_spec_text("relative-spec.json") == '{"hello": "from-cwd"}'
 
+    def test_s3_uri_downloads_via_r2_scheme_rewrite(self) -> None:
+        """An ``s3://`` URI is fetched through the same rclone remote as ``r2://``.
+
+        R2 exposes an S3-compatible API, so ``s3://bucket/key`` names the same
+        object as ``r2://bucket/key`` (see ``r2_io.from_s3_uri``); the fetch
+        must target rclone's ``r2:bucket/key`` form.
+        """
+        captured: list[list[str]] = []
+
+        def fake_check_call(args: list[str]) -> None:
+            captured.append(args)
+            Path(args[-1]).write_text('{"hello": "from-s3"}')
+
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
+            text = spec_io.read_spec_text("s3://bucket/spec.json")
+
+        assert text == '{"hello": "from-s3"}'
+        assert captured and "r2:bucket/spec.json" in captured[0]
+
     def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
-        """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
-        with pytest.raises(ValueError, match="unsupported URI scheme 's3'"):
-            spec_io.read_spec_text("s3://bucket/spec.json")
+        """An unsupported scheme (e.g. ``gs://``) raises a clear ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported URI scheme 'gs'"):
+            spec_io.read_spec_text("gs://bucket/spec.json")
 
 
 class TestLocalizedUri:
@@ -420,10 +442,46 @@ class TestLocalizedUri:
                 fetched = local
         assert not fetched.exists()
 
+    def test_missing_bare_local_path_raises_filenotfound_naming_uri(self, tmp_path: Path) -> None:
+        """A non-existent bare path fails up front, naming the URI, not later at the reader.
+
+        :param tmp_path: Pytest tmp dir; the target is intentionally never created.
+        """
+        missing = tmp_path / "absent.h5"
+
+        with pytest.raises(FileNotFoundError, match=re.escape(f"no file at '{missing}'")):
+            with spec_io.localized_uri(str(missing)):
+                pass
+
+    def test_missing_file_uri_raises_filenotfound_naming_uri(self, tmp_path: Path) -> None:
+        """A non-existent ``file://`` URI fails up front, naming the URI.
+
+        :param tmp_path: Pytest tmp dir; the target is intentionally never created.
+        """
+        missing = tmp_path / "absent.h5"
+
+        with pytest.raises(FileNotFoundError, match=re.escape(missing.as_uri())):
+            with spec_io.localized_uri(missing.as_uri()):
+                pass
+
+    def test_s3_uri_downloads_to_tempfile_and_cleans_up(self) -> None:
+        """An ``s3://`` URI is fetched to a tempfile that is removed on exit."""
+
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_text("from-s3")
+
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
+            with spec_io.localized_uri("s3://bucket/shard.h5") as local:
+                assert local.read_text() == "from-s3"
+                fetched = local
+        assert not fetched.exists()
+
     def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
-        """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
-        with pytest.raises(ValueError, match="unsupported URI scheme 's3'"):
-            with spec_io.localized_uri("s3://bucket/shard.h5"):
+        """An unsupported scheme (e.g. ``gs://``) raises a clear ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported URI scheme 'gs'"):
+            with spec_io.localized_uri("gs://bucket/shard.h5"):
                 pass
 
     def test_malformed_file_uri_is_rejected_with_value_error(self) -> None:

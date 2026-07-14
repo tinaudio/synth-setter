@@ -22,6 +22,7 @@ from synth_setter.cli.eval import (
     _PREDICT_VST_AUDIO_MODULE,
     _log_audio_metrics_to_wandb,
     _log_metrics_csv_to_wandb,
+    _log_shuffle_permutation_to_wandb,
     _run_predict_postprocessing,
 )
 
@@ -54,6 +55,7 @@ def _build_postprocess_cfg(
     shuffle_seed: int = 0,
     metric_prefix: str = "",
     render: dict[str, Any] | None = None,
+    batch_size: int = 1,
 ) -> DictConfig:
     """Build a minimal cfg accepted by ``_run_predict_postprocessing``.
 
@@ -67,6 +69,8 @@ def _build_postprocess_cfg(
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
         every returned audio metric key.
     :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :param batch_size: Drives ``cfg.datamodule.batch_size``; the render timeout
+        scales with ``pred-*.pt`` count times this.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
     return OmegaConf.create(  # type: ignore[no-any-return]
@@ -80,6 +84,7 @@ def _build_postprocess_cfg(
                 "shuffle_seed": shuffle_seed,
                 "metric_prefix": metric_prefix,
             },
+            "datamodule": {"batch_size": batch_size},
             "render": render,
         }
     )
@@ -167,7 +172,7 @@ def test_postprocessing_linux_argv_has_wrapper_prefix(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     _run_predict_postprocessing(cfg)
@@ -195,7 +200,7 @@ def test_postprocessing_non_linux_argv_omits_wrapper(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     _run_predict_postprocessing(cfg)
@@ -228,7 +233,7 @@ def test_postprocessing_plugin_path_gate(
         rerender_target=False,
         render={
             "param_spec_name": "surge/fake_oracle",
-            "preset_path": "preset.fxp",
+            "plugin_state_path": "preset.fxp",
             "plugin_path": plugin_path,
         },
     )
@@ -264,7 +269,7 @@ def test_postprocessing_forwards_render_audio_fields(
         rerender_target=False,
         render={
             "param_spec_name": "surge/fake_oracle",
-            "preset_path": "preset.fxp",
+            "plugin_state_path": "preset.fxp",
             "sample_rate": 22050,
             "channels": 1,
             "velocity": 64,
@@ -297,7 +302,7 @@ def test_postprocessing_rerender_target_gate(
     :param captured_argv: Captured argv list populated by the fixture.
     """
     monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
-    render = {"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"}
+    render = {"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"}
 
     _run_predict_postprocessing(
         _build_postprocess_cfg(
@@ -464,7 +469,7 @@ def test_postprocessing_render_requires_predictions_dir(
     cfg = _build_postprocess_cfg(
         tmp_path,
         compute_metrics=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(ValueError, match="PredictionWriter"):
@@ -638,7 +643,7 @@ def test_postprocessing_render_subprocess_nonzero_exit_raises(
         predictions_tree,
         compute_metrics=False,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(subprocess.CalledProcessError):
@@ -673,7 +678,7 @@ def test_postprocessing_metrics_subprocess_timeout_raises(
         predictions_tree,
         compute_metrics=True,
         rerender_target=False,
-        render={"param_spec_name": "surge/fake_oracle", "preset_path": "preset.fxp"},
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
     )
 
     with pytest.raises(subprocess.TimeoutExpired):
@@ -904,3 +909,275 @@ def test_log_metrics_csv_to_wandb_log_exception_is_swallowed(
         _log_metrics_csv_to_wandb(tmp_path)
 
     assert any("RuntimeError" in r.message for r in caplog.records)
+
+
+_SHUFFLE_PERMUTATION_CSV = "dest_idx,src_idx\n0,1\n1,0\n"
+
+
+class _RecordingWandbRun:
+    """Spy stand-in for ``wandb.run`` that appends every ``log`` payload to ``payloads``."""
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    def log(self, payload: dict[str, object]) -> None:
+        """Record one ``wandb.run.log`` call's argument.
+
+        :param payload: The dict passed to ``wandb.run.log``.
+        """
+        self.payloads.append(payload)
+
+
+@pytest.fixture
+def wandb_log_spy(monkeypatch: pytest.MonkeyPatch) -> _RecordingWandbRun:
+    """Pin ``wandb.run`` to a fresh recording spy for the test's duration.
+
+    :param monkeypatch: Applies and reverts the ``eval_mod.wandb.run`` patch.
+    :returns: The installed spy, whose ``payloads`` collects every logged dict.
+    """
+    spy = _RecordingWandbRun()
+    monkeypatch.setattr(eval_mod.wandb, "run", spy)
+    return spy
+
+
+def test_log_shuffle_permutation_to_wandb_logs_table_to_active_run(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """An active run plus a present ``shuffle_permutation.csv`` logs exactly one Table.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert len(wandb_log_spy.payloads) == 1
+    table = wandb_log_spy.payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]
+    # Rows must round-trip the CSV verbatim, not just carry the right header.
+    assert table.data == [[0, 1], [1, 0]]
+
+
+def test_log_shuffle_permutation_to_wandb_prepends_prefix_to_table_key(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """A non-empty ``prefix`` namespaces the Table key so per-split runs stay distinct.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    _log_shuffle_permutation_to_wandb(tmp_path, prefix="train/")
+
+    assert len(wandb_log_spy.payloads) == 1
+    assert isinstance(wandb_log_spy.payloads[0]["train/shuffle/permutation"], wandb.Table)
+
+
+def test_log_shuffle_permutation_to_wandb_noop_when_no_run(
+    wandb_log_spy: _RecordingWandbRun,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``wandb.run is None`` → returns without raising or logging, even with the CSV present.
+
+    Overriding the spy with ``None`` exercises the early-exit guard: removing it would
+    dereference ``None.log`` and raise instead of logging nothing.
+
+    :param wandb_log_spy: Recording spy whose ``payloads`` must stay empty.
+    :param monkeypatch: Overrides ``wandb.run`` with ``None`` after the fixture installs the spy.
+    :param tmp_path: Scratch dir — ``shuffle_permutation.csv`` is present but must not be read.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+    monkeypatch.setattr(eval_mod.wandb, "run", None)
+
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert wandb_log_spy.payloads == []
+
+
+def test_log_shuffle_permutation_to_wandb_missing_file_is_silent(
+    wandb_log_spy: _RecordingWandbRun,
+    tmp_path: Path,
+) -> None:
+    """A missing ``shuffle_permutation.csv`` is skipped; nothing is logged.
+
+    The probe writes the file only for uniform-params datasets, so its absence is the
+    common non-oracle case and must not raise.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param tmp_path: Empty scratch dir — no ``shuffle_permutation.csv`` present.
+    """
+    _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert wandb_log_spy.payloads == []
+
+
+def test_log_shuffle_permutation_to_wandb_log_exception_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An exception from ``wandb.run.log`` is swallowed and a warning is emitted.
+
+    :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
+    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
+    :param caplog: Captures log output to verify the warning is emitted.
+    """
+    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    class _RaisingRun:
+        """Stand-in for ``wandb.run`` whose ``log`` always raises to simulate a backend failure."""
+
+        def log(self, _payload: object) -> None:
+            """Simulate a failing wandb backend.
+
+            :param _payload: The would-be log dict; discarded before raising.
+            :raises RuntimeError: Always, to simulate a wandb backend failure.
+            """
+            raise RuntimeError("wandb backend unavailable")
+
+    monkeypatch.setattr(eval_mod.wandb, "run", _RaisingRun())
+
+    with caplog.at_level(logging.WARNING):
+        _log_shuffle_permutation_to_wandb(tmp_path)
+
+    assert any("RuntimeError" in r.message for r in caplog.records)
+
+
+def test_postprocessing_logs_shuffle_permutation_table_when_subprocess_writes_csv(
+    wandb_log_spy: _RecordingWandbRun,
+    predictions_tree: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe permutation Table reaches ``wandb.run.log`` end-to-end through postprocessing.
+
+    Wires the producer→consumer contract: when the metrics subprocess writes
+    ``shuffle_permutation.csv``, ``_run_predict_postprocessing`` logs it as a Table under
+    the ``shuffle/permutation`` key. Deleting the log call would fail this test.
+
+    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes the aggregated
+        metrics CSV and the permutation CSV.
+    """
+    metrics_dir = predictions_tree / "metrics"
+
+    def _writes_metrics_and_permutation(args: list[str], **_kwargs: object) -> None:
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+        (metrics_dir / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_metrics_and_permutation)
+    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
+
+    _run_predict_postprocessing(cfg)
+
+    permutation_payloads = [p for p in wandb_log_spy.payloads if "shuffle/permutation" in p]
+    assert len(permutation_payloads) == 1
+    table = permutation_payloads[0]["shuffle/permutation"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["dest_idx", "src_idx"]
+
+
+@pytest.fixture
+def captured_timeouts(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+    """Capture each postprocessing subprocess's ``timeout`` keyed by module.
+
+    Like :func:`captured_argv` but records the ``timeout`` kwarg so the
+    sample-count scaling can be asserted; still materializes the aggregated CSV
+    so the metrics branch's load step succeeds.
+
+    :param monkeypatch: Stubs ``subprocess.run``, ``as_file``, and
+        ``vst_headless_wrapper`` so no real subprocess or package data is touched.
+    :returns: ``{module: timeout}`` populated one entry per intercepted call.
+    """
+    timeouts: dict[str, float] = {}
+
+    def _fake_run(args: list[str], *, timeout: float, **_kwargs: Any) -> None:
+        # Self-diagnosing if a call path ever drops the kwarg, vs an opaque TypeError.
+        assert isinstance(timeout, float), timeout
+        module = (
+            _COMPUTE_AUDIO_METRICS_MODULE
+            if _COMPUTE_AUDIO_METRICS_MODULE in args
+            else _PREDICT_VST_AUDIO_MODULE
+        )
+        timeouts[module] = timeout
+        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
+            return
+        metrics_dir = Path(args[args.index(_COMPUTE_AUDIO_METRICS_MODULE) + 2])
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+
+    monkeypatch.setattr(eval_mod.subprocess, "run", _fake_run)
+
+    @contextmanager
+    def _fake_as_file(_traversable: Any) -> Any:
+        yield Path(_FAKE_WRAPPER)
+
+    monkeypatch.setattr(eval_mod, "as_file", _fake_as_file)
+    monkeypatch.setattr(eval_mod, "vst_headless_wrapper", lambda: object())
+    return timeouts
+
+
+def test_render_timeout_scales_with_prediction_sample_count(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_timeouts: dict[str, float],
+) -> None:
+    """Render timeout grows as overhead + per_sample * (pred files * batch_size).
+
+    A flat ceiling tripped a spurious TimeoutExpired once the split outgrew it;
+    scaling on the rendered sample count is the fix.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` (no wrapper prefix).
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/``.
+    :param captured_timeouts: ``{module: timeout}`` populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    for i in range(3):
+        (predictions_tree / "predictions" / f"pred-{i}.pt").write_bytes(b"")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        batch_size=4,
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    # Hard-coded (not mirroring the module constants) so a wrong constant fails:
+    # 300 overhead + 60/sample * (3 pred files * batch_size 4) = 1020.
+    assert captured_timeouts[_PREDICT_VST_AUDIO_MODULE] == 1020.0
+
+
+def test_metrics_timeout_scales_with_audio_subdir_count_over_workers(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_timeouts: dict[str, float],
+) -> None:
+    """Metrics timeout grows as overhead + per_sample * ceil(audio subdirs / workers).
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` (no wrapper prefix).
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/``.
+    :param captured_timeouts: ``{module: timeout}`` populated by the fixture.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    for i in range(7):
+        (predictions_tree / "audio" / f"sample-{i}").mkdir()
+    cfg = _build_postprocess_cfg(
+        predictions_tree, render_vst=False, compute_metrics=True, num_workers=2
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    # Hard-coded (not mirroring the module constants) so a wrong constant fails:
+    # 180 overhead + 30/sample * ceil(7 subdirs / 2 workers)=4 = 300.
+    assert captured_timeouts[_COMPUTE_AUDIO_METRICS_MODULE] == 300.0

@@ -37,8 +37,13 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/ci-materialize-test-wds": "ci-materialize-test-wds",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
+    "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/smoke-shard-wds": "smoke-shard-wds",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
+    "generate_dataset/surge-simple-lance-440k-20k-20k": "surge-simple-lance-440k-20k-20k",
+    "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
+    "generate_dataset/surge-xt-lance-2m-40k-10k": "surge-xt-lance-2m-40k-10k",
+    "generate_dataset/surge-xt-dawdreamer-smoke": "surge-xt-dawdreamer-smoke",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
 }
@@ -81,3 +86,42 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     spec = _compose_dataset_spec(experiment)
     restored = DatasetSpec.model_validate_json(spec.model_dump_json())
     assert restored == spec
+
+
+def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:
+    """The DawDreamer smoke experiment uses one Surge XT sample per shard."""
+    spec = _compose_dataset_spec("generate_dataset/surge-xt-dawdreamer-smoke")
+
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.param_spec_name == "surge_xt"
+    assert spec.render.samples_per_shard == 1
+    assert spec.train_val_test_sizes == (1, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "expected_ranges"),
+    [
+        (  # [440000, 20000, 20000] at samples_per_shard=2500 → 176/8/8 shards
+            "generate_dataset/surge-simple-lance-440k-20k-20k",
+            {"train": (0, 176), "val": (176, 184), "test": (184, 192)},
+        ),
+        (  # [2000000, 40000, 10000] at samples_per_shard=2500 → 800/16/4 shards
+            "generate_dataset/surge-xt-lance-2m-40k-10k",
+            {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
+        ),
+    ],
+)
+def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
+    experiment: str, expected_ranges: dict[str, tuple[int, int]]
+) -> None:
+    """Full-scale Lance configs pin their exact per-split shard math.
+
+    The generic ``num_shards >= 1`` check above accepts a transposed split
+    digit, and the shard total alone accepts a same-total val/test swap;
+    pinning ``split_shard_ranges`` catches both.
+
+    :param experiment: Hydra experiment id under ``configs/experiment/generate_dataset/``.
+    :param expected_ranges: Hand-computed half-open shard-index ranges per split
+        (each span is ``split_size // samples_per_shard``).
+    """
+    assert _compose_dataset_spec(experiment).split_shard_ranges == expected_ranges

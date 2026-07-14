@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -15,7 +15,7 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 
-FIXED_NOW = datetime(2026, 6, 15, 12, 30, 45, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 15, 12, 30, 45, tzinfo=UTC)
 
 
 class TestMakeDatasetWandbRunId:
@@ -23,20 +23,20 @@ class TestMakeDatasetWandbRunId:
 
     def test_make_run_id_fixed_timestamp_format(self):
         """Fixed UTC timestamp (microsecond=0) produces the expected run ID string."""
-        ts = datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 3, 13, 10, 0, 0, tzinfo=UTC)
         result = make_dataset_wandb_run_id(DatasetConfigId("surge-simple-480k-10k"), timestamp=ts)
         assert result == "surge-simple-480k-10k-20260313T100000000Z"
 
     def test_make_run_id_includes_millisecond_field(self):
         """A timestamp with microseconds produces a 3-digit millisecond suffix."""
-        ts = datetime(2026, 5, 3, 13, 36, 33, 456789, tzinfo=timezone.utc)
+        ts = datetime(2026, 5, 3, 13, 36, 33, 456789, tzinfo=UTC)
         result = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
         assert result == "cfg-20260503T133633456Z"
 
     def test_make_run_id_milliseconds_disambiguate_within_same_second(self):
         """Two timestamps within the same wall-clock second produce different IDs."""
-        ts1 = datetime(2026, 3, 13, 10, 0, 0, 100_000, tzinfo=timezone.utc)
-        ts2 = datetime(2026, 3, 13, 10, 0, 0, 900_000, tzinfo=timezone.utc)
+        ts1 = datetime(2026, 3, 13, 10, 0, 0, 100_000, tzinfo=UTC)
+        ts2 = datetime(2026, 3, 13, 10, 0, 0, 900_000, tzinfo=UTC)
         id1 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts1)
         id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
         assert id1 != id2
@@ -67,15 +67,15 @@ class TestMakeDatasetWandbRunId:
 
     def test_make_run_id_deterministic_same_inputs(self):
         """Same arguments produce the same result."""
-        ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
         a = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
         b = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
         assert a == b
 
     def test_make_run_id_seconds_precision(self):
         """Timestamps one second apart produce different IDs."""
-        ts1 = datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone.utc)
-        ts2 = datetime(2026, 3, 13, 10, 0, 1, tzinfo=timezone.utc)
+        ts1 = datetime(2026, 3, 13, 10, 0, 0, tzinfo=UTC)
+        ts2 = datetime(2026, 3, 13, 10, 0, 1, tzinfo=UTC)
         id1 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts1)
         id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
         assert id1 != id2

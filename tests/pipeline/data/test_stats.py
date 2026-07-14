@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from synth_setter.pipeline.data import stats as _stats_module
+from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 
 
 @pytest.fixture(scope="module")
@@ -247,6 +248,26 @@ def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: Mo
             stats_script.finalize(existing)
         with pytest.raises(ValueError, match=r"<=1 samples"):
             stats_script.finalize(existing, mask_degenerate=True)
+
+
+def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Path) -> None:
+    """Lance stats fold projects ``mel_spec`` and matches numpy mean/std.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+
+    mean, std = stats_script.stream_stats_lance([shard])
+
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+
+    rows = list(iter_lance_column_rows(shard, "mel_spec"))
+    expected = np.stack(rows, axis=0)
+    np.testing.assert_allclose(mean, expected.mean(axis=0))
+    np.testing.assert_allclose(std, expected.std(axis=0))
 
 
 def _write_mel_shard(path: Path, mel_batches: list[np.ndarray]) -> None:
@@ -904,7 +925,7 @@ def test_get_stats_hdf5_writes_sibling_stats_npz_with_mean_std_keys(
 
     ``finalize_hdf5`` asserts ``stats_npz.is_file()`` after the call, but
     every test of finalize stubs ``get_stats_hdf5``. Pin the real
-    output-path derivation (``SurgeXTDataset.get_stats_file_path``) and
+    output-path derivation (``VSTDataset.get_stats_file_path``) and
     the on-disk schema (``mean`` + ``std`` keyed arrays in the input
     dtype) directly against the real function.
 

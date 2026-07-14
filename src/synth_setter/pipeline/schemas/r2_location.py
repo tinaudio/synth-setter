@@ -225,6 +225,14 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(f"{split}.h5")
 
+    def split_lance_uri(self, split: Split) -> str:
+        """R2 URI of a finalized split Lance file.
+
+        :param split: Split name; ``Literal["train","val","test"]``.
+        :returns: ``r2://<bucket>/<prefix><split>.lance``.
+        """
+        return self._under_prefix(f"{split}.lance")
+
     def split_wds_brace_uri(self, shard_range: tuple[int, int]) -> str:
         """R2 URI carrying the webdataset brace pattern for ``[lo, hi)`` shards.
 

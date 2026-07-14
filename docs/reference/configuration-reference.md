@@ -44,7 +44,7 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 
 - Input is mutable, human-authored YAML under `src/synth_setter/configs/experiment/generate_dataset/`
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
-- Runtime state (git SHA, renderer version, per-shard seeds) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator)
+- Runtime state (git SHA, renderer version, per-shard seeds) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator). See [Deterministic Dataset Seeding](../design/deterministic-seeding.md) for the seed contract.
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
@@ -94,7 +94,7 @@ Reference: `training-pipeline.md` §4–5
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
   + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
-  + render: {param_spec_name, preset_path, plugin_path?}   # required when render_vst=true
+  + render: {param_spec_name, plugin_state_path, plugin_path?}   # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
 
@@ -267,22 +267,22 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.2 W&B / Artifact Lineage
 
-| Input                    | Type   | What's Needed                                                    | Reference                   |
-| ------------------------ | ------ | ---------------------------------------------------------------- | --------------------------- |
-| `logger.wandb.log_model` | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
-| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`  | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
-| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
+| Input                    | Type   | What's Needed                                                                          | Reference                   |
+| ------------------------ | ------ | -------------------------------------------------------------------------------------- | --------------------------- |
+| `logger.wandb.log_model` | bool   | `False` — no checkpoint files to W&B; best ckpt goes to R2, referenced by the artifact | training-pipeline.md §6.2   |
+| `logger.wandb.id`        | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random                       | wandb-integration.md gap #8 |
+| `logger.wandb.job_type`  | string | `"training"` instead of empty                                                          | storage-provenance-spec §7  |
+| `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                                       | training-pipeline.md §5.3   |
 
-Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
+Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. At train end the best checkpoint is uploaded to R2 (`_upload_best_checkpoint`) at `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and the artifact references it as an `s3://` URI; `training.upload_checkpoints_uri` optionally overrides the target (default `null` = auto-derive). Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), activated by the opt-in `consumed_dataset_config_id` / `consumed_train_config_id` config keys (default `null` = no edge; alias from `consumed_artifact_alias`, default `latest`).
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                  | Reference                                                   |
-| -------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §6.1                                   |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/surge_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | `nsynth.yaml` / `fsd.yaml`                                  |
+| Input                                  | Type           | What's Needed                                                                                                  | Reference                                                 |
+| -------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 
@@ -310,15 +310,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.6 Other
 
-| Input                        | Type       | What's Needed                                                               | Reference                          |
-| ---------------------------- | ---------- | --------------------------------------------------------------------------- | ---------------------------------- |
-| Training Docker image        | Dockerfile | Separate from data pipeline image (needs CUDA+torch, not VST+rclone)        | training-pipeline.md §7.4          |
-| Training R2 paths            | code       | Dataset R2 path, training R2 path, frozen config upload                     | storage-provenance-spec §3b        |
-| `RUNPOD_API_KEY`             | env var    | RunPod launcher needs API access                                            | storage-provenance-spec §9         |
-| `AWS_ENDPOINT_URL`           | env var    | Required for W&B to resolve R2 artifact references                          | storage-provenance-spec §11        |
-| `torch.compile` backend/mode | string     | Currently just a bool toggle — no backend, mode, fullgraph, dynamic options | Lightning/PyTorch option           |
-| `PYTHONHASHSEED`             | env var    | Fixed hash seed for reproducibility                                         | standard ML practice               |
-| `CUBLAS_WORKSPACE_CONFIG`    | env var    | `:4096:8` for deterministic cuBLAS                                          | required when `deterministic=True` |
+| Input                                                                                              | Type       | What's Needed                                                                                                                                                                                                                                                                                                                                                                                                                | Reference                          |
+| -------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Training Docker image                                                                              | Dockerfile | Separate from data pipeline image (needs CUDA+torch, not VST+rclone)                                                                                                                                                                                                                                                                                                                                                         | training-pipeline.md §7.4          |
+| Training R2 paths                                                                                  | code       | Dataset R2 path, training R2 path, frozen config upload                                                                                                                                                                                                                                                                                                                                                                      | storage-provenance-spec §3b        |
+| `RUNPOD_API_KEY`                                                                                   | env var    | RunPod launcher needs API access                                                                                                                                                                                                                                                                                                                                                                                             | storage-provenance-spec §9         |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_ENDPOINT` / `AWS_ENDPOINT_URL` / `AWS_REGION` | env vars   | Global AWS-SDK → R2 redirect for tools that ignore `RCLONE_CONFIG_R2_*`: the SmooSense / DuckDB-`lance` data viewer querying `.lance` datasets referenced by `s3://...` URIs, raw boto3, AWS CLI. Lance's Rust object_store reads `AWS_ENDPOINT`, DuckDB httpfs reads `AWS_ENDPOINT_URL` — set both. Not needed for model checkpoints (the `${wandb:...}` resolver rclone-downloads from R2). Sample values: `.env.example`. | storage-provenance-spec §11        |
+| `torch.compile` backend/mode                                                                       | string     | Currently just a bool toggle — no backend, mode, fullgraph, dynamic options                                                                                                                                                                                                                                                                                                                                                  | Lightning/PyTorch option           |
+| `PYTHONHASHSEED`                                                                                   | env var    | Fixed hash seed for reproducibility                                                                                                                                                                                                                                                                                                                                                                                          | standard ML practice               |
+| `CUBLAS_WORKSPACE_CONFIG`                                                                          | env var    | `:4096:8` for deterministic cuBLAS                                                                                                                                                                                                                                                                                                                                                                                           | required when `deterministic=True` |
 
 ______________________________________________________________________
 

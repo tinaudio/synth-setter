@@ -15,7 +15,7 @@ The entrypoint's public surface:
 
 ``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
 ``fake_r2_remote`` (see ``tests/pipeline/conftest.py``) and patches
-``subprocess.check_call`` with the ``_materialize_or_passthrough_rclone``
+``_check_call_streamed`` with the ``_materialize_or_passthrough_rclone``
 dispatcher: renderer calls write the expected empty shard file (mirroring the
 contract of ``generate_vst_dataset.py``); rclone calls fall through to the
 real binary against the local-typed remote. Orchestration assertions
@@ -35,10 +35,11 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import h5py
@@ -66,6 +67,20 @@ from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
+
+def _write_audio_h5(path: Path, num_samples: int) -> None:
+    """Write a minimal HDF5 split exposing ``audio`` with ``num_samples`` rows.
+
+    ``_run_oracle_eval_subprocess`` reads this row count to scale the eval
+    timeout, so only the leading dimension is load-bearing here.
+
+    :param path: Destination ``.h5`` file.
+    :param num_samples: Row count the ``audio`` dataset is given.
+    """
+    with h5py.File(path, "w") as f:
+        f.create_dataset("audio", data=np.zeros((num_samples, 1), dtype=np.float32))
+
+
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by generate) returns a deterministic version
 # without loading any .so via pedalboard. Version inside is "1.0.0-test" — the
@@ -75,15 +90,23 @@ TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPl
 TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _call_hydra_main(main_fn: Callable[..., object]) -> None:
+    """Invoke a Hydra-decorated main whose static signature still names ``cfg``.
+
+    :param main_fn: Hydra-decorated main function to call.
+    """
+    main_fn()
+
+
 def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
-    """Return argv lists from non-rclone calls recorded by a patched ``check_call``.
+    """Return argv lists from non-rclone calls recorded by a patched ``_check_call_streamed``.
 
     The dispatcher routes both renderer and rclone invocations through one
-    ``subprocess.check_call`` mock, so tests that want to introspect just the
+    ``_check_call_streamed`` mock, so tests that want to introspect just the
     renderer args (script path, flag set, headless wrapper) filter the
     interleaved call list through this helper.
 
-    :param mock: A patched ``subprocess.check_call`` mock.
+    :param mock: A patched ``_check_call_streamed`` mock.
     :returns: argv lists from invocations whose first element is not ``"rclone"``.
     """
     return [
@@ -98,7 +121,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "task_name": "test-dataset",
         "run_id": "test-dataset-20260328T120000000Z",
-        "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
@@ -110,7 +133,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         },
         "render": {
             "plugin_path": str(TEST_PLUGIN_VST3),
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": TEST_PLUGIN_VERSION,
             "sample_rate": 44100,
@@ -140,6 +163,24 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
         train_val_test_sizes=[10000 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+def test_build_generate_args_passes_shard_seed_as_base_seed(tmp_path: Path) -> None:
+    """build_generate_args gives each shard its own ``--base_seed`` (#884).
+
+    Argv-shape contract pin, backed end-to-end by
+    ``test_distinct_shard_seeds_render_distinct_reproducible_rows``.
+
+    :param tmp_path: Output dir build_generate_args composes shard paths under.
+    """
+    spec = _multi_shard_spec(tmp_path, n=3)
+    passed_seeds = []
+    for shard in spec.shards:
+        args = build_generate_args(spec, shard, tmp_path)
+        idx = args.index("--base_seed")
+        passed_seeds.append(args[idx + 1])
+    assert len(passed_seeds) == 3
+    assert passed_seeds == ["42", "43", "44"]
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +267,362 @@ class TestLoadSpecFromRoot:
         assert loaded.task_name == spec.task_name
 
 
+class TestSpecUriCliMain:
+    """``generate_dataset_from_spec_uri.main`` — parse spec URI and W&B opt-out."""
+
+    def test_single_positional_runs_that_spec_uri_with_wandb_enabled(self) -> None:
+        """The sole positional enables the default grouped W&B logging path."""
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            cli.main(["r2://bucket/run/input_spec.json"])
+
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json", enable_wandb=True)
+
+    def test_no_wandb_flag_disables_wandb_logging(self) -> None:
+        """``--no-wandb`` skips only W&B auth/logging for repair runs."""
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            cli.main(["--no-wandb", "r2://bucket/run/input_spec.json"])
+
+        mock_run.assert_called_once_with("r2://bucket/run/input_spec.json", enable_wandb=False)
+
+    @pytest.mark.parametrize(
+        "argv",
+        [[], ["a/input_spec.json", "b/input_spec.json"]],
+        ids=["missing_uri", "two_uris"],
+    )
+    def test_wrong_positional_count_exits_with_usage_error(self, argv: list[str]) -> None:
+        """Zero or two positionals exit via argparse's usage error (code 2).
+
+        :param argv: argv tail (no program name).
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        with patch.object(cli, "run_from_spec_uri") as mock_run:
+            with pytest.raises(SystemExit) as excinfo:
+                cli.main(argv)
+
+        assert excinfo.value.code == 2
+        mock_run.assert_not_called()
+
+
+class TestSpecUriWandbSettings:
+    """``generate_dataset_from_spec_uri`` W&B settings defaults."""
+
+    def test_settings_disable_wandb_without_api_key_or_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing W&B auth selects disabled mode instead of prompting.
+
+        :param monkeypatch: Clears W&B auth and mode environment variables.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_preserve_explicit_wandb_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Explicit ``WANDB_MODE`` overrides the no-auth disabled fallback.
+
+        :param monkeypatch: Sets W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "offline")
+
+        assert _wandb_mode_override() == "offline"
+
+    def test_settings_keep_default_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Present W&B auth leaves mode unspecified for normal online logging.
+
+        :param monkeypatch: Sets W&B auth and clears W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+
+        assert _wandb_mode_override() is None
+
+    def test_settings_disable_wandb_for_invalid_mode_without_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to disabled mode without auth.
+
+        :param monkeypatch: Sets invalid W&B mode and clears W&B auth.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() == "disabled"
+
+    def test_settings_keep_default_for_invalid_mode_with_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported ``WANDB_MODE`` falls back to W&B's default with auth.
+
+        :param monkeypatch: Sets W&B auth and invalid W&B mode.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import _wandb_mode_override
+
+        monkeypatch.setenv("WANDB_API_KEY", "test-key")
+        monkeypatch.setenv("WANDB_MODE", "bogus")
+
+        assert _wandb_mode_override() is None
+
+
+class TestRunFromSpecUri:
+    """``run_from_spec_uri`` — load a spec by URI, then render/upload its shards."""
+
+    @pytest.fixture(autouse=True)
+    def _single_worker_full_render(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin rank=0/world=1 and force every shard absent in R2 (full render path).
+
+        :param monkeypatch: Pytest fixture used to set env vars and patch
+            ``r2_io.object_size``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+
+    @pytest.fixture()
+    def patched_env_and_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:
+        """Patch the render/rclone seam and the R2 env pre-flight.
+
+        ``ensure_r2_env_loaded`` is stubbed (same isolation the ``main()``
+        tests use) because the fake local-typed remote has no creds to
+        validate; rclone copies still land on ``fake_r2_remote`` via the
+        passthrough dispatcher.
+
+        :param fake_r2_remote: Local-typed R2 remote root (chdirs into the
+            tmp dir, so relative work dirs also land there).
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
+        """
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=_materialize_or_passthrough_rclone,
+            ) as mock_check_call:
+                yield mock_check_call
+
+    def test_local_spec_path_renders_and_uploads_shards(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A bare local spec path drives the full render → R2 upload flow.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; uploaded shards materialize here.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path), enable_wandb=False)
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_r2_spec_uri_downloads_spec_then_renders(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """An ``r2://`` spec URI is fetched from the remote before rendering.
+
+        The spec is placed in the fake remote via the production
+        ``spec_io.upload_spec`` path, then re-loaded through the URI the
+        launcher advertises to workers (``spec.r2.input_spec_uri()``).
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root backing both spec and shards.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+        from synth_setter.pipeline.spec_io import upload_spec
+
+        spec_uri = upload_spec(spec)
+
+        run_from_spec_uri(spec_uri, enable_wandb=False)
+
+        shard = spec.shards[0]
+        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
+        assert landed.is_file()
+
+    def test_work_dir_derives_from_run_id_under_cwd(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """Rendered shards persist under ``logs/generate_dataset/from_spec_uri/<run_id>/``.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Fake R2 root; the fixture chdirs into it, so the
+            relative work dir lands inside the test's tmp dir.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path), enable_wandb=False)
+
+        work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
+        assert (work_dir / spec.shards[0].filename).is_file()
+
+    def test_wandb_enabled_passes_resume_loggers_to_generate(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """The default runner creates a W&B resume logger list for ``generate``.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+        loggers = [MagicMock()]
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch.object(cli, "_resume_loggers", return_value=loggers):
+                with patch.object(cli, "generate") as mock_generate:
+                    cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_generate.assert_called_once_with(spec, work_dir, loggers)
+
+    def test_wandb_enabled_uses_no_loggers_when_wandb_missing(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A wandb-free install still renders through the default CLI path.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch.object(cli, "find_spec", return_value=None):
+                with patch.object(cli, "generate") as mock_generate:
+                    cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_generate.assert_called_once_with(spec, work_dir, [])
+
+    def test_wandb_enabled_builds_grouped_repair_run(
+        self,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """The default runner creates a grouped W&B run for the repair attempt.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param monkeypatch: Clears W&B env vars so defaults are hermetic.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Pytest tmp dir for the local spec JSON.
+        """
+        import synth_setter.cli.generate_dataset_from_spec_uri as cli
+
+        monkeypatch.setenv("WANDB_PROJECT", "")
+        monkeypatch.delenv("WANDB_ENTITY", raising=False)
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json())
+        settings = MagicMock(name="settings")
+        wandb_logger = MagicMock(name="wandb_logger")
+
+        with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
+            with patch("wandb.Settings", return_value=settings) as mock_settings:
+                with patch(
+                    "lightning.pytorch.loggers.wandb.WandbLogger",
+                    return_value=wandb_logger,
+                ) as mock_wandb_logger:
+                    with patch.object(cli, "generate") as mock_generate:
+                        cli.run_from_spec_uri(str(spec_path))
+
+        work_dir = Path("logs") / "generate_dataset" / "from_spec_uri" / spec.run_id
+        mock_settings.assert_called_once_with(
+            code_dir=".",
+            console="wrap",
+            console_multipart=True,
+            mode="disabled",
+        )
+        mock_wandb_logger.assert_called_once_with(
+            save_dir=str(work_dir),
+            name=f"resume-{spec.task_name}-{spec.run_id}",
+            project="synth-setter",
+            entity=None,
+            group=spec.run_id,
+            job_type="data-generation-resume",
+            tags=["from-spec-uri", "resume", spec.task_name],
+            log_model=False,
+            settings=settings,
+        )
+        mock_generate.assert_called_once_with(spec, work_dir, [wandb_logger])
+
+    def test_r2_env_preflight_runs_before_spec_fetch(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """``ensure_r2_env_loaded`` gates the run — its failure aborts before any fetch.
+
+        :param fake_r2_remote: Fake R2 root (unused; activates rclone skip gate).
+        :param spec: Fixture-provided single-shard ``DatasetSpec`` (unused body).
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        with patch(
+            "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
+            side_effect=RuntimeError("no creds"),
+        ):
+            with pytest.raises(RuntimeError, match="no creds"):
+                run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
+
+
 class TestRun:
     """Render → upload, per owned shard.
 
@@ -257,7 +654,7 @@ class TestRun:
 
     @pytest.fixture()
     def patched_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:  # noqa: ARG002
-        """Patch ``subprocess.check_call`` with the renderer/rclone dispatcher.
+        """Patch ``_check_call_streamed`` with the renderer/rclone dispatcher.
 
         Pulls in ``fake_r2_remote`` (consumed by the rclone passthrough — see
         ``_materialize_or_passthrough_rclone``) so rclone copies land on the
@@ -269,10 +666,10 @@ class TestRun:
 
         :param fake_r2_remote: Local-typed R2 remote root (fixture-activation
             only — referenced via the ARG002 noqa).
-        :yields MagicMock: Patched ``subprocess.check_call`` mock.
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
         """
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_materialize_or_passthrough_rclone,
         ) as mock_check_call:
             yield mock_check_call
@@ -283,7 +680,7 @@ class TestRun:
         spec: DatasetSpec,
         tmp_path: Path,
     ) -> None:
-        """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args.
+        """The render seam invokes generate_vst_dataset.py with spec-derived args.
 
         :param patched_subprocess: Subprocess dispatcher used to introspect the
             single renderer call's argv.
@@ -298,6 +695,38 @@ class TestRun:
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.samples_per_shard) in args
+
+    def test_dawdreamer_worker_runtime_failure_precedes_render_side_effects(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """An incompatible DawDreamer worker fails before logging or filesystem writes.
+
+        :param monkeypatch: Replaces the runtime guard and first logging side effect.
+        :param spec: Base spec copied to select the DawDreamer backend.
+        :param tmp_path: Work directory that must remain absent.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        dawdreamer_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"renderer_backend": "dawdreamer"})}
+        )
+        log_mock = MagicMock()
+        monkeypatch.setattr(gd, "_log_hyperparams", log_mock)
+        monkeypatch.setattr(
+            gd,
+            "ensure_dawdreamer_runtime",
+            MagicMock(side_effect=RuntimeError("unsupported DawDreamer worker")),
+        )
+        work_dir = tmp_path / "never-created"
+
+        with pytest.raises(RuntimeError, match="unsupported DawDreamer worker"):
+            generate(dawdreamer_spec, work_dir, [])
+
+        log_mock.assert_not_called()
+        assert not work_dir.exists()
 
     def test_aborts_before_render_when_copy_source_spec_is_missing(
         self,
@@ -391,14 +820,14 @@ class TestRun:
         State-based: no mock on ``_rclone_copy`` — the real ``rclone copy`` runs
         against the fake-local R2 remote rooted at ``fake_r2_remote``, and the
         test asserts on the materialized object on disk. The renderer subprocess
-        ``check_call`` is patched via the shared ``patched_subprocess`` fixture
+        ``_check_call_streamed`` is patched via the shared ``patched_subprocess`` fixture
         so we don't actually shell out to the VST generator; the dispatcher's
         renderer branch writes the same empty HDF5 file that the renderer would.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         :param patched_subprocess: Fixture-activation only (handles the
-            ``subprocess.check_call`` patch).
+            ``_check_call_streamed`` patch).
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
         generate(spec, tmp_path, [])
@@ -501,15 +930,16 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
         events: list[str] = []
 
-        def _record_dispatcher(args: list[str]) -> int:
+        def _record_dispatcher(args: list[str]) -> None:
             if args and args[0] == "rclone":
                 events.append("rclone")
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             events.append("renderer")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_record_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -540,7 +970,7 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_materialize_or_passthrough_rclone,
         ):
             generate(spec, tmp_path, [])
@@ -565,17 +995,18 @@ class TestRun:
         spec = _multi_shard_spec(tmp_path, n=3)
         renderer_call_count = 0
 
-        def _side_effect(args: list[str]) -> int:
+        def _side_effect(args: list[str]) -> None:
             nonlocal renderer_call_count
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_call_count += 1
             if renderer_call_count == 2:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_side_effect,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -604,11 +1035,11 @@ class TestRun:
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        # Renderer-only side effect: return 0 without writing the shard file,
+        # Renderer-only side effect: succeed without writing the shard file,
         # so the ``shard_path.is_file()`` guard raises before any rclone call.
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
-            return_value=0,
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            return_value=None,
         ):
             with pytest.raises(RuntimeError, match="did not write expected shard file"):
                 generate(spec, tmp_path, [])
@@ -700,24 +1131,42 @@ class TestRun:
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_rank_0_of_2_renders_only_first_half_of_shards(
+    @pytest.mark.parametrize(
+        ("rank", "world", "expected_indices"),
+        [
+            pytest.param(0, 2, [0, 1], id="rank0-of-2-renders-first-half"),
+            pytest.param(1, 2, [2], id="rank1-of-2-renders-remainder"),
+            pytest.param(3, 4, [], id="excess-worker-renders-none"),
+        ],
+    )
+    def test_worker_renders_only_its_partition_of_shards(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        rank: int,
+        world: int,
+        expected_indices: list[int],
     ) -> None:
-        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only.
+        """A worker renders (and uploads) exactly its contiguous slice of the 3 shards.
+
+        Covers in-range ranks that own a non-empty slice and an excess rank
+        (``world`` > num_shards) whose empty range renders nothing and makes no
+        rclone calls.
 
         :param patched_subprocess: Subprocess dispatcher used to introspect
-            renderer argv.
+            renderer argv; never invoked when ``expected_indices`` is empty.
         :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
-            shards 0 and 1.
+            the worker's shards.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         :param monkeypatch: Used to set the rank/world env vars.
+        :param rank: This worker's ``SYNTH_SETTER_WORKER_RANK``.
+        :param world: Partition size ``SYNTH_SETTER_NUM_WORKERS``.
+        :param expected_indices: Shard indices the worker should render and upload.
         """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", str(rank))
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", str(world))
         spec = _multi_shard_spec(tmp_path, n=3)
 
         generate(spec, tmp_path, [])
@@ -726,69 +1175,18 @@ class TestRun:
             Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
-        assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
+        assert rendered_filenames == [spec.shards[i].filename for i in expected_indices]
         bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert (bucket_prefix / spec.shards[0].filename).is_file()
-        assert (bucket_prefix / spec.shards[1].filename).is_file()
-        assert not (bucket_prefix / spec.shards[2].filename).exists()
-
-    def test_rank_1_of_2_renders_only_remaining_shard(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only.
-
-        :param patched_subprocess: Subprocess dispatcher used to introspect
-            renderer argv.
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
-            shard 2.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to set the rank/world env vars.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-        spec = _multi_shard_spec(tmp_path, n=3)
-
-        generate(spec, tmp_path, [])
-
-        rendered_filenames = [
-            Path(args[find_script_index(args) + 1]).name
-            for args in _renderer_argv_lists(patched_subprocess)
-        ]
-        assert rendered_filenames == [spec.shards[2].filename]
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert not (bucket_prefix / spec.shards[0].filename).exists()
-        assert not (bucket_prefix / spec.shards[1].filename).exists()
-        assert (bucket_prefix / spec.shards[2].filename).is_file()
-
-    def test_excess_worker_renders_no_shards(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """When world > num_shards, the excess workers exit cleanly without rendering.
-
-        A 4-node partition over 3 shards leaves worker 3 with an empty range — it renders zero
-        shards and makes no rclone calls.
-
-        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
-        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
-        :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Pytest fixture used to set partition env vars.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "3")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
-        spec = _multi_shard_spec(tmp_path, n=3)
-
-        generate(spec, tmp_path, [])
-
-        patched_subprocess.assert_not_called()
-        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+        if not expected_indices:
+            patched_subprocess.assert_not_called()
+            assert not bucket_prefix.exists()
+            return
+        for index, shard in enumerate(spec.shards):
+            uploaded = bucket_prefix / shard.filename
+            if index in expected_indices:
+                assert uploaded.is_file()
+            else:
+                assert not uploaded.exists()
 
     # Skip-existing-shards — see #750.
 
@@ -817,49 +1215,35 @@ class TestRun:
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    def test_run_renders_when_object_absent(
-        self,
-        patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
-        spec: DatasetSpec,
-        tmp_path: Path,
-    ) -> None:
-        """Object absent (None) → render proceeds as before.
-
-        Relies on the autouse ``_default_shard_absent_in_r2`` fixture's default of None.
-
-        :param patched_subprocess: Subprocess dispatcher; renderer is asserted
-            to fire exactly once.
-        :param fake_r2_remote: Local-typed R2 remote — shard should land here.
-        :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
-        """
-        generate(spec, tmp_path, [])
-
-        renderer_calls = _renderer_argv_lists(patched_subprocess)
-        assert len(renderer_calls) == 1
-        assert (
-            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
-        ).is_file()
-
-    def test_run_renders_when_object_zero_size(
+    @pytest.mark.parametrize(
+        "probe_size",
+        [pytest.param(None, id="object-absent"), pytest.param(0, id="object-zero-size")],
+    )
+    def test_run_renders_when_object_treated_as_absent(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
         spec: DatasetSpec,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        probe_size: int | None,
     ) -> None:
-        """Zero-byte object is treated as absent — defensive against half-uploaded objects.
+        """Missing (None) and zero-byte probes both treat the shard as absent and render it.
+
+        A zero-byte object is treated as absent defensively against half-uploaded objects.
 
         :param patched_subprocess: Subprocess dispatcher; renderer is asserted
             to fire exactly once.
         :param fake_r2_remote: Local-typed R2 remote — shard should land here.
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param monkeypatch: Used to override the probe to report 0 bytes.
+        :param monkeypatch: Used to set the probe's reported object size.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param probe_size: ``object_size`` return value standing in for the
+            R2 probe — ``None`` (absent) or ``0`` (zero-byte).
         """
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: probe_size
+        )
 
         generate(spec, tmp_path, [])
 
@@ -1042,17 +1426,18 @@ class TestRun:
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
 
-        def _flaky_dispatcher(args: list[str]) -> int:
+        def _flaky_dispatcher(args: list[str]) -> None:
             nonlocal renderer_calls
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_calls += 1
             if renderer_calls == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_flaky_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -1089,18 +1474,19 @@ class TestRun:
         lock = threading.Lock()
         two_threads_seen = threading.Event()
 
-        def _thread_recording_dispatcher(args: list[str]) -> int:
+        def _thread_recording_dispatcher(args: list[str]) -> None:
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             with lock:
                 thread_ids.add(threading.get_ident())
                 if len(thread_ids) >= 2:
                     two_threads_seen.set()
             two_threads_seen.wait(timeout=5.0)
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_thread_recording_dispatcher,
         ):
             generate(spec, tmp_path, [])
@@ -1136,19 +1522,20 @@ class TestRun:
         renderer_call_count = 0
         lock = threading.Lock()
 
-        def _one_failing(args: list[str]) -> int:
+        def _one_failing(args: list[str]) -> None:
             nonlocal renderer_call_count
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             with lock:
                 renderer_call_count += 1
                 this_attempt = renderer_call_count
             if this_attempt == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            return _materialize_shard(args)
+            _materialize_shard(args)
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_one_failing,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -1178,15 +1565,16 @@ class TestRun:
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
 
-        def _always_fails(args: list[str]) -> int:
+        def _always_fails(args: list[str]) -> None:
             nonlocal renderer_calls
             if args and args[0] == "rclone":
-                return _REAL_CHECK_CALL(args)
+                _REAL_CHECK_CALL(args)
+                return
             renderer_calls += 1
             raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
 
         with patch(
-            "synth_setter.cli.generate_dataset.subprocess.check_call",
+            "synth_setter.cli.generate_dataset._check_call_streamed",
             side_effect=_always_fails,
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -1550,11 +1938,42 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "generate", _fake_run)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         spec = recorded.get("spec")
         assert isinstance(spec, DatasetSpec)
         assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
+
+    def test_local_dawdreamer_runtime_failure_precedes_spec_write(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A local DawDreamer run validates this process before materializing its spec.
+
+        :param monkeypatch: Selects the DawDreamer experiment and fails its runtime guard.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
+                f"render.plugin_path={TEST_PLUGIN_VST3}",
+            ],
+        )
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+        monkeypatch.setattr(
+            gd,
+            "ensure_dawdreamer_runtime",
+            MagicMock(side_effect=RuntimeError("unsupported DawDreamer worker")),
+        )
+
+        with pytest.raises(RuntimeError, match="unsupported DawDreamer worker"):
+            _call_hydra_main(gd.main)
+
+        gd.write_spec_locally.assert_not_called()
+        gd.upload_spec.assert_not_called()
 
     def test_local_run_applies_extras_writing_tags_and_config_tree(
         self,
@@ -1586,7 +2005,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _fake_run)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         output_dir = recorded["work_dir"]
         for artifact in ("tags.log", "config_tree.log"):
@@ -1631,7 +2050,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _run_must_not_fire)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert "sky_cfg" in recorded
         sky_cfg = recorded["sky_cfg"]
@@ -1643,6 +2062,40 @@ class TestMainDispatchBranches:
             assert override in sky_cfg.cmd, (  # type: ignore[attr-defined]
                 f"override {override!r} missing from worker cmd: {sky_cfg.cmd!r}"  # type: ignore[attr-defined]
             )
+
+    def test_remote_dawdreamer_dispatch_does_not_validate_launcher_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A launcher may dispatch DawDreamer to a compatible worker from Python 3.13.
+
+        :param monkeypatch: Selects remote dispatch and records runtime validation.
+        :param tmp_path: Holds the minimal SkyPilot compute template.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
+                f"render.plugin_path={TEST_PLUGIN_VST3}",
+                f"skypilot_launch.compute_template={template}",
+            ],
+        )
+        runtime_mock = MagicMock(side_effect=AssertionError("launcher runtime was validated"))
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(gd, "ensure_dawdreamer_runtime", runtime_mock)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", dispatch_mock)
+
+        _call_hydra_main(gd.main)
+
+        runtime_mock.assert_not_called()
+        dispatch_mock.assert_called_once()
 
     def test_operator_supplied_cmd_is_rejected(
         self,
@@ -1680,7 +2133,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
-            gd.main()
+            _call_hydra_main(gd.main)
 
     def test_main_finalize_inline_true_invokes_finalize_from_spec(
         self,
@@ -1718,7 +2171,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_called_once()
         called_spec, called_work_dir = finalize_mock.call_args[0]
@@ -1750,7 +2203,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_not_called()
 
@@ -1797,7 +2250,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         finalize_mock.assert_not_called()
         # State assertion above is the contract. The log check matches stable
@@ -1851,7 +2304,7 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_output_dir)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         # One invocation per split.
         assert oracle_mock.call_count == 3
@@ -1873,7 +2326,7 @@ class TestMainDispatchBranches:
             # The eval inherits the generate run's datamodule worker count verbatim,
             # so a Darwin override (num_workers=0) reaches the predict DataLoader.
             assert call.kwargs["num_workers"] == observed["num_workers"]
-            assert render_arg.preset_path == "presets/surge-simple.vstpreset"
+            assert render_arg.plugin_state_path == "presets/surge-simple.vstpreset"
             # plugin_path is the TEST_PLUGIN_VST3 this test overrode at generation —
             # proving a non-default plugin flows through to the eval re-render.
             assert render_arg.plugin_path == str(TEST_PLUGIN_VST3)
@@ -1906,28 +2359,30 @@ class TestMainDispatchBranches:
         ``RenderConfig`` so the eval re-renders identically (here a surge_xt spec).
         Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
-        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param monkeypatch: Patches the module's ``_check_call_streamed``.
         :param tmp_path: Roots the distinct dataset-root and eval run dirs.
         :param spec: Source of a valid ``RenderConfig`` to derive the eval render from.
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("train.h5", "val.h5", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         render = spec.render.model_copy(
             update={
                 "param_spec_name": "surge_xt",
-                "preset_path": "presets/surge-base.vstpreset",
+                "plugin_state_path": "presets/surge-base.vstpreset",
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
         predict_file = dataset_root / "test.h5"
+        n_samples = 4
+        _write_audio_h5(predict_file, n_samples)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             run_dir,
@@ -1937,8 +2392,12 @@ class TestMainDispatchBranches:
             predict_file=predict_file,
         )
 
-        run_mock.assert_called_once()
-        called_argv = run_mock.call_args[0][0]
+        streamed_call_mock.assert_called_once()
+        # Hard-coded (not mirroring the module constants) so a wrong constant fails;
+        # the timeout bounds an otherwise-unbounded eval hang (#735) and now scales
+        # with the split: 600 overhead + 120/sample * 4 rows = 1080.
+        assert streamed_call_mock.call_args.kwargs["timeout"] == 1080.0
+        called_argv = streamed_call_mock.call_args[0][0]
         assert "-m" in called_argv
         assert "synth_setter.cli.eval" in called_argv
         assert "experiment=surge/fake_oracle" in called_argv
@@ -1959,7 +2418,7 @@ class TestMainDispatchBranches:
         # is overridden from the generation RenderConfig so the re-render matches it.
         assert "render=surge_simple" in called_argv
         assert "render.param_spec_name=surge_xt" in called_argv
-        assert "render.preset_path=presets/surge-base.vstpreset" in called_argv
+        assert "render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv
@@ -1989,20 +2448,21 @@ class TestMainDispatchBranches:
         eval subprocess, which prepends it to every ``audio/*`` key so the
         per-split passes don't overwrite each other on the shared wandb run.
 
-        :param monkeypatch: Patches the module's ``subprocess.run``.
+        :param monkeypatch: Patches the module's ``_check_call_streamed``.
         :param tmp_path: Roots the dataset-root and eval run dirs.
         :param spec: Source of a valid ``RenderConfig``.
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("val.h5", "test.h5", "stats.npz"):
             (dataset_root / name).touch()
         predict_file = dataset_root / "train.h5"
+        _write_audio_h5(predict_file, 4)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             tmp_path / "oracle_eval" / "train" / "some-run-id",
@@ -2013,9 +2473,48 @@ class TestMainDispatchBranches:
             metric_prefix="train/",
         )
 
-        called_argv = run_mock.call_args[0][0]
+        called_argv = streamed_call_mock.call_args[0][0]
         # ``+`` appends the key: it is absent from eval.yaml's evaluation group.
         assert "+evaluation.metric_prefix=train/" in called_argv
+
+    def test_run_oracle_eval_subprocess_timeout_grows_with_split_sample_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+    ) -> None:
+        """A larger predict split yields a strictly larger eval timeout.
+
+        Pins the scaling itself (not just one formula point): a flat ceiling
+        would return the same budget for both splits and fail this.
+
+        :param monkeypatch: Patches ``_check_call_streamed`` to capture the timeout.
+        :param tmp_path: Roots the two distinct dataset roots.
+        :param spec: Source of a valid ``RenderConfig``.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        def _timeout_for_split(root: Path, num_samples: int) -> float:
+            root.mkdir()
+            for name in ("train.h5", "val.h5", "stats.npz"):
+                (root / name).touch()
+            predict_file = root / "test.h5"
+            _write_audio_h5(predict_file, num_samples)
+            mock = MagicMock()
+            monkeypatch.setattr(gd, "_check_call_streamed", mock)
+            gd._run_oracle_eval_subprocess(
+                root,
+                root / "run",
+                "some-run-id",
+                render=spec.render,
+                num_workers=1,
+                predict_file=predict_file,
+            )
+            return mock.call_args.kwargs["timeout"]
+
+        small = _timeout_for_split(tmp_path / "small", 4)
+        large = _timeout_for_split(tmp_path / "large", 40)
+        assert large > small
 
     def test_run_oracle_eval_subprocess_missing_local_artifacts_raises(
         self,
@@ -2030,14 +2529,14 @@ class TestMainDispatchBranches:
         on a resume; the preflight turns the downstream low-signal HDF5 read
         error into an actionable one before shelling out.
 
-        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param monkeypatch: Patches ``_check_call_streamed`` to assert it never fires.
         :param tmp_path: Empty stand-in for an unpopulated ``output_dir``.
         :param spec: Source of a valid ``RenderConfig`` for the call signature.
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         with pytest.raises(FileNotFoundError, match=r"test\.h5"):
             gd._run_oracle_eval_subprocess(
@@ -2049,7 +2548,7 @@ class TestMainDispatchBranches:
                 predict_file=tmp_path / "test.h5",
             )
 
-        run_mock.assert_not_called()
+        streamed_call_mock.assert_not_called()
 
     def test_run_oracle_eval_subprocess_missing_predict_file_raises(
         self,
@@ -2063,14 +2562,14 @@ class TestMainDispatchBranches:
         preflight passes; the ``predict_file``-specific check then catches the
         absent path before shelling out.
 
-        :param monkeypatch: Patches ``subprocess.run`` to assert it never fires.
+        :param monkeypatch: Patches ``_check_call_streamed`` to assert it never fires.
         :param tmp_path: Roots the dataset dir and a missing predict path.
         :param spec: Source of a valid ``RenderConfig`` for the call signature.
         """
         import synth_setter.cli.generate_dataset as gd
 
-        run_mock = MagicMock()
-        monkeypatch.setattr(gd.subprocess, "run", run_mock)
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
@@ -2087,7 +2586,7 @@ class TestMainDispatchBranches:
                 predict_file=tmp_path / "nonexistent_split.h5",
             )
 
-        run_mock.assert_not_called()
+        streamed_call_mock.assert_not_called()
 
     def test_main_oracle_eval_inline_default_false_skips(
         self,
@@ -2111,7 +2610,7 @@ class TestMainDispatchBranches:
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         oracle_mock.assert_not_called()
 
@@ -2142,7 +2641,7 @@ class TestMainDispatchBranches:
         generate_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         # Skipped before generation, with a warning (exact wording unpinned).
         generate_mock.assert_not_called()
@@ -2174,7 +2673,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="requires finalize_inline=true"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2209,7 +2708,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="only supports output_format=hdf5"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2220,7 +2719,7 @@ class TestMainDispatchBranches:
     ) -> None:
         """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
 
-        ``SurgeDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
+        ``VSTDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
@@ -2248,7 +2747,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="train_val_test_sizes > 0"):
-            gd.main()
+            _call_hydra_main(gd.main)
         generate_mock.assert_not_called()
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
@@ -2294,7 +2793,7 @@ class TestMainDispatchBranches:
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         oracle_mock.assert_not_called()
         info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
@@ -2360,7 +2859,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
     The finalized ``{split}.h5`` files are HDF5 virtual datasets referencing
     their source shards by basename, so ``mode=predict`` reads the audio dataset
     as fill-value zeros unless the shards sit beside the split. These tests drive
-    the real predict read path (:class:`SurgeXTDataset` with ``read_audio=True``)
+    the real predict read path (:class:`VSTDataset` with ``read_audio=True``)
     to pin that the read resolves to real bytes only when co-located.
     """
 
@@ -2375,10 +2874,10 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Holds the co-located shard, VDS split, and stats.
         """
-        from synth_setter.data.surge_datamodule import SurgeXTDataset
+        from synth_setter.data.vst_datamodule import VSTDataset
 
         audio = _write_vds_split_with_shard(tmp_path)
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             tmp_path / "test.h5",
             batch_size=1,
             ot=False,
@@ -2388,7 +2887,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
         )
 
         assert dataset.dataset_file is not None
-        audio_ds = dataset.dataset_file["audio"]
+        audio_ds = cast(h5py.Dataset, dataset.dataset_file["audio"])
         assert isinstance(audio_ds, h5py.Dataset) and audio_ds.is_virtual, (
             "split must be a virtual dataset"
         )
@@ -2408,7 +2907,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
 
         :param tmp_path: Roots the populated source dir and the split-only copy.
         """
-        from synth_setter.data.surge_datamodule import SurgeXTDataset
+        from synth_setter.data.vst_datamodule import VSTDataset
 
         source_dir = tmp_path / "source"
         source_dir.mkdir()
@@ -2419,7 +2918,7 @@ class TestInlineOracleEvalVdsInPlaceRead:
         shutil.copy(source_dir / "test.h5", split_only / "test.h5")
         shutil.copy(source_dir / STATS_NPZ_FILENAME, split_only / STATS_NPZ_FILENAME)
 
-        dataset = SurgeXTDataset(
+        dataset = VSTDataset(
             split_only / "test.h5",
             batch_size=1,
             ot=False,
@@ -2536,7 +3035,7 @@ class TestMainSpecPersistence:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
         called_spec, called_out = gd.write_spec_locally.call_args[0]  # type: ignore[attr-defined]
@@ -2560,7 +3059,7 @@ class TestMainSpecPersistence:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         called_spec = gd.upload_spec.call_args[0][0]  # type: ignore[attr-defined]
@@ -2581,18 +3080,18 @@ class TestMainSpecPersistence:
         monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         gd.upload_spec.assert_called_once()  # type: ignore[attr-defined]
         gd.write_spec_locally.assert_called_once()  # type: ignore[attr-defined]
 
-    def test_main_uploads_spec_with_r2_creds_present_in_env(
+    def test_main_uploads_spec_with_projected_rclone_env_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``upload_spec`` sees R2 creds in ``os.environ`` (set by ``ensure_r2_env_loaded``).
+        """``upload_spec`` sees projected rclone env after ``ensure_r2_env_loaded``.
 
-        Asserts the observable invariant — credentials are present in process
-        env when the upload fires — rather than the internal call ORDER. A
+        Asserts the observable invariant — backend env is present in process
+        env when the upload fires — rather than the internal call order. A
         benign re-ordering that still loads creds before uploading passes; a
         regression that uploads before ``ensure_r2_env_loaded`` populates the
         env fails because the stub records an absent key.
@@ -2600,9 +3099,9 @@ class TestMainSpecPersistence:
         :param monkeypatch: Pytest fixture used to patch ``sys.argv``.
         """
         import synth_setter.cli.generate_dataset as gd
-        from synth_setter.pipeline.r2_io import _SECRET_R2_ENV_KEYS
+        from synth_setter.pipeline.schemas.object_storage import RCLONE_REQUIRED_ENV_KEYS
 
-        probe_key = _SECRET_R2_ENV_KEYS[0]
+        probe_key = RCLONE_REQUIRED_ENV_KEYS[0]
         monkeypatch.delenv(probe_key, raising=False)
 
         argv = [
@@ -2626,7 +3125,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", _record_env)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert creds_present_at_upload.get("present") is True
 
@@ -2656,7 +3155,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         sky_cfg = recorded["sky_cfg"]
         spec = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
@@ -2684,7 +3183,7 @@ class TestMainSpecPersistence:
         monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert "::synth-setter-spec-uri::" not in capsys.readouterr().out
 
@@ -2715,7 +3214,7 @@ class TestMainSpecPersistence:
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         sky_cfg = recorded["sky_cfg"]
         spec_call = gd.write_spec_locally.call_args[0][0]  # type: ignore[attr-defined]
@@ -2791,7 +3290,7 @@ class TestMainHydraOutputDir:
 
         monkeypatch.setattr(gd, "spec_from_cfg", _capture_then_build)
 
-        gd.main()
+        _call_hydra_main(gd.main)
 
         assert observed["output_dir"] == observed["runtime_output_dir"]
 

@@ -13,7 +13,7 @@ helpers get full sphinx-docstring coverage from day one.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5py
@@ -79,7 +79,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         signal_duration_seconds match this module's ``_VALID_*`` constants.
     :rtype: DatasetSpec
     """
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: fixed_now)
@@ -96,7 +96,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render={
             "plugin_path": str(tmp_path / "FakePlugin.vst3"),
-            "preset_path": "presets/surge-base.vstpreset",
+            "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.3.4",
             "sample_rate": 44100,

@@ -17,24 +17,16 @@ existing ``test-vst-slow.yml`` workflow.
 
 from __future__ import annotations
 
-import os
 import threading
-from pathlib import Path
 
 import pytest
 from pedalboard import VST3Plugin
 
-_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
-
-skip_no_vst = pytest.mark.skipif(
-    not Path(_PLUGIN_PATH).exists(),
-    reason=f"VST plugin not found at {_PLUGIN_PATH}",
-)
+from tests._vst import PLUGIN_PATH
 
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-@skip_no_vst
 def test_show_editor_rejects_non_main_thread() -> None:
     """``VST3Plugin.show_editor`` raises ``RuntimeError`` from a non-main thread.
 
@@ -45,7 +37,7 @@ def test_show_editor_rejects_non_main_thread() -> None:
     match is intentional because pedalboard exposes no typed subclass for this
     contract.
     """
-    plugin = VST3Plugin(_PLUGIN_PATH)
+    plugin = VST3Plugin(PLUGIN_PATH)
     captured: list[BaseException] = []
     close = threading.Event()
     close.set()  # pre-arm so a regression path (no raise) returns immediately

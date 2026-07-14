@@ -76,19 +76,23 @@ has_skill() {
   local name="$1" home="${HOME:-}" p
   local paths=(
     "agent/skills/${name}/SKILL.md"
+    ".agents/skills/${name}/SKILL.md"
     ".claude/skills/${name}/SKILL.md"
   )
   if [[ -n "$home" ]]; then
     paths+=(
+      "${home}/.agents/skills/${name}/SKILL.md"
       "${home}/.claude/skills/${name}/SKILL.md"
       "${home}/.codex/skills/${name}/SKILL.md"
       "${home}"/.claude/plugins/*/skills/"${name}"/SKILL.md
       "${home}"/.codex/plugins/*/skills/"${name}"/SKILL.md
+      "${home}"/.codex/plugins/*/codex/synth-setter-skills/"${name}"/SKILL.md
     )
   fi
   if [[ -n "${_REPO_ROOT_FOR_HOOKS:-}" ]]; then
     paths+=(
       "${_REPO_ROOT_FOR_HOOKS}/agent/skills/${name}/SKILL.md"
+      "${_REPO_ROOT_FOR_HOOKS}/.agents/skills/${name}/SKILL.md"
       "${_REPO_ROOT_FOR_HOOKS}/.claude/skills/${name}/SKILL.md"
     )
   fi
@@ -101,11 +105,10 @@ has_skill() {
 run_agent_prompt() {
   # Usage: run_agent_prompt <prompt>
   # Wraps the headless CLI in `timeout` so a hung agent surfaces as exit 124.
-  # Default 800s leaves headroom inside both harness ceilings: doc-drift's
-  # 900s (800 + 10 kill-after = 810 < 900) and pr-review-resolver's
-  # 1200s after a 360s sleep (360 + 800 + 10 = 1170 < 1200). Operators
-  # raising AGENT_TIMEOUT_SECS must check the matching .claude/settings.json
-  # `timeout` field or the harness will SIGKILL.
+  # Default 800s leaves headroom inside doc-drift's 900s harness ceiling
+  # (800 + 10 kill-after = 810 < 900). Operators raising AGENT_TIMEOUT_SECS
+  # must check the matching .claude/settings.json `timeout` field or the
+  # harness will SIGKILL.
   local prompt="$1" cli="${AGENT_HEADLESS:-}" candidate
   local timeout_secs="${AGENT_TIMEOUT_SECS:-800}"
   if [[ -z "$cli" ]]; then
@@ -224,15 +227,15 @@ sweep_stale_worktrees() {
 run_review() {
   # Usage: run_review <slug> <meta> <prompt> [<dry_run_env_var>]
   #
-  # Owns the DRY_RUN-vs-headless-agent dispatch shared by doc-drift.sh and
-  # pr-review-resolver.sh. Generates the report path (`.agent-reviews/<slug>-<uuid>.md`),
+  # Owns the DRY_RUN-vs-headless-agent dispatch used by doc-drift.sh.
+  # Generates the report path (`.agent-reviews/<slug>-<uuid>.md`),
   # invokes the headless agent (or writes a stub under dry-run), and on
   # failure writes a verbose report with the exit code, prompt, and stderr
   # tail. Echoes the resulting report path on stdout so the caller can
   # surface it. Always returns 0 — the caller decides the hook's own exit.
   #
   # `<slug>`             short name used in the report header and filename
-  #                      (e.g. "doc-drift", "pr-review-resolver").
+  #                      (e.g. "doc-drift").
   # `<meta>`             printf-ready block of "Key: value" lines.
   # `<prompt>`           text passed to run_agent_prompt; stubbed under dry-run.
   # `<dry_run_env_var>`  optional name of the env var that gates dry-run mode

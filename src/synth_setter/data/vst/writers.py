@@ -1,9 +1,9 @@
-"""Per-shard dataset writers — HDF5 (resumable) and webdataset tar (new).
+"""Per-shard dataset writers — HDF5, WebDataset tar, and Lance dataset.
 
-Consist of two entrypoints dispatched by the renderer CLI on the output file's suffix:
+Consist of entrypoints dispatched by the renderer CLI on the output file's suffix:
 ``make_hdf5_dataset`` keeps the resumable HDF5 path (signature takes a path and
-opens the file internally), and ``make_wds_dataset`` is the new tar-shard
-writer using ``webdataset.TarWriter``.
+opens the file internally), ``make_wds_dataset`` writes tar shards using
+``webdataset.TarWriter``, and ``make_lance_dataset`` writes a Lance dataset directory.
 """
 
 from __future__ import annotations
@@ -23,12 +23,14 @@ from tqdm import trange
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
+    SampleSeed,
     VSTDataSample,
     create_datasets_and_get_start_idx,
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
+from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
+from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -137,6 +139,21 @@ def save_wds_samples(
     logger.info(f"{len(samples)} wds samples written!")
 
 
+def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
+    """Stack rendered samples into writer-field arrays.
+
+    :param samples: Rendered samples in row order.
+    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
+    :rtype: dict[str, np.ndarray]
+    """
+    audio_name, mel_name, param_name = DATASET_FIELD_NAMES
+    return {
+        audio_name: np.stack([s.audio.T for s in samples], axis=0).astype(np.float16),
+        mel_name: np.stack([s.mel_spec for s in samples], axis=0),
+        param_name: np.stack([s.param_array for s in samples], axis=0),
+    }
+
+
 def _validate_fixed_params_lengths(
     *,
     num_samples: int,
@@ -171,6 +188,38 @@ def _validate_fixed_params_lengths(
             )
 
 
+def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -> AudioRenderer:
+    """Construct the configured audio renderer for one shard or render.
+
+    :param render_cfg: Render settings that identify the backend and audio shape.
+    :param plugin: Preloaded pedalboard plugin for ``plugin_reload_cadence="once"``.
+    :returns: Renderer configured for the requested backend.
+    """
+    if render_cfg.renderer_backend == "dawdreamer":
+        from synth_setter.data.vst.param_map import load_param_map
+        from synth_setter.resources import as_file, param_map
+
+        with as_file(param_map(render_cfg.param_spec_name)) as path:
+            joint_map = load_param_map(path)
+        return DawDreamerRenderer(
+            plugin_path=render_cfg.plugin_path,
+            sample_rate=render_cfg.sample_rate,
+            channels=render_cfg.channels,
+            signal_duration_seconds=render_cfg.signal_duration_seconds,
+            plugin_state_path=render_cfg.plugin_state_path,
+            parameter_map=joint_map,
+            reload_plugin_each_render=render_cfg.plugin_reload_cadence == "render",
+        )
+    return PedalboardRenderer(
+        plugin_path=render_cfg.plugin_path,
+        sample_rate=render_cfg.sample_rate,
+        channels=render_cfg.channels,
+        signal_duration_seconds=render_cfg.signal_duration_seconds,
+        plugin_state_path=render_cfg.plugin_state_path,
+        plugin=plugin,
+    )
+
+
 def _render_in_batches(
     *,
     render_cfg: RenderConfig,
@@ -190,40 +239,34 @@ def _render_in_batches(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
     :param start_idx: First absolute row index this run renders (non-zero on resume).
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed by absolute row.
-    :param fixed_note_params_list: Optional pre-set note params, indexed by absolute row.
+    :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
+        Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
+        callers pin ``start_idx=0`` for shard cadence (``make_hdf5_dataset`` resets a partial-shard
+        resume to row 0), so that seed is row 0 and the remaining rows go unused.
+    :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
+        shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
-    :raises ValueError: ``param_sample_cadence="shard"`` combined with
-        caller-supplied fixed-params lists (shard cadence owns its own patch).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
-    # Shard cadence draws and owns the shard's single patch, so caller-supplied
-    # fixed lists are contradictory (make_hdf5_dataset keeps start_idx at 0 here).
-    if share_params and (
-        fixed_synth_params_list is not None or fixed_note_params_list is not None
-    ):
-        raise ValueError(
-            'param_sample_cadence="shard" cannot be combined with caller-supplied '
-            "fixed-params lists; shard cadence draws and reuses its own single patch"
-        )
 
-    # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
-    # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
+    # "once" reuses one renderer per shard; "render" reloads for each attempt (see #705).
     cached_plugin: VST3Plugin | None = None
+    cached_renderer: AudioRenderer | None = None
     if render_cfg.plugin_reload_cadence == "once":
-        cached_plugin = load_plugin(render_cfg.plugin_path)
-        load_preset(cached_plugin, render_cfg.preset_path)
+        if render_cfg.renderer_backend == "pedalboard":
+            cached_plugin = load_plugin(render_cfg.plugin_path)
+            load_preset(cached_plugin, render_cfg.plugin_state_path)
+        cached_renderer = _make_renderer(render_cfg, cached_plugin)
 
     def _render_loop() -> None:
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
-        # param_sample_cadence="shard": sample 0 draws params via the normal
-        # loudness-gated path; every later render reuses them so the whole shard
-        # is one identical patch (#489 variance probe).
+        # param_sample_cadence="shard": the first rendered row (start_idx) sets the shard's single
+        # patch (drawn fresh, or copied from the source's same row); later renders reuse it (#489).
         shared_synth: dict[str, float] | None = None
         shared_note: NoteParams | None = None
         for i in trange(start_idx, num_samples):
@@ -244,19 +287,22 @@ def _render_in_batches(
                 fixed_note = (
                     fixed_note_params_list[i] if fixed_note_params_list is not None else None
                 )
+            renderer = cached_renderer or _make_renderer(render_cfg)
             sample = generate_sample(
-                render_cfg.plugin_path,
+                renderer=renderer,
                 velocity=render_cfg.velocity,
-                signal_duration_seconds=render_cfg.signal_duration_seconds,
-                sample_rate=render_cfg.sample_rate,
-                channels=render_cfg.channels,
                 min_loudness=render_cfg.min_loudness,
                 param_spec=param_spec,
-                preset_path=render_cfg.preset_path,
                 fixed_synth_params=fixed_synth,
                 fixed_note_params=fixed_note,
-                plugin=cached_plugin,
                 warmup=warmup_this_render,
+                # sample_idx is the absolute row index (the seed key); resumability
+                # must preserve it or per-row seed isolation breaks (#884).
+                seed=SampleSeed(
+                    master_seed=render_cfg.base_seed,
+                    sample_idx=i,
+                    max_attempts=render_cfg.attempts_per_sample,
+                ),
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
@@ -291,12 +337,13 @@ def _render_in_batches(
 def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields.
 
-    Single source of truth for the five render-derived attrs that both the
-    HDF5 ``audio.attrs`` sidecar and the wds ``metadata.json`` tar member
-    expose. Keeping projection here means the two writers can never drift.
+    Single source of truth for the render-derived attrs the HDF5
+    ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
+    Lance schema metadata expose. Keeping projection here means the writers
+    can never drift.
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
-    :returns: Strict ``ShardMetadata`` with the five render-derived fields filled.
+    :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     :rtype: ShardMetadata
     """
     return ShardMetadata(
@@ -305,6 +352,8 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
         sample_rate=render_cfg.sample_rate,
         channels=render_cfg.channels,
         min_loudness=render_cfg.min_loudness,
+        base_seed=render_cfg.base_seed,
+        attempts_per_sample=render_cfg.attempts_per_sample,
     )
 
 
@@ -322,8 +371,7 @@ def make_hdf5_dataset(
     rendered — except under ``render_cfg.param_sample_cadence="shard"``, where a
     partial shard is re-rendered from row 0 (a mid-shard resume can't preserve
     the one-patch-per-shard invariant). Audio is stored as ``float16`` (Blosc2-compressed); ``mel_spec``
-    and ``param_array`` are ``float32``. The five sidecar attrs (velocity,
-    signal duration, sample rate, channels, min_loudness) are written to
+    and ``param_array`` are ``float32``. Render metadata is written to
     ``audio.attrs`` from a single ``ShardMetadata`` instance — the same
     instance ``make_wds_dataset`` uses for its ``metadata.json`` member, so
     both formats expose identical metadata.
@@ -334,7 +382,9 @@ def make_hdf5_dataset(
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard`` (the full shard); rows
         are indexed absolutely, so a resumed run re-renders only its tail while
-        still reading the matching source row.
+        still reading the matching source row. Under ``param_sample_cadence="shard"``
+        only row 0 is consumed (it seeds the shard's single patch); rows 1..N are
+        required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
@@ -403,13 +453,16 @@ def make_wds_dataset(
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard``; ``list[0]`` lands at
-        row 0 (the wds path is non-resumable, ``start_idx = 0``).
+        row 0 (the wds path is non-resumable, ``start_idx = 0``). Under
+        ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
+        shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
+
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
         fixed_synth_params_list=fixed_synth_params_list,
@@ -433,3 +486,67 @@ def make_wds_dataset(
         )
 
         sink.write({"__key__": "metadata", "json": meta.model_dump()})
+
+
+def make_lance_dataset(
+    lance_dir: Path | str,
+    render_cfg: RenderConfig,
+    *,
+    fixed_synth_params_list: list[dict[str, float]] | None = None,
+    fixed_note_params_list: list[NoteParams] | None = None,
+) -> None:
+    """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
+
+    Not resumable: any dataset already at ``lance_dir`` is overwritten on each
+    run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
+    ``float32``. The shard metadata is embedded in Arrow schema metadata so
+    validation and finalize recover the same sidecar payload as HDF5/WDS. Each
+    render batch becomes one Lance fragment, committed as one dataset at the end.
+
+    :param lance_dir: Destination ``.lance`` dataset directory.
+    :param render_cfg: Per-shard renderer config from the dataset spec.
+    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
+        shard row. Must have length ``samples_per_shard``. Under
+        ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
+        shard's single patch); rows 1..N are required but unused.
+    :param fixed_note_params_list: Optional pre-set note params; same full-shard
+        contract as ``fixed_synth_params_list``.
+    """
+    # Function-local so the h5/wds writer paths never pay the `lance` import cost.
+    import lance
+
+    from synth_setter.pipeline.data.lance_shard import (
+        commit_lance_dataset,
+        lance_fragment,
+        lance_schema,
+        record_batch_from_arrays,
+    )
+
+    param_spec = param_specs[render_cfg.param_spec_name]
+    meta = _shard_metadata_from_render(render_cfg)
+    start_idx = 0
+
+    _validate_fixed_params_lengths(
+        num_samples=render_cfg.samples_per_shard,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+    )
+    schema = lance_schema(dataset_field_shapes(render_cfg, len(param_spec)), meta)
+
+    fragments: list[lance.fragment.FragmentMetadata] = []
+
+    def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
+        record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+        fragments.append(lance_fragment(lance_dir, schema, record_batch, len(fragments)))
+
+    # Commit only after a clean render: orphaned fragment data files from a failed
+    # run stay uncommitted (no dataset manifest references them).
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=param_spec,
+        start_idx=start_idx,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+        flush_batch=_flush,
+    )
+    commit_lance_dataset(lance_dir, schema, fragments)

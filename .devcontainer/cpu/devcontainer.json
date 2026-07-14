@@ -12,6 +12,8 @@
   },
   "initializeCommand": "bash .devcontainer/initialize.sh",
   "runArgs": [
+    "--device=/dev/fuse",
+    "--cap-add=SYS_ADMIN",
     "--env-file",
     ".env"
   ],

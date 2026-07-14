@@ -1,9 +1,12 @@
 """Tests for src/synth_setter/tools/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
+import os
 import queue
 import threading
 from pathlib import Path
+from typing import Any, NoReturn
+from unittest import mock
 
 import click
 import h5py
@@ -11,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
@@ -1131,10 +1135,10 @@ class _RecordingEvalRunner:
         dataset_root_dir: Path,
         checkpoint_path: Path,
         param_spec_name: str,
-        preset_path: str,
+        plugin_state_path: str,
     ) -> None:
         self.calls.append(
-            (num_samples, dataset_root_dir, checkpoint_path, param_spec_name, preset_path)
+            (num_samples, dataset_root_dir, checkpoint_path, param_spec_name, plugin_state_path)
         )
 
 
@@ -1155,7 +1159,7 @@ class TestMaybeEvalCapturedPatches:
             num_patches=1,
             checkpoint_path=None,
             param_spec_name=SURGE_SIMPLE,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             eval_runner=runner,
         )
 
@@ -1179,7 +1183,7 @@ class TestMaybeEvalCapturedPatches:
             num_patches=3,
             checkpoint_path=ckpt_path,
             param_spec_name=SURGE_SIMPLE,
-            preset_path="presets/surge-simple.vstpreset",
+            plugin_state_path="presets/surge-simple.vstpreset",
             eval_runner=runner,
         )
 
@@ -1216,7 +1220,7 @@ class TestMaybeEvalCapturedPatches:
                 num_patches=1,
                 checkpoint_path=ckpt_path,
                 param_spec_name=SURGE_SIMPLE,
-                preset_path="presets/surge-base.vstpreset",
+                plugin_state_path="presets/surge-base.vstpreset",
                 eval_runner=runner,
             )
 
@@ -1322,13 +1326,16 @@ class TestBuildPredictVstAudioArgv:
         assert str(missing_wrapper) not in argv
         assert argv[0] == surge_xt_interactive.sys.executable
 
-    def test_param_spec_and_preset_path_are_forwarded(
-        self, surge_xt_interactive, tmp_path: Path
+    def test_param_spec_and_plugin_state_path_are_forwarded(
+        self, surge_xt_interactive: Any, tmp_path: Path
     ) -> None:
-        """``param_spec_name`` and ``preset_path`` follow their flag tokens in argv.
+        """``param_spec_name`` and ``plugin_state_path`` follow their flag tokens in argv.
 
         Otherwise ``predict_vst_audio.py`` would silently fall back to ``surge_xt`` /
         ``presets/surge-base.vstpreset`` and decode/render against a mismatched spec.
+
+        :param surge_xt_interactive: Module fixture under test.
+        :param tmp_path: Temporary directory for the subprocess wrapper fixture.
         """
         argv = surge_xt_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
@@ -1340,8 +1347,8 @@ class TestBuildPredictVstAudioArgv:
 
         assert "--param_spec" in argv
         assert argv[argv.index("--param_spec") + 1] == "custom-spec"
-        assert "--preset_path" in argv
-        assert argv[argv.index("--preset_path") + 1] == "presets/custom.vstpreset"
+        assert "--plugin_state_path" in argv
+        assert argv[argv.index("--plugin_state_path") + 1] == "presets/custom.vstpreset"
         assert argv[-1] == "-t"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(
@@ -1458,7 +1465,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
             audio_dir,
             num_samples=1,
             param_spec_name=SURGE_SIMPLE,
-            preset_path=_RENDER_DEFAULT_PRESET,
+            plugin_state_path=_RENDER_DEFAULT_PRESET,
             subprocess_runner=runner,
         )
 
@@ -1492,14 +1499,14 @@ class TestPlayAudioRecordedE2E:
         from synth_setter.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-simple.vstpreset"
+        plugin_state_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
-        if not Path(preset_path).exists():
-            pytest.skip(f"Surge XT base preset not found at {preset_path}")
+        if not Path(plugin_state_path).exists():
+            pytest.skip(f"Surge XT base preset not found at {plugin_state_path}")
 
         plugin = load_plugin(plugin_path)
-        load_preset(plugin, preset_path)
+        load_preset(plugin, plugin_state_path)
         # Production parity: post-load flush commits preset state — see render_params and main.
         surge_xt_interactive._flush_plugin(plugin)
 
@@ -1561,11 +1568,11 @@ class TestRenderPredictedAudioE2E:
     ) -> None:
         """Invoke the real ``predict_vst_audio.py`` and validate non-silent rendered WAVs."""
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-simple.vstpreset"
+        plugin_state_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
-        if not Path(preset_path).exists():
-            pytest.skip(f"Surge XT base preset not found at {preset_path}")
+        if not Path(plugin_state_path).exists():
+            pytest.skip(f"Surge XT base preset not found at {plugin_state_path}")
 
         # One sample is enough to prove the predict → render → validate chain works end-to-end.
         # Surge XT exhibits sample-dependent silence on identical-zero pred rows past the first
@@ -1581,7 +1588,7 @@ class TestRenderPredictedAudioE2E:
             audio_dir,
             num_samples,
             param_spec_name=SURGE_SIMPLE,
-            preset_path=preset_path,
+            plugin_state_path=plugin_state_path,
         )
 
         for i in range(num_samples):
@@ -1614,14 +1621,14 @@ class TestKeyboardLoopE2E:
         from synth_setter.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-simple.vstpreset"
+        plugin_state_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
-        if not Path(preset_path).exists():
-            pytest.skip(f"Surge XT base preset not found at {preset_path}")
+        if not Path(plugin_state_path).exists():
+            pytest.skip(f"Surge XT base preset not found at {plugin_state_path}")
 
         plugin = load_plugin(plugin_path)
-        load_preset(plugin, preset_path)
+        load_preset(plugin, plugin_state_path)
         # Match production: post-load flush commits the preset state so all spec params are
         # actually exposed (Surge XT hides oscillator-shape params until the active osc type
         # is committed). Same flush pattern used by ``render_params`` and ``main`` in the
@@ -1652,3 +1659,41 @@ class TestKeyboardLoopE2E:
             assert isinstance(value, float)
             assert np.isfinite(value), f"{name} = {value} is not finite"
         assert stop_event.is_set()
+
+
+class _StopBeforeGuiError(Exception):
+    """Sentinel raised from a patched ``load_plugin``; carries the resolved plugin path."""
+
+
+def _raise_stop(plugin_path: str) -> NoReturn:
+    raise _StopBeforeGuiError(plugin_path)
+
+
+class TestMainPluginPathDefault:
+    """``main``'s ``--plugin-path`` default flows through the env-aware registry resolver.
+
+    ``load_plugin`` is patched to capture its argument and abort: once the guard
+    clauses pass it is the first call that consumes the resolved ``--plugin-path``,
+    so the captured path is exactly what the resolver produced.
+    """
+
+    def test_env_var_overrides_default_plugin_path(self) -> None:
+        """``$SYNTH_SETTER_PLUGIN_PATH`` reaches ``load_plugin`` when no flag is passed."""
+        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        with mock.patch.object(sxi, "load_plugin", _raise_stop):
+            result = CliRunner().invoke(
+                sxi.main,
+                ["--param-spec-name", "surge_xt"],
+                env={"SYNTH_SETTER_PLUGIN_PATH": "env-plugin.vst3"},
+            )
+        assert isinstance(result.exception, _StopBeforeGuiError)
+        assert result.exception.args[0] == "env-plugin.vst3"
+
+    def test_unset_env_falls_back_to_bundle(self) -> None:
+        """With no override, ``--plugin-path`` resolves to the in-repo bundle default."""
+        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        with mock.patch.dict(os.environ), mock.patch.object(sxi, "load_plugin", _raise_stop):
+            os.environ.pop("SYNTH_SETTER_PLUGIN_PATH", None)
+            result = CliRunner().invoke(sxi.main, ["--param-spec-name", "surge_xt"])
+        assert isinstance(result.exception, _StopBeforeGuiError)
+        assert result.exception.args[0] == "plugins/Surge XT.vst3"

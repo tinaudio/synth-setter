@@ -16,7 +16,7 @@ ______________________________________________________________________
   are available but significantly slower.
 
 `make install` installs [uv](https://docs.astral.sh/uv/) and a managed
-Python 3.10 interpreter for you — you do not need to install Python
+Python 3.11 interpreter for you — you do not need to install Python
 yourself. If you prefer to manage the interpreter and venv manually, see
 [Appendix A](#appendix-a-manual-environment-setup).
 
@@ -36,7 +36,7 @@ cd synth-setter
 `make install` is the canonical end-to-end install. It:
 
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
-2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
+2. Creates `.venv/` using a managed Python 3.11 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
 3. Installs the project itself in editable mode together with its `dev`
    dependency-group (⊇ `runtime`) from `pyproject.toml`
@@ -52,7 +52,7 @@ make install
 ```
 
 Re-running `make install` is safe: it reuses `.venv/` if it already exists and
-is Python 3.10, and refreshes the installed packages. If `.venv/` exists with a
+is Python 3.11, and refreshes the installed packages. If `.venv/` exists with a
 different Python version, `make install` errors and asks you to remove it
 first.
 
@@ -83,12 +83,22 @@ make install-surge-xt
 ```
 
 This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
-verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
+[Makefile](../Makefile), verifies its md5 checksum, and extracts
+`Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
 have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
+
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets print a notice and exit 0, so on macOS the aggregate still
+succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
+itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
@@ -114,15 +124,14 @@ first to reinstall.
 > lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
 > `.vst3` bundle before invoking pytest.
 
-### 2e. Export environment variables
+### 2e. Create `.env`
 
-The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+R2 preflight and SkyPilot workers read R2 credentials from a `.env` file.
 After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
-template), export the variables into your shell:
+template), those paths load the checkout's `.env` automatically.
 
-```bash
-set -a && source .env && set +a
-```
+Only source it manually for external tools or ad hoc shell commands that do not
+call synth-setter's R2 preflight.
 
 > Environment variable management is being consolidated under
 > [#563](https://github.com/tinaudio/synth-setter/issues/563).
@@ -229,7 +238,7 @@ pytest -m requires_vst -v
 If the plugin is found, VST-dependent tests will run. If not, they are
 automatically skipped (they are excluded from `make test-fast`).
 
-### 4b. rclone + Cloudflare R2
+### 4b. Cloudflare R2 storage
 
 [rclone](https://rclone.org/) is used for all interactions with Cloudflare R2
 object storage, where pipeline data (shards, specs, metadata) is stored. All
@@ -247,41 +256,33 @@ curl https://rclone.org/install.sh | sudo bash
 # Or see https://rclone.org/install/
 ```
 
-**Configure the R2 remote:**
-
 You need R2 credentials (access key ID, secret access key, and endpoint URL)
 from a project maintainer or your Cloudflare dashboard.
 
-```bash
-rclone config
-```
-
-Follow the prompts to create a new remote named `r2` with provider
-`Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file so rclone can auto-configure
-the `r2` remote — and so `docker run --env-file .env` will work out of
-the box for the synth-setter image. This is the canonical `.env`
-template:
+For synth-setter commands, set the canonical application variables in `.env`:
 
 ```
-# --- rclone (R2) remote definition: type/provider are constants ---
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-# --- R2 credentials (secrets) ---
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
-RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
-# --- Target bucket name (read by pipeline entrypoints) ---
-R2_BUCKET=<bucket-name>
+SYNTH_SETTER_STORAGE_PROVIDER=r2
+SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=<your-access-key>
+SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=<your-secret-key>
+SYNTH_SETTER_STORAGE_ENDPOINT_URL=<your-r2-endpoint-url>
 # --- W&B logging ---
 WANDB_API_KEY=<your-wandb-api-key>
 ```
 
-rclone's native env-var auto-config synthesizes the `r2` remote in-memory
-from the 5 `RCLONE_CONFIG_R2_*` vars each time you invoke `rclone` (locally
-or inside the container). No `rclone.conf` file is written. See
+`SYNTH_SETTER_STORAGE_PROVIDER` is optional because it defaults to `r2`.
+The resolver uses canonical dotenv values, canonical process-environment values,
+legacy dotenv aliases, then legacy process-environment aliases; blank values
+are absent. It projects rclone's `RCLONE_CONFIG_R2_*` variables for backend
+calls. Existing deployments may continue to use those legacy variables, but
+new `.env` files should use the canonical names above. See
 [docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
-for the canonical enumeration of every var the image expects at runtime.
+for the runtime contract.
+
+For a direct, standalone `rclone` command, configure an `r2` remote with
+`rclone config` or provide rclone's own `RCLONE_CONFIG_R2_*` variables. A
+canonical-only `.env` configures synth-setter; it does not configure a bare
+`rclone` process that bypasses synth-setter's resolver.
 
 The Docker build itself requires no credentials or secrets: the repo is
 public, so source is fetched anonymously at build time.
@@ -289,10 +290,10 @@ public, so source is fetched anonymously at build time.
 **Verify:**
 
 ```bash
-rclone lsd r2:<bucket-name>/
+uv run python -c 'from synth_setter.pipeline.r2_io import ensure_r2_env_loaded; ensure_r2_env_loaded(); print("R2 authentication succeeded")'
 ```
 
-You should see top-level directories like `data/`, `train/`, and `eval/`.
+This authenticates using the same resolver that the pipeline uses.
 
 ### 4c. Weights & Biases (W&B)
 
@@ -407,6 +408,32 @@ If you are exercising the OCI target:
    sky check oci
    ```
 
+### 4f. Codex plugin (Optional -- Codex reviews and task delegation)
+
+The [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
+plugin is enabled by default in `.claude/settings.json`, so Claude Code
+installs it on first launch. It adds review and delegation commands --
+`/codex:review`, `/codex:adversarial-review`, `/codex:rescue`,
+`/codex:status`/`result`, and `/codex:cancel` -- that run code reviews or hand
+tasks to Codex without leaving Claude Code. **You do not need it for local
+development, training, or the data pipeline.**
+
+> **Data egress.** Running any `/codex:*` command sends the relevant code and
+> context to OpenAI through the Codex CLI, exactly as invoking `codex` directly
+> would. Do not use it on code you cannot share with OpenAI.
+
+To use it:
+
+1. Ensure the `@openai/codex` CLI is on PATH (already shipped in the
+   devcontainer -- see [docker.md](reference/docker.md)) and that you have a
+   ChatGPT subscription or an `OPENAI_API_KEY`. `OPENAI_API_KEY` is a secret:
+   keep it in your `.env` alongside the other credentials (section 2e) and
+   never commit it.
+
+2. Run `/codex:setup` once to verify the CLI, authenticate, and (optionally)
+   enable the pre-response review gate. Run `/reload-plugins` first if the
+   commands do not appear.
+
 ______________________________________________________________________
 
 ## 5. Hydra Configuration System
@@ -485,7 +512,7 @@ ______________________________________________________________________
 ## 7. Docker Workflow
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
-deployment). The image bakes in the source code, dependencies, and Surge XT.
+deployment). The image bakes in the source code, dependencies, Surge XT, and several other VST3 synths (see the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile`).
 No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
@@ -592,7 +619,11 @@ ______________________________________________________________________
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
   generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
-  `synth-setter-generate-dataset` console script is the canonical surface.
+  `synth-setter-generate-dataset` console script is the canonical surface. To render an
+  already-materialized `input_spec.json` instead of composing one, use
+  `synth-setter-generate-dataset-from-spec-uri <uri>` — the URI may be a bare path, `file://`,
+  `r2://`, or `s3://`
+  (e.g. `synth-setter-generate-dataset-from-spec-uri r2://bucket/data/<task>/<run>/input_spec.json`).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**
@@ -605,18 +636,18 @@ ______________________________________________________________________
 ## Appendix A: Manual environment setup
 
 `make install` is the canonical path for most users — it installs uv, a
-managed Python 3.10 interpreter, the venv, dependencies, and pre-commit.
+managed Python 3.11 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
-(currently `>=3.10,<3.14`; `pip` enforces this).
+(currently `>=3.11,<3.14`; `pip` enforces this).
 
 ### A.1. Plain pip + venv
 
 ```bash
-# Use any Python 3.10+ interpreter
-python3.10 -m venv .venv
+# Use any Python 3.11+ interpreter
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 # The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
@@ -631,7 +662,7 @@ Drop `-e` for a non-editable install.
 ### A.2. conda
 
 ```bash
-conda create -n synth-setter python=3.10
+conda create -n synth-setter python=3.11
 conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
@@ -651,7 +682,7 @@ If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
 
 ```bash
-uv venv --python 3.10 --prompt synth-setter .venv
+uv venv --python 3.11 --prompt synth-setter .venv
 source .venv/bin/activate
 uv pip install --group dev -e .
 pre-commit install
@@ -710,8 +741,17 @@ credentials are required.
    optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
    pre-commit hooks. If invoked as root (Codespaces default, or opt-in
    `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
-   workspace mutations under `.git/` land with dev ownership. Then the
-   terminal is ready.
+   workspace mutations under `.git/` land with dev ownership. On a
+   root-owned host bind mount (the local-devcontainer case, where the
+   privilege drop alone can't fix files that arrive pre-owned by root), it
+   also recursively chowns the workspace to the running user — guarded by a
+   `stat`-based ownership check — before any `.git` write, so
+   `pre-commit install` and commits don't fail with permission denied. It also
+   makes the bundled coding agents non-interactive by default — the container
+   is the sandbox — by seeding `~/.codex/config.toml`
+   (`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, written
+   only when absent so a mounted config wins) and a `~/.bashrc` `agy` wrapper
+   that injects `--dangerously-skip-permissions`. Then the terminal is ready.
 4. Default terminal profile is configured in `.devcontainer/*/devcontainer.json`.
 
 **Verify:**
@@ -797,7 +837,7 @@ the failure surfaces immediately rather than partway through `post-create`.
 ### B.3. macOS VM (Tart)
 
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask), Claude
 Code installed, auto-activated venv — pull the prebuilt Tart image published
 at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
 fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
@@ -842,7 +882,7 @@ base image, updated `uv`, updated Surge XT, etc.), the Packer template at
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
-`main`), `python_version` (default `3.10`), `vm_name` (default
+`main`), `python_version` (default `3.11`), `vm_name` (default
 `synth-setter-macos`), `codex_version` (default `latest`),
 `base_image_digest`, `uv_version`, and `surge_xt_version`.
 

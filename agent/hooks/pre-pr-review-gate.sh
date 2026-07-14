@@ -60,9 +60,10 @@
 #   Registered in the agent's settings (e.g. .claude/settings.json) as a
 #   PreToolUse hook on Bash. The handler-level `if: "Bash(gh pr create *)"`
 #   guard is unreliable for PreToolUse hooks (see PR #1090 history), so this
-#   script re-validates the command itself — same defensive pattern
-#   doc-drift.sh / pr-review-resolver.sh use. Non-matching commands exit 0
-#   silently.
+#   script re-validates the command itself via
+#   `agent/_shared/pr_command_classifier.py::classify` — see that module's
+#   docstring for the direct/wrapped/unparsable/"" contract. `direct` runs the
+#   gates below; `wrapped`/`unparsable` block; everything else exits 0.
 # =============================================================================
 set -euo pipefail
 
@@ -73,6 +74,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_lib.sh"
 
 readonly SENTINEL_PY="${SCRIPT_DIR}/../_shared/review_sentinel.py"
+readonly CLASSIFIER_PY="${SCRIPT_DIR}/../_shared/pr_command_classifier.py"
 readonly MIN_REVIEW_BYTES=200
 # gitlint ships its CLI in the `gitlint-core` distribution; pin to the rev in
 # .pre-commit-config.yaml so a PR title obeys the same conventional-commit rule
@@ -86,11 +88,97 @@ PR_TITLE_GATE="${PR_TITLE_GATE:-block}"
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
-# Here-string (not `echo |`) so SIGPIPE under pipefail can't fail-open. Allow
-# leading whitespace at line start so `  gh pr create` is still gated.
-if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND"; then
+# Fast substring pre-check skips the mktemp + python3 classifier spawn for
+# most commands; `gh\s+pr\s+create` alone would miss `gh -R owner/repo pr create`.
+if [[ "$COMMAND" != *gh* || "$COMMAND" != *pr* || "$COMMAND" != *create* ]]; then
   exit 0
 fi
+
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
+.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by
+agent/_shared/review_sentinel.py). Then re-run with the path in the command
+— recommended as a trailing comment so other hooks still fire:
+
+  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
+
+REVIEW_FULL=<value> runs to the next whitespace or shell metachar. Quoted
+paths are NOT recognized — the value-character class excludes both single
+and double quotes entirely, so REVIEW_FULL="..." reads as missing-REVIEW_FULL.
+Pass the path bare.
+
+The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
+first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
+env var, must be a non-negative integer).'
+
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+readonly TITLE_HELP='The PR title is the squash-merge subject, so it lands on main as a commit
+and must be a conventional commit: <type>(<optional-scope>): <description>.
+Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
+(the pr-metadata-gate workflow re-checks the title regardless).'
+
+block() {
+  local reason="$1"
+  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
+  local help="${2:-$BLOCK_HELP}"
+  log "blocking: $reason"
+  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
+  exit 2
+}
+
+# Shared stderr capture for the Python helpers (classifier + sentinel parser)
+# so their failure diagnostics surface in block messages instead of vanishing.
+helper_stderr=$(mktemp)
+trap 'rm -f "$helper_stderr"' EXIT
+
+# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
+# Keep the recipe line in sync with the one in BLOCK_HELP above.
+readonly WRAPPER_HELP='Run the canonical recipe as a single direct command — do not route it
+through bash -c, eval, env -S, a here-string (<<<), or a pipe into a shell:
+
+  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
+
+The gate must see the real argv to validate the review sentinel and title.'
+
+# Classify the command via the shared module: `direct` / `wrapped` /
+# `unparsable` / "" on stdout, diagnostics to helper_stderr, python3's rc.
+classify_pr_command() {
+  python3 "$CLASSIFIER_PY" "$1" 2>"$helper_stderr"
+}
+
+# Missing python3/module fails closed only on the gated surface — blocking
+# every Bash command on an infra failure would brick the session.
+PR_CREATE_MODE=$(classify_pr_command "$COMMAND") && classifier_rc=0 || classifier_rc=$?
+if [[ "$classifier_rc" -ne 0 ]]; then
+  classifier_msg=$(<"$helper_stderr") || true
+  # Keep in sync with _MENTIONS_PR_CREATE_RE in agent/_shared/pr_command_classifier.py.
+  if grep -qE 'gh[[:space:]]+pr[[:space:]]+create' <<<"$COMMAND"; then
+    classifier_reason="internal classifier error (exit ${classifier_rc}) on a"
+    classifier_reason+=" command mentioning gh pr create:"
+    classifier_reason+=" ${classifier_msg:-no stderr captured}"
+    block "$classifier_reason" "$WRAPPER_HELP"
+  fi
+  exit 0
+fi
+
+case "$PR_CREATE_MODE" in
+  direct) ;;
+  wrapped)
+    block "gh pr create must run directly, not through a shell wrapper" \
+      "$WRAPPER_HELP"
+    ;;
+  unparsable)
+    block "cannot parse a command that mentions gh pr create — run it directly" \
+      "$WRAPPER_HELP"
+    ;;
+  "") exit 0 ;;
+  # Any unrecognized classifier output fails closed rather than waving the
+  # command through — the never-fall-open invariant holds by construction here.
+  *)
+    block "unexpected classifier output '${PR_CREATE_MODE}' — treating as gated" \
+      "$WRAPPER_HELP"
+    ;;
+esac
 
 # Extract the PR's head branch from `--head <b>` / `-H <b>` / `--head=<b>`.
 # shlex-tokenize so a value isn't split on spaces and the trailing
@@ -161,38 +249,6 @@ if [[ -n "$TARGET_BRANCH" ]]; then
   fi
   WORKTREE_ROOT=$(worktree_root_for_branch "$TARGET_BRANCH" || true)
 fi
-
-# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
-readonly BLOCK_HELP='Run /repo-review-full-no-comments — it writes the rendered report to
-.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md (filename owned by
-agent/_shared/review_sentinel.py). Then re-run with the path in the command
-— recommended as a trailing comment so other hooks still fire:
-
-  gh pr create --title "..." --body "..."  # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md
-
-REVIEW_FULL=<value> runs to the next whitespace or shell metachar. Quoted
-paths are NOT recognized — the value-character class excludes both single
-and double quotes entirely, so REVIEW_FULL="..." reads as missing-REVIEW_FULL.
-Pass the path bare.
-
-The encoded SHA must be an ancestor of HEAD and within REVIEW_MAX_LAG
-first-parent commits behind it (default 2; override via the REVIEW_MAX_LAG
-env var, must be a non-negative integer).'
-
-# shellcheck disable=SC2016  # intentional: no expansion wanted in the help block
-readonly TITLE_HELP='The PR title is the squash-merge subject, so it lands on main as a commit
-and must be a conventional commit: <type>(<optional-scope>): <description>.
-Allowed <type>s are defined in .gitlint. Set PR_TITLE_GATE=off to bypass
-(the pr-metadata-gate workflow re-checks the title regardless).'
-
-block() {
-  local reason="$1"
-  # Optional 2nd arg overrides the help block; defaults to the REVIEW_FULL help.
-  local help="${2:-$BLOCK_HELP}"
-  log "blocking: $reason"
-  printf 'BLOCKED: %s\n\n%s\n' "$reason" "$help" >&2
-  exit 2
-}
 
 if [[ ! "$REVIEW_MAX_LAG" =~ ^[0-9]+$ ]]; then
   block "REVIEW_MAX_LAG must be a non-negative integer, got: ${REVIEW_MAX_LAG}"
@@ -324,13 +380,11 @@ fi
 # helper exits 1 when the basename doesn't match the sentinel pattern, exit 2
 # on usage error or ValueError — surface those separately so a missing
 # python3 / broken helper isn't misreported as "bad filename".
-helper_stderr=$(mktemp)
-trap 'rm -f "$helper_stderr"' EXIT
 if review_sha=$(python3 "$SENTINEL_PY" parse "$REVIEW_PATH" 2>"$helper_stderr"); then
   :
 else
   helper_rc=$?
-  helper_msg=$(cat "$helper_stderr")
+  helper_msg=$(<"$helper_stderr") || true
   case "$helper_rc" in
     1)
       block "REVIEW_FULL filename does not match the sentinel pattern 'repo-review-full-no-comments.<40-char-sha>.md': $REVIEW_PATH"

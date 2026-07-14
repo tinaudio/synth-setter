@@ -2,17 +2,22 @@
 
 The W&B public API is faked (no network): ``wandb.Api().artifact(ref)`` returns
 a stub whose ``download(root=...)`` writes a ``model.ckpt`` into the cache and
-records every call, so a second resolution can assert the cache is reused.
+records every call, so a second resolution can assert the cache is reused. A
+stub may instead carry ``s3://`` manifest references (a reference-only model
+artifact); the resolver then rclone-downloads from R2 rather than calling
+``download()`` — exercised end-to-end against a local-backed ``r2:`` remote.
 """
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
@@ -22,16 +27,29 @@ from synth_setter.utils.utils import _resolve_wandb_checkpoint, register_resolve
 
 
 class _FakeArtifact:
-    """W&B artifact stub that writes the configured files on download and counts calls."""
+    """W&B artifact stub: writes files on ``download`` (counting calls) or carries ``s3://`` refs.
 
-    def __init__(self, calls: list[str], filenames: tuple[str, ...]) -> None:
-        """Capture the shared call log and the filenames each download materializes.
+    A ``manifest.entries`` of ``s3://`` reference entries models a reference-only
+    model artifact; an empty manifest (the default) models a legacy file-upload
+    artifact whose bytes materialize via ``download``.
+    """
+
+    def __init__(
+        self,
+        calls: list[str],
+        filenames: tuple[str, ...],
+        refs: tuple[str, ...] = (),
+    ) -> None:
+        """Capture the shared call log, the download filenames, and any ``s3://`` references.
 
         :param calls: Shared list recording every ``download`` invocation.
         :param filenames: Files written into the download root (empty ⇒ no ckpt).
+        :param refs: ``s3://`` reference URIs exposed on ``manifest.entries``.
         """
         self._calls = calls
         self._filenames = filenames
+        entries = {ref: SimpleNamespace(ref=ref) for ref in refs}
+        self.manifest = SimpleNamespace(entries=entries)
 
     def download(self, root: str) -> str:
         """Write the configured files into ``root`` and record the call.
@@ -49,14 +67,19 @@ class _FakeArtifact:
         return root
 
 
-def _fake_api(calls: list[str], filenames: tuple[str, ...] = ("model.ckpt",)) -> SimpleNamespace:
+def _fake_api(
+    calls: list[str],
+    filenames: tuple[str, ...] = ("model.ckpt",),
+    refs: tuple[str, ...] = (),
+) -> SimpleNamespace:
     """Build a fake ``wandb`` module whose ``Api().artifact(...)`` returns the stub.
 
     :param calls: Shared list that records every ``download`` invocation.
     :param filenames: Files the stub materializes on download.
+    :param refs: ``s3://`` reference URIs the stub's manifest exposes.
     :returns: A ``wandb``-shaped namespace with an ``Api`` factory.
     """
-    artifact = _FakeArtifact(calls, filenames)
+    artifact = _FakeArtifact(calls, filenames, refs)
     api = SimpleNamespace(artifact=lambda ref: artifact)
     # __spec__ must be present and non-None so the resolver's find_spec("wandb")
     # guard treats this injected stub as an installed package.
@@ -128,6 +151,86 @@ def test_wandb_resolver_reuses_cache_without_redownload(
 
     assert Path(first.ckpt) == Path(second.ckpt)
     assert len(calls) == 1
+
+
+def test_wandb_resolver_reference_artifact_downloads_checkpoint_from_r2(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reference-only artifact's ``s3://`` ckpt is rclone-pulled from R2, not ``download()``-ed.
+
+    Drives the real ``rclone`` binary against a local-backed ``r2:`` remote: the
+    checkpoint is staged at the referenced R2 location, the artifact exposes it as
+    an ``s3://`` manifest reference, and the resolver must convert the scheme and
+    materialize the bytes into its cache — never touching the native ``download()``.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module and points rclone at the local fs.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.chdir(workspace)
+    staged = workspace / "intermediate-data" / "checkpoints" / "flow-simple" / "model.ckpt"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    # Stage a real torch checkpoint so the assertion proves the resolved path is a
+    # loadable checkpoint, not just byte-identical bytes the reference branch moved.
+    ckpt_state = {"state_dict": {"w": torch.tensor([1.0, 2.0])}, "epoch": 3}
+    torch.save(ckpt_state, staged)
+
+    calls: list[str] = []
+    ref = "s3://intermediate-data/checkpoints/flow-simple/model.ckpt"
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=(), refs=(ref,)))
+
+    resolved = Path(_resolve_wandb_checkpoint("entity/project/model-flow-simple:latest"))
+
+    assert resolved.name == "model.ckpt"
+    assert workspace / ".cache" / "checkpoints" in resolved.parents
+    assert calls == [], "native download() must not run for a reference artifact"
+    loaded = torch.load(resolved, weights_only=False)
+    assert loaded["epoch"] == 3
+    assert torch.equal(loaded["state_dict"]["w"], torch.tensor([1.0, 2.0]))
+
+
+def test_wandb_resolver_file_artifact_uses_native_download(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An artifact with no ``s3://`` references falls back to native ``download()`` (legacy path).
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module into ``sys.modules``.
+    """
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=("model.ckpt",)))
+
+    resolved = Path(_resolve_wandb_checkpoint("model-x:latest"))
+
+    assert resolved.name == "model.ckpt"
+    assert resolved.is_file()
+    assert len(calls) == 1
+
+
+def test_wandb_resolver_reference_unsafe_basename_raises(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reference whose basename is ``..`` is rejected, never written above the cache.
+
+    :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
+    :param monkeypatch: Injects the fake ``wandb`` module and stubs the R2 env load.
+    """
+    monkeypatch.setattr(utils_mod.shutil, "which", lambda _name: "/usr/bin/rclone")
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
+    calls: list[str] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "wandb",
+        _fake_api(
+            calls, filenames=(), refs=("s3://intermediate-data/checkpoints/flow-simple/..",)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unsafe checkpoint basename"):
+        _resolve_wandb_checkpoint("entity/project/model-flow-simple:latest")
 
 
 def test_resolve_wandb_checkpoint_traversal_ref_stays_inside_cache(

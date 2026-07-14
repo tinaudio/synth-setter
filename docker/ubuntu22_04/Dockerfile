@@ -48,7 +48,7 @@ RUN case "${TARGETARCH:-}" in \
     esac
 
 # TODO: add appropriate build labels
-# TODO: Consider taking python runtime from `python:3.10-*` stage.
+# TODO: Consider taking python runtime from `python:3.11-*` stage.
 # This would involving copying`/usr/local`.
 # TODO: Add diagram of stages and dependencies.
 # TODO(deduplicate package lists)
@@ -58,10 +58,9 @@ WORKDIR /home/build/
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
-# Non-interactive configuration of tzdata
+# Keep Debian package configuration noninteractive in every derived builder stage.
 ENV DEBIAN_FRONTEND=noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN=true
-RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc select UTC'; } | debconf-set-selections
+ENV TZ=Etc/UTC
 
 ARG TARGETARCH
 ARG BUILD_MODE
@@ -218,6 +217,98 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     rm "./${fname}"
 
 # ==========================================
+# VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
+# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
+# binaries, so non-amd64 builds stage nothing and downstream steps skip.
+# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
+# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
+# License: these third-party binaries ship in the published GHCR image —
+# review upstream license/redistribution terms before adding or bumping an
+# asset (Dexed: GPL-3.0; OB-Xf: GPL-3.0; Six Sines: MIT).
+# ==========================================
+FROM ${BASE_IMAGE} AS vst3-synths-fetch
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    unzip \
+    wget
+WORKDIR /plugins-staging
+
+ARG DEXED_VERSION=0.9.8
+ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Dexed: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip" && \
+    echo "${DEXED_SHA256}  /tmp/dexed.zip" | sha256sum -c - && \
+    unzip -q /tmp/dexed.zip -d /tmp/dexed && \
+    mv "/tmp/dexed/dexed-${DEXED_VERSION}-lnx/Dexed.vst3" . && \
+    rm -rf /tmp/dexed.zip /tmp/dexed
+
+ARG OBXF_VERSION=v1.0.3
+ARG OBXF_SHA256=72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping OB-Xf: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/obxf.zip "https://github.com/surge-synthesizer/OB-Xf/releases/download/${OBXF_VERSION}/ob-xf-Linux-${OBXF_VERSION}.zip" && \
+    echo "${OBXF_SHA256}  /tmp/obxf.zip" | sha256sum -c - && \
+    unzip -q /tmp/obxf.zip "obxf_products/OB-Xf.vst3/*" -d /tmp/obxf && \
+    mv "/tmp/obxf/obxf_products/OB-Xf.vst3" . && \
+    rm -rf /tmp/obxf.zip /tmp/obxf
+
+ARG SIX_SINES_VERSION=v1.1.0
+ARG SIX_SINES_ASSET=six-sines-linux-2025-03-18-43d10b2.tgz
+ARG SIX_SINES_SHA256=fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-only asset" >&2; exit 0; fi; \
+    wget -q -O /tmp/six-sines.tgz "https://github.com/baconpaul/six-sines/releases/download/${SIX_SINES_VERSION}/${SIX_SINES_ASSET}" && \
+    echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
+    rm /tmp/six-sines.tgz
+
+# ==========================================
+# KR106 source build: upstream release ZIPs require glibc 2.38, so build the
+# VST3 from source on Ubuntu 22.04 and stage the resulting bundle.
+# License: Ultramaster KR-106 is GPL-3.0.
+# ==========================================
+FROM builder-base AS builder-build-ultramaster-kr106
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+ARG ULTRAMASTER_KR106_VERSION=v2.5.13
+ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    mkdir -p /plugins-staging && \
+    if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 build dependencies on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      libasound2-dev \
+      libcurl4-openssl-dev \
+      libfontconfig1-dev \
+      libfreetype-dev \
+      libgl-dev \
+      libgl1-mesa-dev \
+      libgtk-3-dev \
+      libwebkit2gtk-4.0-dev \
+      libx11-dev \
+      libxcursor-dev \
+      libxinerama-dev \
+      libxrandr-dev \
+      mesa-common-dev \
+      pkg-config
+WORKDIR /home/build/ultramaster-kr106
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 source build on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    echo "Building Ultramaster KR-106 ${ULTRAMASTER_KR106_VERSION} from git ref ${ULTRAMASTER_KR106_GIT_REF}" && \
+    git init && \
+    git remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git && \
+    git fetch --depth 1 origin "${ULTRAMASTER_KR106_GIT_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    git submodule update --init --recursive --depth 1 && \
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF && \
+    cmake --build build --config Release --target KR106_VST3 --parallel "$(nproc)" && \
+    mkdir -p /plugins-staging && \
+    cp -a "build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3" /plugins-staging/
+
+# ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
@@ -243,7 +334,8 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Check that vst3 was installed.
+# Surge XT is the only bundle present here; the amd64-only fetched synths land
+# downstream (vst3-synths-fetch COPY), gated and load-validated there.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
     || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 
@@ -251,15 +343,16 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 # so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
-# Install Python and create venv
+# Install build-time system Python and uv; the runtime venv is created below.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev
-RUN python3 --version && \
-    python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
+# Keep the managed interpreter outside root's home so the non-root runtime
+# user can read its standard library through /venv/main.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
@@ -270,16 +363,21 @@ ENV HYDRA_FULL_ERROR=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-RUN uv venv $VIRTUAL_ENV
+# Runtime venv: a uv-managed CPython 3.11 (matches `requires-python` in
+# `pyproject.toml`), decoupled from the apt python3 used at build time.
+RUN uv venv --python 3.11 "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
-    python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
+    python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.
 # Both dev and final-stage inherit from this stage.
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
+# Re-declare the predefined platform ARG so ${TARGETARCH} resolves in this
+# stage's RUN steps; buildkit does not inherit ARG across FROM.
+ARG TARGETARCH
 # Install Python dependencies via `uv sync --frozen` against the committed
 # lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
 # across builds. Cache scope: only pyproject.toml + uv.lock + README.md
@@ -304,6 +402,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
 # over SSH (rsync, openssh-client) plus a system pip3 (sky shells out to `pip3`
 # directly, which the uv-managed venv at /venv/main does not expose).
+# fuse (2.x) enables `rclone mount`: the pinned rclone 1.53 execs the bare
+# `fusermount` binary, which `fuse` ships but `fuse3` does not (only
+# `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
+# on 22.04, so install only `fuse`. The launch path must also grant
+# --device=/dev/fuse --cap-add=SYS_ADMIN.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update; \
@@ -319,9 +422,11 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       x11-utils \
       x11-xserver-utils \
       rclone \
+      fuse \
       rsync \
       openssh-client \
-      python3-pip; \
+      python3-pip \
+      unzip; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -363,6 +468,32 @@ RUN ./run-linux-vst-headless.sh \
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
 
+COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
+COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
+
+# Presence gate for the bundles the image must ship: Surge XT on every arch,
+# bundled plugin synths on amd64 only. Load-validation follows.
+RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+      if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
+        echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
+      fi; \
+      [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
+        || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
+    done
+
+# Validate each bundled synth loads under headless X11 — one wrapper run per
+# plugin, since sequential in-process loads crash order-dependently (#1649) —
+# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
+# Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
+      name="${entry%%|*}"; \
+      ./run-linux-vst-headless.sh \
+        python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
+      ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3" || exit 1; \
+    done
+
 WORKDIR /home/build/synth-setter
 
 # ==========================================
@@ -381,9 +512,11 @@ FROM builder-install-synth-setter-deps AS dev-base
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
+# unzip: the in-image pytest run exercises the Makefile install-plugins
+# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
 
 WORKDIR /home/build/synth-setter
 
@@ -408,7 +541,8 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
+# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
@@ -430,24 +564,27 @@ FROM dev-base AS devcontainer-tools
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap \
       curl \
       tmux \
+      xz-utils \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Node.js + Claude Code CLI (system-wide) ---
-ARG CLAUDE_CODE_VERSION=latest
-COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Install Node.js and the system Codex CLI.
+ARG CODEX_VERSION=latest
+COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version \
  && npm --version \
- && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && codex --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
@@ -500,15 +637,32 @@ ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 
-# dev's `npm install -g` would EACCES on the root-owned global tree (claude-code
-# is baked in as root); a per-user prefix sends it to a writable one. $HOME is
-# unset after USER, so export it per-RUN (not ENV — that leaks to root sessions).
-ARG CODEX_VERSION=latest
+# dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local),
+# so the user-owned agents use a writable prefix. $HOME is unset after USER, so
+# export it per-RUN rather than through ENV, which leaks to root sessions.
+ARG CLAUDE_CODE_VERSION=latest
+ARG PI_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
- && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && mkdir -p "/home/${USERNAME}/.npm-global/bin" \
+ && ln -sfn /usr/local/bin/codex "/home/${USERNAME}/.npm-global/bin/codex" \
+ && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force \
- && codex --version
+ && claude --version \
+ && codex --version \
+ && pi --version
+
+# Hermes owns a separate per-user venv; pin and verify its upstream installer.
+ARG HERMES_GIT_REF=v2026.7.7.2
+ARG HERMES_GIT_SHA=9de9c25f620ff7f1ce0fd5457d596052d5159596
+ARG HERMES_INSTALLER_SHA256=a93c65b01ea392e179cf872e182bd01a2b65c0c15f17833e9f9569033ef10e07
+RUN export HOME="/home/${USERNAME}" \
+ && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh \
+ && echo "${HERMES_INSTALLER_SHA256}  /tmp/hermes-install.sh" | sha256sum -c - \
+ && env -u VIRTUAL_ENV bash /tmp/hermes-install.sh --branch "${HERMES_GIT_REF}" --commit "${HERMES_GIT_SHA}" --skip-browser \
+ && rm /tmp/hermes-install.sh \
+ && hermes --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
 # installer fetches a SHA512-verified release into ~/.local/bin (upstream

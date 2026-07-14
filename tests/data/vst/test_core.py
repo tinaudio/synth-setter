@@ -85,6 +85,26 @@ class TestLoadPluginNoWarmup:
 
         fake_plugin.show_editor.assert_not_called()
 
+    def test_load_plugin_forwards_plugin_name_to_host(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``plugin_name`` selects a class inside a multi-class VST3 bundle.
+
+        :param monkeypatch: Patches the ``VST3Plugin`` constructor to record its kwargs.
+        """
+        seen: dict[str, object] = {}
+
+        def _ctor(path: str, *, plugin_name: str | None = None) -> MagicMock:
+            seen["path"] = path
+            seen["plugin_name"] = plugin_name
+            return MagicMock()
+
+        monkeypatch.setattr(core, "VST3Plugin", _ctor)
+
+        load_plugin("plugins/Six Sines.vst3", plugin_name="Six Sines")
+
+        assert seen == {"path": "plugins/Six Sines.vst3", "plugin_name": "Six Sines"}
+
 
 class TestWarmupPlugin:
     """``warmup_plugin`` runs ``show_editor`` once and sets the close event so it returns."""
@@ -329,7 +349,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", preloaded),
         )
 
@@ -367,7 +387,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
         )
 
         assert load_calls == ["plugins/Surge XT.vst3"]
@@ -396,7 +416,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             warmup=True,
         )
 
@@ -423,7 +443,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", cached),
             warmup=True,
         )

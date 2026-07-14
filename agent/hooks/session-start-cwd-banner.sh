@@ -50,8 +50,9 @@ main() {
     # Anchor to $primary_root so the command works even when the session started in a subdir.
     # `uv sync` builds the worktree's own .venv; `make link-plugins` backfills the
     # gitignored plugins/ symlink; `make link-thoughts` points thoughts/ at the
-    # central primary copy. Single-quote the paths so the command survives spaces.
-    printf "  git worktree add --detach '%s/.claude/worktrees/%s' && cd '%s/.claude/worktrees/%s' && uv sync && make link-plugins && make link-thoughts\n" \
+    # central primary copy; `make link-skills` projects marketplace skills.
+    # Single-quote the paths so the command survives spaces.
+    printf "  git worktree add --detach '%s/.claude/worktrees/%s' && cd '%s/.claude/worktrees/%s' && uv sync && make link-plugins && make link-thoughts && make link-skills\n" \
       "$primary_root" "$slug" "$primary_root" "$slug"
   else
     printf '  status   : isolated worktree (OK)\n'
@@ -59,6 +60,21 @@ main() {
     # shellcheck disable=SC2016  # backticks are literal markdown-style hint to the agent, not command substitution
     printf '  worktrees: %s active (run `git worktree list` for paths)\n' "$worktree_count"
   fi
+
+  # Tool discovery paths are committed as symlinks into the canonical agent/
+  # tree; unmaterialized or dangling links mean project assets disappear.
+  local repo_top asset_path
+  repo_top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$repo_top" ]] || return 0
+  for asset_path in \
+    "$repo_top/.agents/skills" \
+    "$repo_top/.claude/hooks" \
+    "$repo_top/.claude/skills"
+  do
+    [[ ( -e "$asset_path" || -L "$asset_path" ) && ! -d "$asset_path" ]] || continue
+    printf '\n  WARNING: %s did not materialize as a directory — agent asset discovery is BROKEN.\n' "${asset_path#"$repo_top/"}"
+    printf "    Fix: git -C '%s' config core.symlinks true && git -C '%s' checkout -- '%s'\n" "$repo_top" "$repo_top" "${asset_path#"$repo_top/"}"
+  done
 }
 
 main "$@"

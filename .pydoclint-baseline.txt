@@ -44,10 +44,6 @@ src/synth_setter/data/ksin_datamodule.py
     DOC101: Method `KSinDataModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `KSinDataModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, break_symmetry: bool, k: int, num_workers: int, ot: bool, pin_memory: bool, shift_test_distribution: bool, signal_length: int, sort_frequencies: bool, train_val_test_seeds: Tuple[int, int, int], train_val_test_sizes: Tuple[int, int, int]].
 --------------------
-src/synth_setter/data/surge_datamodule.py
-    DOC101: Method `WithinChunkShuffledSampler.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `WithinChunkShuffledSampler.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, batches_per_group: int, num_batches: int].
---------------------
 src/synth_setter/data/vst/core.py
     DOC101: Function `extract_renderer_version`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `extract_renderer_version`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: Path].
@@ -206,15 +202,15 @@ src/synth_setter/models/ksin_flow_matching_module.py
     DOC501: Method `KSinFlowMatchingModule._sample_x0_and_x1` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `KSinFlowMatchingModule._sample_x0_and_x1` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['NotImplementedError'].
 --------------------
-src/synth_setter/models/surge_ff_module.py
+src/synth_setter/models/vst_ff_module.py
     DOC101: Method `SurgeFeedForwardModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFeedForwardModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
 --------------------
-src/synth_setter/models/surge_flow_matching_module.py
+src/synth_setter/models/vst_flow_matching_module.py
     DOC101: Method `SurgeFlowMatchingModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFlowMatchingModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [cfg_dropout_rate: float, compile: bool, conditioning: Literal['mel', 'm2l'], encoder: torch.nn.Module, num_params: int, optimizer: torch.optim.Optimizer, rectified_sigma_min: float, scheduler: torch.optim.lr_scheduler, test_cfg_strength: float, test_sample_steps: int, validation_cfg_strength: float, validation_sample_steps: int, vector_field: torch.nn.Module, warmup_steps: int].
 --------------------
-src/synth_setter/models/surge_flowvae_module.py
+src/synth_setter/models/vst_flowvae_module.py
     DOC101: Method `SurgeFlowVAEModule.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SurgeFlowVAEModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [beta_max: float, beta_start: float, beta_warmup_steps: int, compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, param_spec: str, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
 --------------------
@@ -331,7 +327,7 @@ src/synth_setter/pipeline/schemas/spec.py
     DOC601: Class `ShardSpec`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC603: Class `ShardSpec`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [filename: str, model_config: , seed: int, shard_id: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC601: Class `RenderConfig`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `RenderConfig`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [channels: int, gui_toggle_cadence: _GuiToggleCadence, max_retries: int, min_loudness: float, model_config: , parallel: bool, param_sample_cadence: _ParamSampleCadence, param_spec_name: str, plugin_path: str, plugin_reload_cadence: _PluginReloadCadence, preset_path: str, renderer_version: str, sample_rate: int, samples_per_render_batch: int, samples_per_shard: int, signal_duration_seconds: float, velocity: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
+    DOC603: Class `RenderConfig`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [channels: int, gui_toggle_cadence: _GuiToggleCadence, max_retries: int, min_loudness: float, model_config: , parallel: bool, param_sample_cadence: _ParamSampleCadence, param_spec_name: str, plugin_path: str, plugin_reload_cadence: _PluginReloadCadence, renderer_version: str, sample_rate: int, samples_per_render_batch: int, samples_per_shard: int, signal_duration_seconds: float, velocity: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC201: Method `RenderConfig._ranges_must_be_sane` does not have a return section in docstring
     DOC501: Method `RenderConfig._ranges_must_be_sane` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `RenderConfig._ranges_must_be_sane` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].

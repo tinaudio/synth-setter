@@ -17,7 +17,7 @@ import pytest
 
 from synth_setter.data.vst import writers
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -26,7 +26,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """Build a syntactically-valid ``RenderConfig`` for CPU-only tests.
 
-    No I/O happens against ``plugin_path`` or ``preset_path`` in these tests
+    No I/O happens against ``plugin_path`` or ``plugin_state_path`` in these tests
     — they only need to be non-blank strings.
 
     :param \\*\\*overrides: Per-call overrides merged into the default kwargs.
@@ -34,7 +34,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     """
     kwargs: dict[str, object] = {
         "plugin_path": "plugins/Surge XT.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
+        "plugin_state_path": "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -51,7 +51,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
 
 
-def test_shard_metadata_from_render_projects_five_fields() -> None:
+def test_shard_metadata_from_render_projects_render_provenance_fields() -> None:
     """``_shard_metadata_from_render`` returns a strict ``ShardMetadata`` with renderer values."""
     render_cfg = _smoke_render_cfg(
         velocity=64,
@@ -59,6 +59,8 @@ def test_shard_metadata_from_render_projects_five_fields() -> None:
         sample_rate=22050,
         channels=1,
         min_loudness=-40.0,
+        base_seed=7,
+        attempts_per_sample=9,
     )
 
     meta = _shard_metadata_from_render(render_cfg)
@@ -69,6 +71,8 @@ def test_shard_metadata_from_render_projects_five_fields() -> None:
     assert meta.sample_rate == 22050
     assert meta.channels == 1
     assert meta.min_loudness == -40.0
+    assert meta.base_seed == 7
+    assert meta.attempts_per_sample == 9
 
 
 def test_shard_metadata_from_render_round_trips_through_json() -> None:
@@ -117,7 +121,7 @@ def _cli_argv(data_file: str) -> list[str]:
         data_file,
         "--plugin_path",
         "plugins/Surge XT.vst3",
-        "--preset_path",
+        "--plugin_state_path",
         "presets/surge-base.vstpreset",
         "--param_spec_name",
         "surge_simple",
@@ -180,6 +184,27 @@ def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:
     mock_h5.assert_not_called()
     wds_args, _wds_kwargs = mock_wds.call_args
     assert wds_args[0] == str(data_file)
+
+
+def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> None:
+    """``data_file=foo.lance`` routes to ``make_lance_dataset``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    data_file = tmp_path / "shard-000000.lance"
+
+    with (
+        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
+        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
+        patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
+    ):
+        _run_main_with_argv(_cli_argv(str(data_file)))
+
+    mock_lance.assert_called_once()
+    mock_h5.assert_not_called()
+    mock_wds.assert_not_called()
+    lance_args, _lance_kwargs = mock_lance.call_args
+    assert lance_args[0] == str(data_file)
 
 
 def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
@@ -254,7 +279,7 @@ def _stub_render_dependencies(
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> _FakeVSTDataSample:
+    def _fake_generate_sample(**kwargs: object) -> _FakeVSTDataSample:
         captured.append(dict(kwargs))
         return _FakeVSTDataSample()
 
@@ -285,7 +310,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
     returned: list[MagicMock] = []
     captured: list[dict[str, object]] = []
 
-    def _fake_generate_sample(_plugin_path: str, **kwargs: object) -> MagicMock:
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(returned)}")
         returned.append(sample)
@@ -341,29 +366,52 @@ def test_render_in_batches_sample_cadence_draws_fresh_params_every_render(
         assert call_kwargs["fixed_note_params"] is None
 
 
-def test_render_in_batches_shard_cadence_rejects_caller_fixed_params(
+def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Shard cadence plus caller-supplied fixed lists is contradictory and raises.
+    """Shard-cadence copy seeds the shard's single patch from source row 0, then reuses it.
 
     :param monkeypatch: Pytest fixture used to patch module-level callables.
     """
+    n = 3
     render_cfg = _smoke_render_cfg(
-        samples_per_shard=2,
-        samples_per_render_batch=2,
+        samples_per_shard=n,
+        samples_per_render_batch=n,
         param_sample_cadence="shard",
     )
-    _stub_render_dependencies(monkeypatch, load_plugin_calls=[], load_preset_calls=[])
+    captured: list[dict[str, object]] = []
 
-    with pytest.raises(ValueError, match="param_sample_cadence"):
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=MagicMock(name="param_spec"),
-            start_idx=0,
-            fixed_synth_params_list=[{"a": 0.5}, {"a": 0.5}],
-            fixed_note_params_list=None,
-            flush_batch=lambda _batch, _start: None,
-        )
+    def _fake_generate_sample(**kwargs: object) -> MagicMock:
+        captured.append(dict(kwargs))
+        sample = MagicMock(name=f"sample_{len(captured)}")
+        # Mirror the real renderer: the sample reports the params it rendered with, so shard
+        # cadence reuses concrete row-0 values rather than MagicMock placeholder attributes.
+        sample.synth_params = kwargs["fixed_synth_params"]
+        sample.note_params = kwargs["fixed_note_params"]
+        return sample
+
+    monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
+
+    synth_rows = [{"a": 0.1}, {"a": 0.2}, {"a": 0.3}]
+    note_rows: list[NoteParams] = [
+        {"pitch": 60 + i, "note_start_and_end": (0.0, 1.0)} for i in range(n)
+    ]
+    # Source rows must differ so "only row 0 is used" is a real assertion, not a tautology.
+    assert synth_rows[0] != synth_rows[1]
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=synth_rows,
+        fixed_note_params_list=note_rows,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    # Sample 0 seeds the patch from row 0; every later render reuses it, so all renders use row 0.
+    assert len(captured) == n
+    for call_kwargs in captured:
+        assert call_kwargs["fixed_synth_params"] == synth_rows[0]
+        assert call_kwargs["fixed_note_params"] == note_rows[0]
 
 
 def test_make_hdf5_dataset_shard_cadence_rerenders_partial_shard_from_row_zero(
@@ -464,8 +512,41 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     assert len(captured) == n
     cached = cached_plugin_holder[0]
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
     assert sum(len(batch) for batch, _ in flushed) == n
+
+
+@pytest.mark.parametrize(
+    ("cadence", "reload_each_render"),
+    [("once", False), ("render", True)],
+)
+def test_make_renderer_maps_dawdreamer_reload_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+    cadence: str,
+    reload_each_render: bool,
+) -> None:
+    """DawDreamer receives the requested plugin lifecycle policy.
+
+    :param monkeypatch: Replaces renderer construction with a capture seam.
+    :param cadence: Public reload cadence under test.
+    :param reload_each_render: Expected renderer lifecycle flag.
+    """
+    captured: dict[str, object] = {}
+
+    def capture_renderer(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(writers, "DawDreamerRenderer", capture_renderer)
+    render_cfg = _smoke_render_cfg(
+        renderer_backend="dawdreamer",
+        plugin_reload_cadence=cadence,
+        gui_toggle_cadence="never",
+    )
+
+    writers._make_renderer(render_cfg)
+
+    assert captured["reload_plugin_each_render"] is reload_each_render
 
 
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
@@ -504,7 +585,7 @@ def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_rend
     assert load_preset_calls == []
     assert len(captured) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is None
+        assert getattr(call_kwargs["renderer"], "plugin") is None
         assert call_kwargs["warmup"] is False
 
 
@@ -777,7 +858,7 @@ def test_render_in_batches_once_once_warms_once_and_caches_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == 1
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
@@ -818,7 +899,7 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
     cached = cached_plugin_holder[0]
     assert sum(1 for c in captured if c["warmup"] is True) == n
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is cached
+        assert getattr(call_kwargs["renderer"], "plugin") is cached
 
 
 # Writer-level cross-cut: the previous tests stub ``generate_sample`` itself,
@@ -904,7 +985,7 @@ def _install_writer_level_fakes(
     fake_spec.sample.return_value = fake_spec_payload
     fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
 
-    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", _fake_render_params)
     monkeypatch.setattr(
         generate_vst_dataset,
         "make_spectrogram",

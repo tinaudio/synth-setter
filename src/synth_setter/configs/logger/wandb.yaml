@@ -8,7 +8,9 @@ wandb:
   id: null # pass correct id to resume experiment!
   anonymous: null # enable anonymous logging
   project: "${oc.env:WANDB_PROJECT,synth-setter}"
-  log_model: "all" # upload every checkpoint as W&B artifact (crash-resilient)
+  # No checkpoint files to W&B (5 GB total quota); the train-end model-{config_id}
+  # artifact references the R2-stored checkpoint instead.
+  log_model: False
   prefix: "" # a string to put at the beginning of metric keys
   entity: ${oc.env:WANDB_ENTITY,null} # set to name of your wandb team (defaults to user's default entity)
   group: ""
@@ -17,6 +19,9 @@ wandb:
   settings:
     _target_: wandb.Settings
     code_dir: .
-    # ``wrap`` not ``redirect``: redirect's local output.log is never uploaded by
-    # wandb 0.26.x, so the UI Logs tab is empty (#1465); wrap drops subprocess output.
+    # ``wrap`` not ``redirect``: redirect's output.log never uploads in wandb 0.26.x
+    # (#1465); wrap sees only this process, hence ``check_call_streamed``'s stderr tee.
     console: wrap
+    # Resumed sessions (generate → finalize → oracle eval) share one run id; multipart
+    # gives each its own logs/output_*.log instead of overwriting output.log — #1604.
+    console_multipart: true

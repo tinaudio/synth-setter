@@ -13,22 +13,17 @@ Rationale: docs/reference/dependency-management.md.
 from __future__ import annotations
 
 import re
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
 # Names a `Requirement` line may carry before its version/extra/marker suffix.
 _NAME_DELIMS = "<>=!~[; "
 
-# The lite union closure: validate_spec (pydantic + python-dotenv via r2_io) and
-# load_image_config (pydantic + pyyaml). r2_io alone needs only python-dotenv.
-LITE_CLOSURE = {"pydantic", "python-dotenv", "pyyaml"}
+# The lite union closure: validate_spec, r2_io.ensure_r2_env_loaded, and
+# load_image_config. r2_io now parses canonical storage env with BaseSettings.
+LITE_CLOSURE = {"pydantic", "pydantic-settings", "python-dotenv", "pyyaml"}
 
 # Heavy deps that must never reappear in the base; the lite env must import the
 # three entrypoints without any of these.
@@ -104,3 +99,22 @@ def test_project_dependencies_exclude_heavy_runtime(project_dependency_names: se
     """
     leaked = project_dependency_names & HEAVY_DEPS
     assert not leaked, f"heavy deps leaked into [project.dependencies]: {sorted(leaked)}"
+
+
+def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
+    """SmooSense viewer deps stay out of the pipeline runtime and base install.
+
+    :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency_groups = pyproject["dependency-groups"]
+
+    assert "smoosense[jupyter]" in dependency_groups["notebooks"]
+    assert "duckdb>=1.5.4" in dependency_groups["notebooks"]
+    assert {"include-group": "notebooks"} in dependency_groups["dev"]
+    assert all("smoosense" not in str(dep) for dep in pyproject["project"]["dependencies"])
+    assert all("duckdb" not in str(dep) for dep in pyproject["project"]["dependencies"])
+    assert all("smoosense" not in str(dep) for dep in dependency_groups["runtime"])
+    assert all("duckdb" not in str(dep) for dep in dependency_groups["runtime"])
