@@ -134,16 +134,17 @@ def _benchmark_trial(
         pin_memory=False,
         param_spec_name=ParamSpecName("surge_xt"),
         loader=loader,
+        persistent_workers=num_workers > 0,
     )
     module.setup("fit")
     try:
-        warm_iterator = iter(module.train_dataloader())
+        data_loader = module.train_dataloader()
+        warm_iterator = iter(data_loader)
         try:
             next(warm_iterator)
         except StopIteration as error:
             raise ValueError("benchmark dataset produced no full training batches") from error
-        del warm_iterator
-        iterator = iter(module.train_dataloader())
+        iterator = iter(data_loader)
         batches = 0
         wait_seconds = 0.0
         started = time.perf_counter()

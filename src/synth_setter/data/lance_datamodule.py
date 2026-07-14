@@ -351,10 +351,30 @@ class LanceVSTDataModule(VSTDataModule):
     .. attribute :: shard_suffix
 
         Shard filename suffix selecting ``*.lance`` splits.
+
+    .. attribute :: train_dataset
+
+        Training dataset for the selected loader path.
+
+    .. attribute :: val_dataset
+
+        Validation dataset for the selected loader path.
+
+    .. attribute :: test_dataset
+
+        Test dataset for the selected loader path.
+
+    .. attribute :: predict_dataset
+
+        Prediction dataset for the selected loader path.
     """
 
     dataset_cls: ClassVar[type[VSTDataset]] = LanceVSTDataset
     shard_suffix: ClassVar[str] = ".lance"
+    train_dataset: VSTDataset | LanceMapDataset
+    val_dataset: VSTDataset | LanceMapDataset
+    test_dataset: VSTDataset | LanceMapDataset
+    predict_dataset: VSTDataset | LanceMapDataset
 
     def __init__(
         self,
@@ -372,6 +392,7 @@ class LanceVSTDataModule(VSTDataModule):
         *,
         param_spec_name: ParamSpecName,
         loader: Literal["legacy", "map"] = "legacy",
+        persistent_workers: bool = False,
     ) -> None:
         """Store the loader selection on top of the base datamodule config.
 
@@ -393,6 +414,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param param_spec_name: Registry key selecting the param spec width.
         :param loader: Read path per split: ``"legacy"`` (batch-indexed
             adapter) or ``"map"`` (sample-indexed ``LanceMapDataset``).
+        :param persistent_workers: Whether dataloader workers survive iterator resets.
         :raises ValueError: If ``loader`` names an unknown read path.
         """
         if loader not in ("legacy", "map"):
@@ -412,6 +434,7 @@ class LanceVSTDataModule(VSTDataModule):
             param_spec_name=param_spec_name,
         )
         self.loader = loader
+        self.persistent_workers = persistent_workers
         self._map_splits: dict[str, _MapSplit] = {}
 
     def _legacy_dataloader(
@@ -432,6 +455,7 @@ class LanceVSTDataModule(VSTDataModule):
             "pin_memory": self.pin_memory,
             "sampler": sampler,
             "shuffle": False,
+            "persistent_workers": self.persistent_workers,
         }
         if self.num_workers == 0:
             return DataLoader(dataset, **loader_kwargs)
@@ -516,6 +540,10 @@ class LanceVSTDataModule(VSTDataModule):
                 self.predict_file, ot=False, read_audio=True, stats=predict_stats
             ),
         }
+        self.train_dataset = self._map_splits["train"].dataset
+        self.val_dataset = self._map_splits["val"].dataset
+        self.test_dataset = self._map_splits["test"].dataset
+        self.predict_dataset = self._map_splits["predict"].dataset
 
     def _map_dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build the sample-indexed loader for one set-up split.
@@ -540,6 +568,7 @@ class LanceVSTDataModule(VSTDataModule):
             sampler=sampler,
             shuffle=shuffle if sampler is None else None,
             drop_last=drop_last,
+            persistent_workers=self.persistent_workers,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -549,7 +578,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         if not self._map_mode:
             return self._legacy_dataloader(
-                self.train_dataset,
+                cast(VSTDataset, self.train_dataset),
                 sampler=ShiftedBatchSampler(self.batch_size, len(self.train_dataset)),
             )
         # drop_last matches legacy's floor-divide: a trailing short batch (down
@@ -562,7 +591,7 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Dataloader over the validation split.
         """
         if not self._map_mode:
-            return self._legacy_dataloader(self.val_dataset)
+            return self._legacy_dataloader(cast(VSTDataset, self.val_dataset))
         return self._map_dataloader("val", shuffle=False, drop_last=False)
 
     def test_dataloader(self) -> DataLoader:
@@ -571,7 +600,7 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Dataloader over the test split.
         """
         if not self._map_mode:
-            return self._legacy_dataloader(self.test_dataset)
+            return self._legacy_dataloader(cast(VSTDataset, self.test_dataset))
         return self._map_dataloader("test", shuffle=False, drop_last=False)
 
     def predict_dataloader(self) -> DataLoader:
@@ -580,7 +609,7 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Dataloader over the prediction split.
         """
         if not self._map_mode:
-            return self._legacy_dataloader(self.predict_dataset)
+            return self._legacy_dataloader(cast(VSTDataset, self.predict_dataset))
         return self._map_dataloader("predict", shuffle=False, drop_last=False)
 
     def teardown(self, stage: str | None = None) -> None:
@@ -594,3 +623,6 @@ class LanceVSTDataModule(VSTDataModule):
         # LanceMapDataset has no close API: handles open lazily per process
         # and are released with the references.
         self._map_splits = {}
+        for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
+            if hasattr(self, name):
+                delattr(self, name)

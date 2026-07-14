@@ -1,6 +1,7 @@
 """Tests for the local legacy-versus-map Lance loader benchmark harness."""
 
 import json
+from collections.abc import Iterator
 from itertools import product
 from pathlib import Path
 
@@ -125,6 +126,60 @@ def test_benchmark_trial_map_one_full_batch_succeeds(tmp_path: Path) -> None:
     )
 
     assert result.batches == 1
+
+
+def test_benchmark_trial_reuses_persistent_worker_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Warm-up and measurement share one loader and its worker processes.
+
+    :param tmp_path: Arbitrary dataset root accepted by the fake module.
+    :param monkeypatch: Fixture replacing the datamodule with an observable fake.
+    """
+
+    class FakeLoader:
+        def __init__(self) -> None:
+            self.persistent_workers = False
+            self.iterations = 0
+
+        def __iter__(self) -> Iterator[object]:
+            self.iterations += 1
+            return iter((object(),))
+
+    class FakeModule:
+        instance: "FakeModule | None" = None
+
+        def __init__(self, **_kwargs: object) -> None:
+            self.loader = FakeLoader()
+            self.loader.persistent_workers = bool(_kwargs["persistent_workers"])
+            self.loader_requests = 0
+            FakeModule.instance = self
+
+        def setup(self, _stage: str) -> None:
+            pass
+
+        def train_dataloader(self) -> FakeLoader:
+            self.loader_requests += 1
+            return self.loader
+
+        def teardown(self, _stage: str) -> None:
+            pass
+
+    monkeypatch.setattr(benchmark_module, "LanceVSTDataModule", FakeModule)
+
+    benchmark_module._benchmark_trial(
+        tmp_path,
+        loader="map",
+        conditioning="mel",
+        num_workers=2,
+        batch_size=2,
+        max_batches=1,
+    )
+
+    assert FakeModule.instance is not None
+    assert FakeModule.instance.loader_requests == 1
+    assert FakeModule.instance.loader.iterations == 2
+    assert FakeModule.instance.loader.persistent_workers
 
 
 def test_main_writes_benchmark_results_as_json(

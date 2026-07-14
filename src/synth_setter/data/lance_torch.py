@@ -163,6 +163,7 @@ def map_dataloader_over(
     collate_fn: Callable[[dict[str, torch.Tensor]], object] | None = None,
     pin_memory: bool = False,
     drop_last: bool = False,
+    persistent_workers: bool = False,
 ) -> DataLoader:
     """Wrap an existing map-style dataset in a (spawn-safe) DataLoader.
 
@@ -179,6 +180,7 @@ def map_dataloader_over(
     :param collate_fn: Optional batch transformation after the projected Lance read.
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
+    :param persistent_workers: Whether worker processes survive across iterator resets.
     :returns: DataLoader over ``dataset``.
     """
     effective_collate = collate_fn or _prebatched_collate
@@ -194,6 +196,7 @@ def map_dataloader_over(
             collate_fn=typed_collate,
             pin_memory=pin_memory,
             drop_last=drop_last,
+            persistent_workers=persistent_workers,
         )
     return get_safe_loader(
         dataset,
@@ -204,6 +207,7 @@ def map_dataloader_over(
         collate_fn=effective_collate,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        persistent_workers=persistent_workers,
     )
 
 

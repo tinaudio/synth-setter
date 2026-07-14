@@ -281,6 +281,10 @@ class TestLanceMapDataModuleSetup:
                 "test": (module.test_dataloader(), 6),
                 "predict": (module.predict_dataloader(), 6),
             }
+            assert module.train_dataset is loaders["train"][0].dataset
+            assert module.val_dataset is loaders["val"][0].dataset
+            assert module.test_dataset is loaders["test"][0].dataset
+            assert module.predict_dataset is loaders["predict"][0].dataset
             for name, (loader, num_rows) in loaders.items():
                 assert loader.batch_size == 2, name
                 assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
@@ -625,6 +629,29 @@ class TestLanceMapDataModuleModes:
                 return _params_in_order(module.val_dataloader())
 
         np.testing.assert_array_equal(collect(num_workers=2), collect(num_workers=0))
+
+    @pytest.mark.slow
+    def test_val_loader_spawn_worker_noise_is_distinct_and_reproducible(
+        self, dataset_root: Path
+    ) -> None:
+        """Spawn workers receive reproducible seeds without sharing a noise stream.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+
+        def collect() -> torch.Tensor:
+            torch.manual_seed(47)
+            with _set_up_map_module(
+                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=2
+            ) as module:
+                batches = [_unwrap(batch["noise"]) for batch in module.val_dataloader()]
+            return torch.stack(batches)
+
+        first = collect()
+        second = collect()
+
+        assert torch.equal(first, second)
+        assert not torch.equal(first[0], first[1])
 
     @pytest.mark.slow
     @pytest.mark.parametrize("num_rows", [15, 16])
