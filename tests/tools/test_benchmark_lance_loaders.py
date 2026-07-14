@@ -193,3 +193,48 @@ def test_main_writes_benchmark_results_as_json(
             "expected_reads_per_batch": 1.0,
         }
     ]
+
+
+def test_main_runs_real_lance_benchmark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI drives real Lance reads and emits one unique zero-worker matrix.
+
+    :param tmp_path: Temporary root for local Lance fixtures.
+    :param monkeypatch: Fixture supplying CLI arguments.
+    :param capsys: Fixture capturing the JSON output.
+    """
+    root = tmp_path / "data"
+    root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        write_seeded_lance_shard(root / f"{split}.lance", num_rows=6, seed=seed)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark_lance_loaders",
+            str(root),
+            "--batch-size",
+            "2",
+            "--num-workers",
+            "0",
+            "--max-batches",
+            "1",
+            "--repetitions",
+            "1",
+        ],
+    )
+
+    benchmark_module.main()
+
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 4
+    assert {
+        (record["loader"], record["conditioning"], record["num_workers"]) for record in records
+    } == {
+        (loader, conditioning, 0)
+        for loader in ("legacy", "map")
+        for conditioning in ("mel", "m2l")
+    }
+    assert all(record["dataset_rows"] == 6 for record in records)
