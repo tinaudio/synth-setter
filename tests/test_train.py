@@ -79,6 +79,45 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+def test_train_torchsynth_experiment_renders_audio_online(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """Run the TorchSynth experiment without a materialized audio dataset.
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
+
+    assert "train/loss" in metric_dict
+    batch = next(iter(object_dict["datamodule"].train_dataloader()))
+    audio, params, *_ = batch
+    assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
+    assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
+    assert torch.isfinite(audio).all()
+
+
+def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """Train two epochs with per-epoch resampling through the real entrypoint.
+
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across
+    epoch boundaries (one ``iter()`` per epoch on the same loader).
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_train)
+    with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
+        cfg_torchsynth_train.trainer.fast_dev_run = False
+        cfg_torchsynth_train.trainer.max_epochs = 2
+    metric_dict, _ = train(cfg_torchsynth_train)
+
+    assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:

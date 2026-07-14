@@ -37,7 +37,7 @@ concurrency:
 jobs:
   generate-dataset-shards:
     name: Generate dataset shards -> real R2 (Docker + VST)
-    runs-on: ubuntu-latest-4core
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # Fork PRs can't see repo secrets; the rclone auth ping would fail and
     # burn runner minutes. Same gating pattern as test-local-launcher-roundtrip.yml.

@@ -34,7 +34,8 @@ ______________________________________________________________________
 | `DOCKERHUB_TOKEN`                    | CI image push workflows                           | GitHub Secrets             |
 | `APPROVAL_BOT_APP_ID`                | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `APPROVAL_BOT_PRIVATE_KEY`           | Auto-approve workflow, release workflow           | GitHub Secrets             |
-| `ANTHROPIC_API_KEY`                  | Claude review workflow                            | GitHub Secrets             |
+| `ANTHROPIC_API_KEY`                  | (currently unused; retained for possible revival) | GitHub Secrets             |
+| `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` + `claude-code-review` workflows         | GitHub Secrets             |
 
 ______________________________________________________________________
 
@@ -256,32 +257,30 @@ confirm it succeeds.
 
 ______________________________________________________________________
 
-### Anthropic (`ANTHROPIC_API_KEY`)
+### Anthropic (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`)
 
-<!-- TODO: stale rotation smoke test; claude-review.yml was removed (see git log), find a replacement verification before the next rotation -->
-
-**What:** API key that was consumed by the `claude-review.yml` workflow (removed from the repo). Currently unused, but the secret is kept registered for a possible future revival of Claude-powered CI review.
+**What:** `CLAUDE_CODE_OAUTH_TOKEN` authenticates `anthropics/claude-code-action`
+in the `claude` (`@claude` mentions) and `claude-code-review` (PR review)
+workflows, which post to PRs and issues. `ANTHROPIC_API_KEY` is currently
+unused; the secret stays registered for possible future API-keyed workflows.
 
 **Where stored:**
 
-- GitHub Secrets: `ANTHROPIC_API_KEY`
+- GitHub Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`
 
 **Rotation steps:**
 
-1. Log in to the [Anthropic Console](https://console.anthropic.com/).
-2. Navigate to **API Keys**.
-3. Click **Create Key**.
-4. Copy the new key.
-5. Update GitHub Secrets:
-   - Update `ANTHROPIC_API_KEY` with the new key.
-6. Revoke the old key in the Anthropic Console.
+1. Generate a fresh OAuth token locally with the Claude Code CLI:
+   `claude setup-token`.
+2. Update the `CLAUDE_CODE_OAUTH_TOKEN` GitHub Secret with the new token.
+3. For `ANTHROPIC_API_KEY` (only if revived): create the replacement key in
+   the [Anthropic Console](https://console.anthropic.com/) under **API Keys**,
+   update the secret, then revoke the old key.
 
 **Verification:**
 
-No automated smoke test is currently available — the previous procedure
-(triggering `claude-review.yml` via the `needs-claude-review` label) no
-longer works since the workflow was removed. See the TODO above; a
-replacement verification is needed before the next rotation.
+Push any commit to an open PR (or re-run its latest `Claude Code Review` run)
+and confirm the run completes and posts review findings to the PR.
 
 ______________________________________________________________________
 
