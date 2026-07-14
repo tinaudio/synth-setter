@@ -280,9 +280,14 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         # Workers re-seed on first read. Fake mode never uses the generator,
         # so it skips the draw to leave the global stream untouched.
+        self._rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_available() and torch.distributed.is_initialized()
+            else 0
+        )
         self.generator = torch.Generator()
         if not fake:
-            self.generator.manual_seed(draw_generator_seed())
+            self.generator.manual_seed((draw_generator_seed() + self._rank) % (2**64))
         self._worker_reseed_done = False
 
         self.read_audio = read_audio
@@ -399,10 +404,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         Workers fork after ``__init__``, so every fork inherits identical
         generator state and would draw correlated noise; the DataLoader-assigned
-        worker seed (``base_seed + worker_id``) is distinct per worker yet still
-        derived from the global RNG, keeping ``seed_everything`` in charge. Done
-        lazily instead of via ``worker_init_fn`` so Lightning's auto-added
-        ``pl_worker_init_function`` (gated on ``worker_init_fn is None``) stays.
+        worker seed (``base_seed + worker_id``) is namespaced by distributed
+        rank and remains derived from the global RNG, keeping ``seed_everything``
+        in charge. Done lazily instead of via ``worker_init_fn`` so Lightning's
+        auto-added ``pl_worker_init_function`` stays enabled.
         """
         if self._worker_reseed_done:
             return
@@ -412,7 +417,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         if worker_info is None:
             return
         self._worker_reseed_done = True
-        self.generator.manual_seed(worker_info.seed)
+        seed = (worker_info.seed + self._rank * worker_info.num_workers) % (2**64)
+        self.generator.manual_seed(seed)
 
     def __getitem__(
         self, idx: int | tuple[int, int] | Sequence[int] | np.ndarray

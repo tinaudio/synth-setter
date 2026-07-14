@@ -29,6 +29,7 @@ import random
 import shutil
 import sys
 from collections.abc import Iterator
+from itertools import combinations, product
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -861,7 +862,7 @@ class TestNoiseGeneratorSeeding:
         """
         dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
         dataset[0]  # parent read: get_worker_info() is genuinely None here
-        worker_info = SimpleNamespace(seed=777)
+        worker_info = SimpleNamespace(seed=777, num_workers=1)
         monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
         noise = dataset[0]["noise"]
         assert noise is not None
@@ -882,7 +883,7 @@ class TestNoiseGeneratorSeeding:
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
-        worker_info = SimpleNamespace(seed=777)
+        worker_info = SimpleNamespace(seed=777, num_workers=1)
         monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
         first = dataset[0]["noise"]
         second = dataset[1]["noise"]
@@ -893,6 +894,82 @@ class TestNoiseGeneratorSeeding:
         )
         torch.testing.assert_close(
             second, torch.randn(second.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
+
+    def test_ddp_ranks_receive_distinct_reproducible_noise(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy in-process DDP ranks receive separate noise streams.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: None)
+
+        def noise_for_rank(rank: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            torch.manual_seed(1234)
+            dataset = VSTDataset(
+                single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+            )
+            try:
+                noise = dataset[0]["noise"]
+                assert noise is not None
+                return noise.clone()
+            finally:
+                assert dataset.dataset_file is not None
+                dataset.dataset_file.close()
+
+        rank_zero = noise_for_rank(0)
+        rank_one = noise_for_rank(1)
+        assert not torch.equal(rank_zero, rank_one)
+        assert torch.equal(rank_zero, noise_for_rank(0))
+        assert torch.equal(rank_one, noise_for_rank(1))
+
+    def test_ddp_worker_grid_receives_distinct_reproducible_noise(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy distributed rank-worker pairs receive separate noise streams.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        base_seed = 777
+        num_workers = 2
+
+        def noise_for(rank: int, worker_id: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            monkeypatch.setattr(
+                torch.utils.data,
+                "get_worker_info",
+                lambda: SimpleNamespace(
+                    seed=base_seed + worker_id, num_workers=num_workers
+                ),
+            )
+            dataset = VSTDataset(
+                single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+            )
+            try:
+                noise = dataset[0]["noise"]
+                assert noise is not None
+                return noise.clone()
+            finally:
+                assert dataset.dataset_file is not None
+                dataset.dataset_file.close()
+
+        rank_worker_pairs = list(product(range(2), range(num_workers)))
+        first_pass = [noise_for(*pair) for pair in rank_worker_pairs]
+        second_pass = [noise_for(*pair) for pair in rank_worker_pairs]
+
+        assert all(
+            torch.equal(first, second)
+            for first, second in zip(first_pass, second_pass, strict=True)
+        )
+        assert all(
+            not torch.equal(left, right)
+            for left, right in combinations(first_pass, 2)
         )
 
 
