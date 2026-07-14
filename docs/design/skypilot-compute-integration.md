@@ -195,19 +195,17 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
 - name: Launch SkyPilot job
   env:
     RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-    RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-    RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-    RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+    SYNTH_SETTER_STORAGE_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+    SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+    SYNTH_SETTER_STORAGE_ENDPOINT_URL: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
     R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
     WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   run: |
     docker run --rm \
       -e RUNPOD_API_KEY \
-      -e RCLONE_CONFIG_R2_TYPE=s3 \
-      -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
-      -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
-      -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
-      -e RCLONE_CONFIG_R2_ENDPOINT \
+      -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+      -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+      -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
       -e R2_ACCOUNT_ID \
       -e WANDB_API_KEY \
       "$IMAGE" bash -c '... synth-setter-generate-dataset ... skypilot_launch.compute_template=... ...'
@@ -215,7 +213,9 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
 
 Notes:
 
-- `RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are hardcoded literals (constants for Cloudflare R2), not secrets.
+- The GitHub secret names retain the legacy rclone prefix for compatibility; the
+  container receives canonical application settings and the launcher projects
+  rclone's backend variables for workers.
 - `RUNPOD_API_KEY` is intentionally **not** in `_WORKER_ENV_KEYS` — it's the launcher's own credential for SkyPilot's RunPod-API call, not the worker's. The launch step writes it to `~/.runpod/config.toml` inside the container so SkyPilot can read it (env var alone isn't enough for `sky check runpod`); it never gets forwarded to the worker.
 
 #### Why each key lives where it does

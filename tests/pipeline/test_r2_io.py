@@ -207,18 +207,23 @@ class TestR2StorageOptions:
         with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY"):
             r2_io.r2_storage_options()
 
-    def test_legacy_rclone_env_is_not_a_storage_settings_source(
+    def test_legacy_rclone_env_builds_storage_options(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The app no longer treats implementation-specific rclone env as canonical settings.
+        """Legacy rclone names remain compatible with storage-option loading.
 
         :param monkeypatch: Pytest fixture used to set the R2 secret env vars.
         """
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
-        with pytest.raises(RuntimeError, match="SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"):
-            r2_io.r2_storage_options()
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "ak",
+            "secret_access_key": "sk",
+            "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
 
 
 class TestR2DirectoryExists:
@@ -1021,8 +1026,8 @@ class TestEnsureR2EnvLoaded:
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
 
-    def test_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
-        """An env_file's storage settings are projected into the rclone auth-ping env.
+    def test_legacy_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
+        """Legacy dotenv credentials are projected into the rclone auth-ping env.
 
         Captures ``os.environ`` at the moment ``subprocess.run`` is invoked — that's
         the contract boundary, and the only place we need to verify it.
@@ -1031,9 +1036,9 @@ class TestEnsureR2EnvLoaded:
         """
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=id-from-file\n"
-            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret-from-file\n"
-            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=endpoint-from-file\n"
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=id-from-file\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=secret-from-file\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=endpoint-from-file\n"
         )
         captured: dict[str, str] = {}
 
@@ -1046,6 +1051,7 @@ class TestEnsureR2EnvLoaded:
 
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-file"
         assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "endpoint-from-file"
+        assert captured["SYNTH_SETTER_STORAGE_ACCESS_KEY_ID"] == "id-from-file"
 
     def test_dotenv_settings_persist_for_later_canonical_readers(self, tmp_path: Path) -> None:
         """Settings loaded from an explicit env_file survive into later env-only reads.
