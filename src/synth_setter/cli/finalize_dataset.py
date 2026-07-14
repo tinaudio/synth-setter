@@ -253,10 +253,10 @@ def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
     logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> bool:
+def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
-    Returns ``False`` without work when the marker already exists at the run prefix —
+    Returns without work when the marker already exists at the run prefix —
     R2 is the source of truth (per ``pipeline/CLAUDE.md``). The branch on
     ``spec.output_format`` writes the derived artifacts; the marker is
     uploaded strictly last so an interrupted run never advertises artifacts
@@ -266,14 +266,12 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> bool:
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call (multi-GB on the hdf5 branch).
-    :returns: ``True`` when finalization materialized a new dataset; ``False``
-        when the complete marker already existed.
     :raises ValueError: ``spec.output_format`` is not a supported finalized format.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
         logger.info("skip: {} already exists, run is finalized", marker_uri)
-        return False
+        return
 
     # A custom ``r2.prefix`` (e.g. the oracle-eval e2e isolating objects under
     # ``test-runs/<test>/<uuid>/``) is legitimate: finalize reads the same prefix
@@ -297,7 +295,6 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> bool:
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
     logger.info("wrote dataset.complete to {}", marker_uri)
-    return True
 
 
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
@@ -409,8 +406,8 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     loggers = instantiate_loggers(cfg.get("logger"))
     status = "success"
     try:
-        if finalize_from_spec(spec, Path(cfg.paths.output_dir)):
-            _log_dataset_artifact(loggers, spec)
+        finalize_from_spec(spec, Path(cfg.paths.output_dir))
+        _log_dataset_artifact(loggers, spec)
     except BaseException:
         status = "failed"
         raise

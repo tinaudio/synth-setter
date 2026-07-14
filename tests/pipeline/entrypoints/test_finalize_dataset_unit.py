@@ -181,20 +181,6 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
 
 
-def test_finalize_from_spec_existing_marker_returns_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An already-finalized dataset reports that no new artifact was materialized.
-
-    :param tmp_path: Writable scratch directory passed to the finalizer.
-    :param monkeypatch: Makes the complete marker appear in R2.
-    """
-    spec = build_wds_smoke_spec(task_name="finalize-already-complete")
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _: 1)
-
-    assert finalize_dataset.finalize_from_spec(spec, tmp_path) is False
-
-
 def test_finalize_from_spec_non_canonical_prefix_warns_and_proceeds(
     tmp_path: Path,
     fake_r2_remote: Path,
