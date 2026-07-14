@@ -16,9 +16,9 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -154,29 +154,53 @@ def map_dataloader_over(
     *,
     batch_size: int,
     num_workers: int = 0,
-    **loader_kwargs: Any,
+    shuffle: bool | None = None,
+    sampler: torch.utils.data.Sampler[int] | Iterable[int] | None = None,
+    collate_fn: Callable[[dict[str, torch.Tensor]], object] | None = None,
+    pin_memory: bool = False,
+    drop_last: bool = False,
 ) -> DataLoader:
     """Wrap an existing map-style dataset in a (spawn-safe) DataLoader.
 
     Worker processes use Lance's ``get_safe_loader`` (spawn context — Lance
-    datasets are not fork-safe), so ``dataset`` and every ``loader_kwargs``
-    callable must be picklable when ``num_workers > 0``.
+    datasets are not fork-safe), so ``dataset`` and ``collate_fn`` must be
+    picklable when ``num_workers > 0``.
 
     :param dataset: Map-style dataset whose ``__getitems__`` pre-collates a
         batch (:class:`LanceMapDataset` or a wrapper over one).
     :param batch_size: Rows per yielded batch.
     :param num_workers: DataLoader worker processes; ``0`` loads in-process.
-    :param \\*\\*loader_kwargs: Extra ``torch.utils.data.DataLoader`` keywords
-        (``shuffle``, ``sampler``, ``collate_fn``, ``pin_memory``, ...).
+    :param shuffle: Whether to randomize sample order; ignored when ``sampler`` is set.
+    :param sampler: Optional source of sample indices.
+    :param collate_fn: Optional batch transformation after the projected Lance read.
+    :param pin_memory: Whether DataLoader pins tensors before returning them.
+    :param drop_last: Whether to discard a shorter final batch.
     :returns: DataLoader over ``dataset``.
     """
-    loader_kwargs.setdefault("collate_fn", _prebatched_collate)
+    effective_collate = collate_fn or _prebatched_collate
     if num_workers == 0:
         # get_safe_loader's spawn context and persistent workers require
         # num_workers > 0; in-process loading is a plain DataLoader.
-        return DataLoader(dataset, batch_size=batch_size, **loader_kwargs)
+        # DataLoader's stub assumes list batches, but ``__getitems__`` supplies a column dict.
+        typed_collate = cast(Callable[[list[object]], object], effective_collate)
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            collate_fn=typed_collate,
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+        )
     return get_safe_loader(
-        dataset, batch_size=batch_size, num_workers=num_workers, **loader_kwargs
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        sampler=sampler,
+        collate_fn=effective_collate,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
     )
 
 
@@ -187,7 +211,11 @@ def lance_map_dataloader(
     num_workers: int = 0,
     columns: Sequence[str] | None = None,
     storage_options: dict[str, str] | None = None,
-    **loader_kwargs: Any,
+    shuffle: bool | None = None,
+    sampler: torch.utils.data.Sampler[int] | Iterable[int] | None = None,
+    collate_fn: Callable[[dict[str, torch.Tensor]], object] | None = None,
+    pin_memory: bool = False,
+    drop_last: bool = False,
 ) -> DataLoader:
     """Build a map-style DataLoader (random access, shuffling, DDP-samplable).
 
@@ -197,8 +225,11 @@ def lance_map_dataloader(
     :param columns: Columns each batch carries; ``None`` reads all.
     :param storage_options: Object-store config for a cloud ``uri`` (see
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
-    :param \\*\\*loader_kwargs: Extra ``torch.utils.data.DataLoader`` keywords
-        (``shuffle``, ``sampler``, ``pin_memory``, ...).
+    :param shuffle: Whether to randomize sample order; ignored when ``sampler`` is set.
+    :param sampler: Optional source of sample indices.
+    :param collate_fn: Optional batch transformation after the projected Lance read.
+    :param pin_memory: Whether DataLoader pins tensors before returning them.
+    :param drop_last: Whether to discard a shorter final batch.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
     """
@@ -212,7 +243,14 @@ def lance_map_dataloader(
         num_workers,
     )
     return map_dataloader_over(
-        dataset, batch_size=batch_size, num_workers=num_workers, **loader_kwargs
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
     )
 
 
