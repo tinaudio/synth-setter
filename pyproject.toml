@@ -502,10 +502,8 @@ exclude = '''(?x)
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
-# Refresh uv.lock's synth-setter version in the same release commit; the PSR
-# GitHub Action does not provision uv, so release.yml sets it up before PSR.
-# `uv lock` is idempotent on an already-resolved lock but re-resolves after the
-# `project.version` rewrite above so the recorded package version tracks the bump.
+# Refresh uv.lock in the release commit; release.yml provisions uv for PSR.
+# `uv lock` re-resolves after the `project.version` rewrite above.
 build_command = "uv lock"
 # Commit uv.lock alongside pyproject.toml / CHANGELOG.md so the lock never lags.
 assets = ["uv.lock"]

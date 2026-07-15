@@ -13,7 +13,6 @@ import re
 import tomllib
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -67,9 +66,7 @@ def test_release_workflow_provisions_uv_for_build_command(project_root: Path) ->
 
     :param project_root: Repository root fixture.
     """
-    release_workflow = yaml.safe_load(
-        (project_root / ".github/workflows/release.yml").read_text()
-    )
+    release_workflow = yaml.safe_load((project_root / ".github/workflows/release.yml").read_text())
 
     steps = release_workflow["jobs"]["release"]["steps"]
     step_uses = [step.get("uses", "") for step in steps if "uses" in step]
