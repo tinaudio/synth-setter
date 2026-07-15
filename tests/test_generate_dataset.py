@@ -29,7 +29,9 @@ import os
 import subprocess
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import h5py
@@ -41,6 +43,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
@@ -440,6 +443,135 @@ def test_main_skips_schema_invalid_cadence_cell_without_failing(
     )
     assert result.returncode == 0, result.stderr
     assert "skipping run" in (result.stdout + result.stderr)
+
+
+def test_main_remote_worker_command_syncs_repairs_installs_then_executes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote dispatch executes checkout, runtime repair, install, and worker entrypoint.
+
+    :param tmp_path: Scratch worker checkout and isolated Git home.
+    :param monkeypatch: Redirects the worker root and external dispatch boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    worker_root = tmp_path / "worker"
+    scripts_dir = worker_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "sync_worker_checkout.sh").write_text(
+        (_REPO_ROOT / "scripts/sync_worker_checkout.sh").read_text()
+    )
+    (scripts_dir / "ensure_worker_python.sh").write_text(
+        '#!/bin/bash\nprintf "repair\\n" >> "${TRACE}"\n'
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
+    uv.write_text('#!/bin/bash\nprintf "install\\n" >> "${TRACE}"\n')
+    uv.chmod(0o755)
+    worker_entrypoint = fake_bin / "synth-setter-generate-dataset-from-hydra"
+    worker_entrypoint.write_text('#!/bin/bash\nprintf "exec:%s\\n" "$*" >> "${TRACE}"\n')
+    worker_entrypoint.chmod(0o755)
+
+    subprocess.run(["/usr/bin/git", "init", "-q"], cwd=worker_root, check=True)
+    subprocess.run(["/usr/bin/git", "config", "user.name", "Test"], cwd=worker_root, check=True)
+    subprocess.run(
+        ["/usr/bin/git", "config", "user.email", "test@example.invalid"],
+        cwd=worker_root,
+        check=True,
+    )
+    subprocess.run(["/usr/bin/git", "add", "scripts"], cwd=worker_root, check=True)
+    subprocess.run(
+        ["/usr/bin/git", "commit", "-qm", "test worker"],
+        cwd=worker_root,
+        check=True,
+    )
+    subprocess.run(
+        ["/usr/bin/git", "remote", "add", "origin", "."],
+        cwd=worker_root,
+        check=True,
+    )
+    worker_ref = subprocess.run(
+        ["/usr/bin/git", "rev-parse", "HEAD"],
+        cwd=worker_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    compute_template = tmp_path / "compute.yaml"
+    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+    trace = tmp_path / "worker-trace.log"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("TRACE", str(trace))
+    monkeypatch.setenv("WORKER_GIT_REF", worker_ref)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset._WORKER_REPO_ROOT", str(worker_root))
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "write_spec_locally",
+        lambda _spec, output_dir: Path(output_dir) / "input_spec.json",
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "upload_spec",
+        lambda _spec: "r2://test/input_spec.json",
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli.r2_io,
+        "ensure_r2_env_loaded",
+        lambda _env_file: None,
+    )
+
+    completed: list[subprocess.CompletedProcess[str]] = []
+
+    def _execute_worker(sky_cfg: SkypilotLaunchConfig) -> None:
+        assert sky_cfg.cmd is not None
+        command_path = tmp_path / "worker-command.sh"
+        command_path.write_text(sky_cfg.cmd)
+        completed.append(
+            subprocess.run(
+                ["/bin/bash", "worker-command.sh"],
+                cwd=tmp_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        )
+
+    monkeypatch.setattr(skypilot_launch, "dispatch_via_skypilot", _execute_worker)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={compute_template}",
+        ],
+    )
+
+    cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    assert len(completed) == 1
+    result = completed[0]
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Worker now at: {worker_ref}" in result.stdout
+    trace_lines = trace.read_text().splitlines()
+    assert trace_lines[:3] == ["repair", "install", "repair"]
+    assert len(trace_lines) == 4
+    assert trace_lines[3].startswith("exec:experiment=generate_dataset/smoke-shard ")
+    assert f"render.plugin_path={_TEST_PLUGIN_VST3}" in trace_lines[3]
+    assert f"skypilot_launch.compute_template={compute_template}" in trace_lines[3]
+    assert "+created_at=" in trace_lines[3]
 
 
 @pytest.mark.integration_r2

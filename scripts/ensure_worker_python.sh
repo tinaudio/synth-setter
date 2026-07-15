@@ -1,6 +1,18 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
+#######################################
+# Ensure /venv/main uses the canonical worker Python, recreating it when stale.
+# Globals:
+#   PATH: Modified to prioritize /venv/main/bin.
+#   VIRTUAL_ENV: Validated and set to /venv/main.
+# Arguments:
+#   None.
+# Outputs:
+#   Writes recreation status to stdout and invalid-path errors to stderr.
+# Returns:
+#   0 on success, 2 for an unexpected VIRTUAL_ENV, or a dependency error.
+#######################################
 ensure_worker_python() {
   local worker_venv="/venv/main"
   local worker_python="$worker_venv/bin/python"

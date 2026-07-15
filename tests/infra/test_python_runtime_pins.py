@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -143,6 +146,41 @@ def test_local_environment_provisioning_pins_python_31213(project_root: Path) ->
     assert (project_root / ".python-version").read_text().strip() == PYTHON_VERSION
     assert f"python={PYTHON_VERSION}" in (project_root / "environment.yaml").read_text()
     assert f"venv --python {PYTHON_VERSION}" in (project_root / "Makefile").read_text()
+
+
+def test_make_install_accepts_existing_canonical_python(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """A canonical existing venv passes the real ``make install`` version branch.
+
+    :param project_root: Repository root fixture.
+    :param tmp_path: Scratch checkout containing the controlled existing venv.
+    """
+    bin_dir = tmp_path / ".venv/bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(sys.executable)
+
+    precommit = bin_dir / "pre-commit"
+    precommit.write_text("#!/bin/bash\nexit 0\n")
+    precommit.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
+    uv.write_text("#!/bin/bash\nexit 0\n")
+    uv.chmod(0o755)
+    (tmp_path / "Makefile").write_text((project_root / "Makefile").read_text())
+
+    result = subprocess.run(
+        ["/usr/bin/make", "install"],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_docker_runtime_uses_python_312(project_root: Path) -> None:
