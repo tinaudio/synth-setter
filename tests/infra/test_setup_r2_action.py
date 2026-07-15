@@ -198,7 +198,7 @@ def test_setup_r2_exports_canonical_storage_secrets(
 
 @pytest.mark.infra
 def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
-    """`install-rclone` defaults off and gates the apt-get install step.
+    """`install-rclone` defaults off and gates the rclone install step.
 
     Docker-based callers ship rclone in the image and pass the default; only
     native runners opt in. The gate keeps the action a no-op install elsewhere.

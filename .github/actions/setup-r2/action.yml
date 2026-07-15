@@ -15,17 +15,30 @@ inputs:
     description: secrets.RCLONE_CONFIG_R2_ENDPOINT
     required: true
   install-rclone:
-    description: apt-get install the rclone binary first (Ubuntu runners only).
+    description: Install the pinned rclone binary first (Ubuntu runners only).
     required: false
     default: "false"
 
 runs:
   using: composite
   steps:
+    # Pinned, not apt: Ubuntu ships rclone 1.60.1, whose S3 backend fails every
+    # first write to R2 with `NotImplemented`. Keep in step with local dev.
     - name: Install rclone
       if: inputs.install-rclone == 'true'
       shell: bash
-      run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+      env:
+        PINNED_RCLONE_VERSION: "1.68.2"
+      run: |
+        set -euo pipefail
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "${tmp}"' EXIT
+        release="rclone-v${PINNED_RCLONE_VERSION}-linux-amd64"
+        curl -fsSL --retry 3 -o "${tmp}/rclone.zip" \
+          "https://downloads.rclone.org/v${PINNED_RCLONE_VERSION}/${release}.zip"
+        unzip -q "${tmp}/rclone.zip" -d "${tmp}"
+        sudo install -m 0755 "${tmp}/${release}/rclone" /usr/local/bin/rclone
+        rclone version | head -1
 
     # Secrets pass through step env so they are masked in logs while the action
     # writes both the public storage contract and today's rclone backend env.
