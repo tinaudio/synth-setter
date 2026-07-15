@@ -1,9 +1,4 @@
-"""Tests for CheckpointUploader and its CLI wiring.
-
-The R2 transport is monkeypatched throughout — no ``rclone`` binary, no
-network — so only the callback's rank-gating, change-detection, best-effort
-error handling, and URI derivation run for real.
-"""
+"""Test checkpoint mirroring without invoking rclone or the network."""
 
 from __future__ import annotations
 
@@ -144,10 +139,7 @@ def test_uploader_skips_reupload_when_path_unchanged(
 def test_uploader_reuploads_when_last_ckpt_rewritten_in_place(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``save_last`` overwrites ``last.ckpt`` in place; a newer mtime re-uploads it.
-
-    Guards against keying change-detection on the (stable) path alone, which
-    would upload the first save and never its later overwrites.
+    """Use file metadata, not only its stable path, to detect in-place rewrites.
 
     :param monkeypatch: Swaps the R2 transport for a recorder.
     :param tmp_path: Holds the ``last.ckpt`` rewritten in place between batches.
@@ -240,10 +232,7 @@ def test_uploader_retries_after_transient_failure(
 def test_uploader_stops_retrying_after_max_attempts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A persistently failing upload of one unchanged file backs off after the retry cap.
-
-    Without a bound, every subsequent batch re-hits R2 (a synchronous auth-ping
-    + copy) for the rest of the run once R2 goes unreachable.
+    """Stop probing R2 after one checkpoint revision exhausts its retry cap.
 
     :param monkeypatch: Swaps the R2 transport for an attempt-counting raising stub.
     :param tmp_path: Holds the fake checkpoint file the uploader reads.
@@ -269,11 +258,7 @@ def test_uploader_stops_retrying_after_max_attempts(
 def test_uploader_resumes_after_new_checkpoint_follows_exhausted_retries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A newer checkpoint uploads even after retries were exhausted on the prior one.
-
-    Guards the pending-key reset: without it, one bad R2 stretch would permanently
-    stop mirroring every later checkpoint — the exact durability regression this
-    feature prevents.
+    """Keep an exhausted revision's retry budget from suppressing newer checkpoints.
 
     :param monkeypatch: Swaps the R2 transport (failing, then recovering).
     :param tmp_path: Holds the ``last.ckpt`` rewritten between the two versions.
@@ -307,17 +292,15 @@ def test_uploader_resumes_after_new_checkpoint_follows_exhausted_retries(
 def test_checkpoint_prefix_uri_rejects_override_without_key() -> None:
     """A bucket-root override (no key segment) raises rather than yielding a bad prefix."""
     with pytest.raises(ValueError, match="r2://bucket/key"):
-        _checkpoint_prefix_uri(_cfg(upload_checkpoints_uri="r2://mybucket"))
+        _checkpoint_prefix_uri(
+            _cfg(upload_checkpoints_uri="r2://mybucket"), "flow-simple-20260715T000000000Z"
+        )
 
 
 def test_uploader_reuploads_when_size_changes_at_same_mtime(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A same-mtime overwrite of a different size still re-uploads.
-
-    ``mtime`` has coarse (second-level) resolution on some filesystems, so two
-    saves within one tick would collide on ``mtime`` alone — the size term of
-    the change key breaks the tie.
+    """Use file size to distinguish checkpoint rewrites within one mtime tick.
 
     :param monkeypatch: Swaps the R2 transport for a recorder.
     :param tmp_path: Holds the ``last.ckpt`` rewritten in place between hooks.
@@ -329,8 +312,8 @@ def test_uploader_reuploads_when_size_changes_at_same_mtime(
     uploader = CheckpointUploader("r2://b/c")
     trainer = _trainer(str(ckpt))
     uploader.on_train_batch_end(trainer, None, None, None, 0)
-    ckpt.write_bytes(b"much-longer-weights")  # different size
-    os.utime(ckpt, (1000, 1000))  # same coarse mtime tick
+    ckpt.write_bytes(b"much-longer-weights")
+    os.utime(ckpt, (1000, 1000))
     uploader.on_train_batch_end(trainer, None, None, None, 1)
     assert len(calls) == 2
 
@@ -507,33 +490,47 @@ def test_uploader_warns_on_train_end_when_no_checkpoint_seen(
 
 def test_checkpoint_prefix_uri_strips_the_basename() -> None:
     """The prefix is the derived checkpoint URI with its ``model.ckpt`` basename removed."""
-    assert _checkpoint_prefix_uri(_cfg()) == "r2://intermediate-data/checkpoints/flow-simple"
+    prefix = _checkpoint_prefix_uri(_cfg(), "flow-simple-20260715T000000000Z")
+    assert prefix == (
+        "r2://intermediate-data/checkpoints/flow-simple/flow-simple-20260715T000000000Z"
+    )
 
 
 def test_checkpoint_prefix_uri_honors_override() -> None:
     """A verbatim ``upload_checkpoints_uri`` override still yields its parent prefix."""
     cfg = _cfg(upload_checkpoints_uri="r2://models/run/model.ckpt")
-    assert _checkpoint_prefix_uri(cfg) == "r2://models/run"
+    assert _checkpoint_prefix_uri(cfg, "run-20260715T000000000Z") == (
+        "r2://models/run/run-20260715T000000000Z"
+    )
+
+
+def test_checkpoint_prefix_uri_rejects_override_with_trailing_slash() -> None:
+    """A bucket-root override with a trailing slash is not a checkpoint object URI."""
+    with pytest.raises(ValueError, match="r2://bucket/key"):
+        _checkpoint_prefix_uri(
+            _cfg(upload_checkpoints_uri="r2://mybucket/"),
+            "flow-simple-20260715T000000000Z",
+        )
 
 
 def test_append_uploader_attaches_callback_when_enabled() -> None:
     """The flag enabled (with a ModelCheckpoint present) appends one ``CheckpointUploader``."""
     callbacks: list[Callback] = [ModelCheckpoint()]
-    _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+    _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert sum(isinstance(cb, CheckpointUploader) for cb in callbacks) == 1
 
 
 def test_append_uploader_noop_when_disabled() -> None:
     """The flag disabled leaves the callback list untouched."""
     callbacks: list[Callback] = []
-    _append_checkpoint_uploader(_cfg(during_training=False), callbacks)
+    _append_checkpoint_uploader(_cfg(during_training=False), callbacks, "run-id")
     assert callbacks == []
 
 
 def test_append_uploader_noop_when_flag_absent() -> None:
     """A config that never set the flag attaches nothing."""
     callbacks: list[Callback] = []
-    _append_checkpoint_uploader(_cfg(), callbacks)
+    _append_checkpoint_uploader(_cfg(), callbacks, "run-id")
     assert callbacks == []
 
 
@@ -541,7 +538,7 @@ def test_append_uploader_appends_after_existing_model_checkpoint() -> None:
     """The uploader is appended last, preserving a pre-existing ModelCheckpoint's position."""
     existing = ModelCheckpoint()
     callbacks: list[Callback] = [existing]
-    _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+    _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert callbacks[0] is existing
     assert isinstance(callbacks[-1], CheckpointUploader)
 
@@ -555,7 +552,7 @@ def test_append_uploader_skips_and_warns_without_model_checkpoint(
     """
     callbacks: list[Callback] = []
     with caplog.at_level(logging.WARNING):
-        _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+        _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert callbacks == []
     assert "no ModelCheckpoint" in caplog.text
 
@@ -564,14 +561,14 @@ def test_append_uploader_enables_save_on_exception() -> None:
     """Appending the uploader flips ``save_on_exception`` on the ModelCheckpoint (default off)."""
     model_checkpoint = ModelCheckpoint()
     assert model_checkpoint.save_on_exception is False
-    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint])
+    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint], "run-id")
     assert model_checkpoint.save_on_exception is True
 
 
 def test_append_uploader_enables_save_last() -> None:
     """Appending the uploader ensures ModelCheckpoint exposes ``last_model_path``."""
     model_checkpoint = ModelCheckpoint(save_last=False)
-    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint])
+    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint], "run-id")
     assert model_checkpoint.save_last is True
 
 
@@ -584,7 +581,7 @@ def test_append_uploader_skips_and_warns_with_multiple_model_checkpoints(
     """
     callbacks: list[Callback] = [ModelCheckpoint(), ModelCheckpoint()]
     with caplog.at_level(logging.WARNING):
-        _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+        _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert len(callbacks) == 2
     assert not any(isinstance(callback, CheckpointUploader) for callback in callbacks)
     assert "multiple ModelCheckpoint" in caplog.text

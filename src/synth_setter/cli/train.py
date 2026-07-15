@@ -81,30 +81,33 @@ def _derive_checkpoint_uri(cfg: DictConfig) -> str:
     return f"r2://{cfg.r2.bucket}/checkpoints/{resolve_run_config_id(cfg)}/model.ckpt"
 
 
-def _checkpoint_prefix_uri(cfg: DictConfig) -> str:
+def _checkpoint_prefix_uri(cfg: DictConfig, run_id: str) -> str:
     """Return the ``r2://`` directory that mid-run checkpoints upload under.
 
-    The parent of :func:`_derive_checkpoint_uri` — its ``model.ckpt`` basename
-    stripped — so a periodic ``last.ckpt`` lands alongside the train-end
-    ``model.ckpt`` for the same run.
+    The parent of :func:`_derive_checkpoint_uri`, plus the unique run ID, so
+    concurrent runs of one config cannot overwrite each other's ``last.ckpt``.
 
     :param cfg: Hydra-composed train cfg forwarded to :func:`_derive_checkpoint_uri`.
-    :returns: The ``r2://`` prefix (no trailing slash) for this run's checkpoints.
+    :param run_id: Canonical timestamped run ID used to isolate recovery state.
+    :returns: The run-scoped ``r2://`` prefix (no trailing slash).
     :raises ValueError: If a ``training.upload_checkpoints_uri`` override has no
         key segment (e.g. ``r2://bucket``), which would collapse to a bad prefix.
     """
     uri = _derive_checkpoint_uri(cfg)
+    if uri.endswith("/"):
+        raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
     prefix = uri.rsplit("/", 1)[0]
     if not prefix.startswith("r2://") or prefix == "r2://":
         raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
-    return prefix
+    return f"{prefix}/{run_id}"
 
 
-def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> None:
+def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback], run_id: str) -> None:
     """Append an uploader only when exactly one ModelCheckpoint can produce durable saves.
 
     :param cfg: Hydra config carrying the opt-in durability flag and destination.
     :param callbacks: Callback list mutated in place; ModelCheckpoint enables crash saves.
+    :param run_id: Canonical timestamped run ID used to isolate recovery state.
     """
     if not OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
         return
@@ -126,7 +129,7 @@ def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> N
     model_checkpoint = model_checkpoints[0]
     model_checkpoint.save_last = True
     model_checkpoint.save_on_exception = True
-    callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
+    callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg, run_id)))
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
@@ -246,12 +249,13 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
+    run_id = make_wandb_run_id(resolve_run_config_id(cfg))
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
-    _append_checkpoint_uploader(cfg, callbacks)
+    _append_checkpoint_uploader(cfg, callbacks, run_id)
 
     log.info("Instantiating loggers...")
-    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "training")
+    pin_wandb_run_id(cfg, run_id, "training")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")

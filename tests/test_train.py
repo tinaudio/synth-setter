@@ -65,6 +65,26 @@ def _smoke_eval_postprocessing_fake() -> Callable[[list[str]], None]:
     )
 
 
+def _record_successful_r2_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[Path, str]]:
+    """Record uploads only after the real rclone-backed copy succeeds.
+
+    :param monkeypatch: Stubs the R2 auth probe and wraps the upload transport.
+    :returns: Mutable list populated with successful ``(local_path, uri)`` copies.
+    """
+    real_upload = r2_io.upload_to_uri
+    uploads: list[tuple[Path, str]] = []
+
+    def _record(local_path: Path, uri: str) -> None:
+        real_upload(local_path, uri)
+        uploads.append((Path(local_path), uri))
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _record)
+    return uploads
+
+
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     """Run 1 train, val, and test step on CPU with `fast_dev_run`.
 
@@ -776,15 +796,7 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
     :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
     """
-    real_upload = r2_io.upload_to_uri
-    uploads: list[tuple[Path, str]] = []
-
-    def _spy(local_path: Path, uri: str) -> None:
-        uploads.append((Path(local_path), uri))
-        real_upload(local_path, uri)
-
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    monkeypatch.setattr(r2_io, "upload_to_uri", _spy)
+    uploads = _record_successful_r2_uploads(monkeypatch)
     HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
         cfg_train.test = False
@@ -809,18 +821,10 @@ def test_train_mirrors_checkpoint_to_r2_when_fit_raises(
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
     :param monkeypatch: Stubs the R2 auth-ping and wraps uploads to record their URIs.
     """
-    real_upload = r2_io.upload_to_uri
-    uploads: list[tuple[Path, str]] = []
-
-    def _spy(local_path: Path, uri: str) -> None:
-        uploads.append((Path(local_path), uri))
-        real_upload(local_path, uri)
-
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    monkeypatch.setattr(r2_io, "upload_to_uri", _spy)
+    uploads = _record_successful_r2_uploads(monkeypatch)
     with open_dict(cfg_train):
         cfg_train.callbacks.crash_callback = {
-            "_target_": "tests.helpers.crash_callback.RaiseOnTrainBatchEnd"
+            "_target_": "tests.helpers.crash_callback._RaiseOnTrainBatchEnd"
         }
         cfg_train.test = False
         cfg_train.training.upload_checkpoints_during_training = True
