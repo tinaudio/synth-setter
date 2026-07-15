@@ -115,8 +115,8 @@ def stage_lance_shard_attempt(
         the shard's bytes would exceed the single-data-file bound
         (``LANCE_MAX_BYTES_PER_FILE``) the fragment write cannot split.
     """
-    # Function-local so importing this module (e.g. from the hdf5/wds worker
-    # path) never pays the `lance` import cost.
+    # Function-local so importing this module (e.g. from the launcher) never
+    # pays the `lance` import cost.
     import lance
 
     from synth_setter.data.vst.shapes import dataset_field_shapes

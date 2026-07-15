@@ -66,60 +66,29 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
 class OutputFormat(StrEnum):
     """Shard container format; the enum value is the on-disk / JSON token.
 
-    Member values are persisted as R2 / ``input_spec.json`` keys — renaming or
-    removing one requires a data migration.
-
-    .. attribute :: HDF5
-
-        HDF5 container; shards are written as ``.h5`` files.
-
-    .. attribute :: WDS
-
-        WebDataset container; shards are written as ``.tar`` archives.
+    The member value is persisted as an R2 / ``input_spec.json`` key, so
+    renaming it requires a data migration. Lance is the only supported format.
 
     .. attribute :: LANCE
 
         Lance container; shards are written as ``.lance`` dataset directories.
     """
 
-    HDF5 = "hdf5"
-    WDS = "wds"
     LANCE = "lance"
 
     @property
     def extension(self) -> str:
         """Shard filename suffix for this format, leading dot included."""
-        return _OUTPUT_FORMAT_EXTENSIONS[self]
+        return ".lance"
 
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:
         """Return the format whose shards carry ``suffix``, dispatching by file type.
 
-        :param suffix: Filename suffix including the leading dot (e.g. ``.h5``).
+        :param suffix: Filename suffix including the leading dot (e.g. ``.lance``).
         :returns: Matching format, or ``None`` when ``suffix`` is unregistered.
         """
-        return _OUTPUT_FORMAT_BY_EXTENSION.get(suffix)
-
-
-# Source-of-truth suffix per format (leading dot included). A missing row
-# surfaces as KeyError at ``.extension`` rather than a silently-wrong filename.
-_OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
-    OutputFormat.HDF5: ".h5",
-    OutputFormat.WDS: ".tar",
-    OutputFormat.LANCE: ".lance",
-}
-
-# Reverse map for suffix dispatch, derived from the forward map. The import
-# guard below rejects a shared suffix (last-key-wins would silently misroute).
-_OUTPUT_FORMAT_BY_EXTENSION: dict[str, OutputFormat] = {
-    ext: fmt for fmt, ext in _OUTPUT_FORMAT_EXTENSIONS.items()
-}
-if len(_OUTPUT_FORMAT_BY_EXTENSION) != len(_OUTPUT_FORMAT_EXTENSIONS):
-    raise RuntimeError(
-        "Duplicate extensions in _OUTPUT_FORMAT_EXTENSIONS — "
-        "two output formats map to the same suffix: "
-        f"{_OUTPUT_FORMAT_EXTENSIONS!r}"
-    )
+        return cls.LANCE if suffix == ".lance" else None
 
 
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
@@ -196,21 +165,6 @@ def _default_gui_toggle_cadence() -> _GuiToggleCadence:
     return "never" if _current_platform() == "darwin" else "render"
 
 
-# Cap on shard filenames listed in a copy-source mismatch error before eliding.
-_MISMATCH_FILENAMES_SHOWN = 3
-
-
-def _sample_filenames(names: list[str]) -> str:
-    """Render up to ``_MISMATCH_FILENAMES_SHOWN`` names, noting any elided remainder.
-
-    :param names: Filenames to sample for a copy-source mismatch message.
-    :returns: The leading sample, suffixed with ``(+N more)`` when truncated.
-    """
-    shown = names[:_MISMATCH_FILENAMES_SHOWN]
-    elided = len(names) - len(shown)
-    return f"{shown} (+{elided} more)" if elided else f"{shown}"
-
-
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
 
@@ -220,10 +174,7 @@ class ShardSpec(BaseModel):
         description="Logical shard index (0-based), independent of compute infrastructure."
     )
     filename: str = Field(
-        description=(
-            "Shard filename including the format-specific suffix "
-            "(``shard-NNNNNN.h5`` or ``shard-NNNNNN.tar``)."
-        )
+        description="Shard filename including the ``.lance`` suffix (``shard-NNNNNN.lance``)."
     )
     seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
@@ -437,9 +388,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     def shard_metadata(self) -> ShardMetadata:
         """Project this config onto the per-shard sidecar metadata fields.
 
-        Single source of truth for the render-derived attrs the HDF5
-        ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
-        Lance schema metadata expose — writers and finalize can never drift.
+        Single source of truth for the render-derived attrs the Lance schema
+        metadata exposes — writers and finalize can never drift.
 
         :returns: Strict ``ShardMetadata`` with every render-derived field filled.
         """
@@ -458,7 +408,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 _SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
 
 # Typed alias for split names — narrows the ``str`` parameter on layout helpers
-# (``R2Location.split_h5_uri``, ``DatasetSpec.split_shard_ranges`` keys) so a
+# (``R2Location.split_lance_uri``, ``DatasetSpec.split_shard_ranges`` keys) so a
 # typo lands as a type error rather than a silent miss at runtime.
 Split = Literal["train", "val", "test"]
 
@@ -604,7 +554,7 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: output_format
 
-        Shard container format (``hdf5`` writes ``.h5``, ``wds`` writes ``.tar``).
+        Shard container format; Lance writes ``.lance`` dataset directories.
 
     .. attribute :: train_val_test_sizes
 
@@ -622,10 +572,6 @@ class DatasetSpec(BaseModel):
     .. attribute :: render
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
-
-    .. attribute :: copy_dataset_root_uri
-
-        Optional dataset-copy source root URI; ``None`` samples fresh params.
 
     .. attribute :: mask_degenerate_bins
 
@@ -666,9 +612,7 @@ class DatasetSpec(BaseModel):
     # into the enum; an unknown token still raises, matching the prior Literal.
     output_format: OutputFormat = Field(
         strict=False,
-        description=(
-            "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
-        ),
+        description="Shard container format; Lance writes ``.lance`` dataset directories.",
     )
     train_val_test_sizes: tuple[int, int, int] = Field(
         description=(
@@ -692,19 +636,6 @@ class DatasetSpec(BaseModel):
 
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
-    )
-
-    copy_dataset_root_uri: str | None = Field(
-        default=None,
-        description=(
-            "Optional dataset-copy source root URI: each output shard decodes the "
-            "same-named source shard's ``param_array`` and re-renders those fixed params "
-            "instead of sampling fresh (``None``, the default, samples fresh). A bare "
-            "local path, ``file://`` URI, or ``r2://`` URI — an ``r2://`` source is "
-            "downloaded per shard at copy time, so it need not be synced locally first. "
-            "Re-renders apply the *target's* ``min_loudness`` to the fixed params, so a "
-            "copied patch landing below it raises (#724)."
-        ),
     )
 
     mask_degenerate_bins: bool = Field(
@@ -773,24 +704,11 @@ class DatasetSpec(BaseModel):
         :raises TypeError: ``cfg`` is not mapping-shaped (e.g. a ``ListConfig``,
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
             did not resolve to a mapping — both normalized to one stable type.
-        :raises ValueError: ``cfg`` carries a stale ``datasetsrc`` key; the mask
-            below would silently drop it (the model's ``_promote_legacy_datasetsrc``
-            shim never runs on the masked dict), so a migration error is raised.
         """
         # Lazy import: omegaconf is absent from the minimal-env CI install that
         # runs `validate_spec`, which imports this module but never calls this.
         from omegaconf import OmegaConf
 
-        # `datasetsrc` was flattened to `copy_dataset_root`, then renamed to
-        # `copy_dataset_root_uri`. The mask keeps only model fields, so a stale
-        # Hydra override would vanish silently and disable copy with no signal;
-        # reject either old key with a migration pointer.
-        for stale_key in ("datasetsrc", "copy_dataset_root"):
-            if stale_key in cfg:
-                raise ValueError(
-                    f"{stale_key!r} is no longer a config key; the dataset-copy source is "
-                    "now 'copy_dataset_root_uri'. Use copy_dataset_root_uri=<uri>."
-                )
         spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
@@ -839,65 +757,6 @@ class DatasetSpec(BaseModel):
         r2 = data["r2"]
         if isinstance(r2, dict) and "prefix" not in r2:
             data["r2"] = _fill_default_r2_prefix(data, r2)
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def _promote_legacy_copy_dataset_root(cls, data: Any) -> Any:
-        """Promote legacy ``datasetsrc`` / ``copy_dataset_root`` into ``copy_dataset_root_uri``.
-
-        Back-compat for ``input_spec.json`` files materialized before the
-        dataset-copy source became a root URI. Two pre-rename shapes promote to
-        the current ``copy_dataset_root_uri`` (a bare path is itself a valid URI):
-
-          - the flat ``copy_dataset_root: X`` that preceded the URI rename, and
-          - the nested ``datasetsrc: {copy_dataset_root: X}`` that preceded the
-            flatten (``datasetsrc: null`` is dropped — the field defaults to
-            ``None``).
-
-        A non-null legacy ``datasetsrc`` mapping is held to the removed
-        ``DatasetSrcConfig``'s contract — exactly the ``copy_dataset_root`` key,
-        non-null — so a typo'd or empty mapping raises instead of silently
-        disabling copy (use ``datasetsrc: null`` to disable).
-
-        :param data: Raw validator input (typically a dict; pass-through otherwise).
-        :returns: Same input when no legacy key is present; otherwise a new dict
-            with the legacy value promoted to ``copy_dataset_root_uri``.
-        :raises ValueError: more than one of ``datasetsrc`` / ``copy_dataset_root``
-            / ``copy_dataset_root_uri`` is present (ambiguous); ``datasetsrc`` is
-            neither a mapping nor ``null``; or a non-null ``datasetsrc`` mapping is
-            not exactly a non-null ``copy_dataset_root``.
-        """
-        if not isinstance(data, dict) or (
-            "datasetsrc" not in data and "copy_dataset_root" not in data
-        ):
-            return data
-        data = dict(data)
-        present = [
-            key
-            for key in ("datasetsrc", "copy_dataset_root", "copy_dataset_root_uri")
-            if key in data
-        ]
-        if len(present) > 1:
-            raise ValueError(
-                f"DatasetSpec received multiple dataset-copy source keys {present}; "
-                "pass only 'copy_dataset_root_uri'"
-            )
-        if "copy_dataset_root" in data:
-            data["copy_dataset_root_uri"] = data.pop("copy_dataset_root")
-            return data
-        legacy = data.pop("datasetsrc")
-        if isinstance(legacy, dict):
-            if set(legacy) != {"copy_dataset_root"} or legacy["copy_dataset_root"] is None:
-                raise ValueError(
-                    "legacy 'datasetsrc' mapping must hold exactly a non-null "
-                    "'copy_dataset_root'; use datasetsrc: null to disable copy"
-                )
-            data["copy_dataset_root_uri"] = legacy["copy_dataset_root"]
-        elif legacy is not None:
-            raise ValueError(
-                f"legacy 'datasetsrc' must be a mapping or null, got {type(legacy).__name__}"
-            )
         return data
 
     @model_validator(mode="before")
@@ -1030,37 +889,6 @@ class DatasetSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _copy_dataset_root_uri_must_not_be_blank(self) -> DatasetSpec:
-        """Reject a blank ``copy_dataset_root_uri`` so the per-shard source URI is never empty.
-
-        :returns: ``self`` when ``copy_dataset_root_uri`` is unset or non-blank.
-        :raises ValueError: ``copy_dataset_root_uri`` is empty or whitespace-only.
-        """
-        if self.copy_dataset_root_uri is not None and not self.copy_dataset_root_uri.strip():
-            raise ValueError("copy_dataset_root_uri must not be blank")
-        return self
-
-    @model_validator(mode="after")
-    def _copy_dataset_root_uri_requires_hdf5_output(self) -> DatasetSpec:
-        """Reject a dataset-copy source paired with non-hdf5 output.
-
-        The copy path reads each source shard as an HDF5 ``param_array`` of the
-        same shard filename, so a ``.tar`` output has no readable same-named
-        source. Failing at spec construction surfaces the misconfig at launch
-        rather than per-shard inside the renderer subprocess.
-
-        :returns: ``self`` when ``copy_dataset_root_uri`` is unset or output is hdf5.
-        :raises ValueError: ``copy_dataset_root_uri`` is set with ``output_format != "hdf5"``.
-        """
-        if self.copy_dataset_root_uri is not None and self.output_format != "hdf5":
-            raise ValueError(
-                "copy_dataset_root_uri (dataset copy) supports output_format='hdf5' only; got "
-                f"output_format={self.output_format!r}. The source is read as an HDF5 "
-                "param_array of the same shard filename."
-            )
-        return self
-
-    @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
         expected_ext = self.output_format.extension
@@ -1071,64 +899,6 @@ class DatasetSpec(BaseModel):
                     f"output_format {self.output_format.value!r} (expected suffix {expected_ext!r})"
                 )
         return self
-
-    def validate_copy_source(self, source: DatasetSpec) -> None:
-        """Assert ``source`` reproduces this spec for a filename-matched param copy.
-
-        A dataset-copy run reads ``<copy_dataset_root_uri>/<shard.filename>`` per
-        output shard and re-renders that shard's decoded params, so the copy is
-        faithful only when the source agrees on every value fixing the per-shard
-        contract: ``param_spec_name`` (encoding width), ``samples_per_shard``
-        (rows per shard), ``train_val_test_sizes`` (total rows and the
-        train/val/test split layout), ``output_format`` (the shard extension the
-        copy addresses), and the derived shard-filename set. Every mismatch is
-        aggregated so a misconfigured copy surfaces them all in one launch
-        instead of one render — or one re-run — at a time.
-
-        :param source: Spec of the copy source, parsed from its ``input_spec.json``.
-        :raises ValueError: ``source`` differs from ``self`` on any copy-relevant
-            value; the message enumerates every mismatch.
-        """
-        mismatches: list[str] = []
-        if source.render.param_spec_name != self.render.param_spec_name:
-            mismatches.append(
-                f"param_spec_name: source={source.render.param_spec_name!r} != "
-                f"target={self.render.param_spec_name!r}"
-            )
-        if source.render.samples_per_shard != self.render.samples_per_shard:
-            mismatches.append(
-                f"samples_per_shard: source={source.render.samples_per_shard} != "
-                f"target={self.render.samples_per_shard}"
-            )
-        if source.train_val_test_sizes != self.train_val_test_sizes:
-            mismatches.append(
-                f"train_val_test_sizes: source={source.train_val_test_sizes} != "
-                f"target={self.train_val_test_sizes}"
-            )
-        if source.output_format != self.output_format:
-            # The copy addresses source shards by the target's filename; a format
-            # difference means a never-matching extension (e.g. .tar vs .h5).
-            mismatches.append(
-                f"output_format: source={source.output_format.value!r} != "
-                f"target={self.output_format.value!r} (copy reads same-named shards)"
-            )
-        source_filenames = tuple(shard.filename for shard in source.shards)
-        target_filenames = tuple(shard.filename for shard in self.shards)
-        if source_filenames != target_filenames:
-            only_in_source = sorted(set(source_filenames) - set(target_filenames))
-            only_in_target = sorted(set(target_filenames) - set(source_filenames))
-            mismatches.append(
-                f"shard filenames: source has {len(source_filenames)}, "
-                f"target has {len(target_filenames)} "
-                f"(only in source: {_sample_filenames(only_in_source)}; "
-                f"only in target: {_sample_filenames(only_in_target)})"
-            )
-        if mismatches:
-            joined = "\n  - ".join(mismatches)
-            raise ValueError(
-                "dataset-copy source spec does not match the target on copy-relevant "
-                f"values:\n  - {joined}"
-            )
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property

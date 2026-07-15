@@ -46,11 +46,10 @@ Implemented in [#1713](https://github.com/tinaudio/synth-setter/pull/1713):
 - VST parameter sampling accepts an explicit `numpy.random.Generator`; it no
   longer depends on process-global `random` or `numpy.random` streams for seeded
   dataset rows.
-- HDF5, WebDataset, and Lance writers all project render provenance through
+- The Lance writer projects render provenance through
   `ShardMetadata`: `base_seed` and `attempts_per_sample`.
-- Shard validation rejects seed-provenance mismatches in HDF5 attrs, WDS
-  `metadata.json`, and Lance schema metadata. Legacy sidecars without seed
-  fields still validate structurally.
+- Shard validation rejects seed-provenance mismatches in Lance schema metadata.
+  Sidecars without seed fields still validate structurally.
 - Tests cover same-seed repeatability, different-seed divergence, worker-count
   independence, shard-size prefix stability, direct row derivation, retry
   attempt semantics, and same-config repeat runs with seed metadata.

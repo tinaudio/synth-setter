@@ -29,13 +29,13 @@ code**. See
  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────────────┐  │
  │  │ GENERATE │───>│ FINALIZE │───>│  TRAIN   │───>│    EVALUATE      │  │
  │  │          │    │          │    │          │    │                  │  │
- │  │ Render   │    │ Reshard  │    │ Flow     │    │ Predict → Render │  │
+ │  │ Render   │    │ Compose  │    │ Flow     │    │ Predict → Render │  │
  │  │ audio via│    │ into     │    │ matching │    │ → Metrics        │  │
  │  │ VST synth│    │ splits   │    │ model    │    │                  │  │
  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────────┬─────────┘  │
  │       │               │               │                   │            │
  │       ▼               ▼               ▼                   ▼            │
- │    HDF5 shards   train/val/test   Checkpoints       Metrics CSV       │
+ │    Lance shards  train/val/test   Checkpoints       Metrics CSV       │
  │    → R2          → R2             → W&B             Rendered audio     │
  └─────────────────────────────────────────────────────────────────────────┘
 
@@ -58,14 +58,14 @@ code**. See
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
 2. **Generate** -- Workers render audio samples through the configured VST3
-   synth, producing HDF5
+   synth, producing Lance
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
    and ground-truth parameter arrays. Workers are fully parallel with no shared
    state.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
-3. **Finalize** -- Downloads validated shards, reshards into train/val/test
-   splits (HDF5 virtual datasets or WebDataset `.tar`), computes normalization
+3. **Finalize** -- Downloads validated shards, commits their Lance fragments
+   into train/val/test split datasets, computes normalization
    statistics, registers the dataset as a W&B artifact, and writes
    `dataset.complete`.
    Design: [data-pipeline.md](design/data-pipeline.md)
@@ -75,9 +75,9 @@ code**. See
    checkpoint is uploaded to R2 and referenced by the `model-{config_id}` W&B
    artifact (`log_model: False`, so no checkpoint files go to W&B). Hydra composes
    experiment configs from datamodule, model, trainer, and callback configs.
-   VST datasets load from HDF5 shards (`datamodule=surge`) or
-   [Lance](https://github.com/lance-format/lance) shards (`datamodule=surge_lance`);
-   both serve training and evaluation. Native `lance.torch` dataloaders are also
+   VST datasets load from
+   [Lance](https://github.com/lance-format/lance) shards (`datamodule=surge_lance`),
+   which serve training and evaluation. Native `lance.torch` dataloaders are also
    available outside the datamodule configs — see
    [training-pipeline.md §6.1](design/training-pipeline.md#61-dataset-access). The datamodule class is
    param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
@@ -109,7 +109,7 @@ synth-setter/
 │   ├── pipeline/           #   Distributed data pipeline
 │   │   ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
 │   │   ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
-│   │   ├── data/           #     Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report, ...)
+│   │   ├── data/           #     Dataset-shaping utilities (lance_staging, lance_finalize, stats, ...)
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
 │   ├── evaluation/         #   Render/metrics library code (predict_vst_audio, compute_audio_metrics, shuffle_pred_audio, audio_probe) shared by cli/eval.py and the training val-audio probe
@@ -140,7 +140,7 @@ by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baselin
 preset (`plugin_state_paths[name]`), and a `RenderConfig`
 (`src/synth_setter/configs/render/<name>.yaml`)
 — keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
-rendering, HDF5/Lance storage, mel features, distributed workers, and models all
+rendering, Lance storage, mel features, distributed workers, and models all
 read width and behavior from the resolved spec, never from a synth literal.
 Onboarding a new VST3 synth is additive: scaffold a spec with
 `synth-setter-introspect-plugin`, hand-tune it, register it, and write a render

@@ -3,7 +3,7 @@
 Hosts the per-row array names, on-disk dtypes, mel-spectrogram constants, and
 dataset-shape calculators. Kept as a thin sibling module so that the shard
 validator and the writers can import these primitives without pulling in the
-rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard, the
+rest of ``generate_vst_dataset.py``'s import surface (pedalboard, the
 VST renderer).
 """
 
@@ -28,11 +28,10 @@ DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY
 M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
 
-# Per-field on-disk dtype, matching what the HDF5 / wds writers emit. Audio is
+# Per-field on-disk dtype, matching what the Lance writer emits. Audio is
 # stored as ``float16`` for compressed storage efficiency; mel and params stay
 # ``float32``. Consumers upcast as needed; this map is the single source of
-# truth the validator enforces and the resharder honors when constructing
-# VirtualLayouts.
+# truth the validator enforces against each shard's schema.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
     AUDIO_FIELD: np.dtype("float16"),
     MEL_SPEC_FIELD: np.dtype("float32"),

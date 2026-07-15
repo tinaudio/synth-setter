@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
-import h5py
-import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
 import numpy as np
 import pytest
 import torch
@@ -31,10 +29,7 @@ from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
-# Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
-# ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
-# explicit values for every flag below, so these constants must match the values
-# the subprocess is invoked with.
+# These values must match the explicit RenderConfig fixture arguments.
 _SURGE_FIXTURE_SAMPLE_RATE = 44100
 _SURGE_FIXTURE_CHANNELS = 2
 _SURGE_FIXTURE_DURATION_SECONDS = 4.0
@@ -99,95 +94,50 @@ VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
-    """Assert the generated Surge XT dataset is structurally sound.
+    """Assert the generated Surge XT Lance dataset is structurally sound.
 
-    Verifies the three required datasets exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
-    failures here rather than letting downstream training crash on opaque NaN losses.
+    Verifies the three required columns exist with the expected shapes, that no NaN/Inf leaked in
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
+    those failures here rather than letting downstream training crash on opaque NaN losses.
     """
-    with h5py.File(path, "r") as f:
-        for name in ("audio", "mel_spec", "param_array"):
-            assert name in f, f"missing dataset {name!r} in {path}"
+    import lance
 
-        audio = f["audio"]
-        mel = f["mel_spec"]
-        params = f["param_array"]
-        # `h5py.File.__getitem__` returns `Group | Dataset | Datatype`; the
-        # generator only writes Datasets, so narrow the type for shape access.
-        assert isinstance(audio, h5py.Dataset), f"'audio' is not a Dataset in {path}"
-        assert isinstance(mel, h5py.Dataset), f"'mel_spec' is not a Dataset in {path}"
-        assert isinstance(params, h5py.Dataset), f"'param_array' is not a Dataset in {path}"
+    table = lance.dataset(str(path)).to_table()
+    for name in ("audio", "mel_spec", "param_array"):
+        assert name in table.schema.names, f"missing column {name!r} in {path}"
 
-        expected_audio_shape = (
-            num_samples,
-            _SURGE_AUDIO_CHANNELS,
-            _SURGE_AUDIO_SAMPLES_PER_CLIP,
-        )
-        assert audio.shape == expected_audio_shape, (
-            f"audio shape {audio.shape} != expected {expected_audio_shape}"
-        )
-        assert mel.shape == (num_samples, *_SURGE_MEL_SHAPE), (
-            f"mel_spec shape {mel.shape} != expected {(num_samples, *_SURGE_MEL_SHAPE)}"
-        )
-        assert params.shape[0] == num_samples, (
-            f"param_array first dim {params.shape[0]} != num_samples {num_samples}"
-        )
-        assert params.ndim == 2, f"param_array must be 2D, got shape {params.shape}"
+    def _col(name: str) -> np.ndarray:
+        return table.column(name).combine_chunks().to_numpy_ndarray()
 
-        audio_arr = audio[...].astype(np.float32)
-        mel_arr = mel[...]
-        params_arr = params[...]
-        assert np.isfinite(audio_arr).all(), f"audio in {path} contains NaN/Inf"
-        assert np.isfinite(mel_arr).all(), f"mel_spec in {path} contains NaN/Inf"
-        assert np.isfinite(params_arr).all(), f"param_array in {path} contains NaN/Inf"
+    audio_arr = _col("audio").astype(np.float32)
+    mel_arr = _col("mel_spec")
+    params_arr = _col("param_array")
 
-        per_clip_peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
-        silent = np.where(per_clip_peak <= _SURGE_SILENCE_PEAK_THRESHOLD)[0]
-        assert silent.size == 0, (
-            f"audio clips {silent.tolist()} in {path} are silent "
-            f"(peaks={per_clip_peak[silent].tolist()})"
-        )
+    expected_audio_shape = (
+        num_samples,
+        _SURGE_AUDIO_CHANNELS,
+        _SURGE_AUDIO_SAMPLES_PER_CLIP,
+    )
+    assert audio_arr.shape == expected_audio_shape, (
+        f"audio shape {audio_arr.shape} != expected {expected_audio_shape}"
+    )
+    assert mel_arr.shape == (num_samples, *_SURGE_MEL_SHAPE), (
+        f"mel_spec shape {mel_arr.shape} != expected {(num_samples, *_SURGE_MEL_SHAPE)}"
+    )
+    assert params_arr.shape[0] == num_samples, (
+        f"param_array first dim {params_arr.shape[0]} != num_samples {num_samples}"
+    )
+    assert params_arr.ndim == 2, f"param_array must be 2D, got shape {params_arr.shape}"
 
+    assert np.isfinite(audio_arr).all(), f"audio in {path} contains NaN/Inf"
+    assert np.isfinite(mel_arr).all(), f"mel_spec in {path} contains NaN/Inf"
+    assert np.isfinite(params_arr).all(), f"param_array in {path} contains NaN/Inf"
 
-def _write_smoke_stats_npz(train_h5: Path) -> None:
-    """Write the sibling ``stats.npz`` for a smoke dataset via the stats CLI subprocess.
-
-    Runs ``python -m synth_setter.pipeline.data.stats <train_h5> --mask-degenerate-bins``;
-    the subprocess registers the hdf5plugin Blosc2 filter on import, which the
-    in-process dask path does not surface to its workers. Fails loud on timeout
-    or non-zero exit so a broken stats fold surfaces here, not as a downstream
-    datamodule load error.
-
-    :param train_h5: Path to the rendered ``train.h5``; ``stats.npz`` is written beside it.
-    """
-    stats_args = [
-        sys.executable,
-        "-m",
-        "synth_setter.pipeline.data.stats",
-        str(train_h5),
-        "--mask-degenerate-bins",
-    ]
-    timeout = _scaled_vst_subprocess_timeout()
-    try:
-        result = subprocess.run(  # noqa: S603
-            stats_args, text=True, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"get_dataset_stats timed out after {timeout}s\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"get_dataset_stats failed (exit {result.returncode})\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    assert train_h5.parent.joinpath("stats.npz").exists(), (
-        "get_dataset_stats failed to produce stats.npz fixture"
+    per_clip_peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
+    silent = np.where(per_clip_peak <= _SURGE_SILENCE_PEAK_THRESHOLD)[0]
+    assert silent.size == 0, (
+        f"audio clips {silent.tolist()} in {path} are silent "
+        f"(peaks={per_clip_peak[silent].tolist()})"
     )
 
 
@@ -745,11 +695,10 @@ def cfg_surge_xt_global(
 def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> None:
     """Render the smoke ``train`` shard via the ``generate_vst_dataset`` subprocess (real VST), failing loud on timeout/non-zero exit/missing output.
 
-    The writer is dispatched on ``output_path``'s suffix by ``generate_vst_dataset``
-    (``.h5`` -> HDF5, ``.lance`` -> Lance), so this one renderer backs both the h5
-    and Lance real-VST smoke fixtures.
+    The writer is dispatched on ``output_path``'s ``.lance`` suffix by
+    ``generate_vst_dataset``, backing the real-VST smoke fixture.
 
-    :param output_path: Destination shard path (``train.h5`` or ``train.lance``); its
+    :param output_path: Destination shard path (``train.lance``); its
         parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
@@ -807,7 +756,7 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
 
 
 def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
-    """Build the one-shard fake-plugin ``RenderConfig`` shared by the h5 and Lance smoke renders.
+    """Build the one-shard fake-plugin ``RenderConfig`` for the Lance smoke render.
 
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
@@ -829,18 +778,6 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     )
 
 
-def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
-    """Render the smoke ``train.h5`` in-process via ``make_hdf5_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
-
-    :param train_h5: Destination ``train.h5`` path; its parent must already exist.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
-    """
-    from synth_setter.data.vst.writers import make_hdf5_dataset
-
-    make_hdf5_dataset(train_h5, _smoke_fake_render_cfg(param_spec_name))
-
-
 def _render_smoke_train_lance_fake(train_lance: Path, param_spec_name: str) -> None:
     """Render the smoke ``train.lance`` in-process via ``make_lance_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
 
@@ -853,37 +790,6 @@ def _render_smoke_train_lance_fake(train_lance: Path, param_spec_name: str) -> N
     make_lance_dataset(train_lance, _smoke_fake_render_cfg(param_spec_name))
 
 
-def _build_surge_smoke_datasets(
-    tmp_path: Path,
-    param_spec_name: str,
-    render_train_h5: Callable[[Path, str], None],
-) -> Path:
-    """Build the N-sample Surge smoke dataset; ``render_train_h5`` is the only difference between the real-VST and fake fixtures.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
-    :param render_train_h5: Renders ``train.h5`` given ``(train_h5, param_spec_name)``.
-
-    :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
-    """
-    smoke_dataset_dir = tmp_path / "data" / "smoke"
-    smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
-    train_h5 = smoke_dataset_dir / "train.h5"
-
-    render_train_h5(train_h5, param_spec_name)
-    _validate_surge_dataset(train_h5, NUM_FIXTURE_SAMPLES)
-
-    # Sibling stats.npz; shared across train/val/test splits — see #1002. Subprocess
-    # path: in-process dask workers miss the hdf5plugin Blosc2 filter.
-    _write_smoke_stats_npz(train_h5)
-
-    shutil.copy(train_h5, smoke_dataset_dir / "val.h5")
-    shutil.copy(train_h5, smoke_dataset_dir / "test.h5")
-    return smoke_dataset_dir
-
-
 def _build_surge_smoke_lance_datasets(
     tmp_path: Path,
     param_spec_name: str,
@@ -891,12 +797,12 @@ def _build_surge_smoke_lance_datasets(
 ) -> Path:
     """Render the N-sample Surge smoke dataset natively as single-file Lance shards.
 
-    The Lance counterpart to :func:`_build_surge_smoke_datasets`: ``render_train_lance``
-    is the only difference between the real-VST and fake fixtures. It renders
-    ``train.lance`` through the production :func:`make_lance_dataset` writer, then this
-    folds the mel rows into ``stats.npz`` via :func:`fold_lance_shard_into_welford` and clones the
-    split into ``val``/``test``. No HDF5 file is produced — every shard carries the
-    exact on-disk format the pipeline's Lance finalize emits.
+    ``render_train_lance`` is the only difference between the real-VST and fake
+    fixtures. It renders ``train.lance`` through the production
+    :func:`make_lance_dataset` writer, then this folds the mel rows into
+    ``stats.npz`` via :func:`fold_lance_shard_into_welford` and clones the split
+    into ``val``/``test``. Every shard carries the exact on-disk format the
+    pipeline's Lance finalize emits.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
@@ -913,6 +819,7 @@ def _build_surge_smoke_lance_datasets(
     train_lance = smoke_dataset_dir / "train.lance"
 
     render_train_lance(train_lance, param_spec_name)
+    _validate_surge_dataset(train_lance, NUM_FIXTURE_SAMPLES)
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
@@ -927,28 +834,11 @@ def _build_surge_smoke_lance_datasets(
 
 @pytest.fixture(scope="function")
 def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
-    """Generate the N-sample Surge XT dataset used by the e2e smoke test.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
-        and ``--plugin_state_path`` for ``generate_vst_dataset``.
-
-    :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
-        dataset.
-    """
-    return _build_surge_smoke_datasets(tmp_path, param_spec_name, _render_smoke_train_subprocess)
-
-
-@pytest.fixture(scope="function")
-def surge_xt_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     """Generate the N-sample Surge XT smoke dataset as native Lance shards via the real VST.
 
-    The Lance counterpart to :func:`surge_xt_smoke_datasets`: ``generate_vst_dataset``
-    dispatches the ``.lance`` suffix to :func:`make_lance_dataset`, so the real Surge XT
-    subprocess writes ``train.lance`` directly. Backs the real-VST half of the h5<->Lance
-    train/eval parity matrix.
+    ``generate_vst_dataset`` dispatches the ``.lance`` suffix to
+    :func:`make_lance_dataset`, so the real Surge XT subprocess writes
+    ``train.lance`` directly. Backs the real-VST half of the train/eval smoke matrix.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
@@ -967,36 +857,13 @@ def surge_xt_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 def fake_surge_smoke_datasets(
     tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
 ) -> Path:
-    """Render the N-sample Surge dataset in-process via the fake plugin (no real VST/X11).
-
-    The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
-    swaps the loader for ``FakeVST3Plugin`` so ``make_hdf5_dataset`` produces a
-    structurally-valid ``train.h5`` (audio/mel/param) with no Surge XT subprocess.
-    Lets oracle-eval tests that only need a loadable dataset (not real audio fidelity)
-    run on the CPU-fast loop.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.plugin_state_paths`); defaults to ``"surge_4"``.
-    :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
-        for the fake so the render needs no real VST3 binary or display server.
-
-    :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
-    """
-    return _build_surge_smoke_datasets(tmp_path, param_spec_name, _render_smoke_train_h5_fake)
-
-
-@pytest.fixture(scope="function")
-def fake_surge_smoke_lance_datasets(
-    tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
-) -> Path:
     """Render the N-sample Surge smoke dataset in-process as native Lance shards (no real VST/X11).
 
-    The Lance counterpart to :func:`fake_surge_smoke_datasets`: ``install_fake_plugin``
+    The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
     swaps the loader for ``FakeVST3Plugin`` so :func:`make_lance_dataset` writes
-    structurally-valid ``{train,val,test}.lance`` shards directly — no HDF5
-    intermediate to convert. Backs the Lance ``evaluate`` oracle smoke test.
+    structurally-valid ``{train,val,test}.lance`` shards directly. Lets oracle-eval
+    tests that only need a loadable dataset (not real audio fidelity) run on the
+    CPU-fast loop.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
@@ -1029,7 +896,7 @@ def cfg_surge_xt(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.lance")
 
     yield cfg
 
@@ -1040,47 +907,36 @@ def cfg_surge_xt(
 # (no public docstring) matching the sibling ``_FakeOracleDataset`` in test_eval.py.
 class _SurgeSmokeVariant(NamedTuple):
     dataset_fixture: str  # conftest fixture yielding the dataset root dir
-    datamodule_group: (
-        str  # Hydra ``datamodule=`` group: "surge" (h5) | "surge_lance" | "surge_lance_map"
-    )
-    split_ext: str  # split file suffix: ".h5" | ".lance"
+    datamodule_group: str  # Hydra ``datamodule=`` group: "surge_lance" | "surge_lance_map"
+    split_ext: str  # split file suffix: ".lance"
     plugin_path: str  # render plugin for eval postprocessing: real PLUGIN_PATH | fake.vst3
 
 
-# Dataset-format arms of the h5<->Lance smoke parity matrix, shared by the train and eval
+# Datamodule arms of the Lance smoke parity matrix, shared by the train and eval
 # entrypoint tests as ``surge_smoke_variant`` parametrize values. The real-VST arms render
 # through the Surge XT subprocess (slow); the fake arms render in-process via the fake
-# plugin (CPU inner loop). Both feed the same test bodies so a Lance-datamodule regression
-# cannot hide behind h5-only coverage.
+# plugin (CPU inner loop). Both feed the same test bodies so an iterable/map datamodule
+# regression cannot hide behind single-datamodule coverage.
 REAL_VST_VARIANTS = [
     pytest.param(
-        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge", ".h5", PLUGIN_PATH), id="h5"
-    ),
-    pytest.param(
-        _SurgeSmokeVariant("surge_xt_smoke_lance_datasets", "surge_lance", ".lance", PLUGIN_PATH),
+        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge_lance", ".lance", PLUGIN_PATH),
         id="lance",
     ),
     pytest.param(
-        _SurgeSmokeVariant(
-            "surge_xt_smoke_lance_datasets", "surge_lance_map", ".lance", PLUGIN_PATH
-        ),
+        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge_lance_map", ".lance", PLUGIN_PATH),
         id="lance_map",
     ),
 ]
 FAKE_VST_VARIANTS = [
     pytest.param(
-        _SurgeSmokeVariant("fake_surge_smoke_datasets", "surge", ".h5", "plugins/fake.vst3"),
-        id="h5",
-    ),
-    pytest.param(
         _SurgeSmokeVariant(
-            "fake_surge_smoke_lance_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
+            "fake_surge_smoke_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
         ),
         id="lance",
     ),
     pytest.param(
         _SurgeSmokeVariant(
-            "fake_surge_smoke_lance_datasets", "surge_lance_map", ".lance", "plugins/fake.vst3"
+            "fake_surge_smoke_datasets", "surge_lance_map", ".lance", "plugins/fake.vst3"
         ),
         id="lance_map",
     ),
@@ -1211,7 +1067,7 @@ def cfg_surge_xt_eval(
         cfg,
         tmp_path=tmp_path,
         dataset_root=surge_xt_smoke_datasets,
-        predict_file=surge_xt_smoke_datasets / "test.h5",
+        predict_file=surge_xt_smoke_datasets / "test.lance",
         param_spec_name=param_spec_name,
         plugin_path=PLUGIN_PATH,
         rerender_target=True,
@@ -1387,7 +1243,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
     """Return the skeleton shared by hand-built ``DatasetSpec`` test specs.
 
     Carries the fields both the wandb-tracking and parallel-dispatch tests fix
-    identically (deterministic ``created_at`` / ``git_sha``, hdf5 output, the
+    identically (deterministic ``created_at`` / ``git_sha``, lance output, the
     Darwin-portable ``gui_toggle_cadence``); per-test fields (``task_name``,
     ``run_id``, ``r2``, shard sizes, ``parallel``) come in as overrides.
 
@@ -1397,7 +1253,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
         "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "base_seed": 42,
         "render": {
             "plugin_path": "plugins/fake.vst3",

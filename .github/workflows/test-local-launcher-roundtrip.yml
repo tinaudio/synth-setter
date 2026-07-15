@@ -38,7 +38,7 @@ on:
       - "src/synth_setter/pipeline/ci/**"
       - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard.yaml"
-      - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard-wds.yaml"
+      - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard-lance.yaml"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/configs/render/**"

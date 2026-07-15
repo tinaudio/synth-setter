@@ -1,7 +1,7 @@
 """Static assertions on the test-dataset-generation workflow's matrix shape.
 
-The workflow exercises both `hdf5` and `wds` shard formats through the same
-generate + validate plumbing. These tests parse `test-dataset-generation.yml`
+The workflow exercises the `lance` shard format through the generate + validate
+plumbing. These tests parse `test-dataset-generation.yml`
 and assert that the `output_format` axis is wired into the `generate-launcher`
 strategy matrix, that cluster names are namespaced by `matrix.output_format` so
 the matrix cells don't collide on per-cell R2 prefixes, that the per-cell
@@ -124,16 +124,14 @@ def test_setup_emits_spec_uris_map_output(workflow: dict) -> None:
     )
 
 
-def test_setup_emits_output_formats_with_both_rows(workflow: dict) -> None:
-    """Assert `setup` emits an `output_formats` output containing hdf5 + wds.
+def test_setup_emits_output_formats_with_lance_row(workflow: dict) -> None:
+    """Assert `setup` emits an `output_formats` output containing lance.
 
     :param workflow: Parsed workflow YAML from the module-scoped fixture.
     """
     matrix_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="matrix")
     run_script = matrix_step["run"]
-    assert "hdf5" in run_script and "wds" in run_script, (
-        "setup.matrix step must emit both 'hdf5' and 'wds' in its output_formats list"
-    )
+    assert "lance" in run_script, "setup.matrix step must emit 'lance' in its output_formats list"
     assert "output_formats" in workflow["jobs"]["setup"]["outputs"], (
         "setup.outputs is missing the `output_formats` key consumed by downstream jobs"
     )
@@ -147,8 +145,8 @@ def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:
 
     1. ``providers == '[]'`` (unsupported event or unknown ``SCHEDULE_CRON``)
        → ``output_formats='[]'``.
-    2. ``schedule`` (hourly or weekly cron) → both rows:
-       ``output_formats='["hdf5","wds"]'``.
+    2. ``schedule`` (hourly or weekly cron) → the lance row:
+       ``output_formats='["lance"]'``.
     3. ``workflow_dispatch`` → collapse to the single format the dispatched
        experiment resolves to, via Hydra compose of ``DISPATCH_DATASET_CONFIG``.
 
@@ -167,9 +165,9 @@ def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:
         "setup.matrix is missing the providers-empty branch that emits an empty "
         "output_formats list — without it, unsupported-event runs would leave the output unset."
     )
-    assert 'output_formats=\'["hdf5","wds"]\'' in run_script, (
-        "setup.matrix is missing the schedule branch that emits both hdf5 and wds "
-        "rows — without it, scheduled CI would never exercise the wds matrix cell."
+    assert "output_formats='[\"lance\"]'" in run_script, (
+        "setup.matrix is missing the schedule branch that emits the lance "
+        "row — without it, scheduled CI would never exercise the lance matrix cell."
     )
     assert "DISPATCH_DATASET_CONFIG" in run_script and "compose" in run_script, (
         "setup.matrix is missing the workflow_dispatch fallback that composes the "

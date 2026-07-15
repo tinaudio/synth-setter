@@ -4,9 +4,10 @@ Exercises ``generate(spec, work_dir, loggers)`` with ``render.parallel=True`` th
 ``subprocess.check_call`` boundary on every OS / CI host — no Linux Xvfb
 wrapper, no Surge VST3 bundle, no R2 credentials. A fake renderer script
 (written into ``tmp_path``) replaces ``generate_vst_dataset.py``: it just
-writes the expected output file and exits 0, so the test crosses the real
-``ThreadPoolExecutor`` → ``subprocess.check_call`` → fresh Python interpreter
-hop that the unit-tier tests (which patch ``subprocess.check_call``) cannot.
+writes the expected Lance shard directory and exits 0, so the test crosses the
+real ``ThreadPoolExecutor`` → ``subprocess.check_call`` → fresh Python
+interpreter hop that the unit-tier tests (which patch ``subprocess.check_call``)
+cannot.
 
 Companion to ``test_parallel_shard_render_linux.py``: that one stress-tests
 the X11 wrapper against the real plugin (gated Linux+VST); this one keeps
@@ -35,21 +36,24 @@ _FAKE_RENDERER_SOURCE = textwrap.dedent(
     import sys
     from pathlib import Path
 
-    out = Path(sys.argv[1])
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(b"")
+    sys.path.insert(0, sys.argv[3])
+
+    from synth_setter.pipeline.schemas.spec import DatasetSpec
+    from tests.helpers.finalize_shards import write_minimal_lance_shard
+
+    write_minimal_lance_shard(Path(sys.argv[1]), DatasetSpec.model_validate_json(sys.argv[2]))
     """
 ).strip()
 
 
 def _write_fake_renderer(tmp_path: Path) -> Path:
-    """Write a no-op renderer script that materializes the requested output path.
+    """Write a no-op renderer script that materializes the requested Lance shard directory.
 
     The script takes the same first positional arg as the real renderer (the
-    output shard path), writes an empty file there, and exits 0 — enough to
-    satisfy ``_render_and_upload_shard``'s post-render ``is_file()`` check.
-    Subsequent ``--<key> <value>`` flags from ``build_generate_args`` are
-    accepted and ignored.
+    output shard path), writes a minimal ``.lance`` directory tree there, and
+    exits 0 — enough to satisfy ``_render_and_upload_shard``'s post-render
+    ``is_dir()`` check and give ``upload_dir`` real files to copy. Subsequent
+    ``--<key> <value>`` flags from ``build_generate_args`` are accepted and ignored.
 
     :param tmp_path: Per-test tmp dir; the script is dropped here.
     :returns: Path to the fake renderer ``.py`` file.
@@ -115,13 +119,21 @@ def _wire_generate_into_fake_renderer(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
         lambda _path: spec.render.renderer_version,
     )
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+    # Stub the directory skip-probe absent so every shard renders (local rclone
+    # raises on a missing dir, unlike S3).
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_directory_exists", lambda *_a, **_k: False)
     monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "darwin")
 
     fake_renderer = _write_fake_renderer(tmp_path)
 
     def _fake_build_args(_spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
-        return [sys.executable, str(fake_renderer), str(output_dir / shard.filename)]
+        return [
+            sys.executable,
+            str(fake_renderer),
+            str(output_dir / shard.filename),
+            spec.model_dump_json(),
+            str(Path(__file__).resolve().parents[2]),
+        ]
 
     monkeypatch.setattr("synth_setter.cli.generate_dataset.build_generate_args", _fake_build_args)
 
@@ -134,8 +146,8 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
 ) -> None:
     """``parallel=True`` + 4 shards uploads every shard via real subprocess + real rclone.
 
-    State-based assertion: every shard's filename exists under the fake R2
-    remote when ``generate(spec, work_dir, loggers)`` returns.
+    State-based assertion: every shard has a complete staged attempt under the
+    fake R2 remote when ``generate(spec, work_dir, loggers)`` returns.
 
     :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
     :param tmp_path: Per-test tmp dir for the fake renderer script.
@@ -153,8 +165,9 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
 
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     for shard in spec.shards:
-        assert (bucket_prefix / shard.filename).is_file(), (
-            f"shard {shard.shard_id} did not land in fake R2: {shard.filename}"
+        staging_dir = bucket_prefix / "metadata" / "workers" / "shards" / Path(shard.filename).stem
+        assert list(staging_dir.glob("*.valid")), (
+            f"shard {shard.shard_id} has no complete attempt in fake R2: {shard.filename}"
         )
 
 
@@ -188,7 +201,13 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     def _landed_filenames() -> set[str]:
         return {
-            shard.filename for shard in spec.shards if (bucket_prefix / shard.filename).is_file()
+            shard.filename
+            for shard in spec.shards
+            if list(
+                (
+                    bucket_prefix / "metadata" / "workers" / "shards" / Path(shard.filename).stem
+                ).glob("*.valid")
+            )
         }
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")

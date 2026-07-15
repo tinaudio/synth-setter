@@ -89,7 +89,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -152,7 +152,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
         required: false
         type: string
         default: ""

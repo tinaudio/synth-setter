@@ -9,7 +9,7 @@ defaults:
   - _self_
 
 # Pin non-zero val/test splits: VSTDataModule.setup() opens
-# {train,val,test}.h5 (and the predict split) unconditionally, so a zero-sized
+# {train,val,test}.lance (and the predict split) unconditionally, so a zero-sized
 # val or test split would raise FileNotFoundError during the inline oracle eval.
 # Sizes must be multiples of render.samples_per_shard=4.
 train_val_test_sizes: [4, 4, 4]

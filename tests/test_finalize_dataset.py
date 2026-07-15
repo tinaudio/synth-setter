@@ -16,10 +16,15 @@ cleanly:
   S3-compatible backends return; the marker probe in ``finalize()`` needs the
   "absent → None" branch, so the stub stays.
 
+``finalize_lance`` commits staged winner fragments and reads the staging prefix
+over ``s3://`` object storage, which the local remote can't serve;
+``stub_finalize_lance_io`` stubs winner selection + the fragment commit so
+``stats.npz`` + ``dataset.json`` + ``dataset.complete`` still route through the
+real ``r2_io.upload`` for the marker-last and artifact assertions.
+
 Keep this module to tests that drive ``finalize(cfg)`` / ``main()``. Branch-level
-``finalize_wds`` / ``finalize_hdf5`` / ``finalize_from_spec`` tests — which
-legitimately reference internals like ``reshard_dataset``, ``get_stats_hdf5``,
-and ``stream_stats_wds`` — live in
+``finalize_lance`` / ``finalize_from_spec`` tests — which legitimately reference
+module internals — live in
 ``tests/pipeline/entrypoints/test_finalize_dataset_unit.py``; the
 ``build_dataset_artifact`` construction tests live in
 ``tests/pipeline/entrypoints/test_finalize_dataset_artifact.py``. Seeders and
@@ -46,13 +51,9 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
-    build_hdf5_smoke_spec,
-    build_wds_smoke_spec,
-    copy_shard_for_download,
+    build_lance_smoke_spec,
     install_finalize_setup_stubs,
-    seed_shard_files,
-    seed_train_shards,
-    stub_get_stats_hdf5,
+    stub_finalize_lance_io,
     uri_to_local_path,
     write_spec_to_root,
 )
@@ -83,7 +84,9 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     """Spy on ``r2_io.upload`` to assert ``stats.npz`` is uploaded before ``dataset.complete``.
 
     Order via a spy is filesystem-invariant — mtime granularity on fast
-    filesystems can tie two writes inside a single ``finalize`` call.
+    filesystems can tie two writes inside a single ``finalize`` call. The Lance
+    fragment commit is stubbed, so ``stats.npz``, ``dataset.json``, and the
+    marker are the objects routed through ``r2_io.upload``.
 
     :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + Hydra-style output_dir.
     :param fake_r2_remote: Local-typed rclone remote; both artifacts land here.
@@ -92,8 +95,8 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     :param stub_finalize_setup: Fixture-activation only — installs the
         ``ensure_r2_env_loaded`` / ``object_size`` stubs.
     """
-    spec = build_wds_smoke_spec(task_name="finalize-marker-last-wds")
-    seed_train_shards(fake_r2_remote, spec)
+    spec = build_lance_smoke_spec(task_name="finalize-marker-last-lance")
+    stub_finalize_lance_io(monkeypatch)
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
@@ -132,7 +135,7 @@ def test_finalize_is_idempotent_when_marker_already_exists(
     :param stub_finalize_setup: Used to flip the marker probe to "present".
     """
     stub_finalize_setup(0)
-    spec = build_wds_smoke_spec(task_name="finalize-idempotent-wds")
+    spec = build_lance_smoke_spec(task_name="finalize-idempotent-lance")
     output_dir = tmp_path / "hydra_output"
     output_dir.mkdir()
     cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
@@ -148,9 +151,9 @@ def test_finalize_raises_on_unsupported_output_format(
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """An ``output_format`` outside {hdf5, wds} surfaces a clear ValueError.
+    """An ``output_format`` outside {lance} surfaces a clear ValueError.
 
-    Pins the dispatcher's exhaustiveness contract — adding a third format
+    Pins the dispatcher's exhaustiveness contract — adding a second format
     without wiring its branch must trip this test rather than silently
     skip the artifact upload and write a misleading ``dataset.complete``.
     The fail-fast ``download_to_path`` / ``upload`` stubs make this a
@@ -164,7 +167,8 @@ def test_finalize_raises_on_unsupported_output_format(
     :param stub_finalize_setup: Installs the auth + marker-probe stubs so the
         dispatcher (not the marker check) is the failure surface.
     """
-    bad_spec = build_wds_smoke_spec(task_name="finalize-bad-format").model_copy(
+    # model_copy bypasses validation, so an off-enum token reaches the dispatcher.
+    bad_spec = build_lance_smoke_spec(task_name="finalize-bad-format").model_copy(
         update={"output_format": "parquet"}
     )
     monkeypatch.setattr(
@@ -208,12 +212,12 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     :param tmp_path: Hosts ``PROJECT_ROOT``, the on-disk spec JSON, and Hydra's run dir.
     :param monkeypatch: Pytest fixture used to point ``PROJECT_ROOT`` + ``sys.argv``.
     :param stub_finalize_setup: Used to flip the marker probe to "present" so the
-        body skips the wds/hdf5 dispatch.
+        body skips the Lance dispatch.
     """
     stub_finalize_setup(0)
     monkeypatch.setenv("WANDB_MODE", "disabled")
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
-    spec = build_wds_smoke_spec(task_name="hydra-startup")
+    spec = build_lance_smoke_spec(task_name="hydra-startup")
     dataset_root_uri = write_spec_to_root(spec, tmp_path)
     monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_root_uri={dataset_root_uri}"])
 
@@ -223,97 +227,6 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     # Existence proves @hydra.main resolved ${paths.log_dir}, ${now:…}, and
     # the ${task_name} interpolations the shared hydra group references.
     assert (tmp_path / "logs" / "finalize_dataset").is_dir()
-
-
-def test_finalize_hdf5_marker_idempotency_short_circuits_before_download(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Hdf5 dispatch: ``finalize()`` returns without any download when the marker exists.
-
-    ``test_finalize_is_idempotent_when_marker_already_exists`` covers the
-    wds branch; this test pins the hdf5-branch path so a regression that
-    moved the marker check *inside* the format branch (after the dispatch
-    table) would be caught. Positive assertion: ``object_size`` was probed
-    exactly once against the marker URI (so a refactor that removed the
-    probe and the dispatch entirely would fail rather than silently pass).
-
-    :param tmp_path: Pytest tmp dir; hosts the on-disk spec JSON + output_dir.
-    :param monkeypatch: Pytest fixture used to force ``object_size`` to
-        return a present marker and to fail-fast on any download/upload.
-    """
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.download_to_path",
-        lambda *a, **kw: pytest.fail("download_to_path should not be reached"),
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.upload",
-        lambda *a, **kw: pytest.fail("upload should not be reached"),
-    )
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
-    probed_uris: list[str] = []
-
-    def record_probe(uri: str) -> int:
-        probed_uris.append(uri)
-        return 0
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", record_probe)
-
-    spec = build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-present")
-    output_dir = tmp_path / "hydra_output"
-    output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
-
-    finalize_dataset.finalize(cfg)
-
-    assert probed_uris == [spec.r2.dataset_complete_marker_uri()]
-
-
-def test_finalize_hdf5_branch_uploads_marker_last(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The hdf5 ``finalize(cfg)`` path writes ``dataset.complete`` strictly after every artifact.
-
-    Pins the ``pipeline/CLAUDE.md`` ordering invariant for hdf5: an
-    interrupted run must never leave a marker without the artifacts it
-    advertises.
-
-    :param tmp_path: Pytest tmp dir; hosts the fake R2 root + on-disk spec + output_dir.
-    :param monkeypatch: Pytest fixture used to patch the full transport surface.
-    """
-    r2_stand_in = tmp_path / "r2"
-    spec = build_hdf5_smoke_spec(task_name="finalize-hdf5-marker-last")
-    seed_shard_files(r2_stand_in, spec)
-    upload_order: list[str] = []
-
-    monkeypatch.setattr(
-        "synth_setter.pipeline.r2_io.download_to_path",
-        lambda r2_uri, dst: copy_shard_for_download(r2_stand_in, r2_uri, dst),
-    )
-
-    def record_upload(src: str | Path, dst: str) -> None:
-        del src
-        upload_order.append(dst)
-
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", record_upload)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda *a, **k: None)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: None)
-    stub_get_stats_hdf5(monkeypatch)
-
-    output_dir = tmp_path / "hydra_output"
-    output_dir.mkdir()
-    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
-
-    finalize_dataset.finalize(cfg)
-
-    marker_uri = spec.r2.dataset_complete_marker_uri()
-    marker_index = upload_order.index(marker_uri)
-    # Marker strictly later than every artifact URI — the
-    # ``pipeline/CLAUDE.md`` invariant ("never leave a marker without
-    # artifacts") generalizes to splits-with-val-test, not just train.
-    assert marker_index == len(upload_order) - 1
-    for artifact_uri in (spec.r2.stats_uri(), spec.r2.split_h5_uri("train")):
-        assert upload_order.index(artifact_uri) < marker_index
 
 
 def _build_finalize_cfg_with_offline_wandb(
@@ -353,7 +266,7 @@ def _build_finalize_cfg_with_offline_wandb(
 
 def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     tmp_path: Path,
-    fake_r2_remote: Path,
+    fake_r2_remote: Path,  # noqa: ARG001 — env-rooted cfg; Lance I/O is stubbed
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
@@ -367,9 +280,9 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     read back from the bytes the live client wrote.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param fake_r2_remote: Local-typed rclone remote; seeded train shards land
-        here so the wds stats pass has real tars to stream.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
+    :param fake_r2_remote: Local-typed rclone remote where stats + marker land.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and stubs the
+        Lance direct-R2 I/O.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
@@ -378,8 +291,8 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
     wandb.teardown()
 
-    spec = build_wds_smoke_spec(task_name="finalize-artifact-e2e")
-    seed_train_shards(fake_r2_remote, spec)
+    spec = build_lance_smoke_spec(task_name="finalize-artifact-e2e")
+    stub_finalize_lance_io(monkeypatch)
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
@@ -399,9 +312,9 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     )
 
     artifact_name = f"data-{spec.task_name}"
-    # The wds run references the prefix dir + stats.npz; pin the exact stats
-    # s3 URI rather than a bare `s3://` so the assertion can't pass on an
-    # incidental reference. Bucket/prefix come straight off the spec.
+    # The Lance run references the finalized split dataset + stats.npz; pin the
+    # exact stats s3 URI rather than a bare `s3://` so the assertion can't pass
+    # on an incidental reference. Bucket/prefix come straight off the spec.
     stats_ref = f"s3://{spec.r2.bucket}/{spec.r2.prefix}stats.npz"
     payload = read_run_binary(
         Path(binary_files[0]),
@@ -427,17 +340,17 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
 ) -> None:
     """A ``finalize_from_spec`` failure propagates but still closes the wandb run as failed.
 
-    Pins the ``finalize()`` ``try/finally`` contract (finalize_dataset.py:322-330):
-    the body's exception must re-raise *and* the loggers must be closed with
-    ``status="failed"`` so the data-generation run is not left dangling. A real
-    offline ``WandbLogger`` is instantiated (via the offline-wandb cfg builder)
-    so the close path runs ``wandb.finish()`` for real. ``close_loggers`` is
-    wrapped with a spy that still delegates to the real helper: the spy captures
-    the forwarded ``status`` (the state-based ``wandb.run is None`` witness alone
-    can't distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that
-    skips the close entirely, because wandb teardown can null the run by other
-    means). The failure is injected at ``finalize_from_spec`` so the ``except``
-    sets ``status="failed"`` before re-raising.
+    Pins the ``finalize()`` ``try/finally`` contract: the body's exception must
+    re-raise *and* the loggers must be closed with ``status="failed"`` so the
+    data-generation run is not left dangling. A real offline ``WandbLogger`` is
+    instantiated (via the offline-wandb cfg builder) so the close path runs
+    ``wandb.finish()`` for real. ``close_loggers`` is wrapped with a spy that
+    still delegates to the real helper: the spy captures the forwarded
+    ``status`` (the state-based ``wandb.run is None`` witness alone can't
+    distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that skips the
+    close entirely, because wandb teardown can null the run by other means). The
+    failure is injected at ``finalize_from_spec`` so the ``except`` sets
+    ``status="failed"`` before re-raising.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
     :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, raises from
@@ -465,7 +378,7 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
 
-    spec = build_wds_smoke_spec(task_name="finalize-failed-close")
+    spec = build_lance_smoke_spec(task_name="finalize-failed-close")
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
@@ -489,23 +402,21 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
 ) -> None:
     """A wandb ``log_artifact`` failure is swallowed; ``finalize()`` still lands R2 artifacts.
 
-    Pins ``_log_dataset_artifact``'s swallow contract (finalize_dataset.py:288-291):
-    artifact logging runs *after* the R2 outputs and ``dataset.complete`` marker
-    are already written, so a wandb failure must not abort the completed
-    finalize. Injects the failure at ``build_dataset_artifact`` (called inside the
-    ``try``) rather than spying ``log_artifact`` because the production wds path
-    references the prefix dir — patching the builder is the smallest seam that
-    drives the ``except`` branch deterministically. A ``called`` flag asserts the
-    builder actually ran, so a logger-type mismatch that skipped the artifact
-    path entirely could not pass the test vacuously. State-based witness: the
-    return is exception-free and both ``stats.npz`` and the marker exist on the
-    fake remote.
+    Pins ``_log_dataset_artifact``'s swallow contract: artifact logging runs
+    *after* the R2 outputs and ``dataset.complete`` marker are already written,
+    so a wandb failure must not abort the completed finalize. Injects the failure
+    at ``build_dataset_artifact`` (called inside the ``try``) rather than spying
+    ``log_artifact`` — patching the builder is the smallest seam that drives the
+    ``except`` branch deterministically. A ``called`` flag asserts the builder
+    actually ran, so a logger-type mismatch that skipped the artifact path
+    entirely could not pass the test vacuously. State-based witness: the return
+    is exception-free and both ``stats.npz`` and the marker exist on the fake
+    remote.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param fake_r2_remote: Local-typed rclone remote; seeded train shards land
-        here so the wds stats pass has real tars and the outputs materialize.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and raises from
-        ``build_dataset_artifact``.
+    :param fake_r2_remote: Local-typed rclone remote where stats + marker land.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, stubs the Lance
+        direct-R2 I/O, and raises from ``build_dataset_artifact``.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
@@ -522,8 +433,8 @@ def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.build_dataset_artifact", boom)
 
-    spec = build_wds_smoke_spec(task_name="finalize-artifact-swallow")
-    seed_train_shards(fake_r2_remote, spec)
+    spec = build_lance_smoke_spec(task_name="finalize-artifact-swallow")
+    stub_finalize_lance_io(monkeypatch)
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
@@ -548,7 +459,7 @@ def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
 ) -> None:
     """``finalize()`` forces ``logger.wandb.resume="allow"`` before instantiating loggers.
 
-    Pins finalize_dataset.py:319-320: when ``logger.wandb`` is present in the cfg
+    Pins finalize's resume-forcing: when ``logger.wandb`` is present in the cfg
     the run must attach to the pinned generation run rather than mint a new one.
     Captures the cfg ``instantiate_loggers`` actually receives (the cfg object is
     mutated in-place, so the captured reference reflects the forced value) and
@@ -580,7 +491,7 @@ def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
 
-    spec = build_wds_smoke_spec(task_name="finalize-resume-allow")
+    spec = build_lance_smoke_spec(task_name="finalize-resume-allow")
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(

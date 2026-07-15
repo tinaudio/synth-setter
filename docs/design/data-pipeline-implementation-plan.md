@@ -88,7 +88,6 @@ ______________________________________________________________________
 ### On `main` already (no porting needed)
 
 - `src/synth_setter/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
-- `src/synth_setter/pipeline/data/reshard.py` — HDF5 virtual dataset resharding
 - Basic `Makefile` (help/clean targets only)
 - All model/training code, configs, notebooks
 
@@ -115,7 +114,7 @@ stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-pr
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
-output_format: hdf5                   # "hdf5" (local training) or "wds" (multi-GPU streaming)
+output_format: lance
 sample_rate: 44100
 shard_size: 10000
 num_shards: 48
@@ -154,11 +153,6 @@ calls `extract_renderer_version` against the actual plugin bundle (`moduleinfo.j
 on Linux, `Info.plist` → `CFBundleShortVersionString` on macOS, pedalboard fallback)
 and refuses to render on mismatch.
 
-**Output format:** `hdf5` produces virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`).
-`wds` produces WebDataset tar archives (`train-{shard}.tar`, etc.) for multi-GPU streaming.
-Generation always produces HDF5 shards regardless of output format — `wds` is a finalize
-transcoding step.
-
 ______________________________________________________________________
 
 ## 5. Phase 1: Foundation ([#68](https://github.com/tinaudio/synth-setter/issues/68))
@@ -169,7 +163,7 @@ ______________________________________________________________________
 
 **Files created/modified:**
 
-- `requirements-app.txt` (new) — pydantic, h5py, click, runpod, wandb, structlog, tenacity, webdataset, numpy, etc.
+- `requirements-app.txt` (new) — pydantic, click, runpod, wandb, structlog, tenacity, numpy, etc.
 - `requirements-torch.txt` (new) — torch index URL + packages
 - `requirements.txt` (updated) — slimmed to `-r` includes
 - `pyproject.toml` — added `pipeline` pytest marker
@@ -179,9 +173,7 @@ ______________________________________________________________________
 
 **Design notes:**
 
-- `hdf5plugin` included in deps — required at read time for Blosc2-compressed virtual
-  datasets (B6). Task 5.3 finalize and all HDF5 tests must `import hdf5plugin`.
-- `pydantic`, `structlog`, `tenacity`, `click`, `pyyaml`, `webdataset` added beyond what
+- `pydantic`, `structlog`, `tenacity`, `click`, `pyyaml` added beyond what
   `experiment` has (R13).
 - `mutmut` added to dev dependencies — required for verification strategy (§12).
 
@@ -269,10 +261,10 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 **Key behaviors:**
 
 - `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
-  `output_format` defaults to `"hdf5"` if missing from config.
+  `output_format` defaults to `"lance"` if missing from config.
 - `DatasetPipelineSpec` (frozen, strict): `run_id`,
   `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
-  `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
+  `param_spec`, `renderer_version`, `output_format` (`"lance"`), `sample_rate`,
   `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `plugin_state_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
   `samples_per_render_batch`, `shards` (tuple of `ShardSpec`).
@@ -281,16 +273,13 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
-- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed`.
+- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.lance"`), `seed`.
   `shard_id` is int in schema; formatted to string for paths via `shard_dir_name(shard_id) -> str`.
   Current row-level seed derivation is documented in
   [deterministic-seeding.md](deterministic-seeding.md).
   **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`.
   Fields `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`,
   `param_shape` from the original plan are not yet implemented.
-- `Sample` dataclass (frozen, slots): `sample_id: int`, `audio`, `mel_spec`, `params` —
-  typed container for HDF5→WDS transcoding (not Pydantic, already-validated data).
-  Pydantic for trust boundaries, dataclass for internal typed containers.
 - `ShardResult` (inside `WorkerReport`): `shard_id: int`, `filename: str`, `rows: int`,
   `success: bool`, `content_hash: str | None` (SHA-256), `render_time_sec: float`, `error: str | None`.
 - `WorkerReport`: includes `cpu_arch`, `os_info`, `attempt_uuid`, `results: list[ShardResult]`.
@@ -336,10 +325,10 @@ def test_spec_materialization_end_to_end(patch_materialize_io, valid_config_dict
 
     assert spec2.num_shards == 48  # from valid_config_dict
     assert spec2.shards[0].shard_id == 0
-    assert spec2.shards[0].filename == "shard-000000.h5"
+    assert spec2.shards[0].filename == "shard-000000.lance"
     assert spec2.shards[0].seed == 42
     assert spec2.shards[5].seed == 47
-    assert spec2.output_format == "hdf5"
+    assert spec2.output_format == "lance"
     assert sum(s.row_count for s in spec2.shards) == 10_000
     assert materialize_spec(DatasetConfig(**config), timestamp=fixed_ts).model_dump() == spec2.model_dump()
 ```
@@ -363,7 +352,7 @@ ______________________________________________________________________
   - Quarantine: `upload_to_quarantine(dataset_wandb_run_id, shard_id, worker_id, attempt, local_path)`
   - Worker attempts: `upload_report(dataset_wandb_run_id, worker_id, attempt, report)`,
     `upload_debug_log(dataset_wandb_run_id, worker_id, attempt, log_path)`
-  - Finalize outputs: paths for `shards/`, `train.h5`, `stats.npz`,
+  - Finalize outputs: paths for `shards/`, `train.lance`, `stats.npz`,
     `metadata/dataset.json`, `metadata/dataset.complete`
 - `StorageBackend` protocol: `list_shard_markers`, `write_marker`, `upload_file`,
   `download_file`, `list_prefix`, `exists`
@@ -389,13 +378,13 @@ def test_storage_shard_lifecycle(tmp_path):
     worker_id, attempt = "pod-abc", "uuid1234"
 
     storage.write_rendering_marker(run_id, shard_id, worker_id, attempt)
-    storage.upload_file(_create_fake_h5(tmp_path / "local.h5"), run_id,
-        f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt}.h5")
+    storage.upload_file(_create_fake_shard(tmp_path / "local.lance"), run_id,
+        f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt}.lance")
     storage.write_valid_marker(run_id, shard_id, worker_id, attempt)
 
     markers = storage.list_shard_markers(run_id, shard_id)
     assert f"{worker_id}-{attempt}.rendering" in markers
-    assert f"{worker_id}-{attempt}.h5" in markers
+    assert f"{worker_id}-{attempt}.lance" in markers
     assert f"{worker_id}-{attempt}.valid" in markers
 
     shard_dir = tmp_path / run_id / "metadata/workers/shards" / f"shard-{shard_id:06d}"
@@ -412,20 +401,20 @@ ______________________________________________________________________
 
 - `pipeline/validation.py`
 - `tests/pipeline/test_validation.py`
-- `tests/pipeline/conftest.py` — shared HDF5 fixture factories (`_make_test_spec`,
+- `tests/pipeline/conftest.py` — shared shard fixture factories (`_make_test_spec`,
   `_make_fixture_shard`)
 
 **Key behaviors:**
 
 - **Full** (4 checks — workers): structural, shape, value, row count
-- **Existence** (generate/status): `.h5` + `.valid` marker
-- **Structural** (finalize): open h5py, datasets present, shapes match
+- **Existence** (generate/status): `.lance` + `.valid` marker
+- **Structural** (finalize): open the Lance dataset, expected columns present, shapes match
 - Returns `ValidationResult(is_valid, checks: list[CheckResult])`
 - Pure functions (functional core)
 
 **`_make_test_spec` helper** (defined in `tests/pipeline/conftest.py`):
 Returns a valid `DatasetPipelineSpec` with sensible defaults: `renderer_version="test"`,
-`code_version="abc1234"`, `run_id` derived from params, `output_format="hdf5"`.
+`code_version="abc1234"`, `run_id` derived from params, `output_format="lance"`.
 Accepts `num_shards`, `shard_size`, `output_format` overrides.
 
 **`tests/pipeline/conftest.py` also adds project root to `sys.path`** if needed
@@ -444,10 +433,10 @@ checkout root in dev / from `$SYNTH_SETTER_WORKSPACE` in packaged installs).
 def test_tiered_validation_catches_correct_failures(tmp_path):
     """Each tier catches exactly the failures it's responsible for."""
     spec = _make_test_spec(shard_size=100, num_shards=4)
-    good = _make_fixture_shard(tmp_path / "good.h5", 100)
-    nan = _make_fixture_shard(tmp_path / "nan.h5", 100, inject_nan=True)
-    bad_shape = _make_fixture_shard(tmp_path / "shape.h5", 100, wrong_shape=True)
-    truncated = tmp_path / "trunc.h5"; truncated.write_bytes(b"not hdf5")
+    good = _make_fixture_shard(tmp_path / "good.lance", 100)
+    nan = _make_fixture_shard(tmp_path / "nan.lance", 100, inject_nan=True)
+    bad_shape = _make_fixture_shard(tmp_path / "shape.lance", 100, wrong_shape=True)
+    truncated = tmp_path / "trunc.lance"; truncated.write_bytes(b"not lance")
 
     s = spec.shards[0]
     assert validate_full(good, s).is_valid
@@ -554,9 +543,9 @@ ______________________________________________________________________
   interpreter per child — no inherited VST plugin state, no shared mutable globals.
   See design doc §7.8.1 for full trade-off analysis.
 - Per-shard lifecycle: write `.rendering` to **remote** storage FIRST → spawn child process
-  → child imports and calls `make_hdf5_dataset(shard_path, shard_spec)` →
+  → child imports and calls `make_lance_dataset(shard_path, shard_spec)` →
   parent waits with `join(timeout=SHARD_TIMEOUT)` → on success: validate locally →
-  upload `.h5` to storage → write `.valid` to storage.
+  upload `.lance` to storage → write `.valid` to storage.
   `.rendering` in remote storage survives worker/child death (crash resilience).
 - On validation failure or child crash: upload corrupt shard to `quarantine/`, write
   `.invalid` marker, log failure details including exit code (design doc §7.2).
@@ -572,8 +561,8 @@ ______________________________________________________________________
   with `p.kill()`, shard marked invalid.
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
-- **No `generate_fn` argument:** The child process imports `make_hdf5_dataset` directly
-  (`from synth_setter.data.vst.writers import make_hdf5_dataset`). Under `spawn`, the child is a fresh
+- **No `generate_fn` argument:** The child process imports `make_lance_dataset` directly
+  (`from synth_setter.data.vst.writers import make_lance_dataset`). Under `spawn`, the child is a fresh
   interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
   `shard_path` cross the process boundary. For tests, `LocalBackend` calls
   `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.
@@ -618,7 +607,7 @@ def test_local_backend_generates_shards_with_lifecycle(tmp_path):
     for shard in spec.shards:
         markers = storage.list_shard_markers(spec.run_id, shard.shard_id)
         assert any(m.endswith(".valid") for m in markers)
-        assert any(m.endswith(".h5") for m in markers)
+        assert any(m.endswith(".lance") for m in markers)
 
     reports = [f for f in storage.list_prefix(spec.run_id, "metadata/workers/attempts/")
                if f.endswith("report.json")]
@@ -629,7 +618,7 @@ ______________________________________________________________________
 
 ## 9. Phase 5: Pipeline CLI ([#72](https://github.com/tinaudio/synth-setter/issues/72))
 
-Sub-issues: [#17](https://github.com/tinaudio/synth-setter/issues/17) (modular CLI), [#19](https://github.com/tinaudio/synth-setter/issues/19) (WebDataset output), [#21](https://github.com/tinaudio/synth-setter/issues/21) (reconciliation status)
+Sub-issues: [#17](https://github.com/tinaudio/synth-setter/issues/17) (modular CLI), [#21](https://github.com/tinaudio/synth-setter/issues/21) (reconciliation status)
 
 ### Task 5.1: CLI — `generate` ([#17](https://github.com/tinaudio/synth-setter/issues/17))
 
@@ -742,15 +731,10 @@ ______________________________________________________________________
 - Structural-check each staged shard; multiple attempts → pick lexicographically smallest
   `{worker_id}-{attempt_uuid}` filename (deterministic, no clock dependency)
 - Promote to `data/shards/`, write `.promoted` markers (staged files NOT deleted)
-- Compute stats FIRST, then produce training outputs based on `output_format`:
-  - `hdf5`: virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`) — implements fresh
-    resharding using `VirtualLayout`/`VirtualSource` pattern, reading actual shard dimensions
-    from HDF5 metadata. Does NOT call `reshard_data.py` (it hardcodes 10k shard size).
-  - `wds`: WebDataset tar shards stay in place; finalize streams train-shard `mel_spec`
-    arrays into `stats.npz`.
-  - `lance`: Lance dataset-directory shards (`shard-000000.lance/`) are streamed
-    from R2 into non-empty split directories (`train.lance`, `val.lance`, `test.lance`),
-    and finalize streams train-shard `mel_spec` tensors into `stats.npz`.
+- Compute stats FIRST, then produce training outputs: Lance dataset-directory shards
+  (`shard-000000.lance/`) are streamed from R2 into non-empty split directories
+  (`train.lance`, `val.lance`, `test.lance`), and finalize streams train-shard `mel_spec`
+  tensors into `stats.npz`.
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
 - Upload finalized outputs to R2 storage
@@ -763,7 +747,7 @@ ______________________________________________________________________
 
 **Unit tests:** Promotes, rejects missing/corrupt, idempotent, stale marker recovery,
 lexicographic shard selection with multiple attempts, `.promoted` markers written,
-`dataset.complete` content verified, card contents, all output formats, `--dry-run`,
+`dataset.complete` content verified, card contents, Lance output, `--dry-run`,
 mock-W&B test verifying all 7 metrics logged
 
 **Reference tests:**
@@ -782,40 +766,14 @@ def test_full_generate_then_finalize(tmp_path):
         "--storage-root", str(storage_root), "--output-dir", str(output_dir), "--skip-wandb"])
     assert result.exit_code == 0
 
-    with h5py.File(output_dir / "train.h5", "r") as f: assert f["audio"].shape[0] == 300
-    with h5py.File(output_dir / "val.h5", "r") as f: assert f["audio"].shape[0] == 100
+    assert lance.dataset(str(output_dir / "train.lance")).count_rows() == 300
+    assert lance.dataset(str(output_dir / "val.lance")).count_rows() == 100
     assert LocalStorageBackend(root=storage_root).exists(run_id, "metadata/dataset.complete")
 
     # Idempotent
     r2 = runner.invoke(cli, ["finalize", "--run-id", run_id,
         "--storage-root", str(storage_root), "--output-dir", str(output_dir), "--skip-wandb"])
     assert "already finalized" in r2.output.lower()
-```
-
-```python
-def test_finalize_wds_output_format(tmp_path):
-    """WDS output: verify tar archive creation, sample naming, split partitioning."""
-    storage_root, output_dir = tmp_path / "storage", tmp_path / "output"
-    config_path = _write_test_config(tmp_path, num_shards=4, shard_size=50,
-                                      val_shards=1, test_shards=1, output_format="wds")
-    runner = CliRunner()
-    runner.invoke(cli, ["generate", "--config", str(config_path), "--backend", "local",
-        "--workers", "1", "--storage-root", str(storage_root)])
-    run_id = _extract_run_id(storage_root)
-
-    result = runner.invoke(cli, ["finalize", "--run-id", run_id,
-        "--storage-root", str(storage_root), "--output-dir", str(output_dir), "--skip-wandb"])
-    assert result.exit_code == 0
-
-    train_tars = sorted(output_dir.glob("train-*.tar"))
-    assert len(train_tars) >= 1
-    # Verify sample naming inside tar
-    import tarfile
-    with tarfile.open(train_tars[0]) as tf:
-        names = tf.getnames()
-        assert any(n.endswith(".audio.npy") for n in names)
-        assert any(n.endswith(".params.npy") for n in names)
-        assert any(n.endswith(".mel.npy") for n in names)
 ```
 
 ______________________________________________________________________
@@ -879,9 +837,9 @@ def test_e2e_generate_status_finalize(tmp_path):
     fin = runner.invoke(cli, ["finalize", "--run-id", run_id,
         "--storage-root", str(storage_root), "--output-dir", str(output_dir), "--skip-wandb"])
     assert fin.exit_code == 0
-    assert (output_dir / "train.h5").exists()
-    with h5py.File(output_dir / "train.h5") as f: assert f["audio"].shape[0] == 200
-    with h5py.File(output_dir / "val.h5") as f: assert f["audio"].shape[0] == 50
+    assert (output_dir / "train.lance").exists()
+    assert lance.dataset(str(output_dir / "train.lance")).count_rows() == 200
+    assert lance.dataset(str(output_dir / "val.lance")).count_rows() == 50
 ```
 
 ______________________________________________________________________
@@ -945,7 +903,7 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Child process imports `make_hdf5_dataset` directly (`from synth_setter.data.vst.writers import make_hdf5_dataset`).
+    Child process imports `make_lance_dataset` directly (`from synth_setter.data.vst.writers import make_lance_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     Seed derivation is documented in
@@ -954,8 +912,7 @@ ______________________________________________________________________
     per-shard timeout, and clean VST plugin state. See design doc §7.8.1
 08. Entrypoint gets `MODE=generate-shards`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
-10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
-    `reshard_data.py` — it hardcodes 10k shard size)
+10. Finalize streams the promoted Lance shards into non-empty split datasets
 11. `R2StorageBackend` wraps `src/synth_setter/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
 13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
@@ -1008,7 +965,7 @@ Add as optimization (not correctness requirement).
 **GP8. Storage layer missing path helpers for quarantine, attempts, and finalize outputs.**
 Task 2.2 storage layer should expose path helpers for `quarantine/` subdirectory,
 `metadata/workers/attempts/{w}-{a}/` (report.json, debug.log), and `data/` finalize
-outputs (train.h5, stats.npz, dataset.json, dataset.complete). Currently only
+outputs (train.lance, stats.npz, dataset.json, dataset.complete). Currently only
 shard lifecycle paths are described.
 
 **GP9. `status` command should overlay worker errors from reports.**

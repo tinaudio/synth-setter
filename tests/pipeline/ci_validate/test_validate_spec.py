@@ -11,9 +11,9 @@ from synth_setter.pipeline.ci.validate_spec import (
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 
-def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
+def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> dict:
     """Build a minimal valid spec dict mirroring DatasetSpec.model_dump output."""
-    ext = ".h5" if output_format == "hdf5" else ".tar"
+    ext = ".lance" if output_format == "lance" else f".{output_format}"
     spec: dict = {
         "task_name": "test",
         "run_id": "test-20260328T120000000Z",
@@ -24,7 +24,6 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "train_val_test_sizes": [32, 32, 32],
         "train_val_test_seeds": None,
         "base_seed": 42,
-        "copy_dataset_root_uri": None,
         "mask_degenerate_bins": False,
         "num_params": 92,
         "num_shards": 3,
@@ -140,14 +139,14 @@ class TestValidateTestValues:
         """Spec matching generate_dataset/ci-materialize-test.yaml expectations passes."""
         spec = _make_valid_spec()
         assert validate_test_values(spec) == []
-        assert all(s["filename"].endswith(".h5") for s in spec["shards"])
+        assert all(s["filename"].endswith(".lance") for s in spec["shards"])
 
     def test_wrong_shard_count_returns_error(self) -> None:
         """Spec with 2 shards instead of 3 returns a shard count error."""
         spec = _make_valid_spec(
             shards=[
-                {"shard_id": 0, "filename": "shard-000000.h5", "seed": 42},
-                {"shard_id": 1, "filename": "shard-000001.h5", "seed": 43},
+                {"shard_id": 0, "filename": "shard-000000.lance", "seed": 42},
+                {"shard_id": 1, "filename": "shard-000001.lance", "seed": 43},
             ]
         )
         errors = validate_test_values(spec)
@@ -157,9 +156,9 @@ class TestValidateTestValues:
         """Spec with wrong seeds returns a seed error."""
         spec = _make_valid_spec(
             shards=[
-                {"shard_id": 0, "filename": "shard-000000.h5", "seed": 1},
-                {"shard_id": 1, "filename": "shard-000001.h5", "seed": 2},
-                {"shard_id": 2, "filename": "shard-000002.h5", "seed": 3},
+                {"shard_id": 0, "filename": "shard-000000.lance", "seed": 1},
+                {"shard_id": 1, "filename": "shard-000001.lance", "seed": 2},
+                {"shard_id": 2, "filename": "shard-000002.lance", "seed": 3},
             ]
         )
         errors = validate_test_values(spec)

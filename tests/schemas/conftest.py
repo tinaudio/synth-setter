@@ -1,6 +1,6 @@
 """Shared fixtures and helpers for ``tests/schemas/``.
 
-Must NOT chain into ``tests/conftest.py``'s ``lightning``/``torch``/``h5py``
+Must NOT chain into ``tests/conftest.py``'s ``lightning``/``torch``
 imports — the schemas suite stays importable on a minimal install. Run as
 ``pytest tests/schemas/ --confcutdir=tests/schemas``.
 """

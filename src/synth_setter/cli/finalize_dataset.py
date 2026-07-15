@@ -2,25 +2,19 @@
 
 Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
 ``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
-``upload_spec`` wrote to) and dispatches
-on ``spec.output_format``. Every branch uploads its derived artifact(s)
-and then writes the ``dataset.complete`` marker last per
-``pipeline/CLAUDE.md``. The wds branch streams train shards through
-Welford row-by-row; the hdf5 branch downloads every shard, reshards into
-``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch commits staged winner fragments into each
-``{train,val,test}.lance`` split manifest and reduces the winners' Welford
-sidecars into ``stats.npz`` — no shard row is decoded (#1776).
+``upload_spec`` wrote to) and commits its staged winner fragments into each
+``{train,val,test}.lance`` split manifest, reducing the winners' Welford
+sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
+``dataset.complete`` marker is written last per ``pipeline/CLAUDE.md``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import hydra
-import numpy as np
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -28,16 +22,10 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import (
-    DATASET_COMPLETE_FILENAME,
-    INPUT_SPEC_FILENAME,
-    STATS_NPZ_FILENAME,
-)
-from synth_setter.pipeline.data.reshard import reshard_dataset
-from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
+from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
-from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
+from synth_setter.pipeline.spec_io import load_spec_from_root
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
@@ -60,115 +48,6 @@ def _require_nonempty_train(spec: DatasetSpec) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-
-
-def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
-    """Yield one downloaded train shard at a time, unlinking after the consumer is done.
-
-    Peak local disk stays at one shard regardless of split size; the
-    ``finally`` clause runs when ``stream_stats_wds`` advances to the next
-    iteration, so the previous shard's bytes are released before the next
-    download starts.
-
-    :param spec: Validated dataset spec.
-    :param work_dir: Scratch directory; shards land here transiently.
-    :yields Path: Local path of the just-downloaded train shard.
-    """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    for shard in spec.shards[train_lo:train_hi]:
-        local = work_dir / shard.filename
-        r2_io.download_to_path(spec.r2.shard_uri(shard), local)
-        try:
-            yield local
-        finally:
-            local.unlink(missing_ok=True)
-
-
-# DOC502: the documented ValueError propagates from _require_nonempty_train.
-def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502
-    """Stream stats over the train shards and upload ``stats.npz``.
-
-    Per-shard tar files stay in their original R2 location; only the
-    derived ``stats.npz`` is materialized. Brace patterns for non-empty
-    splits are available via
-    ``spec.r2.split_wds_brace_uri(spec.split_shard_ranges[split])``;
-    callers must check ``lo < hi`` first because empty splits raise
-    ``ValueError`` at that helper. ``spec.mask_degenerate_bins`` is
-    forwarded to ``stream_stats_wds``.
-
-    :param spec: Validated dataset spec (``output_format == "wds"``).
-    :param work_dir: Scratch directory; one shard at a time + the final
-        ``stats.npz`` live here transiently.
-    :raises ValueError: The train split is empty
-        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
-        cannot be computed without at least one train shard.
-    """
-    _require_nonempty_train(spec)
-    mean, std = stream_stats_wds(
-        _download_train_shards_one_at_a_time(spec, work_dir),
-        mask_degenerate=spec.mask_degenerate_bins,
-    )
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_npz, mean=mean, std=std)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
-
-
-# DOC503: the documented ValueError propagates from _require_nonempty_train.
-def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC503
-    """Download every shard, reshard into split files, compute stats, upload all artifacts.
-
-    Writes ``work_dir/input_spec.json`` flat (via
-    :func:`~synth_setter.pipeline.spec_io.write_spec_to_path`) so
-    :func:`~synth_setter.pipeline.data.reshard.reshard_dataset`'s default
-    spec discovery picks it up without a ``--spec`` override. The flat
-    placement diverges from :func:`~synth_setter.pipeline.spec_io.write_spec_locally`'s
-    nested ``<output_dir>/data/<task>/<run>/metadata/`` layout because
-    ``work_dir`` is a per-finalize scratch tempdir whose only consumer is
-    reshard — re-creating the operator-side ``data/`` hierarchy under it
-    would force the reshard adapter to learn that layout for no benefit.
-    ``get_stats_hdf5`` then writes ``work_dir / "stats.npz"`` (path derived
-    via ``VSTDataset.get_stats_file_path(train.h5)``); the post-call
-    existence guard pins that contract so a future drift in the derivation
-    surfaces here rather than as a missing upload source. Structural
-    validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
-    that ``reshard_dataset`` performs while staging each split — finalize
-    never re-runs the workers' full four-check pass.
-    ``spec.mask_degenerate_bins`` is forwarded to ``get_stats_hdf5``.
-
-    :param spec: Validated dataset spec (``output_format == "hdf5"``).
-    :param work_dir: Scratch directory; shards, splits, stats and the spec
-        copy live here transiently for the duration of the call.
-    :raises ValueError: The train split is empty
-        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
-        would prune ``train.h5`` and stats compute would fail with a
-        low-signal HDF5 error.
-    :raises FileNotFoundError: ``get_stats_hdf5`` returned without writing
-        ``work_dir / "stats.npz"``, breaking the upload-source contract.
-    """
-    _require_nonempty_train(spec)
-    for shard in spec.shards:
-        r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
-    write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
-    reshard_dataset(work_dir)
-    get_stats_hdf5(str(work_dir / "train.h5"), mask_degenerate=spec.mask_degenerate_bins)
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    if not stats_npz.is_file():
-        raise FileNotFoundError(
-            f"get_stats_hdf5 did not write {stats_npz}; check "
-            f"VSTDataset.get_stats_file_path derivation."
-        )
-    # Reshard prunes empty splits — only upload the ones it actually wrote.
-    # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's
-    # Literal narrowing holds without a cast.
-    for split in spec.split_shard_ranges:
-        split_h5 = work_dir / f"{split}.h5"
-        if split_h5.exists():
-            split_uri = spec.r2.split_h5_uri(split)
-            r2_io.upload(split_h5, split_uri)
-            logger.info("uploaded {} to {}", split_h5.name, split_uri)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
 # DOC502: the documented ValueError propagates from _require_nonempty_train.
@@ -197,15 +76,14 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
     Returns without work when the marker already exists at the run prefix —
-    R2 is the source of truth (per ``pipeline/CLAUDE.md``). The branch on
-    ``spec.output_format`` writes the derived artifacts; the marker is
-    uploaded strictly last so an interrupted run never advertises artifacts
-    that have not landed. Caller is responsible for ensuring R2 creds are
-    loaded.
+    R2 is the source of truth (per ``pipeline/CLAUDE.md``). Lance is the only
+    supported ``spec.output_format``; the marker is uploaded strictly last so
+    an interrupted run never advertises artifacts that have not landed. Caller
+    is responsible for ensuring R2 creds are loaded.
 
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
-        after the call (multi-GB on the hdf5 branch).
+        after the call.
     :raises ValueError: ``spec.output_format`` is not a supported finalized format.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
@@ -222,11 +100,7 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     except ValueError as exc:
         logger.warning("non-canonical r2 prefix (finalizing anyway): {}", exc)
     work_dir.mkdir(parents=True, exist_ok=True)
-    if spec.output_format is OutputFormat.WDS:
-        finalize_wds(spec, work_dir)
-    elif spec.output_format is OutputFormat.HDF5:
-        finalize_hdf5(spec, work_dir)
-    elif spec.output_format is OutputFormat.LANCE:
+    if spec.output_format is OutputFormat.LANCE:
         finalize_lance(spec, work_dir)
     else:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
@@ -240,29 +114,18 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
-    hdf5 reshards into per-split ``.h5`` files, so each non-empty split plus
-    ``stats.npz`` is referenced. wds leaves shards in place under the run
-    prefix, so the prefix dir (carrying the tars) plus ``stats.npz`` is
-    referenced. Empty splits contribute nothing — finalize prunes them.
+    Each non-empty split ``.lance`` dataset plus ``stats.npz`` is referenced;
+    empty splits contribute nothing — finalize prunes them.
 
     :param spec: Validated dataset spec.
-    :returns: Canonical ``r2://`` URIs, splits/prefix first then ``stats.npz``.
+    :returns: Canonical ``r2://`` URIs, split datasets first then ``stats.npz``.
     """
-    if spec.output_format is OutputFormat.HDF5:
-        split_uris = [
-            spec.r2.split_h5_uri(split)
-            for split, (lo, hi) in spec.split_shard_ranges.items()
-            if lo < hi
-        ]
-        return [*split_uris, spec.r2.stats_uri()]
-    if spec.output_format is OutputFormat.LANCE:
-        split_uris = [
-            spec.r2.split_lance_uri(split)
-            for split, (lo, hi) in spec.split_shard_ranges.items()
-            if lo < hi
-        ]
-        return [*split_uris, spec.r2.stats_uri()]
-    return [spec.r2.uri(spec.r2.prefix), spec.r2.stats_uri()]
+    split_uris = [
+        spec.r2.split_lance_uri(split)
+        for split, (lo, hi) in spec.split_shard_ranges.items()
+        if lo < hi
+    ]
+    return [*split_uris, spec.r2.stats_uri()]
 
 
 def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
@@ -270,8 +133,8 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
 
     Names the artifact ``data-{spec.task_name}`` (type ``dataset``) per
     ``storage-provenance-spec.md`` §4, references the finalized R2 objects as
-    ``s3://`` URIs (split ``.h5`` files or the shard prefix, plus
-    ``stats.npz``), and records ``shard_count`` / ``n_samples`` / ``git_sha``
+    ``s3://`` URIs (split ``.lance`` datasets plus ``stats.npz``), and records
+    ``shard_count`` / ``n_samples`` / ``git_sha``
     in ``artifact.metadata`` per §6. References use ``checksum=False`` because
     R2's custom S3 endpoint is not reachable by W&B's default reference
     handler — the URIs record lineage, not a content hash.
@@ -333,8 +196,8 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
         accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
         ``paths.output_dir`` (writable scratch dir; created if missing;
-        retained after the call, multi-GB on the hdf5 branch), and an optional
-        ``logger`` group instantiated for W&B artifact logging.
+        retained after the call), and an optional ``logger`` group instantiated
+        for W&B artifact logging.
     :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
         ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """

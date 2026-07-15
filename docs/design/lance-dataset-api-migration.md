@@ -2,15 +2,15 @@
 
 ## Context
 
-The Lance integration was ported from the HDF5 design: it uses the low-level
-single-file `lance.file` API (`LanceFileWriter`/`LanceFileReader`), writes one
-`*.lance` file per shard, and reads everything through an h5py-shaped adapter
+The initial Lance integration used the low-level
+single-file `lance.file` API (`LanceFileWriter`/`LanceFileReader`), wrote one
+`*.lance` file per shard, and read everything through an array-access adapter
 after an rclone download. A review against the pinned library
 (`pylance 7.0.0`, `pyarrow 24.0.0`) surfaced three things to fix:
 
 1. **Single-file API, not the Dataset API.** The single-file format forgoes
    Lance's headline features (versioning, fragments, compaction, secondary /
-   vector indices, predicate push-down). The h5py-shaped read *interface* is
+   vector indices, predicate push-down). The array-access read *interface* is
    independent of which Lance API backs it.
 2. **Cloud reads go local-first.** Sequential one-pass paths download a full
    shard via rclone before opening it, even though Lance reads object storage
@@ -25,7 +25,7 @@ after an rclone download. A review against the pinned library
   A shard / split becomes a Lance *dataset directory* (`<name>.lance/` with
   `data/`, `_versions/`, `_transactions/`), not a single file.
 - **#2 → direct R2 streaming for sequential paths only.** finalize, stats, and
-  validate read directly from R2 via `storage_options`; the h5py-shaped adapter
+  validate read directly from R2 via `storage_options`; the array-access adapter
   (`data/lance_datamodule.py`) keeps rclone local-first (random per-batch reads
   across epochs must not hit the network). The later native `lance.torch`
   dataloaders (`data/lance_torch.py`) can additionally stream R2 directly via
@@ -125,7 +125,7 @@ after an rclone download. A review against the pinned library
 | version const + dataset writer + sequential reader | `pipeline/data/lance_shard.py`                                       |
 | storage_options builder                            | `pipeline/r2_io.py`                                                  |
 | worker shard writer                                | `data/vst/writers.py`                                                |
-| training h5py adapter                              | `data/lance_datamodule.py`                                           |
+| training array-access adapter                      | `data/lance_datamodule.py`                                           |
 | finalize (direct R2 read + write)                  | `cli/finalize_dataset.py`                                            |
 | stats streaming                                    | `pipeline/data/stats.py`                                             |
 | shard validation                                   | `pipeline/ci/validate_shard.py`                                      |

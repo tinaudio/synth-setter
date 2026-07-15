@@ -1,16 +1,10 @@
 src/synth_setter/cli/generate_dataset.py
-    DOC101: Function `_rclone_copy`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_rclone_copy`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [dest: str, src: str].
     DOC101: Function `build_generate_args`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `build_generate_args`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [output_dir: Path, shard: ShardSpec, spec: DatasetSpec].
     DOC201: Function `build_generate_args` does not have a return section in docstring
-    DOC101: Function `_render_and_upload_shard`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_render_and_upload_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [r2_dest_prefix: str, shard: ShardSpec, spec: DatasetSpec, work_dir: Path].
     DOC101: Function `spec_from_cfg`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `spec_from_cfg`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [cfg: DictConfig].
     DOC201: Function `spec_from_cfg` does not have a return section in docstring
-    DOC501: Function `spec_from_cfg` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `spec_from_cfg` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['TypeError'].
 --------------------
 src/synth_setter/data/audio_datamodule.py
     DOC101: Function `make_spectrogram`: Docstring contains fewer arguments than in function signature.
@@ -49,22 +43,11 @@ src/synth_setter/data/vst/core.py
     DOC103: Function `extract_renderer_version`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: Path].
     DOC201: Function `extract_renderer_version` does not have a return section in docstring
     DOC503: Function `extract_renderer_version` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: ['FileNotFoundError', 'RuntimeError', 'json.JSONDecodeError', 'plistlib.InvalidFileException']. Raised exceptions in the body: ['FileNotFoundError', 'RuntimeError'].
-    DOC101: Function `load_plugin`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `load_plugin`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: str].
-    DOC201: Function `load_plugin` does not have a return section in docstring
-    DOC101: Function `render_params`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `render_params`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [channels: int, midi_note: int, note_start_and_end: tuple[float, float], params: dict[str, float], plugin: VST3Plugin | None, plugin_path: str, preset_path: str | None, sample_rate: float, signal_duration_seconds: float, velocity: int, warmup: bool].
-    DOC201: Function `render_params` does not have a return section in docstring
 --------------------
 src/synth_setter/data/vst/generate_vst_dataset.py
     DOC101: Function `make_spectrogram`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `make_spectrogram`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio: np.ndarray, sample_rate: float].
     DOC201: Function `make_spectrogram` does not have a return section in docstring
-    DOC101: Function `generate_sample`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `generate_sample`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [channels: int, fixed_note_params: NoteParams | None, fixed_synth_params: dict[str, float] | None, min_loudness: float, param_spec: ParamSpec, plugin_path: str, preset_path: str, sample_rate: float, signal_duration_seconds: float, velocity: int].
-    DOC201: Function `generate_sample` does not have a return section in docstring
-    DOC501: Function `generate_sample` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `generate_sample` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
     DOC601: Class `_GenerateCliArgs`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC603: Class `_GenerateCliArgs`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [data_file: CliPositionalArg[str], model_config: ]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC501: Function `main` has raise statements, but the docstring does not have a "Raises" section
@@ -73,11 +56,6 @@ src/synth_setter/data/vst/generate_vst_dataset.py
 src/synth_setter/data/vst/param_spec.py
     DOC101: Method `NoteDurationParameter.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `NoteDurationParameter.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [max_note_duration_seconds: float, name: str].
---------------------
-src/synth_setter/evaluation/compute_audio_metrics.py
-    DOC101: Function `subdir_matches_pattern`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `subdir_matches_pattern`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [dir: Path].
-    DOC201: Function `subdir_matches_pattern` does not have a return section in docstring
 --------------------
 src/synth_setter/evaluation/predict_vst_audio.py
     DOC101: Function `params_to_csv`: Docstring contains fewer arguments than in function signature.
@@ -126,8 +104,6 @@ src/synth_setter/models/components/residual_mlp.py
     DOC103: Method `ConditionalResidualMLP.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [conditioning_dim: int, d_enc: int, d_model: int, n_params: int, num_layers: int, time_encoding: Literal['sinusoidal', 'scalar']].
     DOC101: Method `SpectralResidualMLP.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SpectralResidualMLP.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [hidden_dim: int, in_dim: int, num_blocks: int, out_dim: int].
-    DOC101: Method `CNNResidualMLP.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `CNNResidualMLP.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [channels: int, encoder_blocks: int, hidden_dim: int, in_dim: int, kernel_size: int, norm: Literal['bn', 'ln'], out_dim: int, trunk_blocks: int].
 --------------------
 src/synth_setter/models/components/sinkhorn.py
     DOC101: Method `SinkhornAttention.__init__`: Docstring contains fewer arguments than in function signature.
@@ -202,18 +178,6 @@ src/synth_setter/models/ksin_flow_matching_module.py
     DOC501: Method `KSinFlowMatchingModule._sample_x0_and_x1` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `KSinFlowMatchingModule._sample_x0_and_x1` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['NotImplementedError'].
 --------------------
-src/synth_setter/models/vst_ff_module.py
-    DOC101: Method `SurgeFeedForwardModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `SurgeFeedForwardModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
---------------------
-src/synth_setter/models/vst_flow_matching_module.py
-    DOC101: Method `SurgeFlowMatchingModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `SurgeFlowMatchingModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [cfg_dropout_rate: float, compile: bool, conditioning: Literal['mel', 'm2l'], encoder: torch.nn.Module, num_params: int, optimizer: torch.optim.Optimizer, rectified_sigma_min: float, scheduler: torch.optim.lr_scheduler, test_cfg_strength: float, test_sample_steps: int, validation_cfg_strength: float, validation_sample_steps: int, vector_field: torch.nn.Module, warmup_steps: int].
---------------------
-src/synth_setter/models/vst_flowvae_module.py
-    DOC101: Method `SurgeFlowVAEModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `SurgeFlowVAEModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [beta_max: float, beta_start: float, beta_warmup_steps: int, compile: bool, net: torch.nn.Module, optimizer: torch.optim.Optimizer, param_spec: str, scheduler: torch.optim.lr_scheduler, warmup_steps: int].
---------------------
 src/synth_setter/pipeline/ci/load_image_config.py
     DOC501: Function `main` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Function `main` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
@@ -225,49 +189,6 @@ src/synth_setter/pipeline/ci/validate_spec.py
     DOC101: Function `validate_test_values`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `validate_test_values`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [spec: dict[str, Any]].
     DOC201: Function `validate_test_values` does not have a return section in docstring
---------------------
-src/synth_setter/pipeline/data/add_music2latent.py
-    DOC101: Function `reader_process`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `reader_process`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_indices: list[int], batch_size: int, read_queue: Queue, shard_path: Path].
-    DOC101: Function `writer_process`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `writer_process`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [shard_path: Path, write_queue: Queue].
-    DOC101: Function `process_shard`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `process_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, m2l: EncoderDecoder, num_readers: int, shard_path: Path].
---------------------
-src/synth_setter/pipeline/data/r2_report.py
-    DOC601: Class `RcloneFile`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `RcloneFile`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [filename: str, size_bytes: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC601: Class `ShardFileInfo`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `ShardFileInfo`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [filename: str, is_suspect: bool, size_bytes: int, size_human: str]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC601: Class `ShardReport`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `ShardReport`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [h5_count: int, h5_files: list[ShardFileInfo], json_count: int, logical_shard_count: int, other_count: int, suspect_files: list[ShardFileInfo], threshold_gib: float, total_h5_bytes: int, total_h5_human: str]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC101: Function `format_size`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `format_size`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [size_bytes: int].
-    DOC201: Function `format_size` does not have a return section in docstring
-    DOC101: Function `parse_rclone_ls_output`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `parse_rclone_ls_output`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [output: str].
-    DOC201: Function `parse_rclone_ls_output` does not have a return section in docstring
-    DOC501: Function `parse_rclone_ls_output` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `parse_rclone_ls_output` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
-    DOC101: Function `analyze_shards`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `analyze_shards`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [files: list[RcloneFile], threshold_gib: float].
-    DOC201: Function `analyze_shards` does not have a return section in docstring
-    DOC101: Function `format_report`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `format_report`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [prefix: str, report: ShardReport].
-    DOC201: Function `format_report` does not have a return section in docstring
-    DOC101: Function `run_rclone_ls`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `run_rclone_ls`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [prefix: str].
-    DOC201: Function `run_rclone_ls` does not have a return section in docstring
-    DOC101: Function `main`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `main`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [prefix: str, size_threshold_gib: float].
---------------------
-src/synth_setter/pipeline/data/rewrite_to_latest.py
-    DOC003: Function/method `rewrite_shard`: Docstring style mismatch. (Please read more at https://jsh9.github.io/pydoclint/style_mismatch.html ). You specified "sphinx" style, but the docstring is likely not written in this style.
-    DOC101: Function `main`: Docstring contains fewer arguments than in function signature.
-    DOC106: Function `main`: The option `--arg-type-hints-in-signature` is `True` but there are no argument type hints in the signature
-    DOC107: Function `main`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
-    DOC103: Function `main`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [input_dir: , output_dir: , pattern: , workers: ].
-    DOC201: Function `main` does not have a return section in docstring
 --------------------
 src/synth_setter/pipeline/partitioning.py
     DOC101: Function `validate_rank_world`: Docstring contains fewer arguments than in function signature.
@@ -309,13 +230,7 @@ src/synth_setter/pipeline/schemas/image_config.py
     DOC503: Method `ImageConfig.issue_number_must_be_positive` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
     DOC503: Function `load_image_config` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: ['FileNotFoundError', 'ValueError', 'pydantic.ValidationError']. Raised exceptions in the body: ['FileNotFoundError', 'ValueError'].
 --------------------
-src/synth_setter/pipeline/schemas/prefix.py
-    DOC501: Function `make_dataset_wandb_run_id` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `make_dataset_wandb_run_id` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
---------------------
 src/synth_setter/pipeline/schemas/shard_metadata.py
-    DOC601: Class `ShardMetadata`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `ShardMetadata`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [channels: int, min_loudness: float, model_config: , sample_rate: int, signal_duration_seconds: float, velocity: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC201: Method `ShardMetadata._ranges_must_be_sane` does not have a return section in docstring
     DOC501: Method `ShardMetadata._ranges_must_be_sane` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `ShardMetadata._ranges_must_be_sane` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
@@ -327,7 +242,6 @@ src/synth_setter/pipeline/schemas/spec.py
     DOC601: Class `ShardSpec`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC603: Class `ShardSpec`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [filename: str, model_config: , seed: int, shard_id: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC601: Class `RenderConfig`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
-    DOC603: Class `RenderConfig`: Class docstring attributes are different from actual class attributes. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Attributes in the class definition but not in the docstring: [channels: int, gui_toggle_cadence: _GuiToggleCadence, max_retries: int, min_loudness: float, model_config: , parallel: bool, param_sample_cadence: _ParamSampleCadence, param_spec_name: str, plugin_path: str, plugin_reload_cadence: _PluginReloadCadence, renderer_version: str, sample_rate: int, samples_per_render_batch: int, samples_per_shard: int, signal_duration_seconds: float, velocity: int]. (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
     DOC201: Method `RenderConfig._ranges_must_be_sane` does not have a return section in docstring
     DOC501: Method `RenderConfig._ranges_must_be_sane` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Method `RenderConfig._ranges_must_be_sane` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['ValueError'].
@@ -418,8 +332,6 @@ src/synth_setter/tools/surge_xt_interactive.py
     DOC101: Method `DatasetRefType.convert`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `DatasetRefType.convert`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [ctx: click.Context | None, param: click.Parameter | None, value: str | DatasetRef].
     DOC201: Method `DatasetRefType.convert` does not have a return section in docstring
-    DOC501: Function `load_dataset_synth_params` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Function `load_dataset_synth_params` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['TypeError'].
     DOC502: Function `load_prediction_synth_params` has a "Raises" section in the docstring, but there are not "raise" statements in the body
     DOC101: Function `_flush_plugin`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_flush_plugin`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin: VST3Plugin].
@@ -449,13 +361,9 @@ src/synth_setter/tools/surge_xt_interactive.py
     DOC103: Function `_run_predict`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [checkpoint_path: Path, dataset_root_dir: Path, param_spec_name: str, predict_file: Path, predictions_output_dir: Path, subprocess_runner: SubprocessRunner | None].
     DOC101: Function `_validate_predictions`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_validate_predictions`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [num_samples: int, predictions_output_dir: Path].
-    DOC101: Function `_build_predict_vst_audio_argv`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_build_predict_vst_audio_argv`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio_dir: Path, param_spec_name: str, predictions_output_dir: Path, preset_path: str].
     DOC201: Function `_build_predict_vst_audio_argv` does not have a return section in docstring
     DOC101: Function `_validate_rendered_audio_dir`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_validate_rendered_audio_dir`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio_dir: Path, num_samples: int].
-    DOC101: Function `_render_predicted_audio`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_render_predicted_audio`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio_dir: Path, num_samples: int, param_spec_name: str, predictions_output_dir: Path, preset_path: str, subprocess_runner: SubprocessRunner | None].
     DOC503: Function `_render_predicted_audio` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: ['FileNotFoundError', 'ValueError']. Raised exceptions in the body: ['subprocess.TimeoutExpired'].
     DOC101: Function `_compute_and_validate_metrics`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_compute_and_validate_metrics`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio_dir: Path, metrics_dir: Path, num_samples: int, subprocess_runner: SubprocessRunner | None].
@@ -465,8 +373,6 @@ src/synth_setter/tools/surge_xt_interactive.py
     DOC103: Function `main`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [checkpoint_path: Path | None, dataset_ref: DatasetRef | None, midi_port: str | None, output_dataset_dir_path: Path | None, param_spec_name: str, plugin_path: str, pred: PredictionRef | None, session_recording_path: Path | None].
     DOC501: Function `main` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Function `main` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['TypeError', 'click.UsageError'].
-    DOC101: Function `_maybe_eval_captured_patches`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_maybe_eval_captured_patches`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [checkpoint_path: Path | None, eval_runner: EvalRunner | None, num_patches: int, output_dataset_dir_path: Path, param_spec_name: str, patch_file_path: Path, preset_path: str].
     DOC501: Function `_maybe_eval_captured_patches` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Function `_maybe_eval_captured_patches` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['OSError'].
 --------------------
@@ -551,10 +457,6 @@ tests/data/vst/test_core.py
     DOC103: Method `TestExtractRendererVersion.test_raises_key_error_when_version_field_missing`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
 --------------------
 tests/data/vst/test_generate_vst_dataset.py
-    DOC101: Function `_assert_h5_structure_is_valid`: Docstring contains fewer arguments than in function signature.
-    DOC107: Function `_assert_h5_structure_is_valid`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
-    DOC103: Function `_assert_h5_structure_is_valid`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [min_loudness: float, num_samples: int, out: Path, spec: ].
-    DOC201: Function `_assert_h5_structure_is_valid` does not have a return section in docstring
     DOC101: Function `_patched_sample`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_patched_sample`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [replay: list[tuple[dict[str, float], NoteParams]], spec: ParamSpec].
     DOC101: Function `_audio_metrics`: Docstring contains fewer arguments than in function signature.
@@ -583,8 +485,6 @@ tests/data/vst/test_generate_vst_dataset.py
     DOC103: Function `test_datasets_from_sampled_params_are_identical`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
     DOC101: Function `test_make_dataset`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_make_dataset`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
-    DOC101: Function `test_make_dataset_raises_when_fixed_params_list_is_too_short`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `test_make_dataset_raises_when_fixed_params_list_is_too_short`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
     DOC201: Function `_silent_audio` does not have a return section in docstring
     DOC201: Function `_loud_audio` does not have a return section in docstring
     DOC101: Function `test_generate_sample_raises_when_fixed_synth_params_renders_silent`: Docstring contains fewer arguments than in function signature.
@@ -614,18 +514,9 @@ tests/data/vst/test_generate_vst_dataset_cli.py
 tests/data/vst/test_preset_coverage.py
     DOC101: Function `_flush`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_flush`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin: VST3Plugin].
-    DOC101: Function `_open_editor_briefly`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_open_editor_briefly`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin: VST3Plugin].
     DOC101: Function `_read_all_params`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_read_all_params`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin: VST3Plugin].
     DOC201: Function `_read_all_params` does not have a return section in docstring
-    DOC101: Function `test_flush_pattern_matches_show_editor_pattern`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `test_flush_pattern_matches_show_editor_pattern`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [preset_path: str].
---------------------
-tests/evaluation/test_compute_audio_metrics.py
-    DOC101: Function `_sine`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_sine`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [amplitude: float, freq: float, seconds: float].
-    DOC201: Function `_sine` does not have a return section in docstring
 --------------------
 tests/infra/conftest.py
     DOC101: Function `_find_project_root`: Docstring contains fewer arguments than in function signature.
@@ -716,41 +607,6 @@ tests/infra/test_workflows_under_act.py
     DOC101: Function `test_representative_workflow_parses_under_act_list_mode`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_representative_workflow_parses_under_act_list_mode`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [project_root: Path, workflow_filename: str].
 --------------------
-tests/pipeline/ci_validate/test_validate_shard.py
-    DOC101: Function `_create_shard`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_create_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [datasets: dict[str, tuple[int, ...]] | None, path: Path, shard_size: int].
-    DOC101: Function `real_spec`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `real_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch, tmp_path: Path].
-    DOC201: Function `real_spec` does not have a return section in docstring
-    DOC101: Method `TestValidateShard.test_valid_shard_returns_no_errors`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_valid_shard_returns_no_errors`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestValidateShard.test_missing_dataset_returns_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_missing_dataset_returns_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestValidateShard.test_wrong_row_count_returns_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_wrong_row_count_returns_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestValidateShard.test_not_hdf5_returns_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_not_hdf5_returns_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestValidateShard.test_file_not_found_returns_error`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_file_not_found_returns_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestValidateShard.test_extra_datasets_ignored`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidateShard.test_extra_datasets_ignored`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
-    DOC101: Method `TestMain.test_cli_rejects_two_args`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestMain.test_cli_rejects_two_args`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch, real_spec: DatasetSpec, tmp_path: Path].
---------------------
-tests/pipeline/ci_validate/test_validate_spec.py
-    DOC101: Function `_make_valid_spec`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_make_valid_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**overrides: object, output_format: str].
-    DOC201: Function `_make_valid_spec` does not have a return section in docstring
---------------------
-tests/pipeline/conftest.py
-    DOC101: Function `_make_dataset_spec_kwargs`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_make_dataset_spec_kwargs`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: str].
-    DOC201: Function `_make_dataset_spec_kwargs` does not have a return section in docstring
-    DOC201: Function `valid_dataset_spec_kwargs` does not have a return section in docstring
---------------------
-tests/pipeline/data/test_r2_report.py
-    DOC201: Function `_r2_reachable` does not have a return section in docstring
---------------------
 tests/pipeline/ci_config/test_load_image_config.py
     DOC101: Function `_write_config`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_write_config`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
@@ -784,19 +640,34 @@ tests/pipeline/ci_config/test_materialize_spec.py
     DOC101: Method `TestMaterializeSpecCli.test_missing_args_exits_with_usage`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `TestMaterializeSpecCli.test_missing_args_exits_with_usage`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch].
 --------------------
+tests/pipeline/ci_validate/test_validate_shard.py
+    DOC101: Function `real_spec`: Docstring contains fewer arguments than in function signature.
+    DOC103: Function `real_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch, tmp_path: Path].
+    DOC201: Function `real_spec` does not have a return section in docstring
+    DOC101: Method `TestValidateShard.test_file_not_found_returns_error`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestValidateShard.test_file_not_found_returns_error`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [real_spec: DatasetSpec, tmp_path: Path].
+    DOC101: Method `TestMain.test_cli_rejects_two_args`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestMain.test_cli_rejects_two_args`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch, real_spec: DatasetSpec, tmp_path: Path].
+--------------------
+tests/pipeline/ci_validate/test_validate_spec.py
+    DOC101: Function `_make_valid_spec`: Docstring contains fewer arguments than in function signature.
+    DOC103: Function `_make_valid_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**overrides: object, output_format: str].
+    DOC201: Function `_make_valid_spec` does not have a return section in docstring
+--------------------
 tests/pipeline/configs/test_experiment_yamls.py
     DOC101: Function `_compose_dataset_spec`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_compose_dataset_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [experiment: str].
     DOC201: Function `_compose_dataset_spec` does not have a return section in docstring
-    DOC101: Function `test_experiment_yaml_validates_as_dataset_spec`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `test_experiment_yaml_validates_as_dataset_spec`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [experiment: str].
     DOC101: Function `test_experiment_yaml_json_round_trips`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_experiment_yaml_json_round_trips`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [experiment: str].
 --------------------
+tests/pipeline/conftest.py
+    DOC101: Function `_make_dataset_spec_kwargs`: Docstring contains fewer arguments than in function signature.
+    DOC103: Function `_make_dataset_spec_kwargs`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: str].
+    DOC201: Function `_make_dataset_spec_kwargs` does not have a return section in docstring
+    DOC201: Function `valid_dataset_spec_kwargs` does not have a return section in docstring
+--------------------
 tests/pipeline/entrypoints/test_generate_dataset_unit.py
-    DOC101: Function `_materialize_shard`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_materialize_shard`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [args: list[str]].
-    DOC201: Function `_materialize_shard` does not have a return section in docstring
     DOC101: Function `_base_spec_kwargs`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_base_spec_kwargs`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**overrides: object, tmp_path: Path].
     DOC201: Function `_base_spec_kwargs` does not have a return section in docstring
@@ -822,13 +693,9 @@ tests/pipeline/entrypoints/test_generate_dataset_unit.py
     DOC103: Method `TestSpecFromCfg.test_drops_non_spec_groups`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [valid_dataset_spec_kwargs: dict[str, object]].
 --------------------
 tests/pipeline/entrypoints/test_skypilot_launch.py
-    DOC101: Function `fake_plugin`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `fake_plugin`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
-    DOC201: Function `fake_plugin` does not have a return section in docstring
     DOC101: Function `env_file`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `env_file`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
     DOC201: Function `env_file` does not have a return section in docstring
-    DOC201: Function `template_yaml` does not have a return section in docstring
     DOC101: Function `clear_worker_env_from_process`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `clear_worker_env_from_process`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
     DOC101: Function `mock_cred_bootstrap`: Docstring contains fewer arguments than in function signature.
@@ -838,31 +705,6 @@ tests/pipeline/entrypoints/test_skypilot_launch.py
     DOC201: Function `mock_sky` does not have a return section in docstring
     DOC201: Method `TestOverrideImageId._make_resource` does not have a return section in docstring
     DOC201: Method `TestOverrideImageId._make_task` does not have a return section in docstring
---------------------
-tests/pipeline/test_partitioning.py
-    DOC101: Method `TestEvenDivide.test_each_rank_owns_two_consecutive_shards`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestEvenDivide.test_each_rank_owns_two_consecutive_shards`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [expected: range, rank: int].
-    DOC101: Method `TestUnevenDivide.test_first_two_ranks_get_three_shards_remaining_get_two`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestUnevenDivide.test_first_two_ranks_get_three_shards_remaining_get_two`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [expected: range, rank: int].
-    DOC101: Method `TestValidation.test_get_my_shards_rejects_invalid_rank_world`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestValidation.test_get_my_shards_rejects_invalid_rank_world`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [rank: int, world: int].
-    DOC101: Method `TestReadRankWorldFromEnv._clear_partition_env`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv._clear_partition_env`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
-    DOC101: Method `TestReadRankWorldFromEnv.test_returns_rank_world_tuple_when_env_valid`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv.test_returns_rank_world_tuple_when_env_valid`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
-    DOC101: Method `TestReadRankWorldFromEnv.test_non_integer_rank_raises`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv.test_non_integer_rank_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
-    DOC101: Method `TestReadRankWorldFromEnv.test_non_integer_world_raises`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv.test_non_integer_world_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
-    DOC101: Method `TestReadRankWorldFromEnv.test_out_of_bounds_rank_raises`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv.test_out_of_bounds_rank_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
-    DOC101: Method `TestReadRankWorldFromEnv.test_world_zero_raises`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestReadRankWorldFromEnv.test_world_zero_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
---------------------
-tests/pipeline/test_r2_io.py
-    DOC101: Method `TestObjectSize._mock_run`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestObjectSize._mock_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [stdout: str].
-    DOC201: Method `TestObjectSize._mock_run` does not have a return section in docstring
 --------------------
 tests/pipeline/schemas/test_dataset_spec.py
     DOC101: Function `_valid_spec_kwargs`: Docstring contains fewer arguments than in function signature.
@@ -900,10 +742,6 @@ tests/pipeline/schemas/test_dataset_spec.py
     DOC103: Method `TestDatasetSpecValidators.test_negative_split_size_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [patch_runtime_io: None].
     DOC101: Method `TestDatasetSpecValidators.test_zero_total_split_raises`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `TestDatasetSpecValidators.test_zero_total_split_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [patch_runtime_io: None].
-    DOC101: Method `TestDatasetSpecValidators.test_invalid_output_format_literal_raises`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestDatasetSpecValidators.test_invalid_output_format_literal_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [patch_runtime_io: None].
-    DOC101: Method `TestDatasetSpecValidators.test_wds_output_format_constructs`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `TestDatasetSpecValidators.test_wds_output_format_constructs`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [patch_runtime_io: None].
     DOC101: Method `TestDatasetSpecValidators.test_strict_mode_rejects_int_for_string_field`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `TestDatasetSpecValidators.test_strict_mode_rejects_int_for_string_field`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [patch_runtime_io: None].
     DOC101: Method `TestDatasetSpecValidators.test_strict_mode_rejects_string_for_bool_field`: Docstring contains fewer arguments than in function signature.
@@ -1001,10 +839,8 @@ tests/pipeline/schemas/test_image_config.py
     DOC103: Method `TestStaticFieldsAndYamlMerge.test_target_platform_rejects_invalid_literal`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [tmp_path: Path].
 --------------------
 tests/pipeline/schemas/test_prefix.py
-    DOC101: Method `TestMakeDatasetWandbRunId.test_make_run_id_default_timestamp_is_utc`: Docstring contains fewer arguments than in function signature.
     DOC106: Method `TestMakeDatasetWandbRunId.test_make_run_id_default_timestamp_is_utc`: The option `--arg-type-hints-in-signature` is `True` but there are no argument type hints in the signature
     DOC107: Method `TestMakeDatasetWandbRunId.test_make_run_id_default_timestamp_is_utc`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
-    DOC103: Method `TestMakeDatasetWandbRunId.test_make_run_id_default_timestamp_is_utc`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [mock_datetime: ].
 --------------------
 tests/pipeline/schemas/test_shard_metadata.py
     DOC101: Method `TestShardMetadataRangeValidators.test_velocity_outside_midi_range_raises`: Docstring contains fewer arguments than in function signature.
@@ -1015,6 +851,31 @@ tests/pipeline/schemas/test_shard_metadata.py
     DOC103: Method `TestShardMetadataRangeValidators.test_non_positive_sample_rate_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [bad_sample_rate: int].
     DOC101: Method `TestShardMetadataRangeValidators.test_channels_less_than_one_raises`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `TestShardMetadataRangeValidators.test_channels_less_than_one_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [bad_channels: int].
+--------------------
+tests/pipeline/test_partitioning.py
+    DOC101: Method `TestEvenDivide.test_each_rank_owns_two_consecutive_shards`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestEvenDivide.test_each_rank_owns_two_consecutive_shards`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [expected: range, rank: int].
+    DOC101: Method `TestUnevenDivide.test_first_two_ranks_get_three_shards_remaining_get_two`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestUnevenDivide.test_first_two_ranks_get_three_shards_remaining_get_two`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [expected: range, rank: int].
+    DOC101: Method `TestValidation.test_get_my_shards_rejects_invalid_rank_world`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestValidation.test_get_my_shards_rejects_invalid_rank_world`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [rank: int, world: int].
+    DOC101: Method `TestReadRankWorldFromEnv._clear_partition_env`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv._clear_partition_env`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+    DOC101: Method `TestReadRankWorldFromEnv.test_returns_rank_world_tuple_when_env_valid`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv.test_returns_rank_world_tuple_when_env_valid`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+    DOC101: Method `TestReadRankWorldFromEnv.test_non_integer_rank_raises`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv.test_non_integer_rank_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+    DOC101: Method `TestReadRankWorldFromEnv.test_non_integer_world_raises`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv.test_non_integer_world_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+    DOC101: Method `TestReadRankWorldFromEnv.test_out_of_bounds_rank_raises`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv.test_out_of_bounds_rank_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+    DOC101: Method `TestReadRankWorldFromEnv.test_world_zero_raises`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestReadRankWorldFromEnv.test_world_zero_raises`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [monkeypatch: pytest.MonkeyPatch].
+--------------------
+tests/pipeline/test_r2_io.py
+    DOC101: Method `TestObjectSize._mock_run`: Docstring contains fewer arguments than in function signature.
+    DOC103: Method `TestObjectSize._mock_run`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [stdout: str].
+    DOC201: Method `TestObjectSize._mock_run` does not have a return section in docstring
 --------------------
 tests/scripts/skypilot/test_write_provider_creds.py
     DOC101: Function `_run`: Docstring contains fewer arguments than in function signature.
@@ -1070,11 +931,6 @@ tests/test_benchmarks.py
     DOC101: Function `test_config_resolution_speed`: Docstring contains fewer arguments than in function signature.
     DOC107: Function `test_config_resolution_speed`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Function `test_config_resolution_speed`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [benchmark: , cfg_train: DictConfig].
---------------------
-tests/test_callbacks.py
-    DOC101: Function `_make_trainer`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_make_trainer`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [global_step: int, is_global_zero: bool, loggers: list[object]].
-    DOC201: Function `_make_trainer` does not have a return section in docstring
 --------------------
 tests/test_compare_baseline_configs.py
     DOC601: Class `RefCompareCase`: Class docstring contains fewer class attributes than actual class attributes.  (Please read https://jsh9.github.io/pydoclint/checking_class_attributes.html on how to correctly document class attributes.)
@@ -1190,8 +1046,6 @@ tests/tools/test_surge_xt_interactive.py
     DOC101: Function `simple_pred_tensor`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `simple_pred_tensor`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [simple_spec_total_length: int].
     DOC201: Function `simple_pred_tensor` does not have a return section in docstring
-    DOC101: Function `_write_param_array_h5`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_write_param_array_h5`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [path: Path, rows: np.ndarray].
     DOC101: Method `TestDecodePredictionRow.test_returns_expected_keys_and_finite_floats`: Docstring contains fewer arguments than in function signature.
     DOC107: Method `TestDecodePredictionRow.test_returns_expected_keys_and_finite_floats`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Method `TestDecodePredictionRow.test_returns_expected_keys_and_finite_floats`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [simple_pred_tensor: torch.Tensor, simple_spec: ParamSpec, surge_xt_interactive: ].
@@ -1397,9 +1251,6 @@ tests/tools/test_surge_xt_interactive.py
     DOC101: Method `TestMaybeEvalCapturedPatches.test_no_checkpoint_skips_replication_and_eval`: Docstring contains fewer arguments than in function signature.
     DOC107: Method `TestMaybeEvalCapturedPatches.test_no_checkpoint_skips_replication_and_eval`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Method `TestMaybeEvalCapturedPatches.test_no_checkpoint_skips_replication_and_eval`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].
-    DOC101: Method `TestMaybeEvalCapturedPatches.test_replicates_train_h5_to_three_siblings`: Docstring contains fewer arguments than in function signature.
-    DOC107: Method `TestMaybeEvalCapturedPatches.test_replicates_train_h5_to_three_siblings`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
-    DOC103: Method `TestMaybeEvalCapturedPatches.test_replicates_train_h5_to_three_siblings`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].
     DOC101: Method `TestMaybeEvalCapturedPatches.test_failed_copy_rolls_back_partial_siblings`: Docstring contains fewer arguments than in function signature.
     DOC107: Method `TestMaybeEvalCapturedPatches.test_failed_copy_rolls_back_partial_siblings`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Method `TestMaybeEvalCapturedPatches.test_failed_copy_rolls_back_partial_siblings`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].
@@ -1416,9 +1267,6 @@ tests/tools/test_surge_xt_interactive.py
     DOC101: Method `TestBuildPredictVstAudioArgv.test_non_linux_does_not_prepend_wrapper`: Docstring contains fewer arguments than in function signature.
     DOC107: Method `TestBuildPredictVstAudioArgv.test_non_linux_does_not_prepend_wrapper`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Method `TestBuildPredictVstAudioArgv.test_non_linux_does_not_prepend_wrapper`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].
-    DOC101: Method `TestBuildPredictVstAudioArgv.test_param_spec_and_preset_path_are_forwarded`: Docstring contains fewer arguments than in function signature.
-    DOC107: Method `TestBuildPredictVstAudioArgv.test_param_spec_and_preset_path_are_forwarded`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
-    DOC103: Method `TestBuildPredictVstAudioArgv.test_param_spec_and_preset_path_are_forwarded`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].
     DOC101: Method `TestBuildPredictVstAudioArgv.test_predictions_and_audio_dirs_appear_as_positional_args`: Docstring contains fewer arguments than in function signature.
     DOC107: Method `TestBuildPredictVstAudioArgv.test_predictions_and_audio_dirs_appear_as_positional_args`: The option `--arg-type-hints-in-signature` is `True` but not all args in the signature have type hints
     DOC103: Method `TestBuildPredictVstAudioArgv.test_predictions_and_audio_dirs_appear_as_positional_args`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [surge_xt_interactive: , tmp_path: Path].

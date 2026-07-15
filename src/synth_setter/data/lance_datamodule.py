@@ -3,8 +3,9 @@
 ``LanceShardFile`` adapts a Lance dataset directory — the format the data
 pipeline's writer and finalize steps emit via
 :func:`synth_setter.pipeline.data.lance_shard.write_lance_dataset` — to the
-minimal h5py-``File``-like read surface ``VSTDataset`` consumes, so the Lance
-subclasses inherit every batching / normalization / OT behavior unchanged.
+minimal :class:`~synth_setter.data.vst_datamodule.ShardFile` read surface
+``VSTDataset`` consumes, so the Lance subclasses inherit every batching /
+normalization / OT behavior unchanged.
 
 ``LanceVSTDataModule(loader="map")`` instead wires the native sample-indexed
 :class:`synth_setter.data.lance_torch.LanceMapDataset` into standard
@@ -57,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 
 class LanceColumn:
-    """H5py-``Dataset``-like read view over one fixed-shape tensor column."""
+    """``ShardColumn`` read view over one fixed-shape tensor column."""
 
     def __init__(self, shard: LanceShardFile, name: str, inner_shape: tuple[int, ...]):
         """Wrap one column of an open Lance shard.
@@ -68,13 +69,13 @@ class LanceColumn:
         """
         self._shard = shard
         self._name = name
-        # Backs the h5py-like ``shape`` property; decode reads the shape from
+        # Backs the ``shape`` property; decode reads the shape from
         # Arrow's tensor type, so reads don't consult this.
         self._inner_shape = inner_shape
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """``(num_rows, *tensor_shape)``, mirroring ``h5py.Dataset.shape``.
+        """``(num_rows, *tensor_shape)``, mirroring ``ShardColumn.shape``.
 
         :return: Row count followed by the per-row tensor shape.
         """
@@ -104,13 +105,13 @@ class LanceColumn:
             table = dataset.take([int(i) for i in idx], columns=[self._name])
         chunk = table.column(self._name).combine_chunks()
         array = chunk.to_numpy_ndarray()
-        # Copy out of Arrow's read-only buffer: h5py reads return writable arrays,
+        # Copy out of Arrow's read-only buffer: readers return writable arrays,
         # and torch.from_numpy over a read-only view is undefined behavior on write.
         return array if array.flags.writeable else array.copy()
 
 
 class LanceShardFile:
-    """Read-only adapter exposing a Lance dataset directory via the h5py-``File`` read surface."""
+    """Read-only adapter exposing a Lance dataset directory via the ``ShardFile`` read surface."""
 
     def __init__(self, path: str | Path):
         """Open the ``.lance`` shard dataset read-only.
@@ -172,8 +173,7 @@ class LanceShardFile:
 
         :param name: Column name in the Lance schema (e.g. ``"mel_spec"``).
         :return: Lazy read view over that column.
-        :raises KeyError: If the schema has no such column — at lookup, like h5py, not on first
-            read.
+        :raises KeyError: If the schema has no such column — at lookup, not on first read.
         :raises ValueError: If the shard has been closed.
         """
         if self._closed:
@@ -183,7 +183,7 @@ class LanceShardFile:
         return LanceColumn(self, name, self._inner_shapes[name])
 
     def __bool__(self) -> bool:
-        """Mirror ``h5py.File`` truthiness: True while open, False after ``close``.
+        """Mirror ``ShardFile`` truthiness: True while open, False after ``close``.
 
         :return: Whether the shard is still open.
         """
@@ -196,7 +196,7 @@ class LanceShardFile:
 
 
 class LanceVSTDataset(VSTDataset):
-    """``VSTDataset`` reading a ``.lance`` dataset directory instead of HDF5."""
+    """``VSTDataset`` reading a ``.lance`` dataset directory."""
 
     def __getstate__(self) -> dict[str, object]:
         """Remove the generator state that cannot cross a spawned worker boundary.
@@ -278,9 +278,7 @@ class PrepareBatchCollate:
             generator = torch.Generator()
             worker_info = torch.utils.data.get_worker_info()
             seed = (
-                ranked_generator_seed(
-                    worker_info.seed, self._rank, worker_info.num_workers
-                )
+                ranked_generator_seed(worker_info.seed, self._rank, worker_info.num_workers)
                 if worker_info
                 else ranked_generator_seed(self._seed, self._rank)
             )
@@ -656,3 +654,10 @@ class LanceVSTDataModule(VSTDataModule):
         for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
             if hasattr(self, name):
                 delattr(self, name)
+
+
+# Complete deprecated bindings deferred by the circular base-module import.
+from synth_setter.data import vst_datamodule as _vst_datamodule
+
+_vst_datamodule.SurgeXTDataset = LanceVSTDataset
+_vst_datamodule.SurgeDataModule = LanceVSTDataModule

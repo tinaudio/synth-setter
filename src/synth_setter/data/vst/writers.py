@@ -1,21 +1,16 @@
-"""Per-shard dataset writers — HDF5, WebDataset tar, and Lance dataset.
+"""Per-shard Lance dataset writer.
 
-Consist of entrypoints dispatched by the renderer CLI on the output file's suffix:
-``make_hdf5_dataset`` keeps the resumable HDF5 path (signature takes a path and
-opens the file internally), ``make_wds_dataset`` writes tar shards using
-``webdataset.TarWriter``, and ``make_lance_dataset`` writes a Lance dataset directory.
+``make_lance_dataset`` is the sole entrypoint dispatched by the renderer CLI on
+the output suffix; it writes a Lance dataset directory, one fragment per render
+batch, committed as one dataset at the end.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Protocol, cast
 
-import h5py
 import numpy as np
-import webdataset as wds
 from loguru import logger
 from pedalboard import VST3Plugin
 from tqdm import trange
@@ -24,7 +19,6 @@ from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,
-    create_datasets_and_get_start_idx,
     generate_sample,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
@@ -32,110 +26,6 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.spec import RenderConfig
-
-
-class _WdsTarSink(Protocol):
-    """Minimal surface from ``wds.TarWriter`` used by the wds writer path.
-
-    The webdataset library lacks PEP 561 type stubs, so direct ``wds.TarWriter``
-    references trigger ``reportAttributeAccessIssue`` under pyright. Typing the
-    helper signatures against this Protocol keeps the call surface narrow and
-    confines the type-ignore to the single ``wds.TarWriter(...)`` instantiation.
-    """
-
-    def write(self, sample: dict[str, Any]) -> None:
-        """Write a single sample dict to the underlying tar stream.
-
-        :param sample: Mapping containing a ``__key__`` plus member-name → value entries.
-        """
-        ...
-
-    def close(self) -> None:
-        """Close the underlying tar stream."""
-        ...
-
-    def __enter__(self) -> _WdsTarSink:
-        """Enter the context manager and return ``self``.
-
-        :returns: This sink, for use inside a ``with`` block.
-        :rtype: _WdsTarSink
-        """
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        """Exit the context manager, closing the underlying tar stream.
-
-        :param exc_type: Exception type if raised inside the block, else ``None``.
-        :param exc_val: Exception instance if raised inside the block, else ``None``.
-        :param exc_tb: Traceback if an exception was raised inside the block, else ``None``.
-        """
-        ...
-
-
-def save_hdf5_samples(
-    samples: list[VSTDataSample],
-    audio_dataset: h5py.Dataset,
-    mel_dataset: h5py.Dataset,
-    param_dataset: h5py.Dataset,
-    start_idx: int,
-) -> None:
-    """Append a batch of rendered samples to the three HDF5 datasets in place.
-
-    :param samples: Rendered samples in row order; the first lands at ``start_idx``.
-    :param audio_dataset: Pre-created HDF5 audio dataset (shape ``(N, C, T)``).
-    :param mel_dataset: Pre-created HDF5 mel-spectrogram dataset (shape ``(N, C, M, F)``).
-    :param param_dataset: Pre-created HDF5 parameter-array dataset (shape ``(N, P)``).
-    :param start_idx: Row at which the batch's first sample is written.
-    """
-    logger.info(f"Saving {len(samples)} samples to hdf5...")
-    audios = np.stack([s.audio.T for s in samples], axis=0)
-    mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
-    param_arrays = np.stack([s.param_array for s in samples], axis=0)
-
-    end = start_idx + len(samples)
-    audio_dataset[start_idx:end, :, :] = audios
-    mel_dataset[start_idx:end, :, :] = mel_specs
-    param_dataset[start_idx:end, :] = param_arrays
-
-    logger.info(f"{len(samples)} hdf5 samples written!")
-
-
-def save_wds_samples(
-    samples: list[VSTDataSample],
-    sink: _WdsTarSink,
-    start_idx: int,
-) -> None:
-    """Write a batch of rendered samples as a single tar entry keyed by ``start_idx``.
-
-    Audio is cast to ``float16`` to match the h5 path's storage precision so
-    consumers see the same dtype regardless of which writer produced the shard;
-    ``mel_spec`` and ``param_array`` stay ``float32``.
-
-    :param samples: Rendered samples in row order; all land under the same tar key.
-    :param sink: An open ``wds.TarWriter``-compatible sink (Protocol typed).
-    :param start_idx: Logical row index of the batch's first sample — also the tar key.
-    """
-    logger.info(f"Saving {len(samples)} samples to wds...")
-    audios = np.stack([s.audio.T for s in samples], axis=0).astype(np.float16)
-    mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
-    param_arrays = np.stack([s.param_array for s in samples], axis=0)
-
-    audio_name, mel_name, param_name = DATASET_FIELD_NAMES
-    sink.write(
-        {
-            "__key__": f"{start_idx:08d}",
-            f"{audio_name}.npy": audios,
-            f"{mel_name}.npy": mel_specs,
-            f"{param_name}.npy": param_arrays,
-        }
-    )
-
-    logger.info(f"{len(samples)} wds samples written!")
 
 
 def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
@@ -230,18 +120,17 @@ def _render_in_batches(
 ) -> None:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
 
-    The h5 and wds writers share this loop verbatim: only the per-batch flush
-    differs (HDF5 dataset slice assignment vs. tar member write). The flush
-    callback is invoked once per full ``samples_per_render_batch`` batch plus once
-    for the trailing remainder, with the batch and its starting row index.
+    The flush callback is invoked once per full ``samples_per_render_batch``
+    batch plus once for the trailing remainder, with the batch and its starting
+    row index.
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
     :param start_idx: First absolute row index this run renders (non-zero on resume).
     :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
         Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
-        callers pin ``start_idx=0`` for shard cadence (``make_hdf5_dataset`` resets a partial-shard
-        resume to row 0), so that seed is row 0 and the remaining rows go unused.
+        callers pin ``start_idx=0`` for shard cadence, so that seed is row 0 and the
+        remaining rows go unused.
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
         shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
@@ -333,137 +222,6 @@ def _render_in_batches(
         _render_loop()
 
 
-def make_hdf5_dataset(
-    hdf5_file: Path | str,
-    render_cfg: RenderConfig,
-    *,
-    fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[NoteParams] | None = None,
-) -> None:
-    """Render ``render_cfg.samples_per_shard`` samples to an HDF5 file at ``hdf5_file``.
-
-    Resumable: a partially-written file picks up at the first all-zero row, so
-    a crashed worker can re-run with the same args and only the missing tail is
-    rendered — except under ``render_cfg.param_sample_cadence="shard"``, where a
-    partial shard is re-rendered from row 0 (a mid-shard resume can't preserve
-    the one-patch-per-shard invariant). Audio is stored as ``float16`` (Blosc2-compressed); ``mel_spec``
-    and ``param_array`` are ``float32``. Render metadata is written to
-    ``audio.attrs`` from a single ``ShardMetadata`` instance — the same
-    instance ``make_wds_dataset`` uses for its ``metadata.json`` member, so
-    both formats expose identical metadata.
-
-    :param hdf5_file: Destination HDF5 path; opened in append mode so partial
-        files can resume.
-    :param render_cfg: Per-shard renderer config from the dataset spec.
-    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
-        shard row. Must have length ``samples_per_shard`` (the full shard); rows
-        are indexed absolutely, so a resumed run re-renders only its tail while
-        still reading the matching source row. Under ``param_sample_cadence="shard"``
-        only row 0 is consumed (it seeds the shard's single patch); rows 1..N are
-        required but unused.
-    :param fixed_note_params_list: Optional pre-set note params; same full-shard
-        contract as ``fixed_synth_params_list``.
-    """
-    param_spec = resolve_param_spec(render_cfg.param_spec_name)
-    meta = render_cfg.shard_metadata()
-    # Validate before opening the file so a bad fixed-params list (e.g. a copy
-    # source whose row count != samples_per_shard) fails without leaving an
-    # empty output shard on disk.
-    _validate_fixed_params_lengths(
-        num_samples=render_cfg.samples_per_shard,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-    )
-    with h5py.File(hdf5_file, "a") as h5:
-        audio_dataset, mel_dataset, param_dataset, start_idx = create_datasets_and_get_start_idx(
-            hdf5_file=h5,
-            num_samples=render_cfg.samples_per_shard,
-            channels=render_cfg.channels,
-            sample_rate=render_cfg.sample_rate,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-            num_params=len(param_spec),
-        )
-
-        # Shard cadence is one patch per shard; a mid-shard resume holds an
-        # earlier, now-lost patch, so re-render from row 0 (rows overwritten in place).
-        if render_cfg.param_sample_cadence == "shard" and start_idx != 0:
-            logger.info(
-                f"param_sample_cadence='shard': re-rendering partial shard {hdf5_file} "
-                f"from row 0 (was resuming at {start_idx}) to keep one patch per shard"
-            )
-            start_idx = 0
-
-        for k, v in meta.model_dump().items():
-            audio_dataset.attrs[k] = v
-
-        def _flush(batch: list[VSTDataSample], batch_start: int) -> None:
-            save_hdf5_samples(batch, audio_dataset, mel_dataset, param_dataset, batch_start)
-
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=param_spec,
-            start_idx=start_idx,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-            flush_batch=_flush,
-        )
-
-
-def make_wds_dataset(
-    wds_file: Path | str,
-    render_cfg: RenderConfig,
-    *,
-    fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[NoteParams] | None = None,
-) -> None:
-    """Render ``render_cfg.samples_per_shard`` samples to a webdataset tar at ``wds_file``.
-
-    Not resumable: ``start_idx`` is pinned to 0 and the file is opened by
-    ``wds.TarWriter`` in write mode, so re-running overwrites. Audio is cast to
-    ``float16`` to match the h5 path's storage precision; consumers can upcast
-    on read if higher precision is needed. The shard's ``metadata.json`` member
-    is built from the same ``ShardMetadata`` instance ``make_hdf5_dataset``
-    uses for its ``audio.attrs``, so both formats expose identical metadata.
-
-    :param wds_file: Destination tar path passed to ``webdataset.TarWriter``.
-    :param render_cfg: Per-shard renderer config from the dataset spec.
-    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
-        shard row. Must have length ``samples_per_shard``; ``list[0]`` lands at
-        row 0 (the wds path is non-resumable, ``start_idx = 0``). Under
-        ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
-        shard's single patch); rows 1..N are required but unused.
-    :param fixed_note_params_list: Optional pre-set note params; same full-shard
-        contract as ``fixed_synth_params_list``.
-    """
-    param_spec = resolve_param_spec(render_cfg.param_spec_name)
-    meta = render_cfg.shard_metadata()
-    start_idx = 0
-
-    _validate_fixed_params_lengths(
-        num_samples=render_cfg.samples_per_shard,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-    )
-    with cast(
-        _WdsTarSink,
-        wds.TarWriter(str(wds_file)),  # pyright: ignore[reportAttributeAccessIssue]
-    ) as sink:
-
-        def _flush(batch: list[VSTDataSample], batch_start: int) -> None:
-            save_wds_samples(batch, sink, batch_start)
-
-        _render_in_batches(
-            render_cfg=render_cfg,
-            param_spec=param_spec,
-            start_idx=start_idx,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-            flush_batch=_flush,
-        )
-
-        sink.write({"__key__": "metadata", "json": meta.model_dump()})
-
-
 def make_lance_dataset(
     lance_dir: Path | str,
     render_cfg: RenderConfig,
@@ -476,7 +234,7 @@ def make_lance_dataset(
     Not resumable: any dataset already at ``lance_dir`` is overwritten on each
     run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
     ``float32``. The shard metadata is embedded in Arrow schema metadata so
-    validation and finalize recover the same sidecar payload as HDF5/WDS. Each
+    validation and finalize recover the sidecar payload at read time. Each
     render batch becomes one Lance fragment, committed as one dataset at the end.
 
     :param lance_dir: Destination ``.lance`` dataset directory.
@@ -488,7 +246,8 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     """
-    # Function-local so the h5/wds writer paths never pay the `lance` import cost.
+    # Function-local so importing this module (e.g. from the launcher) never
+    # pays the `lance` import cost.
     import lance
 
     from synth_setter.pipeline.data.lance_shard import (

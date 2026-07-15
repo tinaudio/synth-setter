@@ -88,7 +88,7 @@ def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
     the resolved path in place (no copy; relative paths resolve against the
     process CWD, same as ``rclone`` / ``fsspec`` / Arrow). An ``r2://`` or
     ``s3://`` URI is downloaded to a tempfile that is removed when the context
-    exits, so binary readers (e.g. ``h5py``) can open a remote object as a
+    exits, so file-based readers can open a remote object as a
     local file; ``s3://bucket/key`` is the S3-scheme spelling of the same
     object ``r2://bucket/key`` names (see ``r2_io.from_s3_uri``), so both
     fetch through the one configured rclone remote.
@@ -104,7 +104,7 @@ def localized_uri(uri: str) -> Iterator[Path]:  # noqa: DOC502
     scheme = urlparse(uri).scheme
     if scheme in _LOCAL_FILESYSTEM_SCHEMES:
         local = file_uri_to_path(uri) if scheme == "file" else Path(uri)
-        # Fail here, naming the URI, rather than deeper in an opaque h5py /
+        # Fail here, naming the URI, rather than deeper in an opaque reader /
         # read_text error that has lost which source went missing.
         if not local.exists():
             raise FileNotFoundError(f"no file at {uri!r} (resolved to {local})")
@@ -196,13 +196,11 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
 def write_spec_to_path(spec: DatasetSpec, target: Path) -> Path:
     """Serialize ``spec`` to an explicit filesystem path; create parent dirs.
 
-    Used by callers that need a spec written at a specific location (e.g.
-    ``cli.finalize_dataset.finalize_hdf5`` writes ``input_spec.json`` flat
-    inside its scratch work_dir so reshard's default discovery — see
-    ``data.reshard._load_spec`` — resolves it without a ``--spec`` override).
-    :func:`write_spec_locally` is the operator-side counterpart that places
-    the same bytes under the canonical ``<output_dir>/data/<task>/<run>/metadata/``
-    layout.
+    Used by callers that need a spec written at a specific location (a flat
+    ``input_spec.json`` inside a scratch dir, discoverable by tools that glob
+    the standard name). :func:`write_spec_locally` is the operator-side
+    counterpart that places the same bytes under the canonical
+    ``<output_dir>/data/<task>/<run>/metadata/`` layout.
 
     :param spec: The frozen DatasetSpec to serialize.
     :param target: Destination file path; must end in

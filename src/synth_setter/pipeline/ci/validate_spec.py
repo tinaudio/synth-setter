@@ -100,7 +100,7 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    raw_format = spec.get("output_format", OutputFormat.HDF5.value)
+    raw_format = spec.get("output_format", OutputFormat.LANCE.value)
     output_format = _parse_output_format(raw_format)
     if output_format is None:
         errors.append(

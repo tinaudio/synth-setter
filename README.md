@@ -149,7 +149,7 @@ src/synth_setter/   ML code and data pipeline (PEP src-layout package)
   pipeline/            Distributed data pipeline:
     schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
     ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
-    data/                Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report)
+    data/                Dataset-shaping utilities (lance_staging, lance_finalize, stats)
     skypilot_launch.py   SkyPilot launcher CLI
   evaluation/          Render/metrics library code shared by cli/eval.py and the training val-audio probe
   tools/               python -m utilities (surge_xt_interactive, plot_param2tok, ...)

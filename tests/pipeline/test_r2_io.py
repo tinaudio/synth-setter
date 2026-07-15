@@ -352,13 +352,13 @@ class TestDownloadDirNoOverwrite:
         """
         prefix = fake_r2_remote / "bucket" / "dataset"
         prefix.mkdir(parents=True)
-        (prefix / "train.h5").write_text("train")
+        (prefix / "train.lance").write_text("train")
         (prefix / "stats.npz").write_text("stats")
         dest = tmp_path / "root"
 
         r2_io.download_dir_no_overwrite("r2://bucket/dataset", dest)
 
-        assert (dest / "train.h5").read_text() == "train"
+        assert (dest / "train.lance").read_text() == "train"
         assert (dest / "stats.npz").read_text() == "stats"
 
     def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
@@ -819,15 +819,15 @@ class TestShardUri:
     def test_constructs_full_uri_from_bucket_prefix_filename(self) -> None:
         """The URI follows the r2://{bucket}/{prefix}{filename} convention exactly."""
         assert (
-            r2_io.shard_uri("intermediate-data", "data/run-x/", "shard-000007.h5")
-            == "r2://intermediate-data/data/run-x/shard-000007.h5"
+            r2_io.shard_uri("intermediate-data", "data/run-x/", "shard-000007.lance")
+            == "r2://intermediate-data/data/run-x/shard-000007.lance"
         )
 
     def test_preserves_nested_prefix(self) -> None:
         """Multi-segment prefixes are joined verbatim (caller controls trailing slash)."""
         assert (
-            r2_io.shard_uri("bucket", "a/b/c/", "shard-000000.h5")
-            == "r2://bucket/a/b/c/shard-000000.h5"
+            r2_io.shard_uri("bucket", "a/b/c/", "shard-000000.lance")
+            == "r2://bucket/a/b/c/shard-000000.lance"
         )
 
 
@@ -851,22 +851,22 @@ class TestObjectSize:
 
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         """
-        obj = fake_r2_remote / "bucket" / "key.h5"
+        obj = fake_r2_remote / "bucket" / "key.lance"
         obj.parent.mkdir(parents=True)
         obj.write_bytes(b"x" * 12345)
 
-        assert r2_io.object_size("r2://bucket/key.h5") == 12345
+        assert r2_io.object_size("r2://bucket/key.lance") == 12345
 
     def test_zero_size_returns_zero(self, fake_r2_remote: Path) -> None:
         """A zero-byte object exists; return 0 (callers decide whether to treat as present).
 
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         """
-        obj = fake_r2_remote / "bucket" / "key.h5"
+        obj = fake_r2_remote / "bucket" / "key.lance"
         obj.parent.mkdir(parents=True)
         obj.write_bytes(b"")
 
-        assert r2_io.object_size("r2://bucket/key.h5") == 0
+        assert r2_io.object_size("r2://bucket/key.lance") == 0
 
     def test_absent_returns_none(self) -> None:
         """Empty stdout means the object is missing; return None.
@@ -874,7 +874,7 @@ class TestObjectSize:
         R2-specific behavior — see class docstring for why this stays mock-based.
         """
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("")):
-            assert r2_io.object_size("r2://bucket/key.h5") is None
+            assert r2_io.object_size("r2://bucket/key.lance") is None
 
     def test_absent_parent_directory_returns_none(self, fake_r2_remote: Path) -> None:
         """A missing parent directory means the object is absent; return None.
@@ -884,7 +884,7 @@ class TestObjectSize:
 
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
         """
-        assert r2_io.object_size("r2://bucket/never/created/key.h5") is None
+        assert r2_io.object_size("r2://bucket/never/created/key.lance") is None
 
     def test_probe_failure_propagates(self) -> None:
         """Non-zero rclone exit (not a missing dir) raises — fail-fast on env issues."""
@@ -894,7 +894,7 @@ class TestObjectSize:
         completed.returncode = 1
         with patch.object(r2_io.subprocess, "run", return_value=completed):
             with pytest.raises(subprocess.CalledProcessError):
-                r2_io.object_size("r2://bucket/key.h5")
+                r2_io.object_size("r2://bucket/key.lance")
 
     def test_non_integer_stdout_raises_with_original_cause(self) -> None:
         """Unparsable rclone stdout raises a contextual error chained to the ValueError.
@@ -905,8 +905,8 @@ class TestObjectSize:
         original ``ValueError`` as ``__cause__``.
         """
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("not-a-number")):
-            with pytest.raises(RuntimeError, match="r2://bucket/key.h5") as excinfo:
-                r2_io.object_size("r2://bucket/key.h5")
+            with pytest.raises(RuntimeError, match="r2://bucket/key.lance") as excinfo:
+                r2_io.object_size("r2://bucket/key.lance")
         assert isinstance(excinfo.value.__cause__, ValueError)
 
     def test_invokes_rclone_lsf_format_s(self) -> None:
@@ -918,7 +918,7 @@ class TestObjectSize:
         detection (which relies on empty stdout).
         """
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("42")) as mock_run:
-            r2_io.object_size("r2://bucket/path/key.h5")
+            r2_io.object_size("r2://bucket/path/key.lance")
         args = mock_run.call_args[0][0]
         assert args == [
             "rclone",
@@ -926,7 +926,7 @@ class TestObjectSize:
             "--format=s",
             "--retries=3",
             "--contimeout=30s",
-            "r2:bucket/path/key.h5",
+            "r2:bucket/path/key.lance",
         ]
         kwargs = mock_run.call_args[1]
         assert kwargs.get("check") is False
@@ -936,7 +936,7 @@ class TestObjectSize:
     def test_rejects_non_r2_uri(self) -> None:
         """Local paths are rejected via _to_rclone_path."""
         with pytest.raises(ValueError, match="not an r2:// URI"):
-            r2_io.object_size("local/key.h5")
+            r2_io.object_size("local/key.lance")
 
 
 class TestListEntries:
@@ -1134,8 +1134,8 @@ class TestPurgePrefix:
         """
         prefix_root = fake_r2_remote / "bucket" / "runs" / "abc"
         prefix_root.mkdir(parents=True)
-        (prefix_root / "shard-000000.h5").write_bytes(b"x")
-        (prefix_root / "shard-000001.h5").write_bytes(b"y")
+        (prefix_root / "shard-000000.lance").write_bytes(b"x")
+        (prefix_root / "shard-000001.lance").write_bytes(b"y")
 
         r2_io.purge_prefix("bucket", "runs/abc/")
 
@@ -1150,8 +1150,8 @@ class TestPurgePrefix:
         sibling = fake_r2_remote / "bucket" / "runs" / "xyz"
         target.mkdir(parents=True)
         sibling.mkdir(parents=True)
-        (target / "shard.h5").write_bytes(b"x")
-        keeper = sibling / "shard.h5"
+        (target / "shard.lance").write_bytes(b"x")
+        keeper = sibling / "shard.lance"
         keeper.write_bytes(b"y")
 
         r2_io.purge_prefix("bucket", "runs/abc/")

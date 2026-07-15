@@ -31,7 +31,7 @@ on:
         required: true
         type: string
       output_format:
-        description: "Dataset output format (`hdf5`, `wds`, or `lance`); informational, drives only artifact naming. The CLI re-reads the format from the loaded `DatasetSpec`."
+        description: "Dataset output format (`lance`); informational, drives only artifact naming. The CLI re-reads the format from the loaded `DatasetSpec`."
         required: false
         type: string
         default: ""
@@ -54,14 +54,13 @@ on:
         description: "r2:// URI of the run prefix (e.g. `r2://intermediate-data/data/smoke-shard/<run_id>/`)"
         required: true
         type: string
+      # Intentionally single-option (lance only) so re-adding a format is a one-line change.
       output_format:
         description: "Dataset output format"
         required: true
         type: choice
-        default: hdf5
+        default: lance
         options:
-          - hdf5
-          - wds
           - lance
       run_id:
         description: "Generate stage's run_id; used only for log/artifact naming"
@@ -108,8 +107,7 @@ jobs:
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
 
-      # `pipeline.data.reshard` transitively touches the torch-gated `data/`
-      # package — CPU torch is the minimum that resolves all imports.
+      # CPU torch is required because finalize imports the torch-gated data package.
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

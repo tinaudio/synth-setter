@@ -30,24 +30,21 @@ def test_cli_args_class_inherits_every_render_config_field() -> None:
     assert render_fields <= cli_fields
 
 
-def test_cli_args_class_adds_only_data_file_and_copy_dataset_root_uri_beyond_render_config() -> (
-    None
-):
-    """Beyond ``RenderConfig`` fields, the CLI's only extras are ``data_file`` +
-    ``copy_dataset_root_uri``.
+def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
+    """Beyond ``RenderConfig`` fields, the CLI's only extra is ``data_file``.
 
-    Guards against accidental CLI bloat — adding a flag here should be a deliberate decision,
-    not silent drift. ``copy_dataset_root_uri`` is the deliberate dataset-copy opt-in.
+    Guards against accidental CLI bloat — adding a flag here should be a deliberate decision, not
+    silent drift.
     """
     cli_fields = set(_GenerateCliArgs.model_fields.keys())
     render_fields = set(RenderConfig.model_fields.keys())
 
     extra = cli_fields - render_fields
-    assert extra == {"data_file", "copy_dataset_root_uri"}
+    assert extra == {"data_file"}
 
 
 def _smoke_spec() -> DatasetSpec:
-    """A minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
+    """Build a minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
     render_cfg = RenderConfig(
         plugin_path="plugins/Surge XT.vst3",
         plugin_state_path="presets/surge-base.vstpreset",
@@ -65,7 +62,7 @@ def _smoke_spec() -> DatasetSpec:
     )
     return DatasetSpec(
         task_name="ci-smoke-test",
-        output_format=OutputFormat.HDF5,
+        output_format=OutputFormat.LANCE,
         train_val_test_sizes=(440000, 20000, 20000),
         base_seed=42,
         r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
@@ -73,25 +70,23 @@ def _smoke_spec() -> DatasetSpec:
     )
 
 
-def test_build_generate_args_roundtrips_through_cli_parser() -> None:
+def test_build_generate_args_roundtrips_through_cli_parser(tmp_path: Path) -> None:
     """Args emitted by ``build_generate_args`` parse back into the same ``RenderConfig``.
 
     Pins the full producer↔consumer contract: a divergence in flag spelling (kebab vs.
     underscore), value coercion (int vs. float), or ``extra="forbid"`` rejection would
     break this round-trip even when the field-set parity tests still pass.
+
+    :param tmp_path: Output directory the shard path is built under.
     """
     spec = _smoke_spec()
-    args = build_generate_args(spec, spec.shards[0], Path("/tmp"))
+    args = build_generate_args(spec, spec.shards[0], tmp_path)
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
-    reconstructed = RenderConfig(
-        **parsed.model_dump(exclude={"data_file", "copy_dataset_root_uri"})
-    )
+    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file"}))
 
     # build_generate_args overrides base_seed with the shard's seed (#884), so the
     # round-tripped config matches spec.render with that one field substituted.
     expected = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
     assert reconstructed == expected
-    assert parsed.data_file == "/tmp/shard-000000.h5"
-    # No copy source on this spec, so the CLI flag is absent and parses to None.
-    assert parsed.copy_dataset_root_uri is None
+    assert parsed.data_file == str(tmp_path / "shard-000000.lance")

@@ -34,6 +34,7 @@ import pytest
 from omegaconf import DictConfig
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import upload_spec
 
@@ -176,7 +177,8 @@ def test_cli_renders_spec_fetched_from_r2_uri_end_to_end(uploaded_spec: DatasetS
 
     The subprocess downloads the spec from R2 over the network, renders all three smoke shards
     through the real Surge plugin, uploads them to R2, and retains them under the CWD-relative work
-    dir. Every shard object is then probed in real R2 by size.
+    dir. Every shard is then probed in real R2 for a complete staged attempt — the same worker-side
+    resumability contract used by generation.
 
     :param uploaded_spec: Spec already uploaded to real R2 by the fixture.
     """
@@ -188,11 +190,11 @@ def test_cli_renders_spec_fetched_from_r2_uri_end_to_end(uploaded_spec: DatasetS
 
     work_dir = _CHECKOUT_ROOT / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
     for shard in spec.shards:
-        size = r2_io.object_size(spec.r2.shard_uri(shard))
-        assert size is not None and size > 0, (
-            f"shard {shard.filename} missing or empty at {spec.r2.shard_uri(shard)}"
+        assert shard_has_complete_attempt(spec, shard.shard_id), (
+            f"shard {shard.filename} has no complete staged attempt at "
+            f"{spec.r2.shard_staging_dir_uri(shard.shard_id)}"
         )
-        assert (work_dir / shard.filename).is_file(), (
+        assert (work_dir / shard.filename).is_dir(), (
             f"shard {shard.filename} not retained under {work_dir}"
         )
 

@@ -106,13 +106,13 @@ docs:
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: ".github/workflows/nightly-parallel-datagen.yml"
-        covers: "Nightly + workflow_dispatch running generate-dataset with `++render.parallel=true` against real Surge XT + real R2, then validating spec + shards via `pipeline.ci.{validate_spec,validate_shard}`. Per-run unique `task_name` scopes the ephemeral R2 prefix to `data/<task_name>/<run_id>/` (preserves the `data/` invariant); always-on rclone purge on cleanup. Fills the CI gap left by the slow + requires_vst Linux Xvfb integration test."
+        covers: "Dataset-generation smoke workflow for Lance shards across supported providers"
       - pattern: "src/synth_setter/pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation, and spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "Rclone-backed storage access and Lance target resolution"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
-        covers: "`input_spec.json` read/write/upload/discover helpers (`load_spec_from_uri`, `load_spec_from_root`, `local_spec_path`, `write_spec_locally`, `upload_spec`, `find_input_specs`) — sole call site for writing the operator-side local mirror at `<cfg.paths.output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json` (runner anchors at the Hydra per-run dir, same value `generate()` uses for shard scratch) and the R2 copy at `spec.r2.input_spec_uri()`; called from `cli/generate_dataset.py`'s `main()`. `load_spec_from_uri` is the thin wrapper around `read_spec_text` + `DatasetSpec.model_validate_json` used by `pipeline/data/reshard.py` so the reshard CLI parses specs without dragging Hydra into its import graph. `load_spec_from_root` joins `INPUT_SPEC_FILENAME` onto a run-prefix URI and delegates to `load_spec_from_uri`; it is the reader the finalize entrypoint (`cli/finalize_dataset.py`) uses. `find_input_specs` glob-discovers already-materialized specs under a local `data/` root and is added for future use by `cli/generate_dataset.py`; not yet wired."
+        covers: "`input_spec.json` read/write/upload/discover helpers"
       - pattern: "src/synth_setter/configs/render/**"
         covers: "Render-group selected by experiment overrides (e.g. `override /render: surge_xt`); surge_xt.yaml is the base config (plugin path, preset, sample-rate, cadence, batch-size defaults surfaced for Hydra struct-mode overrides); the other files in `configs/render/` inherit from it and pin a param spec + preset"
       - pattern: "src/synth_setter/pipeline/constants.py"
@@ -122,9 +122,9 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
         covers: "Dataset/render/shard schemas and output-format dispatch"
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
-        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json, into HDF5 shards as audio.attrs, and into Lance schema metadata; mirrored across shard formats by make_hdf5_dataset / make_wds_dataset / make_lance_dataset in writers.py."
+        covers: "ShardMetadata — strict pydantic payload written into Lance schema metadata by make_lance_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
-        covers: "make_hdf5_dataset + make_wds_dataset + make_lance_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via OutputFormat.from_extension."
+        covers: "Lance dataset writer entrypoint and shard metadata wiring"
       - pattern: "src/synth_setter/data/vst/shapes.py"
         covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
@@ -136,18 +136,11 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "`synth-setter-add-embeddings` CLI — appends a `clap` (LAION-CLAP) `FixedSizeList<float32,512>` vector column (with an optional IVF_PQ index for `nearest=` search) and an `m2l` (music2latent) fixed-shape-tensor column to a finalized Lance dataset via `lance.batch_udf`, with injected/lazy-loaded encoders and row-count + dim + finiteness validation (post-finalize augmenter)."
+        covers: "Post-finalize CLAP and music2latent column augmentation for Lance datasets"
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
         covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass that adds an `audio_mp3` Arrow binary preview column and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes (neither a training input)."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
-        covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to HDF5 shards via reader/writer multiprocessing around a GPU encode loop."
-
-  # ── Legacy output formats (HDF5 & WebDataset) ────────────────────
-  - doc: docs/design/legacy/hdf5-wds-formats.md
-    description: How legacy HDF5/WebDataset outputs are staged, promoted, and resharded
-    sources:
-      - pattern: "src/synth_setter/pipeline/data/reshard.py"
-        covers: "HDF5 resharding into train/val/test virtual datasets on the finalize machine"
+        covers: "Adds music2latent embeddings to Lance datasets"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
@@ -166,7 +159,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata seed provenance fields and legacy sidecar defaults"
       - pattern: "src/synth_setter/pipeline/ci/validate_shard.py"
-        covers: "HDF5, WDS, and Lance seed-provenance validation"
+        covers: "Lance seed-provenance validation"
       - pattern: "tests/data/vst/test_*seeding*.py"
         covers: "Seed derivation, generate_sample retry semantics, writer repeatability, and metadata regression tests"
 
@@ -189,7 +182,7 @@ docs:
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `skypilot-local` (kind cluster) + RunPod + OCI: generate → validate-spec → validate-shard, per-provider artifacts. No `pull_request` trigger after #1164/#1170 — presubmit launcher / R2 round-trip duty moves to test-local-launcher-roundtrip.yml. Hourly `schedule` (`0 * * * *`) runs `skypilot-local × {hdf5, wds}`; weekly `schedule` (`0 7 * * 0`) runs all providers × `{hdf5, wds}` (only paid-capacity touch outside manual dispatch). Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+        covers: "Dataset-generation smoke workflow across supported providers"
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
@@ -210,8 +203,6 @@ docs:
     sources:
       - pattern: "src/synth_setter/pipeline/schemas/prefix.py"
         covers: "Run ID format, shard ID format, prefix construction rules"
-      - pattern: "src/synth_setter/pipeline/data/r2_report.py"
-        covers: "R2 listing commands, shard status reporting, path parsing"
       - pattern: "src/synth_setter/configs/r2/*.yaml"
         covers: "`r2` group (`bucket` + `prefix_root`) for the nested `R2Location` field on `DatasetSpec`"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
@@ -494,7 +485,7 @@ docs:
     description: Interactive Surge XT prediction audition and patch-recording guide
     sources:
       - pattern: "src/synth_setter/tools/surge_xt_interactive.py"
-        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/synth_setter/cli/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
+        covers: "Interactive Surge XT audition and patch-recording CLI"
       - pattern: "src/synth_setter/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
@@ -502,10 +493,10 @@ docs:
         covers: "generate_sample / VSTDataSample / make_spectrogram — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/writers.py"
-        covers: "make_hdf5_dataset accepts fixed_synth_params_list / fixed_note_params_list to render captured patches into train.h5; audio dtype float16; mel shape comes from shapes.mel_dataset_shape"
+        covers: "Render captured patches into a Lance train split"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Source of truth for the (channels, n_mels, n_frames) trailing-dims of mel_spec output and (channels, time_samples) trailing-dims of audio output written by make_hdf5_dataset"
+        covers: "Mel and audio tensor-shape contract for Lance writers"
         scope: "interactive"
 
   - doc: docs/guides/adding-a-new-synth.md
@@ -567,8 +558,6 @@ docs:
   #     - pattern: "src/synth_setter/cli/generate_dataset.py"
   #       covers: "rclone copy --checksum for spec + shard uploads"
   #       scope: "rclone"
-  #     - pattern: "src/synth_setter/pipeline/data/r2_report.py"
-  #       covers: "rclone ls command, --size-threshold-gib, CLI usage"
   #     - pattern: "docs/design/storage-provenance-spec.md"
   #       covers: "R2 bucket layout, path conventions, --checksum rule"
   #       scope: "rclone-rules"

@@ -5,11 +5,11 @@ import os
 import queue
 import threading
 from pathlib import Path
-from typing import Any, NoReturn
+from types import ModuleType
+from typing import NoReturn
 from unittest import mock
 
 import click
-import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,6 +19,7 @@ from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import ParamSpec
+from tests.helpers.lance_fixtures import write_lance_shard
 
 SURGE_SIMPLE = "surge_simple"
 
@@ -55,10 +56,13 @@ def simple_pred_tensor(simple_spec_total_length: int) -> torch.Tensor:
     return torch.tensor(np.stack([row_0, row_1]), dtype=torch.float32)
 
 
-def _write_param_array_h5(path: Path, rows: np.ndarray) -> None:
-    """Write a 2D ``rows`` array to an h5 file under the ``param_array`` dataset."""
-    with h5py.File(path, "w") as f:
-        f.create_dataset("param_array", data=rows)
+def _write_param_array_lance(path: Path, rows: np.ndarray) -> None:
+    """Write a 2D ``rows`` array to a Lance dataset under the ``param_array`` column.
+
+    :param path: Destination ``.lance`` dataset directory.
+    :param rows: 2D ``(num_rows, num_params)`` array written as the ``param_array`` column.
+    """
+    write_lance_shard(path, {"param_array": rows.astype(np.float32)})
 
 
 class TestDecodePredictionRow:
@@ -158,7 +162,7 @@ class TestPredictionRefType:
     def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
         """Reject negative indices to match ``decode_prediction_row``'s contract.
 
-        h5py-style negative indexing would otherwise silently select the last row.
+        Negative indexing would otherwise silently select the last row.
         """
         parser = surge_xt_interactive.PredictionRefType()
 
@@ -173,13 +177,13 @@ class TestDatasetRefType:
         """A ``PATH:DATASET_IDX`` string parses into a ``DatasetRef`` with matching fields."""
         parser = surge_xt_interactive.DatasetRefType()
 
-        ref = parser.convert("data/test.h5:3", None, None)
+        ref = parser.convert("data/test.lance:3", None, None)
 
-        assert ref == surge_xt_interactive.DatasetRef(path=Path("data/test.h5"), batch_idx=3)
+        assert ref == surge_xt_interactive.DatasetRef(path=Path("data/test.lance"), batch_idx=3)
 
     @pytest.mark.parametrize(
         "value",
-        ["test.h5", "test.h5:not-an-int", ":0", "test.h5:"],
+        ["test.lance", "test.lance:not-an-int", ":0", "test.lance:"],
         ids=["missing-colon", "non-int-idx", "empty-path", "empty-idx"],
     )
     def test_rejects_invalid_uri(self, surge_xt_interactive, value: str) -> None:
@@ -190,11 +194,11 @@ class TestDatasetRefType:
             parser.convert(value, None, None)
 
     def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
-        """Reject negative indices to avoid h5py's silent ``param_array[-1]`` last-row fallback."""
+        """Reject negative indices to avoid a silent ``param_array[-1]`` last-row fallback."""
         parser = surge_xt_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
-            parser.convert("test.h5:-1", None, None)
+            parser.convert("test.lance:-1", None, None)
 
 
 class TestLoadPredictionSynthParams:
@@ -225,7 +229,7 @@ class TestLoadPredictionSynthParams:
 
 
 class TestLoadDatasetSynthParams:
-    """load_dataset_synth_params reads an h5 ``param_array`` row and decodes it."""
+    """load_dataset_synth_params reads a Lance ``param_array`` row and decodes it."""
 
     def test_round_trip_returns_original_synth_params(
         self,
@@ -233,12 +237,12 @@ class TestLoadDatasetSynthParams:
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """Encoding params, persisting to h5, and reloading recovers the original synth params."""
+        """Encoding params, persisting to Lance, and reloading recovers the synth params."""
         synth_param_dict, note_param_dict = simple_spec.sample()
         encoded = simple_spec.encode(synth_param_dict, note_param_dict)
-        h5_path = tmp_path / "test.h5"
-        _write_param_array_h5(h5_path, encoded[None, :])
-        ref = surge_xt_interactive.DatasetRef(path=h5_path, batch_idx=0)
+        lance_path = tmp_path / "test.lance"
+        _write_param_array_lance(lance_path, encoded[None, :])
+        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=0)
 
         loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
@@ -260,9 +264,9 @@ class TestLoadDatasetSynthParams:
                 simple_spec.encode(row_1_synth, row_1_note),
             ]
         )
-        h5_path = tmp_path / "test.h5"
-        _write_param_array_h5(h5_path, encoded)
-        ref = surge_xt_interactive.DatasetRef(path=h5_path, batch_idx=1)
+        lance_path = tmp_path / "test.lance"
+        _write_param_array_lance(lance_path, encoded)
+        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=1)
 
         loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
@@ -277,9 +281,9 @@ class TestLoadDatasetSynthParams:
     ) -> None:
         """Raise ``IndexError`` or ``ValueError`` when ``batch_idx`` exceeds ``param_array``."""
         encoded = simple_spec.encode(*simple_spec.sample())
-        h5_path = tmp_path / "test.h5"
-        _write_param_array_h5(h5_path, encoded[None, :])
-        ref = surge_xt_interactive.DatasetRef(path=h5_path, batch_idx=99)
+        lance_path = tmp_path / "test.lance"
+        _write_param_array_lance(lance_path, encoded[None, :])
+        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=99)
 
         with pytest.raises((IndexError, ValueError)):
             surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
@@ -292,13 +296,13 @@ class TestLoadDatasetSynthParams:
         surge_xt_smoke_datasets: Path,
         param_spec_name: str,
     ) -> None:
-        """Loads row 0 from the real ``surge_xt_smoke_datasets`` test.h5.
+        """Loads row 0 from the real ``surge_xt_smoke_datasets`` test.lance.
 
         The decode spec must match the spec the fixture generated the dataset with —
         otherwise the decoder slices off the end of the row and ``.item()`` raises.
         """
         ref = surge_xt_interactive.DatasetRef(
-            path=surge_xt_smoke_datasets / "test.h5", batch_idx=0
+            path=surge_xt_smoke_datasets / "test.lance", batch_idx=0
         )
 
         loaded = surge_xt_interactive.load_dataset_synth_params(
@@ -982,7 +986,7 @@ class TestRunPredict:
         # Use relative paths so the test fails if .resolve() is dropped.
         ckpt = Path("relative/ckpt.ckpt")
         dataset_root = Path("relative/dataset")
-        predict_file = Path("relative/dataset/predict.h5")
+        predict_file = Path("relative/dataset/predict.lance")
         predictions_dir = Path("relative/preds")
 
         runner = _RecordingSubprocessRunner()
@@ -1142,15 +1146,25 @@ class _RecordingEvalRunner:
         )
 
 
+def _write_stub_lance_dir(path: Path, content: bytes = b"train-content") -> None:
+    """Create a stand-in ``.lance`` directory tree for copytree replication tests.
+
+    :param path: Directory to create.
+    :param content: Bytes written into a single ``data`` member so copies are content-checkable.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "data").write_bytes(content)
+
+
 class TestMaybeEvalCapturedPatches:
-    """``_maybe_eval_captured_patches`` wires up the train.h5 -> sibling replication."""
+    """``_maybe_eval_captured_patches`` wires up the train.lance -> sibling replication."""
 
     def test_no_checkpoint_skips_replication_and_eval(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
         """Skip sibling-file creation and ``eval_patches`` when ``--checkpoint-path`` is absent."""
-        train_path = tmp_path / "train.h5"
-        train_path.write_bytes(b"stub")
+        train_path = tmp_path / "train.lance"
+        _write_stub_lance_dir(train_path, b"stub")
         runner = _RecordingEvalRunner()
 
         surge_xt_interactive._maybe_eval_captured_patches(
@@ -1163,16 +1177,21 @@ class TestMaybeEvalCapturedPatches:
             eval_runner=runner,
         )
 
-        for sibling in ("test.h5", "val.h5", "predict.h5"):
+        for sibling in ("test.lance", "val.lance", "predict.lance"):
             assert not (tmp_path / sibling).exists()
         assert runner.calls == []
 
-    def test_replicates_train_h5_to_three_siblings(
-        self, surge_xt_interactive, tmp_path: Path
+    def test_replicates_train_lance_to_three_siblings(
+        self, surge_xt_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """Copy ``train.h5`` to test/val/predict.h5 and forward args to the eval runner."""
-        train_path = tmp_path / "train.h5"
-        train_path.write_bytes(b"train-content")
+        """Copy ``train.lance`` to test/val/predict.lance and forward args to the eval runner.
+
+        :param surge_xt_interactive: The lazily-imported tool module under test.
+        :param tmp_path: Per-test tmp dir holding the source and replicated Lance dirs.
+        """
+        train_path = tmp_path / "train.lance"
+        rows = np.arange(12, dtype=np.float32).reshape(3, 4)
+        _write_param_array_lance(train_path, rows)
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
         runner = _RecordingEvalRunner()
@@ -1187,8 +1206,11 @@ class TestMaybeEvalCapturedPatches:
             eval_runner=runner,
         )
 
-        for sibling in ("test.h5", "val.h5", "predict.h5"):
-            assert (tmp_path / sibling).read_bytes() == b"train-content"
+        import lance
+
+        for sibling in ("test.lance", "val.lance", "predict.lance"):
+            copied = lance.dataset(str(tmp_path / sibling)).to_table()["param_array"]
+            np.testing.assert_array_equal(copied.combine_chunks().to_numpy_ndarray(), rows)
         assert runner.calls == [
             (3, tmp_path, ckpt_path, SURGE_SIMPLE, "presets/surge-simple.vstpreset")
         ]
@@ -1196,20 +1218,19 @@ class TestMaybeEvalCapturedPatches:
     def test_failed_copy_rolls_back_partial_siblings(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """Roll back earlier siblings on later ``shutil.copyfile`` ``OSError``; skip eval.
+        """Roll back earlier siblings on later ``shutil.copytree`` ``OSError``; skip eval.
 
-        Failure is triggered by a *real* OS error: ``val.h5`` is pre-created as a directory, so
-        the second copy fails. The exact subclass varies by platform (``IsADirectoryError`` on
-        POSIX, ``PermissionError`` on Windows); asserting on ``OSError`` matches the SUT's
-        ``except OSError:`` contract.
+        Failure is triggered by a *real* OS error: ``val.lance`` is pre-created as a directory, so
+        the second ``copytree`` fails with ``FileExistsError``; asserting on ``OSError`` matches
+        the SUT's ``except OSError:`` contract.
         """
-        train_path = tmp_path / "train.h5"
-        train_path.write_bytes(b"train-content")
+        train_path = tmp_path / "train.lance"
+        _write_stub_lance_dir(train_path, b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
-        # Block the second sibling write with a real directory at its path. Order matches
-        # ``_maybe_eval_captured_patches``: test.h5 → val.h5 → predict.h5.
-        (tmp_path / "val.h5").mkdir()
+        # Block the second sibling write with a pre-existing directory. Order matches
+        # ``_maybe_eval_captured_patches``: test.lance → val.lance → predict.lance.
+        (tmp_path / "val.lance").mkdir()
 
         runner = _RecordingEvalRunner()
 
@@ -1225,10 +1246,11 @@ class TestMaybeEvalCapturedPatches:
             )
 
         # First sibling was copied, second failed; rollback removes the first.
-        assert not (tmp_path / "test.h5").exists(), "rollback should remove test.h5"
-        # val.h5 still exists as the pre-created directory, but no file landed there.
-        assert (tmp_path / "val.h5").is_dir()
-        assert not (tmp_path / "predict.h5").exists()
+        assert not (tmp_path / "test.lance").exists(), "rollback should remove test.lance"
+        # val.lance still exists as the pre-created directory, but no copy landed inside it.
+        assert (tmp_path / "val.lance").is_dir()
+        assert not (tmp_path / "val.lance" / "data").exists()
+        assert not (tmp_path / "predict.lance").exists()
         assert runner.calls == []
 
 
@@ -1327,15 +1349,15 @@ class TestBuildPredictVstAudioArgv:
         assert argv[0] == surge_xt_interactive.sys.executable
 
     def test_param_spec_and_plugin_state_path_are_forwarded(
-        self, surge_xt_interactive: Any, tmp_path: Path
+        self, surge_xt_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """``param_spec_name`` and ``plugin_state_path`` follow their flag tokens in argv.
 
         Otherwise ``predict_vst_audio.py`` would silently fall back to ``surge_xt`` /
         ``presets/surge-base.vstpreset`` and decode/render against a mismatched spec.
 
-        :param surge_xt_interactive: Module fixture under test.
-        :param tmp_path: Temporary directory for the subprocess wrapper fixture.
+        :param surge_xt_interactive: The lazily-imported tool module under test.
+        :param tmp_path: Per-test tmp dir for the predictions and audio output paths.
         """
         argv = surge_xt_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
@@ -1431,7 +1453,7 @@ class TestValidateRenderedAudioDir:
     def test_num_samples_12_does_not_trip_lex_sort(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """Regression: ``num_samples=12`` must not raise just because ``sample_10`` sorts before ``sample_2`` in lexical order.
+        """Regression: ``num_samples=12`` must survive ``sample_10`` sorting before ``sample_2``.
 
         Set comparison + index iteration keeps validation index-based regardless of directory
         iteration order.

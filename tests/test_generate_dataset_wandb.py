@@ -2,8 +2,8 @@
 
 Drives ``generate`` against a real ``WandbLogger(offline=True)`` so spec
 ingestion and per-shard / summary ``log_metrics`` exercise the live wandb
-client without network. ``object_size`` is stubbed so every shard hits the
-R2-skip branch — no renderer subprocess or rclone.
+client without network. ``shard_has_complete_attempt`` is stubbed so every shard hits
+the R2-skip branch — no renderer subprocess or rclone.
 """
 
 from __future__ import annotations
@@ -63,6 +63,16 @@ def _offline_wandb_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
 
 
+def _stub_complete_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep offline W&B tests on the staged-shard skip path.
+
+    :param monkeypatch: Replaces the external storage probe for the calling test.
+    """
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt", lambda *_a, **_k: True
+    )
+
+
 class TestLoggersPinnedToSpec:
     """``_loggers_pinned_to_spec`` writes the run identity onto the wandb logger cfg."""
 
@@ -107,7 +117,7 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
     :param tmp_path: Per-test tmp dir; the offline run lands at
         ``tmp_path/wandb/offline-run-*-<run_id>``.
     :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
-        ``object_size`` + ``extract_renderer_version``.
+        ``shard_has_complete_attempt`` + ``extract_renderer_version``.
     :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
@@ -118,9 +128,7 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
         lambda _path: spec.render.renderer_version,
     )
-    # Force every shard onto the R2-skip branch in ``_render_one_owned_shard``
-    # so no renderer subprocess fires.
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 1_024)
+    _stub_complete_attempts(monkeypatch)
 
     wandb_logger = WandbLogger(
         offline=True,
@@ -173,7 +181,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     :param tmp_path: Per-test tmp dir; the offline run lands at
         ``tmp_path/wandb/offline-run-*-<run_id>``.
     :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env and stub
-        ``object_size`` + ``extract_renderer_version``.
+        ``shard_has_complete_attempt`` + ``extract_renderer_version``.
     :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
@@ -184,9 +192,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
         lambda _path: spec.render.renderer_version,
     )
-    # Every shard hits the R2-skip branch so ``shard/bytes`` is the stubbed
-    # ``existing_size`` and ``shard/render_seconds`` is 0.0.
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 1_024)
+    _stub_complete_attempts(monkeypatch)
 
     wandb_logger = WandbLogger(
         offline=True,
@@ -214,7 +220,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         f"expected {spec.num_shards} per-shard history rows, got {len(shard_rows)}: {shard_rows}"
     )
     for r in shard_rows:
-        assert json.loads(r["shard/bytes"]) == 1024, r
+        assert json.loads(r["shard/bytes"]) == 0, r
         assert json.loads(r["shard/render_seconds"]) == 0.0, r
 
     summary_rows = [r for r in rows if "shards/rendered" in r]
@@ -251,7 +257,7 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
     :param tmp_path: Per-test tmp dir; the offline run lands at
         ``tmp_path/wandb/offline-run-*-<run_id>``.
     :param monkeypatch: Used to pin a hermetic offline ``WANDB_*`` env, ``IMAGE_TAG``,
-        ``sys.argv``, and stub ``object_size`` + ``extract_renderer_version``.
+        ``sys.argv``, and stub ``shard_has_complete_attempt`` + ``extract_renderer_version``.
     :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
@@ -265,7 +271,7 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
         lambda _path: spec.render.renderer_version,
     )
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 1_024)
+    _stub_complete_attempts(monkeypatch)
 
     wandb_logger = WandbLogger(
         offline=True,

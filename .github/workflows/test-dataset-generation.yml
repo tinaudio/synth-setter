@@ -29,14 +29,14 @@ name: Test Dataset Generation
 # artifact upload remains for debugging, but it's no longer load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
-#   * schedule (hourly `0 * * * *`)    → skypilot-local × {hdf5, wds}.
+#   * schedule (hourly `0 * * * *`)    → skypilot-local × {lance}.
 #                                        PR presubmit coverage moves to
 #                                        `test-local-launcher-roundtrip.yml`
 #                                        in #1170 (open at time of writing);
 #                                        this workflow is now schedule +
 #                                        dispatch only.
 #   * schedule (weekly `0 7 * * 0`)    → all providers (skypilot-local +
-#                                        runpod + oci) × {hdf5, wds} —
+#                                        runpod + oci) × {lance} —
 #                                        the only paid-capacity coverage
 #                                        outside manual dispatch.
 #   * workflow_dispatch                → respect `inputs.provider`
@@ -61,12 +61,12 @@ name: Test Dataset Generation
 
 on:
   # Two cron axes (#1164, #1170):
-  #   * `0 * * * *` (top of every hour) — skypilot-local × {hdf5, wds}. Keeps
+  #   * `0 * * * *` (top of every hour) — skypilot-local × {lance}. Keeps
   #     the launcher / kind / R2 path under near-continuous coverage; PR-presubmit
   #     duty for that round-trip lives in test-local-launcher-roundtrip.yml
   #     (lands via #1170).
   #   * `0 7 * * 0` (Sunday 07:00 UTC = ~midnight Pacific Sat→Sun) — full
-  #     provider matrix (skypilot-local + runpod + oci) × {hdf5, wds}.
+  #     provider matrix (skypilot-local + runpod + oci) × {lance}.
   #     Only paid-capacity touch outside manual dispatch; gives us weekly
   #     RunPod / OCI signal so credential rot or backend regressions surface
   #     before someone needs to dispatch a real cloud run.
@@ -104,45 +104,13 @@ on:
 permissions:
   contents: read
 
-# Per-trigger concurrency keys. With hourly + weekly schedules on the same
-# `refs/heads/main`, a single workflow-level group would let an hourly tick
-# cancel an in-flight weekly all-providers (runpod + oci) run mid-flight,
-# burning paid capacity without producing a result. Mixing
-# `github.event.schedule` (the cron string, only set on schedule events) into
-# the group separates the hourly and weekly axes; falling back to
-# `github.event_name` keeps `workflow_dispatch` in its own group too.
-# `cancel-in-progress: true` is still desirable per-group so a re-scheduled
-# tick of the same cron supersedes a stuck prior run.
+# Include the schedule in the group so hourly and weekly runs do not cancel each other.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  # Compute the provider list at runtime, plus the R2 bucket the validate
-  # job will pull specs and shards from. Outputs:
-  #   * `providers`           — provider matrix (drives generate + validate).
-  #   * `output_formats`      — shard-format axis. On the hourly schedule and
-  #                             the weekly schedule both `hdf5` and `wds` run;
-  #                             on workflow_dispatch the matrix collapses to
-  #                             the single format the dispatched config
-  #                             resolves to — a single config hardcodes one
-  #                             `output_format`, and the spec-format cross-check
-  #                             would otherwise fail the non-matching cell.
-  #   * `r2_bucket`           — Cloudflare R2 bucket name (from
-  #                             src/synth_setter/configs/image/dev-snapshot.yaml). Used to
-  #                             construct the spec_uri the validate job pulls.
-  #
-  # Policy:
-  #   * schedule, cron `0 * * * *` (hourly)  → skypilot-local × {hdf5, wds}.
-  #     Free coverage of the unified launcher / kind / R2 path.
-  #   * schedule, cron `0 7 * * 0` (weekly)  → all providers (skypilot-local +
-  #     runpod + oci) × {hdf5, wds}. Only paid-capacity touch outside dispatch;
-  #     surfaces credential rot or backend regressions on the cloud providers.
-  #   * workflow_dispatch                    → respect `inputs.provider`. `all`
-  #     expands to skypilot-local + runpod + oci. Format is whatever the
-  #     dispatched experiment config compiles to.
-  #
-  # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
+  # Resolve the scheduled or dispatched provider matrix and its R2 destinations.
   setup:
     name: Compute provider list + R2 bucket + per-cell spec_uri map
     runs-on: ubuntu-latest
@@ -167,29 +135,7 @@ jobs:
           pip install --no-deps -e .
           pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0" "pydantic>=2,<3" python-dotenv
 
-      # Provider axis:
-      #   schedule, cron `0 * * * *` (hourly) → skypilot-local
-      #   schedule, cron `0 7 * * 0` (weekly) → skypilot-local + runpod + oci
-      #   workflow_dispatch                   → respect inputs.provider
-      #   anything else                       → empty array → downstream skips
-      #
-      # Output-format axis:
-      #   schedule (either cron) → both hdf5 and wds
-      #   workflow_dispatch      → single format derived by Hydra-composing the
-      #     dispatched experiment config; the cell whose `matrix.output_format`
-      #     doesn't match would deterministically fail the spec-format
-      #     cross-check, so collapse the matrix to that one format.
-      #
-      # The Hydra compose in the workflow_dispatch branch captures stderr to a
-      # temp file so a missing-experiment / config-typing / missing-key failure
-      # surfaces in the action log instead of leaving operators with only
-      # "Process completed with exit code 1".
-      #
-      # An unknown `SCHEDULE_CRON` (someone adding a third cron without
-      # updating this dispatch) falls through to the empty-array branch so
-      # the matrix renders as a no-op rather than silently running the wrong
-      # axes; the explicit echo to stderr makes the misconfig visible in the
-      # action log.
+      # Keep the format axis so future formats do not require restructuring the matrix.
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -220,7 +166,7 @@ jobs:
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
           elif [[ "${EVENT_NAME}" == "schedule" ]]; then
-            output_formats='["hdf5","wds"]'
+            output_formats='["lance"]'
           else
             DISPATCH_STDERR=$(mktemp)
             if ! DISPATCH_FORMAT=$(python3 -c "
@@ -247,11 +193,7 @@ jobs:
           echo "providers: ${providers}"
           echo "output_formats: ${output_formats}"
 
-      # Bucket comes from the composed dataset config (the source of truth the
-      # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
-      # destination). Post-Hydra migration, the experiment id is composed
-      # against `src/synth_setter/configs/dataset.yaml` rather than read from a YAML path —
-      # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
+      # Compose the dataset config so this uses the launcher's R2 bucket.
       - id: bucket
         env:
           DATASET_CONFIG: >-
@@ -305,11 +247,7 @@ jobs:
           while read -r prov; do
             while read -r fmt; do
               if [[ "$EVENT_NAME" == "schedule" ]]; then
-                if [[ "$fmt" == "wds" ]]; then
-                  exp="generate_dataset/smoke-shard-wds"
-                else
-                  exp="generate_dataset/smoke-shard"
-                fi
+                exp="generate_dataset/smoke-shard-lance"
               else
                 exp="$DISPATCH_DATASET_CONFIG"
               fi
@@ -355,9 +293,7 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'schedule'
-            && (matrix.output_format == 'wds'
-                && 'generate_dataset/smoke-shard-wds'
-                || 'generate_dataset/smoke-shard')
+            && 'generate_dataset/smoke-shard-lance'
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -377,8 +313,7 @@ jobs:
   # matrix-outputs scalar collapse documented at #1154; per-cell pairing is
   # restored because each generate cell wrote under the same per-cell run_id
   # formula. `if: !cancelled()` decouples each cell from the OTHER cells'
-  # generate outcomes — RunPod transients won't skip OCI validation, and an
-  # hdf5 failure won't skip wds.
+  # generate outcomes — RunPod transients won't skip OCI validation.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-launcher]

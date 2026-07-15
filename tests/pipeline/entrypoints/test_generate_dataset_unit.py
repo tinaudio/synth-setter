@@ -15,23 +15,20 @@ The entrypoint's public surface:
 
 ``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
 ``fake_r2_remote`` (see ``tests/pipeline/conftest.py``) and patches
-``_check_call_streamed`` with the ``_materialize_or_passthrough_rclone``
-dispatcher: renderer calls write the expected empty shard file (mirroring the
-contract of ``generate_vst_dataset.py``); rclone calls fall through to the
-real binary against the local-typed remote. Orchestration assertions
-(call counts, render/upload ordering, partitioning) are state-based —
-asserting on materialized objects under ``fake_r2_remote`` — rather than
-introspecting an ``_rclone_copy`` mock. ``main()`` tests still stub
-``write_spec_locally`` / ``upload_spec`` / ``ensure_r2_env_loaded`` to keep
-the cfg-composition surface isolated from R2.
+``_check_call_streamed`` with ``stub_renderer``: renderer calls write a
+validation-shaped Lance shard directory (mirroring the contract of
+``generate_vst_dataset.py``); rclone calls fall through to the real binary
+against the local-typed remote. Orchestration assertions (call counts,
+render/stage ordering, partitioning) are state-based — a rendered shard's
+completion is probed via ``shard_has_complete_attempt`` (the worker skip-probe,
+which reads the shard's staged ``.valid`` marker under ``fake_r2_remote``).
+``main()`` tests still stub ``write_spec_locally`` / ``upload_spec`` /
+``ensure_r2_env_loaded`` to keep the cfg-composition surface isolated from R2.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -39,46 +36,51 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import MagicMock, patch
 
-import h5py
-import numpy as np
 import pytest
 
 from synth_setter.cli.generate_dataset import (
     build_generate_args,
     generate,
 )
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, STATS_NPZ_FILENAME
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.resources import vst_headless_wrapper
-from tests.helpers.render_subprocess import (
-    REAL_CHECK_CALL as _REAL_CHECK_CALL,
-)
-from tests.helpers.render_subprocess import (
-    materialize_or_passthrough_rclone as _materialize_or_passthrough_rclone,
-)
-from tests.helpers.render_subprocess import (
-    materialize_shard as _materialize_shard,
-)
+from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
 
-def _write_audio_h5(path: Path, num_samples: int) -> None:
-    """Write a minimal HDF5 split exposing ``audio`` with ``num_samples`` rows.
+def _write_lance_split(path: Path, num_rows: int) -> None:
+    """Write a minimal ``.lance`` split dataset with ``num_rows`` rows.
 
-    ``_run_oracle_eval_subprocess`` reads this row count to scale the eval
-    timeout, so only the leading dimension is load-bearing here.
+    ``_run_oracle_eval_subprocess`` reads this row count via ``count_rows`` to
+    scale the eval timeout, so only the row count is load-bearing here.
 
-    :param path: Destination ``.h5`` file.
-    :param num_samples: Row count the ``audio`` dataset is given.
+    :param path: Destination ``.lance`` dataset directory.
+    :param num_rows: Row count the dataset is given.
     """
-    with h5py.File(path, "w") as f:
-        f.create_dataset("audio", data=np.zeros((num_samples, 1), dtype=np.float32))
+    import lance
+    import pyarrow as pa
+
+    lance.write_dataset(pa.table({"audio": pa.array(range(num_rows))}), str(path))
+
+
+def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
+    """Write the validation-shaped Lance shard the renderer promises, for ``spec``.
+
+    Custom ``_check_call_streamed`` dispatchers (retry, fail-fast, parallel)
+    call this on the renderer branch so the staged shard passes worker-side
+    validation before ``stage_lance_shard_attempt`` uploads it.
+
+    :param args: argv list passed to the patched ``_check_call_streamed``.
+    :param spec: Dataset spec whose render shape/dtypes define the shard contract.
+    """
+    write_minimal_lance_shard(Path(args[find_script_index(args) + 1]), spec)
 
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
@@ -124,8 +126,12 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
-        "train_val_test_sizes": [10000, 0, 0],
+        "output_format": "lance",
+        # Smoke-sized so ``stub_renderer`` can write a validation-shaped Lance
+        # shard per test: worker-side validation checks the row count equals
+        # ``samples_per_shard`` and the audio shape derives from the render
+        # config, so a full-size shard would be gigabytes.
+        "train_val_test_sizes": [2, 0, 0],
         "base_seed": 42,
         "r2": {
             "bucket": "intermediate-data",
@@ -136,13 +142,13 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": TEST_PLUGIN_VERSION,
-            "sample_rate": 44100,
+            "sample_rate": 8000,
             "channels": 2,
             "velocity": 100,
-            "signal_duration_seconds": 4.0,
+            "signal_duration_seconds": 0.01,
             "min_loudness": -55.0,
-            "samples_per_render_batch": 32,
-            "samples_per_shard": 10000,
+            "samples_per_render_batch": 2,
+            "samples_per_shard": 2,
             "gui_toggle_cadence": "never",
         },
     }
@@ -160,7 +166,7 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
     """Return a DatasetSpec with ``n`` shards (deterministic filenames/seeds)."""
     kwargs = _base_spec_kwargs(
         tmp_path,
-        train_val_test_sizes=[10000 * n, 0, 0],
+        train_val_test_sizes=[2 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
@@ -394,30 +400,37 @@ class TestRunFromSpecUri:
     def _single_worker_full_render(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Pin rank=0/world=1 and force every shard absent in R2 (full render path).
 
-        :param monkeypatch: Pytest fixture used to set env vars and patch
-            ``r2_io.object_size``.
+        :param monkeypatch: Pytest fixture used to set env vars and force the worker skip-probe to
+            report every shard as un-staged.
         """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_a, **_k: False,
+        )
 
     @pytest.fixture()
-    def patched_env_and_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:
+    def patched_env_and_subprocess(
+        self, fake_r2_remote: Path, spec: DatasetSpec
+    ) -> Iterator[MagicMock]:
         """Patch the render/rclone seam and the R2 env pre-flight.
 
         ``ensure_r2_env_loaded`` is stubbed (same isolation the ``main()``
         tests use) because the fake local-typed remote has no creds to
-        validate; rclone copies still land on ``fake_r2_remote`` via the
-        passthrough dispatcher.
+        validate; renderer calls write a validation-shaped Lance shard and
+        rclone staging still lands on ``fake_r2_remote`` via the passthrough.
 
         :param fake_r2_remote: Local-typed R2 remote root (chdirs into the
             tmp dir, so relative work dirs also land there).
+        :param spec: Fixture-provided single-shard ``DatasetSpec`` whose render
+            shape the ``stub_renderer`` shard writer honours.
         :yields MagicMock: Patched ``_check_call_streamed`` mock.
         """
         with patch("synth_setter.pipeline.r2_io.ensure_r2_env_loaded"):
             with patch(
                 "synth_setter.cli.generate_dataset._check_call_streamed",
-                side_effect=_materialize_or_passthrough_rclone,
+                side_effect=stub_renderer(spec),
             ) as mock_check_call:
                 yield mock_check_call
 
@@ -443,8 +456,7 @@ class TestRunFromSpecUri:
         run_from_spec_uri(str(spec_path), enable_wandb=False)
 
         shard = spec.shards[0]
-        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
-        assert landed.is_file()
+        assert shard_has_complete_attempt(spec, shard.shard_id)
 
     def test_r2_spec_uri_downloads_spec_then_renders(
         self,
@@ -470,8 +482,7 @@ class TestRunFromSpecUri:
         run_from_spec_uri(spec_uri, enable_wandb=False)
 
         shard = spec.shards[0]
-        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
-        assert landed.is_file()
+        assert shard_has_complete_attempt(spec, shard.shard_id)
 
     def test_work_dir_derives_from_run_id_under_cwd(
         self,
@@ -496,7 +507,7 @@ class TestRunFromSpecUri:
         run_from_spec_uri(str(spec_path), enable_wandb=False)
 
         work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
-        assert (work_dir / spec.shards[0].filename).is_file()
+        assert (work_dir / spec.shards[0].filename).is_dir()
 
     def test_wandb_enabled_passes_resume_loggers_to_generate(
         self,
@@ -645,32 +656,39 @@ class TestRun:
 
     @pytest.fixture(autouse=True)
     def _default_shard_absent_in_r2(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default object_size → None so every shard is treated as absent (full render path).
+        """Force the worker skip-probe to report every shard un-staged (full render path).
 
-        Tests that exercise the skip-existing path override this with their own
-        ``monkeypatch.setattr`` on ``pipeline.r2_io.object_size``.
+        Lance shards resume off a staged ``.valid`` marker; defaulting
+        ``shard_has_complete_attempt`` to ``False`` insulates the render-path
+        tests from any host state. Tests that exercise the skip-existing path
+        override this with their own ``monkeypatch.setattr``.
         """
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_a, **_k: False,
+        )
 
     @pytest.fixture()
-    def patched_subprocess(self, fake_r2_remote: Path) -> Iterator[MagicMock]:  # noqa: ARG002
-        """Patch ``_check_call_streamed`` with the renderer/rclone dispatcher.
+    def patched_subprocess(self, fake_r2_remote: Path, spec: DatasetSpec) -> Iterator[MagicMock]:  # noqa: ARG002
+        """Patch ``_check_call_streamed`` with the ``stub_renderer`` dispatcher.
 
-        Pulls in ``fake_r2_remote`` (consumed by the rclone passthrough — see
-        ``_materialize_or_passthrough_rclone``) so rclone copies land on the
-        local-typed remote rooted at the tmp dir instead of hitting real R2.
-        Yielding the mock lets tests introspect ``call_args_list`` (typically
-        via ``_renderer_argv_lists`` to filter out interleaved rclone calls)
-        and override ``side_effect`` per-test when a failure or no-write
-        renderer is needed.
+        Pulls in ``fake_r2_remote`` (consumed by the rclone staging passthrough)
+        so staging rclone copies land on the local-typed remote rooted at the
+        tmp dir instead of hitting real R2. Renderer calls write a
+        validation-shaped Lance shard for ``spec``. Yielding the mock lets tests
+        introspect ``call_args_list`` (typically via ``_renderer_argv_lists`` to
+        filter out interleaved rclone calls) and override ``side_effect``
+        per-test when a failure or no-write renderer is needed.
 
         :param fake_r2_remote: Local-typed R2 remote root (fixture-activation
             only — referenced via the ARG002 noqa).
+        :param spec: Fixture-provided ``DatasetSpec`` whose render shape the
+            ``stub_renderer`` shard writer honours.
         :yields MagicMock: Patched ``_check_call_streamed`` mock.
         """
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_materialize_or_passthrough_rclone,
+            side_effect=stub_renderer(spec),
         ) as mock_check_call:
             yield mock_check_call
 
@@ -728,57 +746,6 @@ class TestRun:
         log_mock.assert_not_called()
         assert not work_dir.exists()
 
-    def test_aborts_before_render_when_copy_source_spec_is_missing(
-        self,
-        patched_subprocess: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """A dataset-copy run whose source spec is unsynced fails before any render.
-
-        :param patched_subprocess: Renderer/rclone dispatcher; asserted to receive
-            no renderer call because the copy preflight aborts first.
-        :param tmp_path: Work dir for ``generate()`` and the (empty) copy root.
-        """
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        with pytest.raises(ValueError, match=INPUT_SPEC_FILENAME):
-            generate(spec, tmp_path, [])
-
-        assert _renderer_argv_lists(patched_subprocess) == []
-
-    def test_aborts_before_render_when_copy_source_spec_mismatches(
-        self,
-        patched_subprocess: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """A dataset-copy run whose source spec disagrees fails before any render.
-
-        :param patched_subprocess: Renderer/rclone dispatcher; asserted to receive
-            no renderer call because the copy preflight aborts first.
-        :param tmp_path: Work dir for ``generate()`` and the copy source root.
-        """
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        source = DatasetSpec(
-            **_base_spec_kwargs(  # type: ignore[arg-type]
-                tmp_path,
-                render={**_base_spec_kwargs(tmp_path)["render"], "param_spec_name": "surge_xt"},  # type: ignore[dict-item]
-            )
-        )
-        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
-        spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        with pytest.raises(ValueError, match="param_spec_name"):
-            generate(spec, tmp_path, [])
-
-        assert _renderer_argv_lists(patched_subprocess) == []
-
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
         patched_subprocess: MagicMock,
@@ -815,14 +782,15 @@ class TestRun:
         patched_subprocess: MagicMock,  # noqa: ARG002
         tmp_path: Path,
     ) -> None:
-        """Shard lands at the R2 URI implied by ``spec.r2`` and the shard's filename.
+        """Shard stages a complete attempt under ``spec.r2`` after generation.
 
-        State-based: no mock on ``_rclone_copy`` — the real ``rclone copy`` runs
-        against the fake-local R2 remote rooted at ``fake_r2_remote``, and the
-        test asserts on the materialized object on disk. The renderer subprocess
-        ``_check_call_streamed`` is patched via the shared ``patched_subprocess`` fixture
-        so we don't actually shell out to the VST generator; the dispatcher's
-        renderer branch writes the same empty HDF5 file that the renderer would.
+        State-based: the real rclone staging runs against the fake-local R2
+        remote rooted at ``fake_r2_remote``, and the test asserts the shard's
+        staged ``.valid`` marker via ``shard_has_complete_attempt``. The renderer
+        subprocess ``_check_call_streamed`` is patched via the shared
+        ``patched_subprocess`` fixture so we don't shell out to the VST generator;
+        its renderer branch writes the validation-shaped Lance shard directory
+        the renderer would.
 
         :param spec: Fixture-provided ``DatasetSpec``.
         :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
@@ -832,8 +800,7 @@ class TestRun:
         """
         generate(spec, tmp_path, [])
 
-        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
-        assert landed.is_file()
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_subprocess_failure_propagates(
         self,
@@ -858,8 +825,8 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
 
-        # No rclone copy reached the fake remote.
-        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+        # Renderer failed before validation/staging: no complete attempt is staged.
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_rclone_failure_propagates(
         self,
@@ -899,10 +866,11 @@ class TestRun:
         :param patched_subprocess: Dispatcher mock; ``_renderer_argv_lists``
             filters out rclone calls so we can introspect the per-shard
             output-path argv.
-        :param fake_r2_remote: All three shards should land in this remote.
+        :param fake_r2_remote: All three shards should stage into this remote.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
         generate(spec, tmp_path, [])
 
@@ -912,45 +880,49 @@ class TestRun:
             Path(args[find_script_index(args) + 1]).name for args in renderer_calls
         ]
         assert rendered_filenames == [s.filename for s in spec.shards]
-        # State-based proof: every shard landed in the fake remote.
+        # State-based proof: every shard staged a complete attempt.
         for shard in spec.shards:
-            assert (fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename).is_file()
+            assert shard_has_complete_attempt(spec, shard.shard_id)
 
-    def test_each_shard_uploaded_after_its_render(
+    def test_each_shard_staged_after_its_render(
         self,
         fake_r2_remote: Path,  # noqa: ARG002
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ...
+        """Render and stage are interleaved per shard: render0, stage0, render1, stage1, ...
 
-        :param fake_r2_remote: Fixture-activation only — the rclone passthrough
-            in the custom dispatcher needs the local-typed remote.
+        :param fake_r2_remote: Fixture-activation only — the render's own
+            ``write_rendering_marker`` staging needs the local-typed remote.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
+        :param monkeypatch: Records the ``stage_lance_shard_attempt`` events.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
         events: list[str] = []
 
-        def _record_dispatcher(args: list[str]) -> None:
-            if args and args[0] == "rclone":
-                events.append("rclone")
-                _REAL_CHECK_CALL(args)
-                return
+        def _record_render(args: list[str]) -> None:
             events.append("renderer")
-            _materialize_shard(args)
+            _render_valid_shard(args, spec)
 
+        def _record_stage(*_a: object, **_k: object) -> None:
+            events.append("stage")
+
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", _record_stage
+        )
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_record_dispatcher,
+            side_effect=_record_render,
         ):
             generate(spec, tmp_path, [])
 
         assert events == [
             "renderer",  # shard 0
-            "rclone",
+            "stage",
             "renderer",  # shard 1
-            "rclone",
+            "stage",
             "renderer",  # shard 2
-            "rclone",
+            "stage",
         ]
 
     def test_shards_persist_after_upload(
@@ -958,38 +930,37 @@ class TestRun:
         fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """Every rendered shard remains at ``work_dir / shard.filename`` after upload.
+        """Every rendered shard remains at ``work_dir / shard.filename`` after staging.
 
-        Pins the post-upload retention contract: ``finalize_dataset`` and
-        post-mortem consumers expect shards to outlive the render+upload step.
+        Pins the post-stage retention contract: ``finalize_dataset`` and
+        post-mortem consumers expect shards to outlive the render+stage step.
 
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain every
-            shard alongside the on-disk copies.
+        :param fake_r2_remote: Local-typed R2 remote — asserted to hold a
+            complete staged attempt per shard alongside the on-disk copies.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
 
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_materialize_or_passthrough_rclone,
+            side_effect=stub_renderer(spec),
         ):
             generate(spec, tmp_path, [])
 
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
-            assert (tmp_path / shard.filename).is_file()
-            assert (bucket_prefix / shard.filename).is_file()
+            # Lance shards are directories; the rendered shard is retained on disk.
+            assert (tmp_path / shard.filename).is_dir()
+            assert shard_has_complete_attempt(spec, shard.shard_id)
 
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
-        fake_r2_remote: Path,
+        fake_r2_remote: Path,  # noqa: ARG002
         tmp_path: Path,
     ) -> None:
         """Mid-loop subprocess failure raises immediately; later shards are not attempted.
 
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain only
-            shard 0 (rclone runs for it; shard 1's renderer raises; shard 2
-            never runs).
+        :param fake_r2_remote: Fixture-activation only — the render's staging
+            markers need the local-typed remote.
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
@@ -997,13 +968,10 @@ class TestRun:
 
         def _side_effect(args: list[str]) -> None:
             nonlocal renderer_call_count
-            if args and args[0] == "rclone":
-                _REAL_CHECK_CALL(args)
-                return
             renderer_call_count += 1
             if renderer_call_count == 2:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            _materialize_shard(args)
+            _render_valid_shard(args, spec)
 
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
@@ -1013,38 +981,37 @@ class TestRun:
                 generate(spec, tmp_path, [])
 
         assert renderer_call_count == 2
-        # State-based proof of fail-fast: only shard 0 landed in R2.
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert (bucket_prefix / spec.shards[0].filename).is_file()
-        assert not (bucket_prefix / spec.shards[1].filename).exists()
-        assert not (bucket_prefix / spec.shards[2].filename).exists()
+        # State-based proof of fail-fast: only shard 0 staged a complete attempt.
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[2].shard_id)
 
     def test_subprocess_exits_zero_without_writing_shard_raises(
         self,
-        fake_r2_remote: Path,
+        fake_r2_remote: Path,  # noqa: ARG002
         spec: DatasetSpec,
         tmp_path: Path,
     ) -> None:
-        """If the renderer exits 0 but never wrote the expected shard file, fail loudly.
+        """If the renderer exits 0 but never wrote the expected shard dataset, fail loudly.
 
         Catches a generator bug at the rendering boundary instead of letting it surface as a less-
         direct rclone "source not found" further down the pipeline.
 
-        :param fake_r2_remote: Local-typed R2 remote — must remain empty since
-            no shard file is written and rclone is therefore never invoked.
+        :param fake_r2_remote: Fixture-activation only — the pre-render staging
+            marker needs the local-typed remote.
         :param spec: Fixture-provided ``DatasetSpec``.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        # Renderer-only side effect: succeed without writing the shard file,
-        # so the ``shard_path.is_file()`` guard raises before any rclone call.
+        # Renderer-only side effect: succeed without writing the shard dataset,
+        # so the ``shard_path.is_dir()`` guard raises before validation/staging.
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
             return_value=None,
         ):
-            with pytest.raises(RuntimeError, match="did not write expected shard file"):
+            with pytest.raises(RuntimeError, match="did not write expected shard"):
                 generate(spec, tmp_path, [])
 
-        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_renderer_version_mismatch_raises_before_uploads(
         self,
@@ -1089,6 +1056,7 @@ class TestRun:
         monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
         monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
         generate(spec, tmp_path, [])
 
@@ -1097,9 +1065,8 @@ class TestRun:
             for args in _renderer_argv_lists(patched_subprocess)
         }
         assert rendered_filenames == {shard.filename for shard in spec.shards}
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
-            assert (bucket_prefix / shard.filename).is_file()
+            assert shard_has_complete_attempt(spec, shard.shard_id)
 
     def test_run_raises_on_partial_partition_env(
         self,
@@ -1168,6 +1135,7 @@ class TestRun:
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", str(rank))
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", str(world))
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
         generate(spec, tmp_path, [])
 
@@ -1182,15 +1150,14 @@ class TestRun:
             assert not bucket_prefix.exists()
             return
         for index, shard in enumerate(spec.shards):
-            uploaded = bucket_prefix / shard.filename
             if index in expected_indices:
-                assert uploaded.is_file()
+                assert shard_has_complete_attempt(spec, shard.shard_id)
             else:
-                assert not uploaded.exists()
+                assert not shard_has_complete_attempt(spec, shard.shard_id)
 
     # Skip-existing-shards — see #750.
 
-    def test_run_skips_render_when_shard_already_in_r2(
+    def test_run_skips_render_when_shard_already_staged(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
@@ -1198,88 +1165,71 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """Object present (size > 0) → renderer is not invoked, shard upload is not attempted.
+        """A complete staged attempt → renderer is not invoked, no new staging happens.
 
         :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
         :param fake_r2_remote: Local-typed R2 remote — asserted empty (the
-            probe stub returns "present" without seeding an actual file).
+            probe stub claims "complete" without seeding an actual attempt).
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param monkeypatch: Used to override the probe to claim the shard is
-            already in R2.
+        :param monkeypatch: Used to override the skip-probe to claim the shard
+            is already staged.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_a, **_k: True,
+        )
 
         generate(spec, tmp_path, [])
 
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
-    @pytest.mark.parametrize(
-        "probe_size",
-        [pytest.param(None, id="object-absent"), pytest.param(0, id="object-zero-size")],
-    )
-    def test_run_renders_when_object_treated_as_absent(
+    def test_run_renders_when_shard_absent(
         self,
         patched_subprocess: MagicMock,
-        fake_r2_remote: Path,
         spec: DatasetSpec,
-        monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        probe_size: int | None,
     ) -> None:
-        """Missing (None) and zero-byte probes both treat the shard as absent and render it.
-
-        A zero-byte object is treated as absent defensively against half-uploaded objects.
+        """An un-staged shard (skip-probe False) is rendered exactly once and staged.
 
         :param patched_subprocess: Subprocess dispatcher; renderer is asserted
-            to fire exactly once.
-        :param fake_r2_remote: Local-typed R2 remote — shard should land here.
+            to fire exactly once (the autouse fixture forces the skip-probe False).
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param monkeypatch: Used to set the probe's reported object size.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
-        :param probe_size: ``object_size`` return value standing in for the
-            R2 probe — ``None`` (absent) or ``0`` (zero-byte).
         """
-        monkeypatch.setattr(
-            "synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: probe_size
-        )
-
         generate(spec, tmp_path, [])
 
         renderer_calls = _renderer_argv_lists(patched_subprocess)
         assert len(renderer_calls) == 1
-        assert (
-            fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
-        ).is_file()
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
-    def test_run_skip_path_probes_full_object_uri_per_shard(
+    def test_run_skip_path_probes_each_assigned_shard_id(
         self,
         patched_subprocess: MagicMock,  # noqa: ARG002
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Probe is called once per assigned shard with the full object URI under r2.prefix.
+        """The skip-probe is called once per assigned shard, with that shard's id.
 
-        :param patched_subprocess: Fixture-activation only (renderer
-            materializes shards so rclone copies have a valid source).
+        :param patched_subprocess: Fixture-activation only (renderer stages
+            shards so the staging probe has a valid source).
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to install the probe-URI capture stub.
+        :param monkeypatch: Used to install the skip-probe capture stub.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
-        probed_uris: list[str] = []
+        patched_subprocess.side_effect = stub_renderer(spec)
+        probed_ids: list[int] = []
 
-        def _probe(uri: str) -> None:
-            probed_uris.append(uri)
-            return None
+        def _probe(_spec: DatasetSpec, shard_id: int) -> bool:
+            probed_ids.append(shard_id)
+            return False
 
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _probe)
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.shard_has_complete_attempt", _probe)
 
         generate(spec, tmp_path, [])
 
-        assert probed_uris == [
-            f"r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}" for shard in spec.shards
-        ]
+        assert probed_ids == [shard.shard_id for shard in spec.shards]
 
     def test_run_renders_only_absent_shards_in_mixed_run(
         self,
@@ -1288,21 +1238,25 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Mid-run resumption: shard 0 already in R2, shards 1 and 2 absent → render only 1 and 2.
+        """Mid-run resumption: shard 0 already staged, shards 1 and 2 absent → render only 1 and 2.
 
         :param patched_subprocess: Subprocess dispatcher used to introspect
             renderer argv.
-        :param fake_r2_remote: Local-typed R2 remote — shards 1 and 2 land
-            here; shard 0 does not (it was reported "present" by the probe).
+        :param fake_r2_remote: Fixture-activation only — shards 1 and 2 stage
+            here; shard 0 does not (it was reported "complete" by the probe).
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to install the per-shard probe stub.
+        :param monkeypatch: Used to install the per-shard skip-probe stub.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
-        def _present_only_for_shard_0(uri: str) -> int | None:
-            return 9999 if uri.endswith("shard-000000.h5") else None
+        def _complete_only_for_shard_0(_spec: DatasetSpec, shard_id: int) -> bool:
+            return shard_id == 0
 
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            _complete_only_for_shard_0,
+        )
 
         generate(spec, tmp_path, [])
 
@@ -1310,11 +1264,11 @@ class TestRun:
             Path(args[find_script_index(args) + 1]).name
             for args in _renderer_argv_lists(patched_subprocess)
         ]
-        assert rendered_filenames == ["shard-000001.h5", "shard-000002.h5"]
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        assert not (bucket_prefix / "shard-000000.h5").exists()
-        assert (bucket_prefix / "shard-000001.h5").is_file()
-        assert (bucket_prefix / "shard-000002.h5").is_file()
+        assert rendered_filenames == ["shard-000001.lance", "shard-000002.lance"]
+        # shard 0 was skip-simulated (never rendered); shards 1 and 2 staged.
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert shard_has_complete_attempt(spec, spec.shards[2].shard_id)
 
     @patch("synth_setter.cli.generate_dataset.logger")
     def test_run_logs_summary_with_rendered_and_skipped_counts(
@@ -1328,17 +1282,21 @@ class TestRun:
 
         :param mock_logger: Patched ``generate_dataset.logger`` for capturing
             the summary line.
-        :param patched_subprocess: Fixture-activation only (renderer
-            materializes shards so rclone copies have a valid source).
+        :param patched_subprocess: Fixture-activation only (renderer stages
+            shards so the staging probe has a valid source).
         :param tmp_path: Pytest tmp dir used by ``_multi_shard_spec``.
-        :param monkeypatch: Used to install the per-shard probe stub.
+        :param monkeypatch: Used to install the per-shard skip-probe stub.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
-        def _present_only_for_shard_0(uri: str) -> int | None:
-            return 9999 if uri.endswith("shard-000000.h5") else None
+        def _complete_only_for_shard_0(_spec: DatasetSpec, shard_id: int) -> bool:
+            return shard_id == 0
 
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            _complete_only_for_shard_0,
+        )
 
         generate(spec, tmp_path, [])
 
@@ -1361,14 +1319,18 @@ class TestRun:
         :param mock_logger: Captures the speed log line's content.
         :param patched_subprocess: Fixture-activation only.
         :param tmp_path: Used by ``_multi_shard_spec``.
-        :param monkeypatch: Installs the probe stub that skips shard 0.
+        :param monkeypatch: Installs the skip-probe stub that skips shard 0.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
+        patched_subprocess.side_effect = stub_renderer(spec)
 
-        def _present_only_for_shard_0(uri: str) -> int | None:
-            return 9999 if uri.endswith("shard-000000.h5") else None
+        def _complete_only_for_shard_0(_spec: DatasetSpec, shard_id: int) -> bool:
+            return shard_id == 0
 
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            _complete_only_for_shard_0,
+        )
 
         generate(spec, tmp_path, [])
 
@@ -1386,19 +1348,19 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """A non-zero rclone exit during the probe propagates as CalledProcessError.
+        """A non-zero rclone exit during the skip-probe propagates as CalledProcessError.
 
         :param patched_subprocess: Subprocess dispatcher; asserted never
-            invoked (the probe failure raises before any render/upload).
+            invoked (the probe failure raises before any render/stage).
         :param spec: Fixture-provided ``DatasetSpec``.
-        :param monkeypatch: Used to install the raising probe stub.
+        :param monkeypatch: Used to install the raising skip-probe stub.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
 
         def _raise(*_a: object, **_k: object) -> None:
             raise subprocess.CalledProcessError(1, ["rclone", "lsf"])
 
-        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _raise)
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.shard_has_complete_attempt", _raise)
 
         with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
@@ -1410,15 +1372,14 @@ class TestRun:
         fake_r2_remote: Path,
         tmp_path: Path,
     ) -> None:
-        """``max_retries=1`` + flaky renderer (1 fail, then success) → shard lands in R2.
+        """``max_retries=1`` + flaky renderer (1 fail, then success) → shard stages in R2.
 
         The renderer-subprocess retry loop covers transient X11 / Xvfb init races
-        and pedalboard load hiccups on first call into a fresh subprocess. Rclone
-        sits outside the loop (rclone has its own --retries=3); only the renderer
-        call is wrapped.
+        and pedalboard load hiccups on first call into a fresh subprocess. Staging
+        sits outside the loop; only the renderer call is wrapped.
 
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain the
-            shard after the retried render succeeds.
+        :param fake_r2_remote: Fixture-activation only — the render's staging
+            markers need the local-typed remote.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         """
         kwargs = _base_spec_kwargs(tmp_path)
@@ -1428,13 +1389,10 @@ class TestRun:
 
         def _flaky_dispatcher(args: list[str]) -> None:
             nonlocal renderer_calls
-            if args and args[0] == "rclone":
-                _REAL_CHECK_CALL(args)
-                return
             renderer_calls += 1
             if renderer_calls == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            _materialize_shard(args)
+            _render_valid_shard(args, spec)
 
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
@@ -1443,8 +1401,7 @@ class TestRun:
             generate(spec, tmp_path, [])
 
         assert renderer_calls == 2
-        landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / spec.shards[0].filename
-        assert landed.is_file()
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_parallel_render_uses_thread_pool_and_uploads_all_shards(
         self,
@@ -1452,7 +1409,7 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``render.parallel=True`` + 4 shards → ≥2 worker threads; every shard uploads.
+        """``render.parallel=True`` + 4 shards → ≥2 worker threads; every shard stages.
 
         Pins ``available_cpus`` to 8 so the dispatch heuristic
         ``min(max(1, available_cpus() // 2), len(my_range))`` resolves to 4
@@ -1460,13 +1417,13 @@ class TestRun:
         each render until the second thread enters, forcing the pool to
         actually parallelize.
 
-        :param fake_r2_remote: Local-typed R2 remote — asserted to contain
-            every shard after the parallel dispatch.
+        :param fake_r2_remote: Fixture-activation only — the parallel staging
+            markers need the local-typed remote.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         :param monkeypatch: Pins ``available_cpus`` so pool size is deterministic.
         """
         monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
-        kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[40000, 0, 0])
+        kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[8, 0, 0])
         kwargs["render"] = {**kwargs["render"], "parallel": True}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         assert len(spec.shards) == 4
@@ -1475,15 +1432,12 @@ class TestRun:
         two_threads_seen = threading.Event()
 
         def _thread_recording_dispatcher(args: list[str]) -> None:
-            if args and args[0] == "rclone":
-                _REAL_CHECK_CALL(args)
-                return
             with lock:
                 thread_ids.add(threading.get_ident())
                 if len(thread_ids) >= 2:
                     two_threads_seen.set()
             two_threads_seen.wait(timeout=5.0)
-            _materialize_shard(args)
+            _render_valid_shard(args, spec)
 
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
@@ -1492,9 +1446,8 @@ class TestRun:
             generate(spec, tmp_path, [])
 
         assert len(thread_ids) >= 2
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
         for shard in spec.shards:
-            assert (bucket_prefix / shard.filename).is_file()
+            assert shard_has_complete_attempt(spec, shard.shard_id)
 
     def test_parallel_render_propagates_subprocess_failure(
         self,
@@ -1510,13 +1463,13 @@ class TestRun:
         they start. Net effect: renderer fires at most twice (1 fail + ≤1
         in-flight peer), and at most one shard lands in R2.
 
-        :param fake_r2_remote: Local-typed R2 remote — used for state-based
-            cancellation check.
+        :param fake_r2_remote: Fixture-activation only — used for the
+            state-based cancellation check.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         :param monkeypatch: Pins ``available_cpus`` so pool size is deterministic.
         """
         monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
-        kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[40000, 0, 0])
+        kwargs = _base_spec_kwargs(tmp_path, train_val_test_sizes=[8, 0, 0])
         kwargs["render"] = {**kwargs["render"], "parallel": True}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_call_count = 0
@@ -1524,15 +1477,12 @@ class TestRun:
 
         def _one_failing(args: list[str]) -> None:
             nonlocal renderer_call_count
-            if args and args[0] == "rclone":
-                _REAL_CHECK_CALL(args)
-                return
             with lock:
                 renderer_call_count += 1
                 this_attempt = renderer_call_count
             if this_attempt == 1:
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
-            _materialize_shard(args)
+            _render_valid_shard(args, spec)
 
         with patch(
             "synth_setter.cli.generate_dataset._check_call_streamed",
@@ -1541,8 +1491,9 @@ class TestRun:
             with pytest.raises(subprocess.CalledProcessError):
                 generate(spec, tmp_path, [])
 
-        bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-        landed = sum(1 for shard in spec.shards if (bucket_prefix / shard.filename).is_file())
+        landed = sum(
+            1 for shard in spec.shards if shard_has_complete_attempt(spec, shard.shard_id)
+        )
         assert landed <= 1
         assert renderer_call_count <= 2
 
@@ -1554,10 +1505,10 @@ class TestRun:
         """``max_retries=2`` + always-failing renderer → 3 attempts then propagate.
 
         Confirms the retry budget is bounded: ``max_retries + 1`` total attempts,
-        then ``CalledProcessError`` surfaces and no shard is uploaded.
+        then ``CalledProcessError`` surfaces and no shard is staged.
 
-        :param fake_r2_remote: Local-typed R2 remote — asserted empty since
-            every render attempt failed.
+        :param fake_r2_remote: Fixture-activation only — the pre-render staging
+            marker needs the local-typed remote.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         """
         kwargs = _base_spec_kwargs(tmp_path)
@@ -1565,11 +1516,8 @@ class TestRun:
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
 
-        def _always_fails(args: list[str]) -> None:
+        def _always_fails(_args: list[str]) -> None:
             nonlocal renderer_calls
-            if args and args[0] == "rclone":
-                _REAL_CHECK_CALL(args)
-                return
             renderer_calls += 1
             raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
 
@@ -1581,41 +1529,44 @@ class TestRun:
                 generate(spec, tmp_path, [])
 
         assert renderer_calls == 3
-        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
-    def test_shard_lands_in_work_dir_before_upload(
+    def test_shard_lands_in_work_dir_before_staging(
         self,
         patched_subprocess: MagicMock,  # noqa: ARG002
         spec: DatasetSpec,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Caller-supplied ``work_dir`` hosts the rendered shard at the upload boundary.
+        """Caller-supplied ``work_dir`` hosts the rendered shard at the staging boundary.
 
-        Stubs ``_rclone_copy`` to snapshot the source path and its on-disk
-        existence at the upload moment — proving the shard landed at
-        ``work_dir / shard.filename`` before the upload runs.
+        Stubs ``stage_lance_shard_attempt`` to snapshot the shard path and its
+        on-disk existence at the staging moment — proving the shard landed at
+        ``work_dir / shard.filename`` (as a Lance directory) before staging runs.
 
-        :param patched_subprocess: Fixture-activation only; renderer side of the
-            dispatcher materializes the shard file into ``work_dir``.
+        :param patched_subprocess: Fixture-activation only; the renderer side of
+            the dispatcher writes the shard dataset into ``work_dir``.
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         :param tmp_path: Caller-supplied work_dir for this run.
-        :param monkeypatch: Used to install the rclone-stub that captures the
-            shard path + existence at the upload moment.
+        :param monkeypatch: Used to install the staging stub that captures the
+            shard path + existence at the staging moment.
         """
         captured: dict[str, object] = {}
 
-        def _capture_src(src: str, _dest: str) -> None:
-            src_path = Path(src)
-            captured["src"] = src_path
-            captured["existed_at_upload"] = src_path.is_file()
+        def _capture_stage(
+            _spec: object, _shard: object, shard_path: Path, **_kwargs: object
+        ) -> None:
+            captured["src"] = shard_path
+            captured["existed_at_stage"] = shard_path.is_dir()
 
-        monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _capture_src)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", _capture_stage
+        )
 
         generate(spec, tmp_path, [])
 
         assert captured["src"] == tmp_path / spec.shards[0].filename
-        assert captured["existed_at_upload"] is True
+        assert captured["existed_at_stage"] is True
 
     def test_provenance_not_stamped_when_no_wandb_logger(
         self,
@@ -1658,7 +1609,7 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, tmp_path)
 
-        assert args[2] == str(tmp_path / "shard-000000.h5")
+        assert args[2] == str(tmp_path / "shard-000000.lance")
 
     def test_samples_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
         """samples_per_shard is emitted as ``--samples_per_shard <count>`` flag.
@@ -1690,29 +1641,6 @@ class TestBuildGenerateArgs:
         args = build_generate_args(spec, shard, Path("out"))
 
         assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
-
-    def test_copy_dataset_root_uri_absent_when_unset(self, spec: DatasetSpec) -> None:
-        """No ``--copy_dataset_root_uri`` flag is emitted when the spec has no copy source.
-
-        :param spec: Single-shard spec fixture with no ``copy_dataset_root_uri``.
-        """
-        args = build_generate_args(spec, spec.shards[0], Path("out"))
-
-        assert "--copy_dataset_root_uri" not in args
-
-    def test_copy_dataset_root_uri_forwarded_when_set(self, tmp_path: Path) -> None:
-        """``spec.copy_dataset_root_uri`` is forwarded as a ``--copy_dataset_root_uri`` flag.
-
-        :param tmp_path: Pytest temp dir pinning the spec's plugin/output paths.
-        """
-        spec = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri="r2://bucket/source")  # type: ignore[arg-type]
-        )
-
-        args = build_generate_args(spec, spec.shards[0], Path("out"))
-
-        flag_idx = args.index("--copy_dataset_root_uri")
-        assert args[flag_idx + 1] == "r2://bucket/source"
 
 
 # ---------------------------------------------------------------------------
@@ -2305,6 +2233,9 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        # finalize writes each split to R2; ``main`` materializes them locally for
+        # the eval. Stub that download so no real rclone runs against a bare remote.
+        monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
@@ -2327,12 +2258,12 @@ class TestMainDispatchBranches:
         output_dir = observed["output_dir"]
         assert isinstance(output_dir, Path)
         splits = ("train", "val", "test")
-        split_h5s = ("train.h5", "val.h5", "test.h5")
+        split_lances = ("train.lance", "val.lance", "test.lance")
         # test stays bare ``audio/*``; train/val are namespaced so the shared
         # wandb run keeps one summary key per split instead of overwriting.
         split_prefixes = ("train/", "val/", "")
-        for call, split, split_h5, prefix in zip(
-            oracle_mock.call_args_list, splits, split_h5s, split_prefixes
+        for call, split, split_lance, prefix in zip(
+            oracle_mock.call_args_list, splits, split_lances, split_prefixes
         ):
             dataset_root, run_dir, _run_id = call[0]
             # The whole generation RenderConfig flows through (keyword-only) so
@@ -2349,8 +2280,8 @@ class TestMainDispatchBranches:
             # The eval reads in place from the Hydra output_dir where the shards and
             # VDS splits already live — not a downloaded copy under oracle_eval/.
             assert dataset_root == output_dir
-            # predict_file targets this split's HDF5.
-            assert call.kwargs["predict_file"] == output_dir / split_h5
+            # predict_file targets this split's Lance dataset.
+            assert call.kwargs["predict_file"] == output_dir / split_lance
             # Run dir: oracle_eval/<split>/<run_id>
             assert run_dir.parent.parent.name == "oracle_eval", (
                 f"eval run dir should land under "
@@ -2386,7 +2317,7 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "stats.npz"):
+        for name in ("train.lance", "val.lance", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         render = spec.render.model_copy(
@@ -2396,9 +2327,9 @@ class TestMainDispatchBranches:
                 "plugin_path": "plugins/Surge XT.vst3",
             }
         )
-        predict_file = dataset_root / "test.h5"
+        predict_file = dataset_root / "test.lance"
         n_samples = 4
-        _write_audio_h5(predict_file, n_samples)
+        _write_lance_split(predict_file, n_samples)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             run_dir,
@@ -2446,7 +2377,7 @@ class TestMainDispatchBranches:
         # Sentinel 7 (no config default) proves the value is forwarded, not hardcoded.
         assert "datamodule.num_workers=7" in called_argv
         assert "mode=predict" in called_argv
-        # predict_file routes the datamodule to this split's HDF5.
+        # predict_file routes the datamodule to this split's Lance dataset.
         assert f"datamodule.predict_file={predict_file}" in called_argv
         # Default (test split) carries no prefix override: its keys stay bare
         # ``audio/*`` so existing sweeps/dashboards keep working.
@@ -2475,10 +2406,10 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("val.h5", "test.h5", "stats.npz"):
+        for name in ("val.lance", "test.lance", "stats.npz"):
             (dataset_root / name).touch()
-        predict_file = dataset_root / "train.h5"
-        _write_audio_h5(predict_file, 4)
+        predict_file = dataset_root / "train.lance"
+        _write_lance_split(predict_file, 4)
         gd._run_oracle_eval_subprocess(
             dataset_root,
             tmp_path / "oracle_eval" / "train" / "some-run-id",
@@ -2512,10 +2443,10 @@ class TestMainDispatchBranches:
 
         def _timeout_for_split(root: Path, num_samples: int) -> float:
             root.mkdir()
-            for name in ("train.h5", "val.h5", "stats.npz"):
+            for name in ("train.lance", "val.lance", "stats.npz"):
                 (root / name).touch()
-            predict_file = root / "test.h5"
-            _write_audio_h5(predict_file, num_samples)
+            predict_file = root / "test.lance"
+            _write_lance_split(predict_file, num_samples)
             mock = MagicMock()
             monkeypatch.setattr(gd, "_check_call_streamed", mock)
             gd._run_oracle_eval_subprocess(
@@ -2542,7 +2473,7 @@ class TestMainDispatchBranches:
 
         ``finalize_from_spec`` short-circuits when R2 already holds the
         ``dataset.complete`` marker, leaving ``output_dir`` without the splits
-        on a resume; the preflight turns the downstream low-signal HDF5 read
+        on a resume; the preflight turns the downstream low-signal Lance read
         error into an actionable one before shelling out.
 
         :param monkeypatch: Patches ``_check_call_streamed`` to assert it never fires.
@@ -2554,14 +2485,14 @@ class TestMainDispatchBranches:
         streamed_call_mock = MagicMock()
         monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
 
-        with pytest.raises(FileNotFoundError, match=r"test\.h5"):
+        with pytest.raises(FileNotFoundError, match=r"test\.lance"):
             gd._run_oracle_eval_subprocess(
                 tmp_path,
                 tmp_path / "oracle_eval" / "test" / "rid",
                 "rid",
                 render=spec.render,
                 num_workers=0,
-                predict_file=tmp_path / "test.h5",
+                predict_file=tmp_path / "test.lance",
             )
 
         streamed_call_mock.assert_not_called()
@@ -2589,7 +2520,7 @@ class TestMainDispatchBranches:
 
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
-        for name in ("train.h5", "val.h5", "test.h5", "stats.npz"):
+        for name in ("train.lance", "val.lance", "test.lance", "stats.npz"):
             (dataset_root / name).touch()
 
         with pytest.raises(FileNotFoundError, match=r"predict_file"):
@@ -2599,7 +2530,7 @@ class TestMainDispatchBranches:
                 "rid",
                 render=spec.render,
                 num_workers=0,
-                predict_file=tmp_path / "nonexistent_split.h5",
+                predict_file=tmp_path / "nonexistent_split.lance",
             )
 
         streamed_call_mock.assert_not_called()
@@ -2694,48 +2625,13 @@ class TestMainDispatchBranches:
         finalize_mock.assert_not_called()
         oracle_mock.assert_not_called()
 
-    def test_main_oracle_eval_inline_rejects_wds(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """``oracle_eval_inline=true`` + ``output_format=wds`` raises before ``generate()``.
-
-        Eval reads HDF5 splits; WDS shards aren't consumed by the same loader.
-
-        :param monkeypatch: Patches argv + the three seams the test asserts are unreached.
-        """
-        import synth_setter.cli.generate_dataset as gd
-
-        argv = [
-            "synth-setter-generate-dataset",
-            "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
-            "finalize_inline=true",
-            "oracle_eval_inline=true",
-            "output_format=wds",
-        ]
-        monkeypatch.setattr("sys.argv", argv)
-        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
-        generate_mock = MagicMock()
-        finalize_mock = MagicMock()
-        oracle_mock = MagicMock()
-        monkeypatch.setattr(gd, "generate", generate_mock)
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
-        monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
-
-        with pytest.raises(ValueError, match="only supports output_format=hdf5"):
-            _call_hydra_main(gd.main)
-        generate_mock.assert_not_called()
-        finalize_mock.assert_not_called()
-        oracle_mock.assert_not_called()
-
     def test_main_oracle_eval_inline_rejects_zero_size_split(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
 
-        ``VSTDataModule.setup()`` opens train/val/test ``.h5`` unconditionally
+        ``VSTDataModule.setup()`` opens train/val/test ``.lance`` unconditionally
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
@@ -2819,138 +2715,6 @@ class TestMainDispatchBranches:
         assert len(ignored_lines) == 1, (
             f"expected exactly one INFO log mentioning 'oracle_eval_inline=True' + 'ignored'; "
             f"got messages: {info_messages!r}"
-        )
-
-
-def _write_vds_split_with_shard(data_dir: Path) -> np.ndarray:
-    """Write a real shard + a VDS ``test.h5`` + ``stats.npz`` into ``data_dir``.
-
-    Follows the basename-VDS contract of
-    :func:`synth_setter.pipeline.data.reshard._write_split`: the split's
-    ``audio`` / ``param_array`` are HDF5 virtual datasets whose source is the
-    shard referenced **by basename**, so they resolve only when the shard sits
-    beside the split — the on-disk shape the inline oracle-eval reads (#1396).
-
-    :param data_dir: Destination dir; receives ``shard-000000.h5``,
-        ``test.h5``, and ``stats.npz``.
-    :returns: The shard's ``audio`` array (``float16``) so callers can assert
-        the read resolves to the real bytes.
-    """
-    rows, channels, samples, num_params = 2, 2, 8, 4
-    audio_dtype = DATASET_FIELD_DTYPES["audio"]
-    param_dtype = DATASET_FIELD_DTYPES["param_array"]
-    # Start at 1 so every value is distinct and nonzero (a fill-value zeros read
-    # is then unmistakable) while staying in the field dtype — no scalar promotion.
-    audio = np.linspace(0.1, 0.9, rows * channels * samples, dtype=audio_dtype).reshape(
-        rows, channels, samples
-    )
-    param = np.linspace(0.1, 0.8, rows * num_params, dtype=param_dtype).reshape(rows, num_params)
-
-    shard = data_dir / "shard-000000.h5"
-    with h5py.File(shard, "w") as f:
-        f.create_dataset("audio", data=audio)
-        f.create_dataset("param_array", data=param)
-
-    fields = (
-        ("audio", audio_dtype, (channels, samples)),
-        ("param_array", param_dtype, (num_params,)),
-    )
-    with h5py.File(data_dir / "test.h5", "w", libver="latest") as f:
-        for key, dtype, tail in fields:
-            layout = h5py.VirtualLayout(shape=(rows, *tail), dtype=dtype)
-            layout[0:rows] = h5py.VirtualSource(shard.name, key, shape=(rows, *tail), dtype=dtype)
-            f.create_virtual_dataset(key, layout)
-
-    np.savez(
-        data_dir / STATS_NPZ_FILENAME,
-        mean=np.zeros(1, dtype=np.float32),
-        std=np.ones(1, dtype=np.float32),
-    )
-    return audio
-
-
-class TestInlineOracleEvalVdsInPlaceRead:
-    """Behavioral proof for #1396: the inline eval reads the VDS splits in place.
-
-    The finalized ``{split}.h5`` files are HDF5 virtual datasets referencing
-    their source shards by basename, so ``mode=predict`` reads the audio dataset
-    as fill-value zeros unless the shards sit beside the split. These tests drive
-    the real predict read path (:class:`VSTDataset` with ``read_audio=True``)
-    to pin that the read resolves to real bytes only when co-located.
-    """
-
-    def test_predict_audio_read_vds_split_beside_shards_returns_shard_data(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """With the shard co-located, the predict-row audio read resolves to real bytes.
-
-        Reads row ``1`` — the slice that crashed in production after row 0's
-        fill-value zeros — through the same datamodule the eval uses.
-
-        :param tmp_path: Holds the co-located shard, VDS split, and stats.
-        """
-        from synth_setter.data.vst_datamodule import VSTDataset
-
-        audio = _write_vds_split_with_shard(tmp_path)
-        dataset = VSTDataset(
-            tmp_path / "test.h5",
-            batch_size=1,
-            ot=False,
-            read_audio=True,
-            read_mel=False,
-            use_saved_mean_and_variance=True,
-        )
-
-        assert dataset.dataset_file is not None
-        audio_ds = cast(h5py.Dataset, dataset.dataset_file["audio"])
-        assert isinstance(audio_ds, h5py.Dataset) and audio_ds.is_virtual, (
-            "split must be a virtual dataset"
-        )
-        audio_item = dataset[1]["audio"]
-        assert audio_item is not None
-        np.testing.assert_array_equal(audio_item.numpy(), audio[1:2].astype(np.float32))
-
-    def test_predict_audio_read_vds_split_without_shards_returns_dangling_zeros(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """Without the shard beside it, the same read dangles to fill-value zeros.
-
-        Reproduces the #1396 failure mode: copying only the split + stats away from the shards (as
-        the old download did) makes the audio unreadable, so the read returns zeros instead of the
-        shard bytes.
-
-        :param tmp_path: Roots the populated source dir and the split-only copy.
-        """
-        from synth_setter.data.vst_datamodule import VSTDataset
-
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-        audio = _write_vds_split_with_shard(source_dir)
-
-        split_only = tmp_path / "split_only"
-        split_only.mkdir()
-        shutil.copy(source_dir / "test.h5", split_only / "test.h5")
-        shutil.copy(source_dir / STATS_NPZ_FILENAME, split_only / STATS_NPZ_FILENAME)
-
-        dataset = VSTDataset(
-            split_only / "test.h5",
-            batch_size=1,
-            ot=False,
-            read_audio=True,
-            read_mel=False,
-            use_saved_mean_and_variance=True,
-        )
-
-        dangling_item = dataset[1]["audio"]
-        assert dangling_item is not None
-        dangling = dangling_item.numpy()
-        assert np.array_equal(dangling, np.zeros_like(dangling)), (
-            "dangling VDS read should fall back to fill-value zeros"
-        )
-        assert not np.array_equal(dangling, audio[1:2].astype(np.float32)), (
-            "without co-located shards the read must not reach the real audio"
         )
 
 
@@ -3322,125 +3086,6 @@ def test_smoke_job_name_rejects_unsafe_task_name() -> None:
     bad_spec = SimpleNamespace(task_name="bad.task.name")
     with pytest.raises(ValueError, match=r"fix spec.task_name or pin"):
         _smoke_job_name(bad_spec)  # type: ignore[arg-type]
-
-
-class TestValidateCopySource:
-    """``_validate_copy_source`` — the imperative shell around the preflight."""
-
-    def test_no_copy_dataset_root_uri_is_a_noop(self, spec: DatasetSpec) -> None:
-        """A spec with no copy source skips the preflight entirely (no disk read).
-
-        :param spec: Single-shard spec fixture with ``copy_dataset_root_uri`` unset.
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        _validate_copy_source(spec)  # no raise, no source dir needed
-
-    def test_matching_source_spec_passes(self, tmp_path: Path) -> None:
-        """A copy root holding a matching ``input_spec.json`` validates clean.
-
-        :param tmp_path: Pytest tmp dir used as the synced copy source root.
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
-        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
-        target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        _validate_copy_source(target)  # no raise
-
-    def test_missing_source_spec_raises_with_root_uri(self, tmp_path: Path) -> None:
-        """A copy root without an ``input_spec.json`` fails loudly, naming the root URI.
-
-        :param tmp_path: Pytest tmp dir; the copy root is left without a spec.
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        with pytest.raises(ValueError, match=re.escape(str(copy_root))):
-            _validate_copy_source(target)
-
-    def test_rclone_fetch_failure_raises_distinct_from_missing_spec(self, tmp_path: Path) -> None:
-        """A non-zero rclone exit on an ``r2://`` copy root surfaces as an access failure.
-
-        The ``CalledProcessError`` arm must not be folded into the "sync the
-        spec" message — an auth/network fault is not a missing object.
-
-        :param tmp_path: Pytest tmp dir (only the target spec needs a home).
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        target = DatasetSpec(
-            **_base_spec_kwargs(  # type: ignore[arg-type]
-                tmp_path, copy_dataset_root_uri="r2://bucket/source"
-            )
-        )
-
-        def fail_rclone(args: list[str]) -> None:
-            raise subprocess.CalledProcessError(7, args)
-
-        with patch("synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fail_rclone):
-            with pytest.raises(ValueError, match="object-store access failure") as excinfo:
-                _validate_copy_source(target)
-        assert "exited 7" in str(excinfo.value)
-        assert isinstance(excinfo.value.__cause__, subprocess.CalledProcessError)
-
-    def test_malformed_source_spec_raises_as_malformed(self, tmp_path: Path) -> None:
-        """A source ``input_spec.json`` that fails schema validation is named as malformed.
-
-        :param tmp_path: Pytest tmp dir holding a copy root with a corrupted spec.
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        source = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
-        # A complete spec whose strict-typed field is corrupted parses past the
-        # before-validators and then fails strict validation → ValidationError.
-        corrupt = json.loads(source.model_dump_json())
-        corrupt["base_seed"] = "not-an-int"
-        (copy_root / INPUT_SPEC_FILENAME).write_text(json.dumps(corrupt))
-        target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        with pytest.raises(ValueError, match="malformed or stale"):
-            _validate_copy_source(target)
-
-    def test_mismatched_source_spec_raises(self, tmp_path: Path) -> None:
-        """A source spec with a different ``param_spec_name`` is rejected at preflight.
-
-        :param tmp_path: Pytest tmp dir used as the synced copy source root.
-        """
-        from synth_setter.cli.generate_dataset import _validate_copy_source
-
-        copy_root = tmp_path / "source"
-        copy_root.mkdir()
-        source = DatasetSpec(
-            **_base_spec_kwargs(
-                tmp_path,
-                render={
-                    **_base_spec_kwargs(tmp_path)["render"],  # type: ignore[dict-item]
-                    "param_spec_name": "surge_xt",
-                },
-            )  # type: ignore[arg-type]
-        )
-        (copy_root / INPUT_SPEC_FILENAME).write_text(source.model_dump_json())
-        target = DatasetSpec(
-            **_base_spec_kwargs(tmp_path, copy_dataset_root_uri=str(copy_root))  # type: ignore[arg-type]
-        )
-
-        with pytest.raises(ValueError, match="param_spec_name"):
-            _validate_copy_source(target)
 
 
 def test_worker_id_sanitizes_hostname_for_object_key_use(

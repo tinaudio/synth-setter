@@ -162,7 +162,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     ``data.download_dataset_root_uri`` gate composes with eval through ``main``.
 
     :param tmp_path: Root for the fake R2 remote, the download target, and the output dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
     """
     if shutil.which("rclone") is None:
         pytest.skip("rclone binary not available on PATH")
@@ -170,9 +170,10 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     remote_root = tmp_path / "r2"
     staged = remote_root / "intermediate-data" / "dataset"
     staged.mkdir(parents=True)
-    splits_and_stats = ("train.h5", "val.h5", "test.h5", "stats.npz")
-    for name in splits_and_stats:
-        shutil.copy(surge_xt_smoke_datasets / name, staged / name)
+    # Lance splits are directories; stats.npz is a plain file.
+    for name in ("train.lance", "val.lance", "test.lance"):
+        shutil.copytree(surge_xt_smoke_datasets / name, staged / name)
+    shutil.copy(surge_xt_smoke_datasets / "stats.npz", staged / "stats.npz")
 
     dataset_root = tmp_path / "downloaded"
     output_dir = tmp_path / "out"
@@ -196,7 +197,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
             "callbacks.log_per_param_mse.param_spec=surge_4",
             "datamodule.download_dataset_root_uri=r2://intermediate-data/dataset",
             f"datamodule.dataset_root={dataset_root}",
-            f"datamodule.predict_file={dataset_root}/test.h5",
+            f"datamodule.predict_file={dataset_root}/test.lance",
             "datamodule.batch_size=1",
             "datamodule.num_workers=0",
             "ckpt_path=null",
@@ -211,8 +212,9 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     )
     assert proc.returncode == 0, proc.stderr
 
-    for name in splits_and_stats:
-        assert (dataset_root / name).is_file(), f"{name} was not downloaded from R2"
+    for split in ("train.lance", "val.lance", "test.lance"):
+        assert (dataset_root / split).is_dir(), f"{split} was not downloaded from R2"
+    assert (dataset_root / "stats.npz").is_file(), "stats.npz was not downloaded from R2"
 
     metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
     assert metrics["test/param_mse"] == 0.0
@@ -230,7 +232,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     ``metrics.json`` must carry the oracle's exact-zero ``test/param_mse``.
 
     :param tmp_path: Root for the fake R2 remote and the local output dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
     """
     if shutil.which("rclone") is None:
         pytest.skip("rclone binary not available on PATH")
@@ -256,7 +258,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
             f"model.net.d_out={len(param_specs['surge_4'])}",
             "callbacks.log_per_param_mse.param_spec=surge_4",
             f"datamodule.dataset_root={surge_xt_smoke_datasets}",
-            f"datamodule.predict_file={surge_xt_smoke_datasets}/test.h5",
+            f"datamodule.predict_file={surge_xt_smoke_datasets}/test.lance",
             "datamodule.batch_size=1",
             "datamodule.num_workers=0",
             "ckpt_path=null",

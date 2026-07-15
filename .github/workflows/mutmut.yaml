@@ -5,7 +5,7 @@ name: Mutation Testing
 # `[tool.mutmut]` configuration — it proves the mutmut sandbox imports resolve
 # and that `mutmut run` actually completes end-to-end. The end-to-end completion
 # is *not* possible on macOS (Apple's fork-safety + heavy C-extension imports in
-# tests/conftest.py — torch, h5py, hydra — cause SIGSEGV in forked children).
+# tests/conftest.py — torch, hydra — cause SIGSEGV in forked children).
 # On ubuntu-latest, os.fork() works cleanly.
 
 on:

@@ -3,21 +3,18 @@
 The finalize entrypoint test (``tests/test_finalize_dataset.py``), its branch
 unit test (``tests/pipeline/entrypoints/test_finalize_dataset_unit.py``), and the
 real-R2 integration test (``tests/integration/test_finalize_dataset_r2.py``) all
-seed deterministic wds/hdf5 shards and build smoke ``DatasetSpec`` objects the
+seed deterministic Lance shards and build smoke ``DatasetSpec`` objects the
 same way. Centralizing the writers + builders here keeps the lanes from
 drifting: a change to a shard's on-disk layout updates every caller at once.
 """
 
 from __future__ import annotations
 
-import io
 import shutil
-import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-import h5py
 import numpy as np
 import pytest
 from omegaconf import DictConfig, OmegaConf
@@ -31,63 +28,6 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
-
-
-def write_minimal_wds_shard(dest: Path) -> None:
-    """Write a tar at ``dest`` with one ``00000000.mel_spec.npy`` member.
-
-    :param dest: Filesystem path where the tar is written. Parent dirs are created as needed.
-    """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # 4 rows so Welford variance is non-degenerate.
-    payload = np.arange(8, dtype=np.float32).reshape(4, 2)
-    buf = io.BytesIO()
-    np.save(buf, payload)
-    member_bytes = buf.getvalue()
-    with tarfile.open(dest, mode="w") as tar:
-        info = tarfile.TarInfo(name="00000000.mel_spec.npy")
-        info.size = len(member_bytes)
-        tar.addfile(info, io.BytesIO(member_bytes))
-
-
-def build_wds_smoke_spec(
-    task_name: str = "finalize-wds-unit",
-    train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
-    mask_degenerate_bins: bool = False,
-) -> DatasetSpec:
-    """Construct a wds ``DatasetSpec`` directly (no Hydra compose).
-
-    :param task_name: Unique task name so each test gets a distinct r2.prefix.
-    :param train_val_test_sizes: Three-tuple of sample counts; default is one
-        4-sample shard.
-    :param mask_degenerate_bins: Threaded onto the spec so wire tests can pin
-        both polarities of the finalize stats-fold knob.
-    :returns: A frozen wds ``DatasetSpec`` whose shards are deterministic.
-    """
-    kwargs: dict[str, Any] = {
-        "task_name": task_name,
-        "output_format": "wds",
-        "train_val_test_sizes": list(train_val_test_sizes),
-        "base_seed": 42,
-        "mask_degenerate_bins": mask_degenerate_bins,
-        "r2": {"bucket": "intermediate-data"},
-        "render": {
-            "plugin_path": "/fake/Plugin.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.0.0-test",
-            "sample_rate": 44100,
-            "channels": 2,
-            "velocity": 100,
-            "signal_duration_seconds": 4.0,
-            "min_loudness": -55.0,
-            "samples_per_render_batch": 4,
-            "samples_per_shard": 4,
-            "gui_toggle_cadence": "never",
-        },
-    }
-    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
-
 
 # sample_rate=100 keeps the mel front end at its minimum hop so shards stay tiny.
 _LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
@@ -110,7 +50,7 @@ def build_lance_smoke_spec(
     task_name: str = "finalize-lance-unit",
     train_val_test_sizes: tuple[int, int, int] = (4, 0, 0),
     mask_degenerate_bins: bool = False,
-    render: RenderConfig | None = None,
+    render: RenderConfig | dict[str, Any] | None = None,
     base_seed: int = 42,
 ) -> DatasetSpec:
     """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
@@ -136,13 +76,13 @@ def build_lance_smoke_spec(
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
-def build_hdf5_smoke_spec(
-    task_name: str = "finalize-hdf5-unit",
+def build_multishard_lance_smoke_spec(
+    task_name: str = "finalize-lance-unit",
     train_val_test_sizes: tuple[int, int, int] = (8, 4, 4),
     samples_per_shard: int = 4,
     mask_degenerate_bins: bool = False,
 ) -> DatasetSpec:
-    """Construct a small hdf5 ``DatasetSpec`` directly (no Hydra compose).
+    """Construct a small multi-shard lance ``DatasetSpec`` directly (no Hydra compose).
 
     :param task_name: Unique task name so each test gets a distinct r2.prefix.
     :param train_val_test_sizes: Three-tuple of sample counts; every entry must
@@ -150,11 +90,11 @@ def build_hdf5_smoke_spec(
     :param samples_per_shard: Per-shard row count driving shard count derivation.
     :param mask_degenerate_bins: Threaded onto the spec so wire tests can pin
         both polarities of the finalize stats-fold knob.
-    :returns: A frozen hdf5 ``DatasetSpec`` whose shards are deterministic.
+    :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
         "task_name": task_name,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": list(train_val_test_sizes),
         "base_seed": 42,
         "mask_degenerate_bins": mask_degenerate_bins,
@@ -164,10 +104,10 @@ def build_hdf5_smoke_spec(
             "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
-            "sample_rate": 44100,
+            "sample_rate": 100,
             "channels": 2,
             "velocity": 100,
-            "signal_duration_seconds": 4.0,
+            "signal_duration_seconds": 1.0,
             "min_loudness": -55.0,
             "samples_per_render_batch": samples_per_shard,
             "samples_per_shard": samples_per_shard,
@@ -210,11 +150,13 @@ def shard_seed_for_path(dest: Path, spec: DatasetSpec) -> int:
     return spec.shards[0].seed
 
 
-def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
+def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | None = None) -> None:
     """Write a structurally valid Lance shard for ``spec`` at ``dest``.
 
     :param dest: Filesystem path where the Lance file is written.
     :param spec: Lance spec whose render shape/dtypes define the shard contract.
+    :param num_rows: Override the leading (row-count) dimension of every field;
+        ``None`` keeps the spec's per-shard sample count.
     """
     from synth_setter.pipeline.data.lance_shard import (
         lance_schema,
@@ -225,6 +167,8 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     render = spec.render.model_copy(update={"base_seed": shard_seed_for_path(dest, spec)})
     shapes = dataset_field_shapes(render, spec.num_params)
+    if num_rows is not None:
+        shapes = {field: (num_rows, *shape[1:]) for field, shape in shapes.items()}
     schema = lance_schema(shapes, smoke_shard_metadata(render))
     arrays = {
         AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
@@ -237,7 +181,10 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec) -> None:
             dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
         ),
     }
-    write_lance_dataset(dest, schema, [record_batch_from_arrays(arrays, schema)])
+    # record_batch_from_arrays rejects empty batches, so a zero-row shard is
+    # written as a schema-only dataset with no batches at all.
+    batches = [] if shapes[MEL_SPEC_FIELD][0] == 0 else [record_batch_from_arrays(arrays, schema)]
+    write_lance_dataset(dest, schema, batches)
 
 
 def uri_to_local_path(fake_r2_remote: Path, r2_uri: str) -> Path:
@@ -262,8 +209,8 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
     """Materialize each train shard under ``<remote>/<bucket>/<prefix>/<filename>``.
 
     Mirrors what ``generate_dataset.generate`` would have uploaded earlier in the
-    pipeline so finalize's ``r2_io.download_to_path`` finds a real tar under
-    the local-typed remote.
+    pipeline so finalize's Lance streaming finds a real shard under the
+    local-typed remote.
 
     :param fake_r2_remote: Root of the local-typed remote.
     :param spec: Dataset spec whose ``shards`` and ``r2`` provide the layout.
@@ -276,8 +223,6 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
         path = uri_to_local_path(fake_r2_remote, spec.r2.shard_uri(shard))
         if spec.output_format == "lance":
             write_minimal_lance_shard(path, spec)
-        elif spec.output_format == "wds":
-            write_minimal_wds_shard(path)
         else:
             raise ValueError(f"no minimal shard writer for output_format {spec.output_format!r}")
         seeded.append(path)
@@ -285,20 +230,17 @@ def seed_train_shards(fake_r2_remote: Path, spec: DatasetSpec) -> list[Path]:
 
 
 def seed_shard_files(remote_root: Path, spec: DatasetSpec) -> None:
-    """Write every ``spec.shards[i].filename`` as a structurally valid HDF5 shard.
+    """Write every ``spec.shards[i].filename`` as a structurally valid Lance shard.
 
-    Shapes/dtypes match
-    :func:`synth_setter.pipeline.ci.validate_shard.check_shard_contracts`.
+    Shapes/dtypes match the writer contract in
+    :func:`synth_setter.data.vst.shapes.dataset_field_shapes`.
 
     :param remote_root: Directory acting as the R2-side staging area.
     :param spec: Spec whose ``shards`` define the filenames to seed.
     """
     remote_root.mkdir(parents=True, exist_ok=True)
-    shapes = dataset_field_shapes(spec.render, spec.num_params)
     for shard in spec.shards:
-        with h5py.File(remote_root / shard.filename, "w") as f:
-            for field, shape in shapes.items():
-                f.create_dataset(field, shape=shape, dtype=DATASET_FIELD_DTYPES[field])
+        write_minimal_lance_shard(remote_root / shard.filename, spec)
 
 
 def write_spec_to_root(spec: DatasetSpec, tmp_path: Path) -> str:
@@ -336,27 +278,6 @@ def build_finalize_cfg(dataset_root_uri: str, output_dir: Path) -> DictConfig:
     )
 
 
-def stub_get_stats_hdf5(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub ``finalize_dataset.get_stats_hdf5`` to write a sentinel ``stats.npz``.
-
-    Real Dask startup dominates runtime; tests that drive ``finalize_hdf5``
-    end-to-end use this stub so the subsequent ``r2_io.upload`` step still
-    runs against a real on-disk file produced sibling to ``train.h5``.
-
-    :param monkeypatch: Pytest fixture used to install the stub.
-    """
-
-    def fake_stats(train_h5_path: str, mask_degenerate: bool = False) -> None:
-        del mask_degenerate
-        np.savez(
-            Path(train_h5_path).parent / "stats.npz",
-            mean=np.zeros((2, 8, 8), dtype=np.float32),
-            std=np.ones((2, 8, 8), dtype=np.float32),
-        )
-
-    monkeypatch.setattr("synth_setter.cli.finalize_dataset.get_stats_hdf5", fake_stats)
-
-
 def install_finalize_setup_stubs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Callable[[int | None], None]:
@@ -383,6 +304,64 @@ def install_finalize_setup_stubs(
         monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda _uri: size)
 
     return _set_marker_size
+
+
+def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the fragment-commit finalize path so it runs against the local fake remote.
+
+    ``finalize_lance`` delegates to
+    :func:`~synth_setter.pipeline.data.lance_finalize.finalize_lance_fragments`,
+    whose winner selection lists the R2 staging prefix and whose per-split
+    ``Overwrite`` commit needs real staged fragment data — neither of which the
+    local-typed ``fake_r2_remote`` can serve. Stubbing winner selection (with a
+    synthetic non-degenerate Welford state per shard) and the fragment commit
+    leaves ``stats.npz`` + ``dataset.json`` + ``dataset.complete`` as the only
+    artifacts routed through the real ``r2_io.upload`` — enough to pin the
+    marker-last ordering and artifact-logging contracts locally. The full commit
+    is covered against real R2 in ``tests/integration/test_finalize_dataset_r2.py``.
+
+    :param monkeypatch: Pytest fixture used to install the stubs.
+    """
+    from datetime import UTC, datetime
+
+    from synth_setter.pipeline.data.lance_finalize import (
+        CheckedLanceWinner,
+        StagedLanceAttempt,
+    )
+
+    def fake_select(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
+        rows = spec.render.samples_per_shard
+        shape = (spec.render.channels, 8, 8)
+        # Non-degenerate m2 (variance == 1) so finalize's default degenerate-bin
+        # check never raises for the smoke spec.
+        welford = (
+            rows,
+            np.zeros(shape, dtype=np.float32),
+            np.full(shape, float(rows), dtype=np.float32),
+        )
+        return {
+            shard.shard_id: CheckedLanceWinner(
+                attempt=StagedLanceAttempt(
+                    shard_id=shard.shard_id,
+                    name=f"stub-{shard.shard_id:06d}",
+                    valid_key=f"stub/{shard.filename}.valid",
+                    valid_mtime=datetime.now(UTC),
+                ),
+                # Stub winner: commit_lance_dataset is patched out, so the
+                # fragment is never read — a placeholder satisfies the field.
+                fragment=cast(Any, object()),
+                welford=welford,
+            )
+            for shard in spec.shards
+        }
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.lance_finalize._select_checked_winners", fake_select
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.lance_finalize.commit_lance_dataset",
+        lambda *args, **kwargs: None,
+    )
 
 
 def copy_shard_for_download(r2_stand_in: Path, r2_uri: str, dst: Path) -> None:

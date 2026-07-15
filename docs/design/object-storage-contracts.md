@@ -160,9 +160,7 @@ class DatasetStorageLayout(BaseModel):
     def dataset_card(self) -> ObjectLocation: ...
     def complete_marker(self) -> ObjectLocation: ...
     def shard(self, shard: ShardSpec) -> ObjectLocation: ...
-    def split_h5(self, split: Split) -> ObjectLocation: ...
     def split_lance(self, split: Split) -> ObjectLocation: ...
-    def split_wds_brace(self, shard_range: tuple[int, int]) -> ObjectLocation: ...
     def stats(self) -> ObjectLocation: ...
     def lance_versions(self, shard: ShardSpec) -> ObjectLocation: ...
 ```
@@ -263,7 +261,7 @@ spec.storage.complete_marker()
 Current examples:
 
 - `spec_io.upload_spec()` uploads `spec.r2.input_spec_uri()`.
-- `finalize_dataset.finalize_hdf5()` downloads each `spec.r2.shard_uri(shard)`.
+- `finalize_dataset.finalize_lance()` commits worker-written Lance fragments into the split datasets (no per-shard download).
 - `train._upload_best_checkpoint()` uploads a checkpoint URI.
 
 Target pattern:
@@ -453,7 +451,6 @@ The following leaks should not remain:
    - `datamodule.download_dataset_root_uri`
    - `evaluation.upload_output_dir_uri`
    - `training.upload_checkpoints_uri`
-   - `copy_dataset_root_uri`
 
 ### Still Open
 

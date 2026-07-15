@@ -1,4 +1,4 @@
-"""Leaf-module home for the wds tar shard's ``metadata.json`` sidecar model.
+"""Leaf-module home for the Lance shard's schema-metadata payload model.
 
 Kept free of project imports (only ``pydantic``) so consumers on either side
 of the ``synth_setter/`` boundary — notably ``synth_setter.data.vst`` — can
@@ -14,13 +14,12 @@ DEFAULT_ATTEMPTS_PER_SAMPLE = 100
 
 
 class ShardMetadata(BaseModel):
-    """Sidecar JSON written into wds tar shards (member ``metadata.json``).
+    """Per-shard provenance embedded in the Lance dataset's Arrow schema metadata.
 
-    Mirrors the ``audio`` HDF5 dataset attrs that the wds layout doesn't have
-    a natural home for. The wds writer (PR-13) and the wds branch of
-    ``validate_shard`` (also PR-13) will consume this model directly so a
-    malformed sidecar fails loudly at write or read time instead of silently
-    shipping a half-described shard.
+    The writer projects a ``RenderConfig`` onto these fields and embeds them in
+    the shard's schema metadata; validation and finalize recover the payload via
+    this model so a malformed value fails loudly at read time instead of
+    silently shipping a half-described shard.
 
     JSON read off R2 is a trust boundary — the value ranges below match
     ``RenderConfig._ranges_must_be_sane`` so a corrupted or hand-edited

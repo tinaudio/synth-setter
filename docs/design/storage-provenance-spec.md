@@ -49,12 +49,10 @@ ______________________________________________________________________
 
 > **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`. The `metadata/workers/` staging prefix and the `finalize` promotion step are **future state** — see [#406](https://github.com/tinaudio/synth-setter/issues/406).
 
-> **Format status:** Lance is the primary output format; HDF5/WDS entries below are legacy, kept because existing R2 datasets use those layouts — see [legacy/hdf5-wds-formats.md](legacy/hdf5-wds-formats.md) and [#1779](https://github.com/tinaudio/synth-setter/issues/1779).
-
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── shards/                  # Future state — no shards/ subdir exists yet; current workers upload shard files directly under the run prefix root. #406
-│   ├── shard-000000.h5
+│   ├── shard-000000.lance/
 │   └── ...
 ├── train.lance/             # output_format=lance; fragment data may be worker-written, manifests are finalize-written
 │   ├── data/
@@ -73,7 +71,6 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 │       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz
 │       ├── attempts/{worker_id}-{attempt_uuid}/report.json
 │       └── attempts/{worker_id}-{attempt_uuid}/debug.log
-├── train.h5, val.h5, test.h5  # output_format=hdf5; split virtual datasets
 └── stats.npz                   # Normalization statistics
 ```
 

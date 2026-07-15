@@ -21,19 +21,22 @@ REAL_CHECK_CALL = check_call_streamed
 
 
 def materialize_shard(args: list[str]) -> None:
-    """``_check_call_streamed`` side effect that writes the shard the renderer promises.
+    """``_check_call_streamed`` side effect that writes the Lance shard the renderer promises.
 
     Mirrors the production contract: ``generate_vst_dataset.py`` exits 0 only
-    after writing the HDF5 to its output path, so a test without this side
-    effect would trip the ``shard_path.is_file()`` check in
-    ``_render_and_upload_shard``.
+    after writing the ``.lance`` dataset directory to its output path, so a test
+    without this side effect would trip the ``shard_path.is_dir()`` check in
+    ``_render_and_upload_shard``. The ``_versions/`` subdir is populated because
+    the resume skip-probe and the ordered directory upload both target it.
 
     :param args: argv list passed to the patched ``_check_call_streamed``.
     """
     script_idx = find_script_index(args)
-    output_file = Path(args[script_idx + 1])
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_bytes(b"")
+    output_dir = Path(args[script_idx + 1])
+    (output_dir / "data").mkdir(parents=True, exist_ok=True)
+    (output_dir / "data" / "shard.bin").write_bytes(b"\x00")
+    (output_dir / "_versions").mkdir(parents=True, exist_ok=True)
+    (output_dir / "_versions" / "1.manifest").write_bytes(b"\x00")
 
 
 def materialize_or_passthrough_rclone(args: list[str]) -> None:

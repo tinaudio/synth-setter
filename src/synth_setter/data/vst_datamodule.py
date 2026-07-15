@@ -1,8 +1,9 @@
 """VST shard dataloading and shared batch preparation.
 
-Example::
+Reading a shard needs a storage-format subclass; the concrete entry point is
+:class:`synth_setter.data.lance_datamodule.LanceVSTDataModule`::
 
-    module = VSTDataModule(
+    module = LanceVSTDataModule(
         dataset_root="data", param_spec_name=ParamSpecName("surge_xt")
     )
     module.setup("fit")
@@ -11,10 +12,9 @@ Example::
 
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+import sys
 from typing import ClassVar, NotRequired, Protocol, TypedDict
 
-import h5py
-import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
 import numpy as np
 import torch
 from lightning import LightningDataModule
@@ -28,6 +28,7 @@ from synth_setter.pipeline import r2_io
 
 # Exclusive ``torch.randint`` bound keeping drawn seeds in signed-int64 range.
 _SEED_BOUND = torch.iinfo(torch.int64).max
+
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
 # are documented in the docstring body instead.
@@ -136,9 +137,7 @@ def prepare_batch(
     # the generator (randn_like does not), so noise can't land on a foreign device.
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, m2l, audio = _hungarian_match(
-            noise, params, mel_spec, m2l, audio
-        )
+        noise, params, mel_spec, m2l, audio = _hungarian_match(noise, params, mel_spec, m2l, audio)
 
     return {
         "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
@@ -200,7 +199,7 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
 
 
 class ShardColumn(Protocol):
-    """One named array column of a shard — the read surface of ``h5py.Dataset``."""
+    """One named array column of a shard — the format-neutral read surface it exposes."""
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -217,7 +216,7 @@ class ShardColumn(Protocol):
 
 
 class ShardFile(Protocol):
-    """Read handle over one dataset shard — the surface of ``h5py.File`` the readers use."""
+    """Read handle over one dataset shard — the format-neutral surface the readers use."""
 
     def __getitem__(self, name: str) -> ShardColumn:
         """Return the named column view.
@@ -242,9 +241,11 @@ class ShardFile(Protocol):
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so class-level
 # annotations are documented in the docstring body instead.
 class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
-    """Batch-indexed dataset over one shard of VST renders (HDF5 by default).
+    """Batch-indexed dataset over one shard of VST renders.
 
-    Each ``__getitem__`` returns a whole batch (the dataloader uses ``batch_size=None``)
+    Abstract on the storage format: a format-specific subclass (e.g.
+    ``LanceVSTDataset``) must implement ``_open``. Each ``__getitem__`` returns a
+    whole batch (the dataloader uses ``batch_size=None``)
     of conditioning features, target params, and noise (Hungarian-matched to params when
     ``ot`` is set). Fake mode synthesises
     random tensors of the configured width without opening any file. ``mean`` and ``std``
@@ -255,7 +256,6 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     ``seed_everything`` governs it) and re-seeded once per dataloader worker from
     the worker seed (seed it manually to pin a batch); fake mode leaves it at the
     default seed because fake noise never uses it.
-    Storage-format subclasses override ``_open`` to read non-HDF5 shards.
     """
 
     mean: np.ndarray | None = None
@@ -279,7 +279,7 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
     ) -> None:
         """Open the shard and configure which features each batch reads.
 
-        :param dataset_file: Path to the HDF5 shard; ignored when ``fake`` is set.
+        :param dataset_file: Path to the shard; ignored when ``fake`` is set.
         :param batch_size: Number of samples returned per ``__getitem__``.
         :param ot: Whether to optimal-transport match noise to params per batch.
         :param read_audio: Whether to read the raw audio tensor.
@@ -329,12 +329,18 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
             self._load_dataset_statistics(dataset_file)
 
     def _open(self, dataset_file: str | Path) -> ShardFile:
-        """Open the shard read-only; storage-format subclasses override this hook.
+        """Open the shard read-only; a format-specific subclass must implement this hook.
 
         :param dataset_file: Path to the shard on disk.
         :return: Open read handle for the shard.
+        :raises NotImplementedError: Always — the base class is storage-format
+            agnostic; use a concrete subclass such as ``LanceVSTDataset`` (wired
+            via ``LanceVSTDataModule.dataset_cls``).
         """
-        return h5py.File(dataset_file, "r")
+        raise NotImplementedError(
+            "VSTDataset is storage-format agnostic; a format-specific subclass "
+            "(e.g. synth_setter.data.lance_datamodule.LanceVSTDataset) must implement _open."
+        )
 
     def _load_dataset_statistics(self, dataset_file: str | Path) -> None:
         """Load the mel mean and std saved alongside the shard.
@@ -482,11 +488,11 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
 
 class WithinChunkShuffledSampler(torch.utils.data.Sampler):
-    """Shuffle batches within fixed-size groups to limit concurrent HDF5 file handles.
+    """Shuffle batches within fixed-size groups to limit concurrent shard file handles.
 
     The dataset is stored as equal-length shards on disk. Sampling within each group of
     ``batches_per_group`` keeps reads local to a shard rather than spanning the whole
-    dataset, so h5py only crosses shard boundaries at group edges.
+    dataset, so reads only cross shard boundaries at group edges.
     """
 
     def __init__(self, batch_size: int, num_batches: int, batches_per_group: int) -> None:
@@ -616,7 +622,9 @@ class VSTDataModule(LightningDataModule):
     """
 
     dataset_cls: ClassVar[type[VSTDataset]] = VSTDataset
-    shard_suffix: ClassVar[str] = ".h5"
+    # Default shard suffix; the base ``VSTDataset._open`` is abstract, so a
+    # format-specific subclass (e.g. ``LanceVSTDataModule``) is required to read.
+    shard_suffix: ClassVar[str] = ".lance"
 
     def __init__(
         self,
@@ -792,7 +800,7 @@ class VSTDataModule(LightningDataModule):
 
         :param stage: Lightning stage hint; unused because all splits are closed together.
         """
-        # fake mode leaves dataset_file None (no h5 opened), so guard each close.
+        # fake mode leaves dataset_file None (no shard opened), so guard each close.
         for dataset in (
             self.train_dataset,
             self.val_dataset,
@@ -803,7 +811,12 @@ class VSTDataModule(LightningDataModule):
                 dataset.dataset_file.close()
 
 
-# Deprecated aliases: archived W&B run configs and external job scripts resolve the
-# old ``_target_`` paths, so Hydra must keep finding these names.
-SurgeXTDataset = VSTDataset
-SurgeDataModule = VSTDataModule
+# Archived Hydra targets resolve after the circular Lance import completes.
+if "synth_setter.data.lance_datamodule" not in sys.modules:
+    from synth_setter.data.lance_datamodule import LanceVSTDataModule, LanceVSTDataset
+
+    SurgeXTDataset = LanceVSTDataset
+    SurgeDataModule = LanceVSTDataModule
+else:
+    SurgeXTDataset = VSTDataset
+    SurgeDataModule = VSTDataModule

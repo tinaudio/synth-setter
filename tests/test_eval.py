@@ -209,13 +209,12 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
 
 _FAKE_ORACLE_DATASETS = [
-    pytest.param(_FakeOracleDataset("h5", "fake_surge_smoke_datasets", None), id="h5"),
     pytest.param(
-        _FakeOracleDataset("lance", "fake_surge_smoke_lance_datasets", "surge_lance"),
+        _FakeOracleDataset("lance", "fake_surge_smoke_datasets", "surge_lance"),
         id="lance",
     ),
     pytest.param(
-        _FakeOracleDataset("lance_map", "fake_surge_smoke_lance_datasets", "surge_lance_map"),
+        _FakeOracleDataset("lance_map", "fake_surge_smoke_datasets", "surge_lance_map"),
         id="lance_map",
     ),
 ]
@@ -236,7 +235,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     the metric dict.
 
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
-    :param surge_xt_smoke_datasets: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Holds ``{train,val,test}.lance`` + ``stats.npz``.
     :param dataset_spec_factory: Factory producing the frozen dataset provenance.
     :param monkeypatch: Replaces the external W&B logger boundary.
     """
@@ -259,7 +258,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.lance")
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
@@ -308,7 +307,7 @@ def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_su
     ``evaluate()`` boundary — confirming the gate is wired through the real
     entrypoint (#489).
 
-    :param cfg_surge_real_train: Surge XT smoke-test training config (h5 or Lance arm).
+    :param cfg_surge_real_train: Surge XT smoke-test training config (Lance).
     :param cfg_surge_real_eval: Matching predict-mode eval config (render + metrics on),
         sharing ``tmp_path`` so eval reads the checkpoint training writes.
     """
@@ -412,14 +411,13 @@ def _compose_fake_oracle_eval_cfg(
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         predict-mode ``PredictionWriter`` writes ``predictions/`` beneath it.
-    :param dataset_root: Holds the ``{train,val,test}`` splits (``.h5`` or
-        ``.lance`` per the selected ``datamodule``) + ``stats.npz``.
+    :param dataset_root: Holds the ``{train,val,test}.lance`` splits + ``stats.npz``.
     :param mode: ``cfg.mode`` under test (``test`` / ``validate`` / ``val`` /
         ``predict`` / an unknown spelling).
     :param param_spec_name: Param spec the dataset was rendered with; drives the
         inline ``render`` group and the per-param-MSE callback's spec.
     :param datamodule: Optional datamodule group override (e.g. ``surge_lance``);
-        ``None`` keeps the experiment's HDF5 ``surge`` group.
+        ``None`` keeps the experiment's default ``surge`` group.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -463,7 +461,7 @@ def _compose_parametrized_fake_oracle_eval_cfg(
     *,
     mode: str,
 ) -> DictConfig:
-    """Compose the fake-oracle eval cfg for the parametrized H5/Lance dataset.
+    """Compose the fake-oracle eval cfg for the parametrized Lance dataset.
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``.
     :param request: Fetches the parametrized dataset fixture.
@@ -902,18 +900,18 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
 @pytest.mark.fake_vst
 def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     tmp_path: Path,
-    fake_surge_smoke_lance_datasets: Path,
+    fake_surge_smoke_datasets: Path,
 ) -> None:
     """``datamodule=surge_lance`` drives ``evaluate`` end-to-end over Lance splits.
 
-    The oracle returns params verbatim, so ``val/param_mse`` is exactly zero —
-    the same contract as the HDF5 leg, with every batch read from Lance.
+    The oracle returns params verbatim, so ``val/param_mse`` is exactly zero,
+    with every batch read from Lance.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
-    :param fake_surge_smoke_lance_datasets: Natively-generated Lance smoke dataset.
+    :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
     """
     cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path, fake_surge_smoke_lance_datasets, mode="validate", datamodule="surge_lance"
+        tmp_path, fake_surge_smoke_datasets, mode="validate", datamodule="surge_lance"
     )
 
     HydraConfig().set_config(cfg)

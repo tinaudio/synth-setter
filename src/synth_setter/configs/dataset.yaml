@@ -23,7 +23,7 @@ task_name: ???
 # construction), so default it to ``task_name`` for the Hydra output-dir interpolation.
 # Dropped before DatasetSpec construction (it's not a spec field).
 run_name: ${task_name}
-output_format: hdf5
+output_format: lance
 base_seed: 42
 
 # Wandb run tags; parity with train.yaml/eval.yaml. ``extras: default`` sets
@@ -31,17 +31,9 @@ base_seed: 42
 # Masked out of ``DatasetSpec`` by ``from_hydra_cfg`` (not a spec field).
 tags: ["dev", "generate_dataset"]
 
-# Optional dataset-copy source root URI. ``null`` samples fresh params (the
-# default). Set to a root of source shards (bare path, ``file://``, or ``r2://``)
-# to instead re-render each same-named shard's params; the source must share
-# this config's ``render.param_spec_name``. An ``r2://`` source is downloaded
-# per shard at copy time. Override directly, e.g.
-# ``copy_dataset_root_uri=r2://bucket/prefix/task/run``.
-copy_dataset_root_uri: null
-
-# Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_wds`` /
-# ``get_stats_hdf5``; ``true`` substitutes ``std=1.0`` at zero-variance mel
-# bins instead of raising. Smoke configs override to ``true``.
+# Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_lance``;
+# ``true`` substitutes ``std=1.0`` at zero-variance mel bins instead of raising.
+# Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
 # Run synth-setter-finalize-dataset inline after generate completes.
@@ -50,7 +42,7 @@ mask_degenerate_bins: false
 finalize_inline: false
 
 # Run surge/fake_oracle inline (subprocess) after finalize. Requires
-# finalize_inline=true + output_format=hdf5. Local-run only.
+# finalize_inline=true. Local-run only.
 oracle_eval_inline: false
 
 # Null default: ``DatasetSpec._drop_null_run_id`` mode='before' validator pops

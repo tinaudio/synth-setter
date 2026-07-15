@@ -11,7 +11,7 @@ What this test deliberately does NOT cover:
   - ``sky.launch`` / kind / file_mounts / dev-snapshot image pull — the
     ``test-dataset-generation.yml`` workflow keeps that coverage nightly.
   - The real Surge VST3 subprocess — replaced by a deterministic dummy that
-    writes a validation-passing shard (HDF5 or tar) of the right shape.
+    writes a validation-passing Lance shard of the right shape.
 
 The test is gated on ``rclone lsd r2:`` succeeding so a contributor's bare
 clone or a fork PR without R2 secrets auto-skips. A unique R2 prefix per
@@ -57,8 +57,8 @@ def _unique_r2_prefix() -> str:
 
     The full triple keeps concurrent CI runs isolated even on re-runs: the
     same ``run_id`` paired with a bumped ``run_attempt`` lands under a fresh
-    leaf, and the trailing uuid nonce keeps the two parametrizations
-    (``hdf5`` / ``wds``) in the same run apart. Locally (no ``GITHUB_*``
+    leaf, and the trailing uuid nonce keeps the parametrizations
+    in the same run apart. Locally (no ``GITHUB_*``
     env) the placeholders ``local`` / ``0`` keep dev artifacts grouped
     under a recognizable ``ci-roundtrip/local/0/`` parent that can be
     purged in bulk; each ``pytest`` invocation still gets a fresh uuid
@@ -121,7 +121,6 @@ def ci_r2_prefix() -> Iterator[str]:
     "experiment",
     [
         "generate_dataset/smoke-shard",
-        "generate_dataset/smoke-shard-wds",
         "generate_dataset/smoke-shard-lance",
     ],
 )
@@ -138,8 +137,8 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     upload, and finally the existing ``pipeline.ci`` validators downloading
     everything back from R2 and confirming structural correctness.
 
-    :param experiment: Hydra experiment id (parametrized to cover the ``hdf5``,
-        ``wds``, and ``lance`` formats).
+    :param experiment: Hydra experiment id (both parametrizations render the
+        ``lance`` format).
     :param ci_r2_prefix: Unique R2 prefix per CI run; finalizer purges it.
     :param monkeypatch: Pytest fixture used to set env vars and patch
         ``sys.argv`` for the ``main()`` invocation.
