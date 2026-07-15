@@ -502,7 +502,10 @@ exclude = '''(?x)
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
-build_command = ""
+# Refresh uv.lock's synth-setter version after the version stamp; the PSR action
+# container ships pip but no uv (#1913). `assets` commits the refreshed lock.
+build_command = "pip install uv==0.11.28 && uv lock"
+assets = ["uv.lock"]
 commit_message = "chore(release): {version} [skip ci]"
 changelog_file = "CHANGELOG.md"
 
