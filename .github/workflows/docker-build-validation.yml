@@ -70,18 +70,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # Standard runners ship ~25 GiB of unused toolchains; the cu128 torch
-      # layers need that disk. Logs RAM/CPU/disk for exit-137 (OOM) triage.
+      # Buys headroom for the torch build's cache and its `load: true` export
+      # (#1930). Inline: a composite may be absent from the PR head checked out.
       - name: Free runner disk space
         run: |
           set -euo pipefail
-          df -h /
+          df -h
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            /usr/local/share/powershell /usr/local/lib/node_modules /opt/az \
+            /usr/share/miniconda \
             || echo "::warning::toolchain cleanup failed, continuing"
           sudo docker image prune --all --force \
             || echo "::warning::docker image prune failed, continuing"
-          df -h /
+          df -h
           free -h
           nproc
 
@@ -199,18 +201,20 @@ jobs:
           # immutable dev-snapshot-<sha> tag for the triggering one).
           ref: ${{ github.event.inputs.git_ref || github.sha }}
 
-      # This job additionally `load:`s the built image for the smoke tests, so
-      # it needs the reclaimed disk even more than docker-validate does.
+      # Same reclaim (#1930) — the smoke tests pull the pushed image back down.
+      # Inline + byte-identical: this job checks out an arbitrary `git_ref`.
       - name: Free runner disk space
         run: |
           set -euo pipefail
-          df -h /
+          df -h
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            /usr/local/share/powershell /usr/local/lib/node_modules /opt/az \
+            /usr/share/miniconda \
             || echo "::warning::toolchain cleanup failed, continuing"
           sudo docker image prune --all --force \
             || echo "::warning::docker image prune failed, continuing"
-          df -h /
+          df -h
           free -h
           nproc
 
