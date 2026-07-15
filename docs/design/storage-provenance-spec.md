@@ -35,10 +35,11 @@ ______________________________________________________________________
 intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
-└── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+└── probes/{train_config_id}/step-{global_step}/
 ```
 
-The three prefixes (`data/`, `train/`, `eval/`) are the canonical per-run dataset footprint.
+The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`).
 
 ______________________________________________________________________
 

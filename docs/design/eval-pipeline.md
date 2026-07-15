@@ -260,6 +260,8 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
+`predict_vst_audio` also accepts a staging layout with **no** `target-audio-*.pt` files when `--rerender_target` is on and target params are staged (the training val-audio probe's layout — training batches carry no raw audio); with no target-audio file and rerendering off, it raises a directed `ValueError` rather than rendering without a target source. When dataset audio is absent the spectrogram falls back to the re-rendered target.
+
 When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too. When the auto-shuffle probe ran, the drawn permutation is also logged as a `shuffle/permutation` `wandb.Table` (from `shuffle_permutation.csv`) — W&B-only, not in the returned dict — so the render-order mapping behind the shuffled metrics is reproducible.
 
 ### 5.2 Render
@@ -320,7 +322,7 @@ _target_: synth_setter.data.vst_datamodule.VSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
-num_workers: 11
+num_workers: 4  # per dataloader — validation doubles the live worker count
 ```
 
 `surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.

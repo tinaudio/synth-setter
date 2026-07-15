@@ -112,7 +112,7 @@ synth-setter/
 │   │   ├── data/           #     Dataset-shaping utilities (lance_staging, lance_finalize, stats, ...)
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
-│   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics, shuffle_pred_audio (library code called by cli/eval.py)
+│   ├── evaluation/         #   Render/metrics library code (predict_vst_audio, compute_audio_metrics, shuffle_pred_audio, audio_probe) shared by cli/eval.py and the training val-audio probe
 │   ├── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, ...)
 │   └── configs/            #   Hydra YAML configs (and SkyPilot Task templates under compute/) — #1236
 │       ├── train.yaml      #     Root training config

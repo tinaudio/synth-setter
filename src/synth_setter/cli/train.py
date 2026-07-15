@@ -1,5 +1,6 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -14,6 +15,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.evaluation.audio_probe import ProbeRenderSettings, run_audio_probe
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
 from synth_setter.run_id import make_wandb_run_id
@@ -33,7 +35,7 @@ from synth_setter.utils import (
     use_input_artifacts,
     watch_gradients,
 )
-from synth_setter.utils.callbacks import CheckpointUploader
+from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
 from synth_setter.workspace import operator_workspace
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -132,6 +134,73 @@ def _configure_checkpoint_durability(
     model_checkpoint.save_last = True
     model_checkpoint.save_on_exception = True
     callbacks.append(CheckpointUploader(prefix_uri, model_checkpoint))
+
+
+def _derive_probe_uri(cfg: DictConfig) -> str:
+    """Return the ``r2://`` prefix val-audio-probe snapshots are archived under.
+
+    Derives ``r2://{r2.bucket}/probes/{config_id}/``, where ``config_id`` is
+    :func:`~synth_setter.utils.resolve_run_config_id` — the same identity the
+    checkpoint URI uses, so a run's probes and checkpoint sit under one name.
+
+    :param cfg: Hydra-composed train cfg; reads ``r2.bucket``.
+    :returns: The ``r2://`` snapshot prefix for this run.
+    """
+    return f"r2://{cfg.r2.bucket}/probes/{resolve_run_config_id(cfg)}"
+
+
+def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
+    """Append the opt-in validation audio probe.
+
+    Wired here rather than through the ``callbacks`` config group because the probe
+    needs ``cfg.render`` and the Python-resolved run config id, neither of which a
+    callback YAML can interpolate.
+
+    :param cfg: Hydra config carrying the opt-in flag, ``render`` group, and ``r2.bucket``.
+    :param callbacks: Callback list mutated in place.
+    :raises ValueError: If the probe is enabled without a ``render`` config group, with
+        validation disabled, or with a non-positive-integer sample count.
+    """
+    if not OmegaConf.select(cfg, "training.val_audio_probe"):
+        return
+    if cfg.get("render") is None:
+        raise ValueError(
+            "training.val_audio_probe=true requires a render config group "
+            "(e.g. `render=surge_xt`); cfg.render is unset."
+        )
+    # The surge experiment base ships trainer.limit_val_batches: 0 — a validation-hooked
+    # probe wired into such a run would silently stage nothing forever.
+    if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
+        raise ValueError(
+            "training.val_audio_probe=true requires validation to run, but "
+            "trainer.limit_val_batches is 0. Override it (e.g. "
+            "`trainer.limit_val_batches=1.0`) to enable the probe."
+        )
+    num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
+    # bool is an int subclass, so `true` would otherwise pass as 1.
+    if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
+        raise ValueError(
+            f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
+        )
+    settings = ProbeRenderSettings(
+        param_spec_name=cfg.render.param_spec_name,
+        plugin_state_path=cfg.render.plugin_state_path,
+        plugin_path=cfg.render.get("plugin_path"),
+        sample_rate=cfg.render.get("sample_rate"),
+        channels=cfg.render.get("channels"),
+        velocity=cfg.render.get("velocity"),
+        signal_duration_seconds=cfg.render.get("signal_duration_seconds"),
+    )
+    r2_io.ensure_r2_env_loaded()
+    callbacks.append(
+        ValAudioProbe(
+            probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
+            probe_fn=partial(
+                run_audio_probe, settings=settings, upload_uri=_derive_probe_uri(cfg)
+            ),
+            num_samples=num_samples,
+        )
+    )
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
@@ -256,6 +325,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
     _configure_checkpoint_durability(cfg, callbacks, recovery_namespace)
+    _configure_val_audio_probe(cfg, callbacks)
 
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, run_id, "training")

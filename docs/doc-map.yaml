@@ -70,7 +70,7 @@ docs:
       - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
-        covers: "Lightning callback behavior and opt-in R2 checkpoint durability"
+        covers: "Lightning callback behavior: R2 checkpoint durability; ValAudioProbe metrics harvested one validation late"
 
   # ── W&B artifact & provenance reference ─────────────────────────
   - doc: docs/reference/artifact-provenance-reference.md
@@ -236,7 +236,7 @@ docs:
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
     sources:
       - pattern: "src/synth_setter/cli/train.py"
-        covers: "Training entry point, Hydra config composition, operator-workspace bootstrap (sets ``$PROJECT_ROOT`` so ``configs/paths/default.yaml`` interpolates under any install layout)"
+        covers: "Training entry point, Hydra config composition, operator-workspace bootstrap (sets ``$PROJECT_ROOT``), opt-in validation-audio-probe wiring"
       - pattern: "src/synth_setter/models/**"
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
       - pattern: "src/synth_setter/data/**"
@@ -287,6 +287,8 @@ docs:
         covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv + shuffle_permutation.csv)"
       - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
         covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs; auto-invoked by compute_audio_metrics.main() when params_are_uniform returns True. params_are_uniform is also the gating predicate imported by compute_audio_metrics."
+      - pattern: "src/synth_setter/evaluation/audio_probe.py"
+        covers: "Training validation-audio probe render, score, and R2-archive chain (run_audio_probe / ProbeRenderSettings)"
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
@@ -414,7 +416,7 @@ docs:
       - pattern: "tests/_meta/**"
         covers: "AST-based meta-tests enforcing structural invariants on other test modules (e.g., no Hydra config-initializer imports in canonical entrypoint test files)"
       - pattern: "tests/infra/**"
-        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity, PR-review model-routing + review-launcher contract tests (Claude/Codex/OpenCode role pinning, launcher dry-run and degrade paths)"
       - pattern: "tests/integration/**"
         covers: "Four classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` (path-scoped) on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`; and (4) real-R2 streaming round-trips for pipeline/dataloader reads (`test_lance_r2_multipart.py`, `test_lance_torch_r2.py`, `test_finalize_dataset_r2.py`, `test_add_embeddings_r2.py`; `integration_r2`+`r2`+`slow`) that run wherever R2 credentials are provisioned. The `integration_r2` marker spans classes 1 and 4 — it gates on credentials, it does not identify a class."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
@@ -448,6 +450,25 @@ docs:
         covers: "Hook wiring + exit-contract tests (settings.json wiring, gate tests, skill-discovery parity) and the autouse gate-override env scrub conftest"
       - pattern: "tests/infra/test_agent_hooks_suite.py"
         covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
+
+  # ── PR review fan-out (roles, model pinning, cross-model pass) ──
+  - doc: AGENTS.md
+    description: Code-review section — review fan-out worker roles, per-provider model pinning, cross-model opencode pass
+    sources:
+      - pattern: "agent/_shared/run_codex_review_agent.*"
+        covers: "Codex review launcher: role resolution from .codex/agents TOMLs, codex exec invocation, agent_message extraction"
+      - pattern: "agent/_shared/run_opencode_review_agent.*"
+        covers: "OpenCode review launcher: role resolution from .opencode/agents TOMLs, read-only pr-reviewer agent, watchdog timeout, exit-3 degrade signal"
+      - pattern: ".claude/agents/pr-review-*.md"
+        covers: "Claude-side pinned review roles (model/effort frontmatter) and worker briefs incl. the opencode-launcher carve-out"
+      - pattern: ".codex/agents/*.toml"
+        covers: "Codex-side pinned review roles (model/model_reasoning_effort) and developer instructions"
+      - pattern: ".opencode/agents/*.toml"
+        covers: "OpenCode-side pinned review models/variants for the worker roles"
+      - pattern: "opencode.json"
+        covers: "Read-only pr-reviewer opencode agent: edit/task deny, read-only bash allowlist"
+      - pattern: "agent/skills/_shared/repo-review-full-analysis.md"
+        covers: "Shared fan-out pipeline: skill selection, worker prompts, cross-model opencode pass, aggregation and sentinel contract"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
