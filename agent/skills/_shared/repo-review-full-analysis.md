@@ -78,7 +78,9 @@ Always run `code-health`, `synth-setter-project-standards`, and `correctness-rev
 only when the diff touches the Lance API. Grep the changed Python files:
 
 ```bash
-mapfile -t changed_py < <(gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" --json files -q '.files[].path' | grep '\.py$')
+# `read` (not `mapfile`) so macOS bash 3.2 works. Each line is one changed path.
+changed_py=()
+while IFS= read -r f; do changed_py+=("$f"); done < <(gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" --json files -q '.files[].path' | grep '\.py$')
 # PR file lists include deleted paths; keep only files present in the checkout
 present=(); for f in "${changed_py[@]}"; do [[ -f $f ]] && present+=("$f"); done
 [[ ${#present[@]} -gt 0 ]] && grep -lE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${present[@]}"

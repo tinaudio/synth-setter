@@ -61,7 +61,9 @@ export them before running the snippet:
 ```bash
 # --diff-filter=d drops deleted paths; the '*.py' pathspec keeps the scan on
 # code so prose mentions of Lance APIs in docs/markdown don't false-positive
-mapfile -t changed_py < <(git diff --name-only --diff-filter=d "$BASE"..."$HEAD" -- '*.py')
+# `read` (not `mapfile`) so macOS bash 3.2 works. Each line is one changed path.
+changed_py=()
+while IFS= read -r f; do changed_py+=("$f"); done < <(git diff --name-only --diff-filter=d "$BASE"..."$HEAD" -- '*.py')
 [[ ${#changed_py[@]} -gt 0 ]] && grep -nE 'import lance|lancedb|lance\.[a-z]|Lance[A-Z]|FragmentMetadata|write_dataset|\.scanner\(|\.to_batches\(|\.take\(|add_columns|merge_columns' -- "${changed_py[@]}"
 ```
 
