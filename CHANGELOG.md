@@ -1,6 +1,135 @@
 # CHANGELOG
 
 
+## v8.50.0 (2026-07-15)
+
+### Features
+
+- **data**: Wire lance.torch map dataloaders into the Lance datamodule
+  ([#1834](https://github.com/tinaudio/synth-setter/pull/1834),
+  [`4a7f941`](https://github.com/tinaudio/synth-setter/commit/4a7f941794fbef2e6b9594536bbcf8757575d143))
+
+* feat(data): wire lance.torch map dataloaders into LanceVSTDataModule behind loader switch
+
+Add loader={legacy,map} to LanceVSTDataModule (#1740 Task 2.2-2.4): PrepareBatchCollate bridges
+  LanceMapDataset's pre-collated batches into prepare_batch with lazy per-process noise RNG
+  (spawn-picklable); repeat_first_batch re-expressed as sample-index folding; fake mode stays on the
+  legacy in-memory path. Validated across all registered param specs via Trainer
+  fit/validate/test/predict flows and the real train(cfg) entrypoint on both loader paths.
+
+* refactor(data): apply simplify-pass cleanups to map-loader wiring
+
+Replace the _RepeatFirstRows dataset wrapper (and its shuffle coupling + dead __getitem__) with a
+  self-contained _RepeatFirstBatchSampler; load stats.npz once per setup instead of per split; lift
+  the shard-column test fixtures into tests/helpers/lance_fixtures.py.
+
+* fix(data): address pre-PR review findings on map-loader wiring
+
+_RepeatFirstBatchSampler floors its index count to full batches (legacy floor-divide parity; no
+  truncated repeat on non-divisible row counts); map setup fails fast on an unregistered
+  param_spec_name; loader is validated before base construction. Fix pre-existing ruff findings in
+  vst_datamodule.py now that CI lints it as a changed file (module docstring, imperative __bool__
+  summary, np.random epoch offset), and lint-clean the new test module. Adds coverage: ragged
+  repeat, val/predict repeat routing, external predict_file stats, teardown/setup cycle.
+
+Note: pre-commit's ruff hook is a no-op in nested .worktrees/ (gitignore exclusion via
+  --force-exclude); ruff was run directly on changed files.
+
+* fix(data): type LanceVSTDataModule init explicitly and harden repeat sampler
+
+Mirror the base datamodule signature instead of *args/**kwargs Any pass-through (project no-Any
+  standard), drop the Any-typed sampling dict, freeze _MapSplit, and fail fast when
+  repeat_first_batch has less than one full batch. Adds stats-off map coverage and tightens the
+  seed-test docstring to present-tense contract wording.
+
+* fix(data): train drop_last parity and review-round-3 cleanups for map loader
+
+Map-mode train drops the ragged tail like legacy floor-divide (a size-1 trailing batch breaks
+  batch-statistics layers); eval loaders keep it. Document _MapSplit fields with attribute blocks
+  instead of a noqa, promote DEFAULT_PARAM_SPEC_NAME to public for the mirrored signature, share the
+  global-RNG seed draw via draw_generator_seed(), and log when fake mode bypasses loader='map'. Adds
+  noise-advance and train-tail tests.
+
+* style(data): unquote cast target for file-consistent cast style
+
+* refactor(data): name the generator seed bound instead of inlining it
+
+* chore(deps): sync uv.lock with the 8.46.0 release version
+
+* feat(data): add lance-map experiments with e2e smoke and parity tests
+
+Answers the round-4 review ask: surge/ffn_4_lance_map and surge/eval_ffn_4_lance_map compose the
+  existing ffn_4 contracts onto datamodule=surge_lance_map (pinned in test_configs), the
+  surge_lance_map smoke variant joins the real- and fake-VST matrices consumed by test_train.py and
+  test_eval.py, and TestLegacyMapParity compares legacy vs map eval epochs batch-for-batch (noise on
+  shape only — the streams are seeded independently per path by design).
+
+* refactor(data): type param spec registry names
+
+* fix(data): reject conflicting spec registration
+
+* test(data): expect typed registered param spec key
+
+* test(data): add Lance map acceptance benchmarks
+
+* refactor(data): reuse Lance conditioning mode
+
+* test(data): pin Lance map read and sampler contracts
+
+* refactor(data): type Lance parameter spec selection
+
+* fix(code-health): synchronize package lock version
+
+* refactor(data): type Lance loader options
+
+* refactor(data): clarify benchmark read model
+
+* fix(data): preserve M2L alignment under matching
+
+* fix(data): exclude teardown from loader timing
+
+* fix(data): reopen Lance handles after fork
+
+* test(data): run benchmark CLI end to end
+
+* refactor(data): tighten loader documentation
+
+* fix(data): preserve one-batch benchmark trials
+
+* fix(data): preserve map loader integration contracts
+
+* fix(data): validate persistent loader configuration
+
+* fix(data): harden map loader contracts
+
+* fix(data): validate normalization statistics
+
+* fix(data): isolate distributed loader noise
+
+* fix(data): seed loader workers by rank
+
+* fix(data): namespace distributed worker seeds
+
+* test(data): cover distributed worker seed grid
+
+* fix(data): namespace legacy loader noise
+
+* refactor(data): share ranked generator seeding
+
+* fix(ci): extend MPS test timeout
+
+* fix(data): preserve map loader batch invariants
+
+Reject non-finite mel values created by normalization or float32 conversion. Fold repeat-first-batch
+  indices at the dataset boundary so Lightning can install its standard distributed sampler.
+
+### Testing
+
+- (fix) use worktree virtualenv in make targets
+  ([#1898](https://github.com/tinaudio/synth-setter/pull/1898),
+  [`2782fbc`](https://github.com/tinaudio/synth-setter/commit/2782fbc8ed9824c0129eb39c76a49d4043b6ecce))
+
+
 ## v8.49.0 (2026-07-15)
 
 ### Continuous Integration

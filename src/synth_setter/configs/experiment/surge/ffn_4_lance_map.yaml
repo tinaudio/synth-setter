@@ -1,0 +1,11 @@
+# @package _global_
+
+# surge/ffn_4 on the native lance.torch map dataloaders: same training
+# contract, only the loader switches off the legacy batch-indexed adapter.
+
+defaults:
+  - /experiment/surge/ffn_4
+  - override /datamodule: surge_lance_map
+  - _self_
+
+experiment_name: surge-4-toy-lance-map
