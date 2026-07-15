@@ -30,6 +30,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -41,9 +42,11 @@ import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
 
+from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
+from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests._vst import PLUGIN_PATH
@@ -692,8 +695,8 @@ def test_generate_dataset_renders_shards_to_r2(
     try:
         from_hydra(cfg_dataset)
         for shard in spec.shards:
-            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
-                f"shard missing in R2: {shard.filename}"
+            assert shard_has_complete_attempt(spec, shard.shard_id), (
+                f"staged attempt missing in R2: {shard.filename}"
             )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
@@ -739,8 +742,8 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     try:
         from_hydra(cfg_dataset_obxf)
         for shard in spec.shards:
-            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
-                f"shard missing in R2: {shard.filename}"
+            assert shard_has_complete_attempt(spec, shard.shard_id), (
+                f"staged attempt missing in R2: {shard.filename}"
             )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
@@ -777,6 +780,8 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
     storage_options = r2_io.r2_storage_options()
     try:
         from_hydra(cfg_dataset)
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            finalize_lance(spec, Path(raw_work_dir))
         for shard in spec.shards:
             s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
             params = np.stack(
