@@ -310,7 +310,7 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via R2
 
-`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). Intermediate checkpoints are synced only when `training.upload_checkpoints_during_training` is set (default off): a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write to `r2://…/checkpoints/{config_id}/last.ckpt`, so a host crash before train-end can't strand the newest checkpoint. The upload is synchronous on the training thread, so it targets single-device or coarse-cadence runs.
+`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). When `training.upload_checkpoints_during_training` is set (default off), a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write under `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt`. The UUID isolates concurrent launches even if their timestamp-based W&B run IDs collide. Enabling this mode requires exactly one `ModelCheckpoint`; configuration fails before training otherwise. Uploads are synchronous on the training thread, so this mode targets single-device or coarse-cadence runs.
 
 ```yaml
 # src/synth_setter/configs/logger/wandb.yaml
@@ -322,12 +322,22 @@ wandb:
 
 This gives us:
 
-- **Durability** — the best checkpoint survives pod death in R2 (intermediate checkpoints are not persisted)
+- **Durability** — the best checkpoint survives in R2; opt-in mid-run mirroring also preserves the latest `last.ckpt` after a crash
 - **Lineage** — the artifact is linked to the run, dataset, config, and git SHA
 - **Resume** — the `${wandb:...}` resolver rclone-downloads the referenced checkpoint from R2 to resume from any machine
 - **Registry** — browsable in the W&B model registry
 
-> **Known limitation:** the R2 object lives at a per-`config_id` path and is overwritten each run, so an older artifact version (`:vN` for N < latest) resolves to the current object. (Per-version immutability would fold the run id into the path — deferred, YAGNI.)
+The train-end `model.ckpt` remains a per-`config_id` object and is overwritten by later runs. Mid-run recovery objects are launch-scoped and do not overwrite one another; their exact URI is emitted as `Mid-run checkpoint uploaded to ...` in the training log.
+
+To recover a crashed launch, copy the URI from that log line and materialize it locally through the checksum-enabled R2 helper:
+
+```bash
+export RECOVERY_URI='r2://intermediate-data/checkpoints/<config-id>/<wandb-run-id>-<uuid>/last.ckpt'
+uv run python -c 'import os; from pathlib import Path; from synth_setter.pipeline.r2_io import download_to_path; download_to_path(os.environ["RECOVERY_URI"], Path("last.ckpt"))'
+uv run synth-setter-train <original-overrides> ckpt_path="$PWD/last.ckpt"
+```
+
+Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises the upload, real rclone-backed download, byte equality, and exception propagation.
 
 ### 6.3 Resume From W&B
 
@@ -390,7 +400,7 @@ ______________________________________________________________________
 
 **Decision:** the best checkpoint is uploaded to R2 at train end and referenced by the W&B `model-{config_id}` artifact. `log_model: False` keeps checkpoint files out of W&B.
 
-**Rationale:** W&B's 5 GB total storage cannot hold every checkpoint file. Storing only an `s3://` reference (~0 bytes in W&B) keeps lineage and resume working while the bytes live in R2. Only the best checkpoint is persisted, at train end — intermediate checkpoints are not synced, so this is durability for the final result, not crash resilience.
+**Rationale:** W&B's 5 GB total storage cannot hold every checkpoint file. Storing only an `s3://` reference (~0 bytes in W&B) keeps lineage and resume working while the bytes live in R2. The best checkpoint is always persisted at train end; opt-in launch-scoped `last.ckpt` mirrors add crash recovery without consuming W&B storage.
 
 ### 7.3 Single-Pod RunPod Launcher
 
@@ -408,7 +418,7 @@ ______________________________________________________________________
 
 **Decision:** the best checkpoint lives in R2; the W&B artifact holds only an `s3://` reference and the run lineage.
 
-**Rationale:** uploading checkpoint files to W&B (`log_model: "all"`) would exhaust the 5 GB storage budget. Referencing R2 keeps lineage and resume intact at near-zero W&B storage cost. Only the best checkpoint is mirrored at train end — GC is implicit (the per-`config_id` path is overwritten each run), and dual-copy cost is one upload, not a per-interval stream.
+**Rationale:** uploading checkpoint files to W&B (`log_model: "all"`) would exhaust the 5 GB storage budget. Referencing R2 keeps lineage and resume intact at near-zero W&B storage cost. The best checkpoint is mirrored at train end. Optional mid-run durability adds a synchronous upload stream under a unique launch namespace; retention of those recovery objects is an operator responsibility.
 
 ### 7.6 No Automatic Promotion
 
@@ -511,13 +521,13 @@ ______________________________________________________________________
 
 ## 11. Open Questions & Risks
 
-| #   | Question / Risk                                              | Impact                   | Status                                                                       |
-| --- | ------------------------------------------------------------ | ------------------------ | ---------------------------------------------------------------------------- |
-| 1   | Should RunPod pods auto-terminate after training exits?      | Cloud cost / orphan pods | Open                                                                         |
-| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~   | ~~Storage growth~~       | Resolved — only the best checkpoint is mirrored to R2 at train end           |
-| 3   | Is single-GPU sufficient for next-generation models?         | Future scaling           | Accepted for now                                                             |
-| 4   | ~~How should stale checkpoints be garbage-collected in R2?~~ | ~~Storage cost~~         | Resolved — the per-`config_id` path is overwritten each run (no separate GC) |
-| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~            | ~~Cost~~                 | Resolved — bytes live in R2; W&B holds only an `s3://` reference             |
+| #   | Question / Risk                                                           | Impact                   | Status                                                                         |
+| --- | ------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| 1   | Should RunPod pods auto-terminate after training exits?                   | Cloud cost / orphan pods | Open                                                                           |
+| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~                | ~~Storage growth~~       | Resolved — best at train end; opt-in launch-scoped `last.ckpt` during training |
+| 3   | Is single-GPU sufficient for next-generation models?                      | Future scaling           | Accepted for now                                                               |
+| 4   | How should stale mid-run recovery checkpoints be garbage-collected in R2? | Storage cost             | Open — launch-scoped recovery objects require an explicit retention policy     |
+| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~                         | ~~Cost~~                 | Resolved — bytes live in R2; W&B holds only an `s3://` reference               |
 
 ______________________________________________________________________
 
@@ -556,11 +566,11 @@ ______________________________________________________________________
 
 | Checkpoint              | Keep locally          | Persisted to cloud                                                   |
 | ----------------------- | --------------------- | -------------------------------------------------------------------- |
-| `last.ckpt`             | Yes                   | No                                                                   |
+| `last.ckpt`             | Yes                   | Opt-in — mirrored to a launch-scoped R2 recovery object              |
 | `best.ckpt`             | Yes                   | Yes — uploaded to R2, referenced by the `model-{config_id}` artifact |
 | Intermediate step ckpts | Per checkpoint config | No                                                                   |
 
-> No checkpoint files are uploaded to W&B (`log_model: False`). Only the best checkpoint is mirrored to R2, at train end.
+> No checkpoint files are uploaded to W&B (`log_model: False`). The best checkpoint is mirrored to R2 at train end; `training.upload_checkpoints_during_training=true` additionally mirrors `last.ckpt` for crash recovery.
 
 ## Appendix D: Implementation Recipes
 

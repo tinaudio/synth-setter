@@ -97,6 +97,7 @@ class CheckpointUploader(Checkpoint):
             return
         self._uploaded_key = key
         self._uploaded_save_step = save_step
+        log.info("Mid-run checkpoint uploaded to %s", self._dest_uri)
 
     def on_train_batch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
         self._maybe_upload(trainer)

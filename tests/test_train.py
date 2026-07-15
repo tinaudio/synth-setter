@@ -838,3 +838,6 @@ def test_train_mirrors_checkpoint_to_r2_when_fit_raises(
     assert last_local.name == "last.ckpt"
     mirrored = fake_r2_remote / last_uri.removeprefix("r2://")
     assert mirrored.read_bytes() == last_local.read_bytes()
+    recovered = last_local.with_name("recovered-last.ckpt")
+    r2_io.download_to_path(last_uri, recovered)
+    assert recovered.read_bytes() == last_local.read_bytes()

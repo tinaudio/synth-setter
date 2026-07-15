@@ -12,7 +12,11 @@ from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.cli.train import _append_checkpoint_uploader, _checkpoint_prefix_uri
+from synth_setter.cli.train import (
+    _append_checkpoint_uploader,
+    _checkpoint_prefix_uri,
+    _make_recovery_namespace,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import _MAX_UPLOAD_ATTEMPTS, CheckpointUploader
 
@@ -103,19 +107,22 @@ def _stub_r2(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, str]]:
 
 
 def test_uploader_uploads_new_checkpoint_to_prefixed_last_ckpt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A freshly-written ``last_model_path`` uploads to ``{prefix}/last.ckpt``.
 
     :param monkeypatch: Swaps the R2 transport for a recorder.
     :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    :param caplog: Captures the recovery URI emitted after a successful upload.
     """
     calls = _stub_r2(monkeypatch)
     ckpt = tmp_path / "last.ckpt"
     ckpt.write_bytes(b"weights")
     uploader = CheckpointUploader("r2://intermediate-data/checkpoints/flow-simple")
-    uploader.on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)
+    with caplog.at_level(logging.INFO):
+        uploader.on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)
     assert calls == [(ckpt, "r2://intermediate-data/checkpoints/flow-simple/last.ckpt")]
+    assert "uploaded to r2://intermediate-data/checkpoints/flow-simple/last.ckpt" in caplog.text
 
 
 def test_uploader_skips_reupload_when_path_unchanged(
@@ -496,6 +503,15 @@ def test_checkpoint_prefix_uri_strips_the_basename() -> None:
     )
 
 
+def test_make_recovery_namespace_distinguishes_same_run_id_launches() -> None:
+    """Each launch gets an isolated recovery namespace even when its run ID collides."""
+    first = _make_recovery_namespace("flow-simple-20260715T000000000Z")
+    second = _make_recovery_namespace("flow-simple-20260715T000000000Z")
+    assert first.startswith("flow-simple-20260715T000000000Z-")
+    assert second.startswith("flow-simple-20260715T000000000Z-")
+    assert first != second
+
+
 def test_checkpoint_prefix_uri_honors_override() -> None:
     """A verbatim ``upload_checkpoints_uri`` override still yields its parent prefix."""
     cfg = _cfg(upload_checkpoints_uri="r2://models/run/model.ckpt")
@@ -543,18 +559,12 @@ def test_append_uploader_appends_after_existing_model_checkpoint() -> None:
     assert isinstance(callbacks[-1], CheckpointUploader)
 
 
-def test_append_uploader_skips_and_warns_without_model_checkpoint(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """With no ModelCheckpoint present the uploader is skipped (it would suppress the default).
-
-    :param caplog: Captures the skip warning.
-    """
+def test_append_uploader_rejects_missing_model_checkpoint() -> None:
+    """Durability fails before training when no checkpoint writer is configured."""
     callbacks: list[Callback] = []
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="exactly one ModelCheckpoint; found 0"):
         _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert callbacks == []
-    assert "no ModelCheckpoint" in caplog.text
 
 
 def test_append_uploader_enables_save_on_exception() -> None:
@@ -572,16 +582,10 @@ def test_append_uploader_enables_save_last() -> None:
     assert model_checkpoint.save_last is True
 
 
-def test_append_uploader_skips_and_warns_with_multiple_model_checkpoints(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Ambiguous checkpoint ownership skips durability instead of silently missing saves.
-
-    :param caplog: Captures the configuration warning.
-    """
+def test_append_uploader_rejects_multiple_model_checkpoints() -> None:
+    """Durability fails before training when checkpoint ownership is ambiguous."""
     callbacks: list[Callback] = [ModelCheckpoint(), ModelCheckpoint()]
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="exactly one ModelCheckpoint; found 2"):
         _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
     assert len(callbacks) == 2
     assert not any(isinstance(callback, CheckpointUploader) for callback in callbacks)
-    assert "multiple ModelCheckpoint" in caplog.text
