@@ -1,0 +1,14 @@
+[agents]
+max_depth = 2
+
+[agents."pr-review-orchestrator"]
+config_file = "agents/pr-review-orchestrator.toml"
+description = "Coordinates the full PR review gates."
+
+[agents."pr-review-worker-deep"]
+config_file = "agents/pr-review-worker-deep.toml"
+description = "Runs the correctness review pass."
+
+[agents."pr-review-worker-fast"]
+config_file = "agents/pr-review-worker-fast.toml"
+description = "Runs non-correctness review passes."

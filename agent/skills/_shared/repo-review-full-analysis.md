@@ -91,9 +91,22 @@ skip `lance-review`.
 
 ## Step 4: Launch parallel review agents
 
-Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (one message with N tool calls = N parallel agents). You are an orchestrator agent yourself, so these review agents are your sub-agents.
+Launch one named review Agent per selected skill. `correctness-review` uses
+`pr-review-worker-deep`; all other selected skills use
+`pr-review-worker-fast`. Under Claude Code, select those exact values with the
+Agent tool's `subagent_type`. Under Codex, write each complete worker prompt to
+a unique temporary file, then invoke
+`agent/_shared/run_codex_review_agent.sh <role> --prompt-file <path>`.
+That launcher resolves the role's project-pinned model and reasoning effort
+before starting `codex exec`. **Launch all agents in a single message** so they
+run concurrently (one message with N tool calls = N parallel agents). Do not
+add any other per-invocation model override: each project agent file owns its
+provider-specific model and effort. You are an orchestrator agent yourself, so
+these review agents are your sub-agents.
 
-If your harness does not let a sub-agent spawn its own sub-agents, fall back to running each selected skill sequentially in your own context — invoke each `tinaudio-synth-setter-skills:<skill-name>` via the Skill tool one at a time (with the same repo-local exception as the parallel path for `lance-review` and `correctness-review`: invoke those bare, not under the `tinaudio-synth-setter-skills:` prefix — see the note below). The fallback must produce the *same* per-skill result as the parallel path: feed each skill the same inputs the sub-agent prompt would carry (PR number, repo, base/head SHA, file list) and capture its findings in the per-agent output contract below (BLOCK/WARN sections, each finding citing `<path>:<line>`), so Step 5 aggregation parses sequential and parallel output identically. Parallel fan-out is preferred; the sequential fallback preserves correctness when nesting is unavailable.
+If either named worker is unavailable or nested spawning is disabled, stop and
+surface the configuration error. Do not fall back to an inherited, anonymous,
+or sequential worker because that would bypass the gate's model policy.
 
 Each agent's prompt MUST include:
 
@@ -109,11 +122,9 @@ applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
 contract below is unchanged for both.
 
 `lance-review` additionally requires web access (`WebFetch`/`WebSearch`): its
-grounding rule only holds if the agent can fetch the live Lance docs, so spawn
-its sub-agent as `general-purpose` (which has both tools) regardless of which
-invocation path it takes. `correctness-review` needs no web access — it reasons
-about the diff itself — but is spawned as `general-purpose` like every other
-fan-out agent.
+grounding rule only holds if the agent can fetch the live Lance docs. The
+`pr-review-worker-fast` role inherits the parent agent's tools, including web
+access. `correctness-review` needs no web access and runs on the deep worker.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -218,5 +229,9 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
-- The structure is three-level and intentional: the main agent spawns one orchestrator agent (you), which fans out one *general-purpose* review sub-agent per skill; each review sub-agent invokes its plugin skill via the Skill tool. The orchestration is your contribution; each plugin skill's authoritative checklist is the source of truth for its domain.
+- The structure is three-level and intentional: the main agent spawns the
+  project review orchestrator (you), which fans out one named review worker per
+  skill; each worker invokes its plugin skill via the Skill tool. The
+  orchestration is your contribution; each plugin skill's authoritative
+  checklist is the source of truth for its domain.
 - For the concrete invocation pattern (parallel Agent tool calls in a single message, expected per-agent prompt shape), see the example trace recorded in PR #777's review history — that's the workflow this pipeline packages.
