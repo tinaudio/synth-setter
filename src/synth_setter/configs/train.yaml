@@ -62,7 +62,8 @@ training:
   # for single-device runs) so a host crash before train-end can't strand it.
   upload_checkpoints_during_training: false
   # Off-loop val audio probe: renders a few predictions per validation epoch, logs
-  # `val_audio/*` next validation, archives wavs to R2 probes/. Needs a `render` group.
+  # `val_audio/*` next validation, archives wavs to R2 probes/. Needs a `render`
+  # group and validation enabled (surge experiments ship limit_val_batches: 0).
   val_audio_probe: false
   # Samples taken from the first val batch; each costs a plugin load plus a render.
   val_audio_probe_samples: 5

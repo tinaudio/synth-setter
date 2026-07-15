@@ -106,3 +106,17 @@ def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples:
 
     with pytest.raises(ValueError, match="positive integer"):
         _configure_val_audio_probe(cfg, [])
+
+
+def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
+    """Probe on + `trainer.limit_val_batches=0` fails loudly instead of silently never firing.
+
+    The surge experiment base disables validation outright; a validation-hooked probe wired into
+    such a run would stage nothing forever.
+    """
+    cfg = _cfg(enabled=True)
+    with open_dict(cfg):
+        cfg.trainer = {"limit_val_batches": 0}
+
+    with pytest.raises(ValueError, match="limit_val_batches"):
+        _configure_val_audio_probe(cfg, [])

@@ -158,8 +158,8 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
 
     :param cfg: Hydra config carrying the opt-in flag, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
-    :raises ValueError: If the probe is enabled without a ``render`` config group, or
-        ``training.val_audio_probe_samples`` is not a positive integer.
+    :raises ValueError: If the probe is enabled without a ``render`` config group, with
+        validation disabled, or with a non-positive-integer sample count.
     """
     if not OmegaConf.select(cfg, "training.val_audio_probe"):
         return
@@ -167,6 +167,14 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
         raise ValueError(
             "training.val_audio_probe=true requires a render config group "
             "(e.g. `render=surge_xt`); cfg.render is unset."
+        )
+    # The surge experiment base ships trainer.limit_val_batches: 0 — a validation-hooked
+    # probe wired into such a run would silently stage nothing forever.
+    if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
+        raise ValueError(
+            "training.val_audio_probe=true requires validation to run, but "
+            "trainer.limit_val_batches is 0. Override it (e.g. "
+            "`trainer.limit_val_batches=1.0`) to enable the probe."
         )
     num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
     if not isinstance(num_samples, int) or num_samples < 1:
