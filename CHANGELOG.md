@@ -1,6 +1,87 @@
 # CHANGELOG
 
 
+## v8.54.1 (2026-07-15)
+
+### Bug Fixes
+
+- **training**: Cut the VST dataloader worker default from 11 to 4
+  ([#1935](https://github.com/tinaudio/synth-setter/pull/1935),
+  [`172d574`](https://github.com/tinaudio/synth-setter/commit/172d5747b6d3714cde6317f9964fb382ca473665))
+
+* fix(training): cut VST dataloader workers from 11 to 4
+
+num_workers applies per dataloader, so enabling validation doubles the live worker count. At the
+  previous default of 11 a val-enabled surge_lance run ran 22 workers at ~1.3 GB each -- roughly 28
+  GB -- and earlyoom killed it on a 32 GB host before it could reach its checkpoint interval.
+
+A controlled sweep on an idle box (same ckpt, 300 s of steady state per config) shows throughput is
+  flat across a 5.5x range of workers while memory grows linearly:
+
+workers | 2 4 6 8 11 steps/m | 85.0 79.7 84.7 84.4 84.4 peak RSS| 6.3 9.1 10.3 14.8 18.9 (GB)
+
+The run is GPU-bound at every setting, so the extra workers only prefetched batches the GPU could
+  not consume. Pick 4 rather than the measured-optimal 2 to keep prefetch headroom on faster
+  accelerators, where the dataloader could become the bottleneck.
+
+Scope is limited to vst.yaml, which feeds the surge/surge_lance path the sweep measured. kosc, fm,
+  ksin, nsynth, fsd and torchsynth are different DataModule classes with different loaders and are
+  left alone.
+
+Refs #1916
+
+* test(training): pin the VST dataloader worker default per entrypoint
+
+The pre-PR review flagged that changing datamodule/vst.yaml's num_workers is a P31 behavior change
+  with no e2e coverage. train, eval and generate_dataset all resolve datamodule.num_workers, and
+  every fixture that composes them overrides the value, so nothing in the suite would have noticed
+  the default drifting back up.
+
+Pin it in each entrypoint's e2e module. The tests fail on the old value of 11 and pass on 4.
+
+generate_dataset reaches the default only through the oracle-eval subprocess's predict dataloader;
+  its shard render pool sizes itself from available_cpus()//2 and is unaffected.
+
+Also drop two overclaims the review caught: the vst.yaml comment asserted GPU-bound as a property of
+  the whole VST family when the sweep measured one Lance training run, and getting-started's ~28 GB
+  figure was naive arithmetic (22 x 1.3) that contradicted the sweep's own 18.9 GB single-pool
+  measurement.
+
+* test(training): assert the worker default where the entrypoints consume it
+
+The re-review flagged the pins as config-value checks: they would pass even if nothing read the
+  default. Instantiate the datamodule the way train and evaluate do, and assert num_workers on the
+  built object instead of the composed dict.
+
+generate never builds a datamodule -- it forwards the value into the oracle-eval subprocess argv,
+  and this module may not import the private helper that does it -- so its pin stays at the composed
+  default, with the limit stated in the docstring.
+
+Wrap train's compose in try-finally to clear the Hydra singleton, matching the eval module.
+
+Also correct the per-worker figure: the sweep's marginal cost is ~1.37 GB per worker, so the
+  reference doc's ~1.3 GB understated it and disagreed with getting-started's measured pool sizes.
+  Both now say ~1.4 GB.
+
+Verified red on 11 and green on 4, and the surrounding train/eval/generate suites still pass.
+
+### Build System
+
+- **data-pipeline**: Bake jqueue into the runtime ahead of the shard queue
+  ([#1936](https://github.com/tinaudio/synth-setter/pull/1936),
+  [`2bfaee1`](https://github.com/tinaudio/synth-setter/commit/2bfaee13a8f2d998c20c83a6c366381a3123a958))
+
+PR #1811's Docker/VST CI checks pull the floating dev-snapshot image, which cannot contain the
+  jqueue dependency until it reaches main — the feature PR therefore fails those checks on
+  ModuleNotFoundError before its code runs. Landing the dependency alone lets the next main image
+  bake jqueue[s3] so #1811 validates against the real CI checks instead of dispatched branch-image
+  evidence runs.
+
+jqueue's async S3 closure constrains boto3/botocore (1.43.23 -> 1.40.61) and consequently resolves
+  the optional smoosense tool to 0.1.37 — the same documented resolution #1811 carries. Nothing on
+  main imports jqueue until #1811 merges.
+
+
 ## v8.54.0 (2026-07-15)
 
 ### Automation
