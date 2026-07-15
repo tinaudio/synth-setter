@@ -57,10 +57,12 @@ jobs:
 
       # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
       # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
+      # cache-image would need `actions: write`, which this job deliberately omits.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+          cache-image: false
 
       - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
