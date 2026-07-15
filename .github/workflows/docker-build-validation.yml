@@ -10,14 +10,7 @@ name: Docker Image Build and Push
 #   (docker-validate job, contents: read only — PR shell steps cannot use
 #   the GITHUB_TOKEN to push to GHCR; see #1266 review).
 #
-# git_ref resolution:
-# The git_ref input accepts any ref form (branch, tag, or full SHA). After
-# checkout, `git rev-parse HEAD` resolves it to a 40-char lowercase commit
-# SHA (steps.source.outputs.sha), which is what gets baked into the image
-# via the SYNTH_PERMUTATIONS_GIT_REF build-arg. The build ALWAYS pins to
-# the resolved commit SHA — the original input form is discarded.
-# The resolved SHA is validated as 40-char lowercase hex by load_image_config
-# (src/synth_setter/pipeline/schemas/image_config.py) in the "Load image config" step.
+# Normalize git_ref to the commit SHA baked into the image — see #509.
 
 on:
   workflow_dispatch:
@@ -195,10 +188,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # dispatch: use input; push: triggering SHA. `github.sha` pins push
-          # runs to the commit that fired the workflow so back-to-back merges
-          # don't cause one run to build a later main commit (and skip the
-          # immutable dev-snapshot-<sha> tag for the triggering one).
+          # Pin push runs to their triggering SHA so queued runs retain immutable tags — see #756.
           ref: ${{ github.event.inputs.git_ref || github.sha }}
 
       # Same reclaim (#1930) — the smoke tests pull the pushed image back down.
@@ -218,38 +208,7 @@ jobs:
           free -h
           nproc
 
-      # Emits three outputs:
-      #   sha         — 40-char commit SHA, baked into the image
-      #   is_main     — "true" when this build represents the *current* main
-      #                 HEAD and should advance the shared `dev-snapshot`/`latest`
-      #                 tags. Covers push-to-main runs whose triggering SHA still
-      #                 equals origin/main's HEAD, the common ref forms a user
-      #                 might paste into the dispatch input (`main`,
-      #                 `refs/heads/main`, `refs/remotes/origin/main`), and the
-      #                 case where the resolved HEAD equals origin/main's HEAD
-      #                 (e.g., a literal SHA dispatch that happens to be main).
-      #                 Push runs whose triggering SHA has been overtaken by a
-      #                 newer main commit (delayed/queued runs, manual re-runs
-      #                 of older pushes) fall through to `false` so they only
-      #                 publish the immutable `dev-snapshot-<sha>` tag and don't
-      #                 clobber the floating tags with an older commit.
-      #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
-      #                 floating tag, or empty when no meaningful branch applies
-      #                 (push-to-main run, any main ref form, a git_ref already
-      #                 resolved to a SHA, or a git tag dispatch). Well-known
-      #                 ref prefixes (`refs/heads/`, `refs/remotes/origin/`) are
-      #                 stripped before slugging so the same branch produces the
-      #                 same tag regardless of how the operator typed it.
-      #                 Slashes become dashes; charset is restricted to
-      #                 [A-Za-z0-9_.-]; truncated to 100 chars to leave room
-      #                 for the `dev-snapshot-` prefix under Docker's 128-char
-      #                 tag limit.
-      #                 Known limitation: branches whose slugs collide after
-      #                 normalization (e.g., `feat/foo` and `feat-foo`, or two
-      #                 branches sharing their first 100 normalized chars) will
-      #                 share the same `dev-snapshot-<slug>` tag and overwrite
-      #                 each other. Branches whose names are already Docker-tag
-      #                 -safe and ≤100 chars are unaffected.
+      # Derive immutable and floating image tags from the resolved ref — see #756.
       - name: Resolve checked-out commit SHA, main flag, and branch slug
         id: source
         env:
