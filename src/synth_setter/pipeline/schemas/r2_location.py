@@ -285,6 +285,13 @@ class R2Location(BaseModel):
         """
         return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"
 
+    def shard_queue_uri(self) -> str:
+        """R2 URI of the run's shard work-queue state JSON (jqueue DirectQueue).
+
+        :returns: ``r2://<bucket>/<prefix>metadata/shard-queue.json``.
+        """
+        return self._under_prefix("metadata/shard-queue.json")
+
     def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:
         """R2 URI of a per-attempt worker report under ``metadata/workers/attempts/``.
 

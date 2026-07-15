@@ -578,6 +578,11 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
+    .. attribute :: use_shard_queue
+
+        Whether workers claim shard IDs dynamically from the run's jqueue
+        work queue in R2 instead of owning a static rank/world slice.
+
     .. attribute :: git_sha
 
         Commit SHA of the launcher's working tree at construction.
@@ -645,6 +650,16 @@ class DatasetSpec(BaseModel):
             "mel bins instead of raising; ``False`` is the strict production default. "
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
+        ),
+    )
+
+    use_shard_queue: bool = Field(
+        default=False,
+        description=(
+            "Whether workers claim shard IDs dynamically from the run's jqueue "
+            "work queue in R2 instead of owning a static rank/world slice; the "
+            "operator populates the queue at launch (``False`` keeps static "
+            "partitioning, the default)."
         ),
     )
 

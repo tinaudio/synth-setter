@@ -57,8 +57,10 @@ from synth_setter.pipeline.partitioning import (
     get_my_shards,
     read_rank_world_from_env,
 )
+from synth_setter.pipeline.schemas.object_storage import storage_settings_from_sources
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
+from synth_setter.pipeline.shard_queue import ShardQueue, shard_queue_location
 from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
@@ -315,34 +317,37 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
         )
 
-        rank, world = read_rank_world_from_env()
-        my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
-        logger.info(
-            f"shard partition: rank={rank}/{world} owns shard_ids "
-            f"[{my_range.start}, {my_range.stop}) "
-            f"({len(my_range)} of {spec.num_shards} shards)"
-        )
-
         work_dir.mkdir(parents=True, exist_ok=True)
 
         # ``start`` brackets only the dispatch call so the rate still includes the
         # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
         start = time.perf_counter()
-        if spec.render.parallel and len(my_range) > 0:
-            rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, loggers)
-        else:
-            rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, loggers)
+        rendered, skipped, assigned = _dispatch_shards(
+            spec,
+            work_dir=work_dir,
+            loggers=loggers,
+        )
         elapsed_s = time.perf_counter() - start
         samples = rendered * spec.render.samples_per_shard
         rate = samples / elapsed_s if elapsed_s > 0 else 0.0
         logger.info(
-            f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
+            "shard summary: rendered={rendered} skipped={skipped} {assignment}",
+            rendered=rendered,
+            skipped=skipped,
+            assignment=(
+                f"({assigned} queue claims won by this machine)"
+                if spec.use_shard_queue
+                else f"of {assigned} assigned"
+            ),
         )
         logger.info(
-            f"generation speed: {samples} samples in {elapsed_s:.3f}s "
-            f"= {rate:.3f} samples/s (wallclock includes R2 skip probes)"
+            "generation speed: {samples} samples in {elapsed_s:.3f}s "
+            "= {rate:.3f} samples/s (wallclock includes R2 skip probes)",
+            samples=samples,
+            elapsed_s=elapsed_s,
+            rate=rate,
         )
-        _log_summary(loggers, rendered, skipped, len(my_range), elapsed_s, samples, rate)
+        _log_summary(loggers, rendered, skipped, assigned, elapsed_s, samples, rate)
     except BaseException:
         status = "failed"
         raise
@@ -437,7 +442,8 @@ def _log_summary(
     :param loggers: Lightning loggers — empty list is a no-op.
     :param rendered: Shards this rank actually rendered.
     :param skipped: Shards short-circuited by the R2-skip probe.
-    :param total: ``len(my_range)`` — owned shard count for this rank.
+    :param total: Owned shard count for this rank (``len(my_range)``); in
+        queue mode, the claims this machine won (``rendered + skipped``).
     :param elapsed_s: Wall-clock seconds bracketing the dispatcher (includes
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
@@ -529,9 +535,9 @@ def _dispatch_shards_parallel(
         while in_flight:
             done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
             for fut in done:
-                r, s = fut.result()
-                rendered += int(r)
-                skipped += int(s)
+                did_render, did_skip = fut.result()
+                rendered += int(did_render)
+                skipped += int(did_skip)
             for _ in range(len(done)):
                 sid = next(pending, None)
                 if sid is None:
@@ -539,6 +545,129 @@ def _dispatch_shards_parallel(
                 in_flight.add(pool.submit(_render_one_owned_shard, spec, sid, work_dir, loggers))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+    return rendered, skipped
+
+
+def _dispatch_shards(
+    spec: DatasetSpec,
+    *,
+    work_dir: Path,
+    loggers: list[Logger],
+) -> tuple[int, int, int]:
+    """Dispatch shards by dynamic queue claims or static rank/world ownership.
+
+    :param spec: Validated dataset spec.
+    :param work_dir: Directory where shards are rendered before upload.
+    :param loggers: Loggers receiving per-shard metrics.
+    :returns: ``(rendered, skipped, assigned)`` counts; ``assigned`` is the
+        static rank's shard count or, in queue mode, the claims processed by
+        this machine (``rendered + skipped``).
+    """
+    if spec.use_shard_queue:
+        logger.info(
+            "shard distribution: dynamic queue over {num_shards} shards "
+            "(use_shard_queue=true; rank/world partitioning bypassed)",
+            num_shards=spec.num_shards,
+        )
+        if spec.render.parallel:
+            logger.warning(
+                "render.parallel=true is ignored with use_shard_queue=true: "
+                "queue mode renders one claim at a time per machine"
+            )
+        rendered, skipped = _dispatch_shards_from_queue(
+            _shard_queue_for_spec(spec),
+            spec,
+            work_dir=work_dir,
+            loggers=loggers,
+        )
+        return rendered, skipped, rendered + skipped
+
+    rank, world = read_rank_world_from_env()
+    my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
+    logger.info(
+        "shard partition: rank={rank}/{world} owns shard_ids "
+        "[{start}, {stop}) ({owned} of {total} shards)",
+        rank=rank,
+        world=world,
+        start=my_range.start,
+        stop=my_range.stop,
+        owned=len(my_range),
+        total=spec.num_shards,
+    )
+    if spec.render.parallel and len(my_range) > 0:
+        rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, loggers)
+    else:
+        rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, loggers)
+    return rendered, skipped, len(my_range)
+
+
+def _shard_queue_for_spec(spec: DatasetSpec) -> ShardQueue:
+    """Build the run's shard work queue from process-env storage settings.
+
+    Callers run after ``ensure_r2_env_loaded`` (operator) or the worker env
+    bootstrap, so the canonical ``SYNTH_SETTER_STORAGE_*`` keys are present.
+
+    :param spec: Validated dataset spec; ``spec.r2`` locates the queue state.
+    :returns: Queue over the run's ``metadata/shard-queue.json`` object in R2.
+    """
+    config = storage_settings_from_sources().to_config()
+    return ShardQueue.for_location(config, shard_queue_location(spec.r2))
+
+
+def _dispatch_shards_from_queue(
+    queue: ShardQueue,
+    spec: DatasetSpec,
+    *,
+    work_dir: Path,
+    loggers: list[Logger],
+) -> tuple[int, int]:
+    """Claim, render, and acknowledge shards until the queue is drained.
+
+    A failed render retires its claim before propagating; the next population
+    restores the missing shard ID. If retirement fails, stale-claim recovery
+    preserves the job without masking the render failure.
+
+    :param queue: Queue from which this worker claims shards.
+    :param spec: Validated dataset spec.
+    :param work_dir: Directory where shards are rendered before upload.
+    :param loggers: Loggers receiving per-shard metrics.
+    :returns: ``(rendered, skipped)`` counts over claims processed by this worker.
+    :raises BaseException: The render failure; claim-cleanup errors never replace it.
+    """
+    rendered = 0
+    skipped = 0
+    while (claimed := queue.claim(shard_count=spec.num_shards)) is not None:
+        logger.info(
+            "claimed shard {shard_id} from queue (job {job_id})",
+            shard_id=claimed.shard_id,
+            job_id=claimed.job_id,
+        )
+        try:
+            with queue.maintain_heartbeat(claimed.job_id):
+                did_render, did_skip = _render_one_owned_shard(
+                    spec, claimed.shard_id, work_dir, loggers
+                )
+        except BaseException:
+            # Deliberately broad (incl. Ctrl-C): retire the claim so peers don't
+            # re-claim it; relaunch reconciliation re-renders anything unfinished.
+            logger.error(
+                "retiring failed shard {shard_id} from queue; "
+                "it will re-render on the next relaunch",
+                shard_id=claimed.shard_id,
+            )
+            try:
+                queue.ack(claimed.job_id)
+            except Exception as retire_exc:  # noqa: BLE001 — never mask the render failure
+                # The stale-claim sweep recovers the unretired job later.
+                logger.error(
+                    "failed to retire claim {job_id}: {error}",
+                    job_id=claimed.job_id,
+                    error=retire_exc,
+                )
+            raise
+        queue.ack(claimed.job_id)
+        rendered += int(did_render)
+        skipped += int(did_skip)
     return rendered, skipped
 
 
@@ -889,6 +1018,16 @@ def main(cfg: DictConfig) -> None:
 
     # ``input_spec_uri()`` includes the run prefix so workers read the same object just uploaded.
     spec_uri = spec.r2.input_spec_uri()
+
+    if spec.use_shard_queue:
+        # Before any worker starts (local or SkyPilot) so no claim can race an
+        # empty queue; a relaunch restores IDs absent from active queue state.
+        enqueued = _shard_queue_for_spec(spec).populate(shard.shard_id for shard in spec.shards)
+        logger.info(
+            "shard queue populated: enqueued {enqueued} of {num_shards} shard jobs",
+            enqueued=enqueued,
+            num_shards=spec.num_shards,
+        )
 
     if sky_cfg.compute_template is None:
         loggers = _loggers_pinned_to_spec(cfg, spec)

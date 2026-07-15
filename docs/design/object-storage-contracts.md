@@ -34,7 +34,10 @@ tool details from dataset, training, evaluation, and CLI logic.
 
 - Do not remove rclone from bulk sync in the first migration.
 - Do not add a new object-store client until call sites are hidden behind the
-  facade.
+  facade. Documented exception: the shard work queue (`pipeline/shard_queue.py`)
+  talks to R2 through jqueue's aioboto3 `S3Storage` because it needs conditional
+  (`If-Match`) puts that rclone cannot express; it builds its client from the
+  same centralized `StorageConfig`.
 - Do not support arbitrary generic S3 buckets in places that need the configured
   synth-setter object store. A bare `s3://` URI means "this configured
   S3-compatible store" unless a future API explicitly accepts external stores.
@@ -162,6 +165,7 @@ class DatasetStorageLayout(BaseModel):
     def shard(self, shard: ShardSpec) -> ObjectLocation: ...
     def split_lance(self, split: Split) -> ObjectLocation: ...
     def stats(self) -> ObjectLocation: ...
+    def shard_queue(self) -> ObjectLocation: ...
     def lance_versions(self, shard: ShardSpec) -> ObjectLocation: ...
 ```
 

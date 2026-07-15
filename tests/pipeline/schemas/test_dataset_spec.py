@@ -405,6 +405,23 @@ class TestDatasetSpecConstruction:
         assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
         assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
+    def test_use_shard_queue_defaults_to_false(self, patch_runtime_io: None) -> None:
+        """Static rank/world partitioning stays the default distribution mode.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert spec.use_shard_queue is False
+
+    def test_use_shard_queue_true_survives_json_round_trip(self, patch_runtime_io: None) -> None:
+        """Workers re-reading input_spec.json from R2 see the operator's queue opt-in.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(use_shard_queue=True))
+        rehydrated = DatasetSpec.model_validate_json(spec.model_dump_json())
+        assert rehydrated.use_shard_queue is True
+
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
         """An explicit run_id in the input dict passes through instead of being regenerated."""
         spec = DatasetSpec(**_valid_spec_kwargs(run_id="custom-run-id-001"))
