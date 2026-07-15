@@ -53,12 +53,7 @@ class CheckpointUploader(Checkpoint):
         self._warned_ddp = False
 
     def _maybe_upload(self, trainer: Trainer) -> None:
-        """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
-
-        Rank-0-only and de-duplicated by the ``(path, mtime, size)`` file key plus
-        ModelCheckpoint's completed-save step. The save step distinguishes equal-size
-        rewrites on filesystems with coarse timestamp resolution. Failed uploads retry
-        at most :data:`_MAX_UPLOAD_ATTEMPTS` times per completed save.
+        """Upload each newly completed rank-0 checkpoint save with bounded retries.
 
         :param trainer: The active trainer; supplies the rank flag and the
             ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.

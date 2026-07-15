@@ -101,7 +101,7 @@ def _checkpoint_prefix_uri(cfg: DictConfig) -> str:
 
 
 def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> None:
-    """Append an uploader only when an explicit ModelCheckpoint can produce durable saves.
+    """Append an uploader only when exactly one ModelCheckpoint can produce durable saves.
 
     :param cfg: Hydra config carrying the opt-in durability flag and destination.
     :param callbacks: Callback list mutated in place; ModelCheckpoint enables crash saves.
@@ -116,8 +116,16 @@ def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> N
             "default ModelCheckpoint and write no checkpoints)."
         )
         return
-    for model_checkpoint in model_checkpoints:
-        model_checkpoint.save_on_exception = True
+    if len(model_checkpoints) > 1:
+        log.warning(
+            "training.upload_checkpoints_during_training is set with multiple "
+            "ModelCheckpoint callbacks; skipping the uploader because checkpoint "
+            "ownership is ambiguous."
+        )
+        return
+    model_checkpoint = model_checkpoints[0]
+    model_checkpoint.save_last = True
+    model_checkpoint.save_on_exception = True
     callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
 
 

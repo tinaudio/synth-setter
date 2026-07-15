@@ -566,3 +566,25 @@ def test_append_uploader_enables_save_on_exception() -> None:
     assert model_checkpoint.save_on_exception is False
     _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint])
     assert model_checkpoint.save_on_exception is True
+
+
+def test_append_uploader_enables_save_last() -> None:
+    """Appending the uploader ensures ModelCheckpoint exposes ``last_model_path``."""
+    model_checkpoint = ModelCheckpoint(save_last=False)
+    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint])
+    assert model_checkpoint.save_last is True
+
+
+def test_append_uploader_skips_and_warns_with_multiple_model_checkpoints(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ambiguous checkpoint ownership skips durability instead of silently missing saves.
+
+    :param caplog: Captures the configuration warning.
+    """
+    callbacks: list[Callback] = [ModelCheckpoint(), ModelCheckpoint()]
+    with caplog.at_level(logging.WARNING):
+        _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+    assert len(callbacks) == 2
+    assert not any(isinstance(callback, CheckpointUploader) for callback in callbacks)
+    assert "multiple ModelCheckpoint" in caplog.text
