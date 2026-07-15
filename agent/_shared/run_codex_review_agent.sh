@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 launcher="${repo_root}/agent/_shared/run_codex_review_agent.py"
-resolved="$(uv run --no-sync python "${launcher}" "$@")"
+resolved="$(uv run --no-project --script "${launcher}" "$@")"
 dry_run_filter='if (.dry_run | type) == "boolean" then
   (.dry_run | tostring)
 else
@@ -26,7 +26,11 @@ else
   error("invalid command")
 end'
 command_lines="$(jq -er "${command_filter}" <<<"${resolved}")"
-mapfile -t command <<<"${command_lines}"
+# `read` (not `mapfile`) so macOS bash 3.2 works. Each line is one argv element.
+command=()
+while IFS= read -r line; do
+  command+=("${line}")
+done <<<"${command_lines}"
 prompt_filter='if (.prompt | type) == "string" then
   .prompt
 else
