@@ -1,7 +1,7 @@
 ---
 name: pr-review-worker-fast
 description: Runs non-correctness checklist passes for the full PR review gates.
-model: haiku
+model: sonnet
 effort: medium
 ---
 
