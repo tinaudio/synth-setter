@@ -9,12 +9,15 @@ the canonical pedalboard-free entrypoint for interpreter-only contexts
 
 ``synth-setter-introspect-plugin --register`` inserts entries here by line anchor
 (``synth_setter.data.vst.registration.registry_with_spec``): keep the import block
-contiguous and each dict's ``<name>: … = {`` / ``}`` lines intact when editing by hand.
+contiguous and each registry dict's assignment / closing brace intact when editing by hand.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import cast
 
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
@@ -23,13 +26,15 @@ from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_SIMPLE_PARAM_SPEC,
     SURGE_XT_PARAM_SPEC,
 )
+from synth_setter.param_spec_name import ParamSpecName
 
-param_specs: dict[str, ParamSpec] = {
-    "surge_xt": SURGE_XT_PARAM_SPEC,
-    "surge_simple": SURGE_SIMPLE_PARAM_SPEC,
-    "surge_4": SURGE_4_PARAM_SPEC,
-    "obxf": OBXF_PARAM_SPEC,
+_param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
+    ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
+    ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
+    ParamSpecName("obxf"): OBXF_PARAM_SPEC,
 }
+param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
 plugin_state_paths: dict[str, str] = {
     "surge_xt": "presets/surge-base.vstpreset",
@@ -37,6 +42,19 @@ plugin_state_paths: dict[str, str] = {
     "surge_4": "presets/surge-mini.vstpreset",
     "obxf": "presets/obxf-base.vstpreset",
 }
+
+
+def resolve_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
+    """Resolve a domain-typed name against the runtime-extensible registry.
+
+    :param param_spec_name: Runtime registry key; dynamically registered names are valid.
+    :returns: The exact registered specification object, without copying it.
+    :raises KeyError: If the name is not registered.
+    """
+    try:
+        return _param_specs[param_spec_name]
+    except KeyError:
+        raise KeyError(param_spec_name) from None
 
 
 def default_plugin_path() -> str:

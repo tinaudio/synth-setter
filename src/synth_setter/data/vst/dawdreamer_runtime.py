@@ -9,7 +9,7 @@ from typing import Literal
 
 RendererBackend = Literal["pedalboard", "dawdreamer"]
 
-_SUPPORTED_PYTHON_MINORS = {(3, 11), (3, 12)}
+_SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {
     ("Darwin", "arm64"),
     ("Darwin", "x86_64"),
@@ -31,12 +31,12 @@ def ensure_dawdreamer_runtime(renderer_backend: RendererBackend) -> None:
         return
 
     python_minor = sys.version_info[:2]
-    if sys.implementation.name != "cpython" or python_minor not in _SUPPORTED_PYTHON_MINORS:
+    if sys.implementation.name != "cpython" or python_minor != _SUPPORTED_PYTHON_MINOR:
         detected = f"{sys.implementation.name} {python_minor[0]}.{python_minor[1]}"
         raise RuntimeError(
-            "DawDreamer 0.8.3 requires CPython 3.11 or 3.12 on the render worker; "
+            "DawDreamer 0.8.3 requires CPython 3.12 on the render worker; "
             f"detected {detected}. Dispatch to a supported worker or recreate this "
-            "environment with Python 3.11."
+            "environment with Python 3.12."
         )
 
     target = (platform.system(), platform.machine())
@@ -52,5 +52,5 @@ def ensure_dawdreamer_runtime(renderer_backend: RendererBackend) -> None:
     except (ImportError, OSError) as exc:
         raise RuntimeError(
             "DawDreamer could not be loaded on this render worker. Run `uv sync --frozen` "
-            "under CPython 3.11 or 3.12 and verify the worker matches a supported wheel target."
+            "under CPython 3.12 and verify the worker matches a supported wheel target."
         ) from exc

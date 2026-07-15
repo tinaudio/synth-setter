@@ -48,8 +48,8 @@ RUN case "${TARGETARCH:-}" in \
     esac
 
 # TODO: add appropriate build labels
-# TODO: Consider taking python runtime from `python:3.11-*` stage.
-# This would involving copying`/usr/local`.
+# TODO: Consider taking python runtime from `python:3.12-*` stage.
+# This would involve copying `/usr/local`.
 # TODO: Add diagram of stages and dependencies.
 # TODO(deduplicate package lists)
 # ==========================================
@@ -363,12 +363,12 @@ ENV HYDRA_FULL_ERROR=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# Runtime venv: a uv-managed CPython 3.11 (matches `requires-python` in
+# Runtime venv: a uv-managed CPython 3.12 (matches `requires-python` in
 # `pyproject.toml`), decoupled from the apt python3 used at build time.
-RUN uv venv --python 3.11 "$VIRTUAL_ENV"
+RUN uv venv --python 3.12.13 "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
-    python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
+    python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.

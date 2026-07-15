@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 import click
 
@@ -38,8 +38,6 @@ from synth_setter.data.vst.registration import (
     render_config_yaml,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
-
-_PluginT = TypeVar("_PluginT")
 
 # Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
 # this cadence keep a slow load distinguishable from a hang.
@@ -349,14 +347,14 @@ def _write_register_wiring(
     )
 
 
-def _load_plugin_loudly(
+def _load_plugin_loudly[PluginT](
     plugin_path: str,
     plugin_name: str | None,
-    loader: Callable[[str, str | None], _PluginT],
+    loader: Callable[[str, str | None], PluginT],
     *,
     timeout_seconds: float,
     heartbeat_seconds: float = _LOAD_HEARTBEAT_SECONDS,
-) -> _PluginT:
+) -> PluginT:
     """Run ``loader`` on a daemon thread, echoing elapsed-time heartbeats until it returns.
 
     Native VST3 init can block for minutes with no output, indistinguishable

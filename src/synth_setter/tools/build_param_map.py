@@ -28,6 +28,7 @@ from synth_setter.data.vst.param_map import (
 )
 from synth_setter.data.vst.param_spec import CategoricalParameter, Parameter
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.param_spec_name import ParamSpecName
 
 INTROSPECTION_SAMPLE_RATE = 44_100
 INTROSPECTION_BLOCK_SIZE = 2_048
@@ -460,7 +461,7 @@ def join_param_map(
         raise ValueError("parameter map join failed:\n" + "\n".join(errors))
     return SynthParamMap(
         plugin=pedalboard.plugin,
-        param_spec_name=param_spec_name,
+        param_spec_name=ParamSpecName(param_spec_name),
         preset_resource=pedalboard.preset_resource,
         preset_sha256=pedalboard.preset_sha256,
         pedalboard=BackendSnapshot(

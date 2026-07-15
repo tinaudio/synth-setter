@@ -1,6 +1,199 @@
 # CHANGELOG
 
 
+## v8.49.0 (2026-07-15)
+
+### Continuous Integration
+
+- Make pre-PR remediation progress durable
+  ([#1889](https://github.com/tinaudio/synth-setter/pull/1889),
+  [`11d2cc7`](https://github.com/tinaudio/synth-setter/commit/11d2cc77447d8625bca6347ab4e62558dc903d66))
+
+* ci: make pre-PR remediation progress durable
+
+* ci: clarify pre-PR remediation guidance
+
+* ci: record pre-PR review progress
+
+* ci: refine review loop progress tracking
+
+* ci: count repeated non-PASS reviews
+
+* ci: derive review progress state counts
+
+### Features
+
+- **ci-automation**: Bump python floor to 3.12
+  ([#1797](https://github.com/tinaudio/synth-setter/pull/1797),
+  [`2bf03c3`](https://github.com/tinaudio/synth-setter/commit/2bf03c36d649889112b8cbfecc3ba6f402d98d53))
+
+* feat(ci-automation): bump python floor to 3.12
+
+* fix(ci-automation): repair stale worker python venv
+
+* fix(ci-automation): pin Python 3.12.13 runtime safely
+
+* fix(ci-automation): align launcher cache with Python pin
+
+* fix(ci-automation): install macOS deps into managed venv
+
+* internal-fix(ci-automation): validate Python patch version
+
+Exercise the existing-venv make branch with the canonical interpreter and pin the remote worker
+  command chain end to end. Align the worker helper with the project shell contract.
+
+* chore(cli): route Hydra __main__ calls through a typed cast
+
+pyright keeps the undecorated one-arg signature for functions whose decorator returns Any, so the
+  bare `main()` in the three Hydra entrypoints reports a missing `cfg` argument whenever the file is
+  touched (train.py was frozen into the pyright exclude list for the same reason). Cast the wrapper
+  to its real no-arg call shape at the call site; no runtime change.
+
+* chore(deps): synchronize lockfile package version
+
+* internal-fix(ci-automation): bootstrap stale workers safely
+
+* internal-fix(ci-automation): keep source overlay parseable
+
+### Refactoring
+
+- **data**: Type param spec registry names
+  ([#1879](https://github.com/tinaudio/synth-setter/pull/1879),
+  [`170dbcd`](https://github.com/tinaudio/synth-setter/commit/170dbcd625f298d04f2d79e138d6f49fea601339))
+
+* refactor(data): type param spec registry names
+
+* fix(data): reject conflicting spec registration
+
+* test(data): expect typed registered param spec key
+
+### Testing
+
+- (fix) prioritize DawDreamer gui validation
+  ([#1877](https://github.com/tinaudio/synth-setter/pull/1877),
+  [`4f2ea74`](https://github.com/tinaudio/synth-setter/commit/4f2ea74c252835ca70d8438507db7e09bd59251a))
+
+* fix(schema): prioritize DawDreamer gui validation
+
+* test(schema): cover DawDreamer GUI-disabled config
+
+---------
+
+- (fix) use local workflow fixture import
+  ([#1896](https://github.com/tinaudio/synth-setter/pull/1896),
+  [`cd86245`](https://github.com/tinaudio/synth-setter/commit/cd862454ebad447f2ec28d0e5d72656f2745c114))
+
+
+## v8.48.1 (2026-07-14)
+
+### Bug Fixes
+
+- **testing**: Prioritize DawDreamer cadence validation
+  ([#1882](https://github.com/tinaudio/synth-setter/pull/1882),
+  [`12428a0`](https://github.com/tinaudio/synth-setter/commit/12428a0db01b626cc5fd468db44e8a1dfd6aa294))
+
+### Continuous Integration
+
+- Add parallel repo-review-full PR review workflow
+  ([#1869](https://github.com/tinaudio/synth-setter/pull/1869),
+  [`aa67d39`](https://github.com/tinaudio/synth-setter/commit/aa67d39f05a8bf8fadb91315f3cf04edc5d0b3cd))
+
+Run /repo-review-full alongside the existing code-review plugin workflow so every PR also gets a
+  checklist-driven multi-agent review that posts each diff-anchored BLOCK/WARN as an unresolved
+  inline comment; non-diff findings go in a PR health section. The skill is repo-local
+  (.claude/skills -> agent/skills), so no external marketplace clone is needed.
+
+Part of #372
+
+- Always post a Claude review summary comment
+  ([#1871](https://github.com/tinaudio/synth-setter/pull/1871),
+  [`ae5bd37`](https://github.com/tinaudio/synth-setter/commit/ae5bd3703e1da4b093230602d1b774b94677590e))
+
+The code-review plugin stays silent when it finds no >=80-confidence issue, and its clean-PR
+  acknowledgment floats with the unpinned marketplace ref, so reviews left no visible comment on
+  clean PRs (zero claude[bot] comments across seven recent PRs). Require the review to finish by
+  posting exactly one summary comment every run — findings if any, else an explicit "No issues
+  found" — so every review is visible regardless of which plugin version is live.
+
+Fixes #1865
+
+### Documentation
+
+- **agents**: File a bug for unexpected out-of-scope errors
+  ([#1856](https://github.com/tinaudio/synth-setter/pull/1856),
+  [`9851db1`](https://github.com/tinaudio/synth-setter/commit/9851db15415c3bbb0ee50481b1313765d34e7ffc))
+
+Add a directive to AGENTS.md (canonical) and its CLAUDE.md twin: when an agent hits an error or
+  clearly-wrong behavior outside the current task's scope, file a Bug via /github-taxonomy instead
+  of fixing it inline or dropping it silently.
+
+### Internal-Fix
+
+- **data**: Isolate Lance dataloader workers
+  ([#1853](https://github.com/tinaudio/synth-setter/pull/1853),
+  [`7d7086d`](https://github.com/tinaudio/synth-setter/commit/7d7086de8d8e4b117c3815b8eb651af96f736d7d))
+
+* internal-fix(data): isolate Lance dataloader workers
+
+* test(data): cover spawned Lance loaders
+
+- **storage**: Support legacy r2 env names
+  ([#1844](https://github.com/tinaudio/synth-setter/pull/1844),
+  [`1054dae`](https://github.com/tinaudio/synth-setter/commit/1054dae091d7d57e38f5751bef14965c7525c3d8))
+
+* internal-fix(storage): support legacy r2 env names
+
+* internal-fix(storage): document canonical env resolution
+
+* internal-fix(storage): prefer canonical env names
+
+* chore(deps): refresh lockfile
+
+### Refactoring
+
+- Require explicit param_spec_name in VST datamodule configs
+  ([#1857](https://github.com/tinaudio/synth-setter/pull/1857),
+  [`bb5304b`](https://github.com/tinaudio/synth-setter/commit/bb5304bbb25624611e90c94317385154db73115f))
+
+* fix(config): require explicit param_spec_name in VST datamodule configs
+
+The vst.yaml base shipped param_spec_name: surge_xt, so any VST-family config that did not override
+  it silently paired the surge_xt spec with whatever dataset it was pointed at —
+  datamodule=surge_lance against a surge_simple Lance dataset trains with a 300-wide spec over
+  92-wide param_array rows unless the operator remembers the override.
+
+Make the base abstract (param_spec_name: ???) so composition fails loudly, declare surge_xt
+  explicitly in surge.yaml and surge_debug.yaml (behavior preserved for every existing composition),
+  and pin the contract in tests: the base keeps the mandatory sentinel and every concrete VST-family
+  config must compose param_spec_name to a key in the param_specs registry.
+
+uv.lock: mechanical resync of the project version to pyproject 8.47.0; the release commit skipped it
+  and the uv-lock hook regenerates it here.
+
+Refs #1855
+
+* test(config): describe surge overlay docstring against the abstract base
+
+The pre-PR review flagged the docstring as narrating the removed base-default design instead of
+  current behavior.
+
+* chore(deps): resync uv.lock project version to pyproject 8.48.0
+
+The release automation bumps pyproject with [skip ci] and leaves uv.lock behind, so the lock-check
+  workflow fails on the merge commit of any PR that touches the lockfile.
+
+* chore(ci): retrigger PR checks for rebased head
+
+The pull_request synchronize event for the rebase produced no Tests / lock-check / Code Quality runs
+  on this SHA; an empty commit re-fires it.
+
+* fix(data): require explicit VST param specs
+
+- **data**: Share VST conditioning mode type
+  ([#1870](https://github.com/tinaudio/synth-setter/pull/1870),
+  [`702f278`](https://github.com/tinaudio/synth-setter/commit/702f2787e84dd2fff6069dbca1bc644ec546bcb5))
+
+
 ## v8.48.0 (2026-07-14)
 
 ### Features

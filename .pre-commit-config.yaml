@@ -1,5 +1,6 @@
 default_language_version:
-  python: python3
+  # AST-parsing hooks need PEP 695 support, matching requires-python.
+  python: python3.12
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -127,6 +128,7 @@ repos:
     rev: 1.7.0
     hooks:
       - id: interrogate
+        language_version: python3.12
         exclude: >-
           (?x)^(
             src/synth_setter/pipeline/data/add_music2latent\.py|
@@ -186,6 +188,7 @@ repos:
     rev: v0.9.0.2
     hooks:
       - id: shellcheck
+        args: [-x]
         exclude: >-
           (?x)^(
             jobs/eval/eval-audio\.sh|

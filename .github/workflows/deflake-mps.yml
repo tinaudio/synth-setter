@@ -39,22 +39,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: "3.12.13"
 
       # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
       # transitively includes `runtime`. No cpu/cu128 extra is active and the
       # [tool.uv.sources] markers don't match on macOS, so torch resolves from
       # PyPI's MPS-capable wheel — correct for Apple Silicon.
       - name: Install dependencies
-        run: uv pip install --system --group dev -e .
+        run: |
+          uv sync --frozen --group dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       # Mirror `test-mps.yml`'s Surge XT provisioning — same cask + symlink path
       # the configs and `--plugin_path` defaults expect.
@@ -70,7 +68,7 @@ jobs:
           python -c "import torch; assert torch.backends.mps.is_available(), 'MPS not available on this runner'"
 
       - name: List dependencies
-        run: uv pip list --system
+        run: uv pip list
 
       # COUNT validated as a positive int — `type: number` admits floats; pytest-repeat needs int.
       # PYTEST_NODE_ID + COUNT routed through env (never inlined into `run: |`) so an adversarial
