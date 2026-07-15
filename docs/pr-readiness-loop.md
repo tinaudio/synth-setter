@@ -23,16 +23,33 @@ hold. They are AND-ed; failing any one means not ready.
    re-reviews after every push, usually within ~60s. Both the inline-comments
    endpoint and the top-level reviews endpoint must be clear.
 
+## The probe
+
+`agent/_shared/pr_readiness_probe.sh <N>` reports all four gates in one shot —
+one line per gate, with gate-3 failures listing each unresolved thread
+(`path:line @author: first line`) and gate 4 as an advisory Copilot status.
+Exit codes: `0` = gates 1-3 hold, `1` = a gate failed, `2` = usage/environment
+error. Merged/closed PRs short-circuit to READY (auto-merge can land
+mid-poll). `--gates-only` skips the gate-4 lookup for callers that only
+consume the exit code. The Stop hook (`agent/hooks/pr-readiness-stop.sh`) runs
+this same probe, so the hook and the loop can never disagree.
+
+**Poll the probe, not just CI.** A `/loop` on `gh pr checks` alone goes blind
+to review comments that land mid-wait — the historical failure mode where an
+agent watches CI go green, stops, and leaves unresolved threads unanswered.
+
 ## The loop
 
 After every push, iterate until all four gates hold. Use `/loop` for the
-waiting steps (e.g. `/loop 2m gh pr checks <N>`) — do not stop at the first
-push.
+waiting steps with the probe as the poll target
+(`/loop 2m bash agent/_shared/pr_readiness_probe.sh <N>`) so a comment that
+arrives mid-wait shows up in the poll output itself — do not stop at the first
+push, and do not poll `gh pr checks` alone.
 
 1. **Push the change.**
 
-2. **Wait for CI to finish:** `gh pr checks <N> --watch` or `/loop` the checks
-   command.
+2. **Wait for CI to finish:** `gh pr checks <N> --watch`, or `/loop` the probe
+   so new review comments surface while you wait.
 
 3. **If any check fails:** diagnose, fix, push, return to step 2. Do not move
    on with red CI.
@@ -43,7 +60,8 @@ push.
    - `UNKNOWN` → GitHub hasn't finished computing; poll again.
    - `MERGEABLE` → continue.
 
-5. **Reply inline to every open review comment.** List them with
+5. **Reply inline to every open review comment.** The probe's gate-3 output
+   lists every unresolved thread awaiting a reply; for full bodies use
    `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate`. If a reply
    required a code change, push and return to step 2. Drive this with
    `/pr-review-resolver`. The reply endpoint that works is

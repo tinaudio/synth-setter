@@ -9,11 +9,8 @@
 #   warn   loud stderr, exit 0 (never blocks)
 #   off    no-op
 #
-# Deterministic vs delegated: gate 1 (CI green) and gate 2
-# (mergeable=MERGEABLE) are checked here against `gh pr checks` / `gh pr view`.
-# Gates 3 (every review comment answered) and 4 (no fresh Copilot findings) are
-# not robustly decidable in bash — the block message points the agent at
-# /pr-readiness and docs/pr-readiness-loop.md for those.
+# Gates 1-3 are decided by agent/_shared/pr_readiness_probe.sh (gate 4 stays
+# advisory); a missing probe or probe error (exit ≥2) fails open — only exit 1 blocks.
 set -euo pipefail
 
 # shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}
@@ -45,7 +42,7 @@ in_headless_context() {
 
 # `in_primary_checkout` mirrors worktree-guard's detection: git's per-worktree
 # git dir equals the common git dir only in the primary checkout. Returns 1
-# (not primary) on any resolution failure so a probe error can't force a block.
+# (not primary) on any git resolution failure so it can't force a block.
 in_primary_checkout() {
   local git_dir common_dir abs_git_dir abs_common_dir
   git_dir=$(git rev-parse --git-dir 2>/dev/null) || return 1
@@ -53,14 +50,6 @@ in_primary_checkout() {
   abs_git_dir=$(cd "$git_dir" 2>/dev/null && pwd) || return 1
   abs_common_dir=$(cd "$common_dir" 2>/dev/null && pwd) || return 1
   [[ "$abs_git_dir" == "$abs_common_dir" ]]
-}
-
-# `ci_is_green` returns 0 only when every check has concluded successfully.
-# `gh pr checks` exits non-zero while checks are pending (8) or failing (1);
-# both count as "gate not yet holding" per docs/pr-readiness-loop.md — the hook
-# does not sleep, it tells the agent to watch/loop.
-ci_is_green() {
-  gh pr checks "$1" >/dev/null 2>&1
 }
 
 main() {
@@ -88,26 +77,23 @@ main() {
   pr=$(gh pr view "$branch" --json number -q .number 2>/dev/null || true)
   [[ -n "$pr" ]] || exit 0
 
-  # Merged PRs satisfy all gates by definition — mergeable=UNKNOWN is expected
-  # for closed/merged PRs and must not be treated as a gate failure.
-  local pr_state
-  pr_state=$(gh pr view "$pr" --json state -q .state 2>/dev/null || true)
-  [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]] && exit 0
-
-  local mergeable failed_gate=""
-  if ! ci_is_green "$pr"; then
-    failed_gate="Gate 1 (CI not fully green — checks failing or still pending)"
-  else
-    mergeable=$(gh pr view "$pr" --json mergeable -q .mergeable 2>/dev/null || true)
-    if [[ "$mergeable" != "MERGEABLE" ]]; then
-      failed_gate="Gate 2 (mergeable=${mergeable:-UNKNOWN}, want MERGEABLE)"
-    fi
+  local probe probe_out probe_rc=0
+  probe="${SCRIPT_DIR}/../_shared/pr_readiness_probe.sh"
+  if [[ ! -f "$probe" ]]; then
+    { declare -F log >/dev/null 2>&1 && log "probe missing at ${probe}; skipping readiness gates (fail-open)"; } || true
+    exit 0
+  fi
+  # --gates-only: the hook only consumes the exit code on the passing path, so
+  # skip the probe's advisory Copilot lookup (two paginated REST calls).
+  probe_out=$(bash "$probe" --gates-only "$pr" 2>&1) || probe_rc=$?
+  [[ "$probe_rc" -eq 0 ]] && exit 0
+  if [[ "$probe_rc" -ne 1 ]]; then
+    { declare -F log >/dev/null 2>&1 && log "probe exited ${probe_rc} for PR #${pr}; fail-open: ${probe_out}"; } || true
+    exit 0
   fi
 
-  [[ -z "$failed_gate" ]] && exit 0
-
   declare -F ensure_reviews_dir >/dev/null 2>&1 && ensure_reviews_dir
-  declare -F log >/dev/null 2>&1 && log "blocking Stop for PR #${pr} (branch ${branch}): ${failed_gate}"
+  declare -F log >/dev/null 2>&1 && log "blocking Stop for PR #${pr} (branch ${branch}): readiness gates failing"
 
   local prefix override_hint
   if [[ "$mode" == "block" ]]; then
@@ -119,14 +105,14 @@ main() {
   fi
 
   cat >&2 <<EOF
-${prefix}: PR #${pr} (branch ${branch}) is not ready — ${failed_gate}.
-AGENTS.md "After every push, drive the readiness loop until all four gates
-hold." Do not end the turn yet.
+${prefix}: PR #${pr} (branch ${branch}) is not ready — readiness probe report:
 
-Run /pr-readiness to drive the loop (watch CI, check mergeable, reply inline to
-every open review comment, wait for Copilot). This hook checks gates 1-2 only;
-also confirm gate 3 (every open review comment has an inline reply) and gate 4
-(no fresh Copilot findings since the last push) — see docs/pr-readiness-loop.md.
+${probe_out}
+
+AGENTS.md "After every push, drive the readiness loop until all four gates
+hold." Do not end the turn yet. Run /pr-readiness to drive the loop (watch CI,
+check mergeable, reply inline to every open review comment, wait for Copilot)
+— procedure and traps in docs/pr-readiness-loop.md.
 
 ${override_hint}
 EOF

@@ -178,18 +178,21 @@ unintended shell expansion. A `PreToolUse` hook
   `/pr-preflight`.
 - **After every push, drive the readiness loop until all four gates hold.**
   "I pushed the fix" is not "the PR is ready." Run `/pr-readiness` to drive the
-  loop: watch CI (`gh pr checks <N> --watch` or `/loop`) and fix red; confirm
-  `mergeable=MERGEABLE`; reply inline on every open review comment via
-  `/pr-review-resolver`; then wait ~60s (allow 15 min) for Copilot's post-push
-  review on **both** `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
+  loop, polling `agent/_shared/pr_readiness_probe.sh <N>` (all four gates in
+  one shot — never `gh pr checks` alone): fix red CI; confirm
+  `mergeable=MERGEABLE`; reply inline on
+  every open review comment via `/pr-review-resolver`; then wait ~60s (allow
+  15 min) for Copilot's post-push review on **both**
+  `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
   `repos/<OWNER>/<REPO>/pulls/<N>/reviews`; address any new findings and loop.
   If Copilot is silent past 15 min, manually re-request and repeat at most
   once. Full procedure (commands, endpoints, traps) in
   [`docs/pr-readiness-loop.md`](docs/pr-readiness-loop.md). A `Stop` hook
-  (`agent/hooks/pr-readiness-stop.sh`) enforces this: it blocks ending the turn
-  while gates 1-2 (CI green, `mergeable`) fail for the branch's open PR, and
-  points back here for gates 3-4 (`PR_READINESS_GATE`: `block` default /
-  `warn` / `off`).
+  (`agent/hooks/pr-readiness-stop.sh`) enforces this: it runs the same probe
+  and blocks ending the turn while gates 1-3 (CI green, `mergeable`, every
+  unresolved review thread replied) fail for the branch's open PR; gate 4
+  (Copilot) stays advisory (`PR_READINESS_GATE`: `block` default / `warn` /
+  `off`).
 - **Always reply inline** on each open PR review comment (humans, Copilot, and
   the Claude CI review),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.

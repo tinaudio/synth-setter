@@ -39,11 +39,22 @@ Resolve the PR once up front:
 PR=$(gh pr view "$(git branch --show-current)" --json number -q .number)
 ```
 
-Then iterate until all four gates hold. Use `/loop` for the waiting steps
-(e.g. `/loop 2m gh pr checks "$PR"`).
+Then iterate until all four gates hold. Use `/loop` for the waiting steps with
+the four-gate probe as the poll target — never `gh pr checks` alone (rationale
+in docs/pr-readiness-loop.md § The probe):
 
-1. **Watch CI** — `gh pr checks "$PR" --watch`. On any failure, diagnose, fix,
-   commit, push, and return to step 1. Never move on with red CI.
+```bash
+/loop 2m bash agent/_shared/pr_readiness_probe.sh "$PR"
+```
+
+The probe prints one line per gate (gate-3 failures list each unresolved
+thread awaiting a reply; gate 4 is an advisory Copilot status) and exits 0
+only when gates 1-3 hold. Act on whichever gate it reports as failing:
+
+1. **Watch CI** — poll the probe as above, or `gh pr checks "$PR" --watch`
+   for a single blocking wait when you'll re-probe right after. On any
+   failure, diagnose, fix, commit, push, and return to step 1. Never move on
+   with red CI.
 
 2. **Check mergeability** — `gh pr view "$PR" --json mergeable -q .mergeable`:
 
@@ -67,6 +78,7 @@ Then iterate until all four gates hold. Use `/loop` for the waiting steps
 
 ## Relationship to the Stop hook
 
-`agent/hooks/pr-readiness-stop.sh` blocks the turn from ending while gates 1-2
-fail; it cannot decide gates 3-4 in bash, so it points here. Running this skill
-to completion is what clears the block.
+`agent/hooks/pr-readiness-stop.sh` runs the same probe and blocks the turn
+from ending while any of gates 1-3 fails — including unresolved review threads
+awaiting a reply. Gate 4 (Copilot) stays advisory. Running this skill to
+completion is what clears the block.
