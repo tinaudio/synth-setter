@@ -9,12 +9,13 @@ Tests are organized around the PUBLIC typed API:
 
 from __future__ import annotations
 
-import shutil
-import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 
 import pytest
 
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.r2_report import (
     RcloneFile,
     ShardReport,
@@ -281,25 +282,7 @@ class TestFormatSize:
 # run_rclone_ls — integration test against real R2 (auto-skipped without access)
 # ---------------------------------------------------------------------------
 
-_has_rclone = shutil.which("rclone") is not None
-
-
-def _r2_reachable() -> bool:
-    """Check if rclone can reach the r2: remote."""
-    if not _has_rclone:
-        return False
-    try:
-        subprocess.run(
-            ["rclone", "lsd", "r2:"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-    return True
-
-
+@pytest.mark.integration_r2
 @pytest.mark.r2
 @pytest.mark.slow
 class TestRunRcloneLsIntegration:
@@ -307,26 +290,28 @@ class TestRunRcloneLsIntegration:
 
     def test_end_to_end_report_against_r2(self) -> None:
         """Upload fake shards to the configured test bucket, analyze, verify, clean up."""
-        if not _r2_reachable():
+        if not r2_io.is_r2_reachable():
             pytest.skip("R2 not reachable")
-        test_prefix = f"r2:{R2_TEST_BUCKET}/test-{uuid.uuid4().hex[:8]}/"
+        r2_io.ensure_r2_env_loaded()
+        test_dir = f"test-{uuid.uuid4().hex[:8]}/"
+        r2_uri_prefix = f"{r2_io.R2_URI_SCHEME}{R2_TEST_BUCKET}/{test_dir}"
         test_content = b"fake shard data"
 
         try:
-            # Upload two small fake h5 files and one metadata json
-            for name in [
-                "shard-test-abc123-0000.h5",
-                "shard-test-abc123-0001.h5",
-                "metadata-test-abc123.json",
-            ]:
-                subprocess.run(
-                    ["rclone", "rcat", f"{test_prefix}{name}"],
-                    input=test_content,
-                    check=True,
-                )
+            # Upload two small fake h5 files and one metadata json via the
+            # canonical r2_io upload helper (carries --checksum --retries=3).
+            with tempfile.TemporaryDirectory() as tmpdir:
+                for name in [
+                    "shard-test-abc123-0000.h5",
+                    "shard-test-abc123-0001.h5",
+                    "metadata-test-abc123.json",
+                ]:
+                    local_path = Path(tmpdir) / name
+                    local_path.write_bytes(test_content)
+                    r2_io.upload_to_uri(local_path, f"{r2_uri_prefix}{name}")
 
-            # Run the actual function under test
-            output = run_rclone_ls(test_prefix)
+            # run_rclone_ls takes an rclone-form path; convert the r2:// URI.
+            output = run_rclone_ls(r2_io.to_rclone_path(r2_uri_prefix))
             files = parse_rclone_ls_output(output)
             report = analyze_shards(files, threshold_gib=1.0)
 
@@ -337,20 +322,4 @@ class TestRunRcloneLsIntegration:
             assert len(report["suspect_files"]) == 2
 
         finally:
-            # Clean up: delete the test prefix
-            try:
-                subprocess.run(
-                    ["rclone", "purge", test_prefix],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-            except subprocess.CalledProcessError as exc:
-                import warnings
-
-                msg = (
-                    f"Failed to clean up test prefix: {test_prefix}\n"
-                    f"stdout: {exc.stdout}\n"
-                    f"stderr: {exc.stderr}"
-                )
-                warnings.warn(msg, stacklevel=2)
+            r2_io.purge_prefix(R2_TEST_BUCKET, test_dir)
