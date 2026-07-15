@@ -102,8 +102,9 @@ def prepare_batch(
     :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` with
         ``float32`` contiguous tensors, ``None`` for unread modalities; ``params``
         and ``noise`` are ``(batch, num_params)``.
-    :raises ValueError: If stored values are non-finite, parameters are outside
-        ``[0, 1]``, or audio samples are outside ``[-1, 1]``.
+    :raises ValueError: If stored or transformed values are non-finite,
+        parameters are outside ``[0, 1]``, or audio samples are outside
+        ``[-1, 1]``.
     """
     validation_error = _raw_batch_validation_error(raw)
     if validation_error is not None:
@@ -114,8 +115,13 @@ def prepare_batch(
     mel_raw = raw.get("mel_spec")
     if mel_raw is not None:
         if mean is not None and std is not None:
-            mel_raw = (mel_raw - mean) / std
+            with np.errstate(over="ignore", invalid="ignore"):
+                mel_raw = (mel_raw - mean) / std
+            if not np.isfinite(mel_raw).all():
+                raise ValueError("mel_spec normalization produced non-finite values")
         mel_spec = torch.from_numpy(mel_raw).to(dtype=torch.float32)
+        if not torch.isfinite(mel_spec).all():
+            raise ValueError("mel_spec float32 conversion produced non-finite values")
     else:
         mel_spec = None
 

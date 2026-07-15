@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Literal, cast
@@ -307,42 +307,49 @@ class PrepareBatchCollate:
         )
 
 
-class _RepeatFirstBatchSampler(torch.utils.data.Sampler[int]):
-    """Repeat the first full batch for each complete batch in an epoch.
+class _RepeatFirstBatchDataset(torch.utils.data.Dataset):
+    """Fold every requested sample index into the first full batch."""
 
-    Indices fold modulo ``batch_size``; debug-only and not DDP-aware.
-    """
+    def __init__(self, dataset: LanceMapDataset, batch_size: int) -> None:
+        """Wrap a map dataset with repeat-mode index folding.
 
-    def __init__(self, num_rows: int, batch_size: int) -> None:
-        """Fix the epoch geometry the sampler folds.
-
-        :param num_rows: Dataset row count; floored to full batches.
+        :param dataset: Sample-indexed dataset to read.
         :param batch_size: Row modulus every index is folded into.
         :raises ValueError: If the dataset holds less than one full batch — flooring would
             otherwise yield a silently empty epoch.
         """
+        num_rows = len(dataset)
         if num_rows < batch_size:
             raise ValueError(
                 f"repeat_first_batch needs at least one full batch: "
                 f"{num_rows} rows < batch_size {batch_size}"
             )
-        self._num_indices = num_rows - num_rows % batch_size
+        self._dataset = dataset
+        self._num_rows = num_rows - num_rows % batch_size
         self._batch_size = batch_size
 
     def __len__(self) -> int:
-        """Return the number of indices per epoch.
+        """Return the epoch length floored to complete batches.
 
         :returns: Row count floored to a multiple of the batch size.
         """
-        return self._num_indices
+        return self._num_rows
 
-    def __iter__(self) -> Iterator[int]:
-        """Yield the folded index sequence for one epoch.
+    def __getitems__(self, indices: Sequence[int]) -> dict[str, torch.Tensor]:
+        """Read requested indices after folding them into the first batch.
 
-        :yields int: The next row index, always within ``[0, batch_size)``.
+        :param indices: Row indices supplied by the active sampler.
+        :returns: Pre-collated column tensors from the wrapped dataset.
         """
-        for i in range(self._num_indices):
-            yield i % self._batch_size
+        return self._dataset.__getitems__([i % self._batch_size for i in indices])
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        """Read one index after folding it into the first batch.
+
+        :param index: Row index supplied by the active sampler.
+        :returns: One row from the wrapped dataset.
+        """
+        return self._dataset[index % self._batch_size]
 
 
 @dataclass(frozen=True)
@@ -579,19 +586,17 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: DataLoader yielding ``prepare_batch`` model batches.
         """
         pieces = self._map_splits[split]
-        # Legacy parity: train/val/test repeat the first batch when configured;
-        # predict never does. The sampler replaces (and overrides) shuffling.
-        sampler = None
-        if self.repeat_first_batch and split != "predict":
-            sampler = _RepeatFirstBatchSampler(len(pieces.dataset), self.batch_size)
+        repeats_first_batch = self.repeat_first_batch and split != "predict"
+        dataset: torch.utils.data.Dataset = pieces.dataset
+        if repeats_first_batch:
+            dataset = _RepeatFirstBatchDataset(pieces.dataset, self.batch_size)
         return map_dataloader_over(
-            pieces.dataset,
+            dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             collate_fn=pieces.collate,
             pin_memory=self.pin_memory,
-            sampler=sampler,
-            shuffle=shuffle if sampler is None else None,
+            shuffle=False if repeats_first_batch else shuffle,
             drop_last=drop_last,
             persistent_workers=self.persistent_workers,
         )

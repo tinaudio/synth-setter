@@ -447,6 +447,23 @@ class TestLanceMapDataModuleSetup:
         assert isinstance(loader.sampler, torch.utils.data.RandomSampler)
         assert loader.batch_size == 4
 
+    def test_repeat_first_batch_exposes_standard_sampler_before_lightning(
+        self, dataset_root: Path
+    ) -> None:
+        """Repeat mode keeps index folding outside Lightning's sampler slot.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=4,
+            repeat_first_batch=True,
+        ) as module:
+            loader = module.train_dataloader()
+
+        assert isinstance(loader.sampler, torch.utils.data.SequentialSampler)
+        assert loader.batch_size == 4
+
 
 class TestLanceMapDataModuleFlows:
     """Dataloader semantics per Lightning flow: train / val / test / predict."""
@@ -782,6 +799,52 @@ class TestLanceMapDataModuleModes:
         assert rank_sets[0] | rank_sets[1] == set(range(len(source_rows)))
         overlap = rank_sets[0] & rank_sets[1]
         assert len(overlap) == num_rows % 2
+
+    @pytest.mark.slow
+    def test_repeat_first_batch_survives_ddp_sampler_replacement(self, tmp_path: Path) -> None:
+        """Every distributed rank remains restricted to the first full batch.
+
+        :param tmp_path: Directory receiving the Lance shards and rank-index files.
+        """
+        num_rows = 16
+        batch_size = 4
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for seed, split in enumerate(("train", "val", "test"), start=1):
+            write_seeded_lance_shard(
+                dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed
+            )
+        write_mel_stats(dataset_root)
+        source_rows = make_shard_columns(num_rows, seed=1)["param_array"] * 2 - 1
+        output_dir = tmp_path / "rank-indices"
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root,
+            batch_size=batch_size,
+            loader="map",
+            num_workers=0,
+            ot=False,
+            pin_memory=False,
+            repeat_first_batch=True,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+        trainer = Trainer(
+            accelerator="cpu",
+            devices=2,
+            strategy="ddp_spawn",
+            max_epochs=1,
+            logger=False,
+            enable_checkpointing=False,
+            enable_model_summary=False,
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
+        )
+
+        trainer.fit(_DDPIndexRecorder(source_rows, output_dir), datamodule=module)
+
+        for rank in range(2):
+            seen = np.load(output_dir / f"rank-{rank}.npy")
+            assert len(seen) == num_rows // 2
+            assert set(seen.tolist()) <= set(range(batch_size))
 
 
 class _FlowProbe(LightningModule):

@@ -171,6 +171,44 @@ def test_prepare_batch_nonfinite_column_raises_value_error(
         )
 
 
+def test_prepare_batch_normalization_overflow_raises_value_error() -> None:
+    """Finite normalization operands may not produce non-finite model input."""
+    raw = _make_raw()
+    mel = _unwrap_array(raw.get("mel_spec"))
+    mean = np.zeros(mel.shape[1:], dtype=np.float32)
+    std = np.ones(mel.shape[1:], dtype=np.float32)
+    mel.flat[0] = np.finfo(np.float32).max
+    mean.flat[0] = -np.finfo(np.float32).max
+
+    with pytest.raises(ValueError, match="normalization produced non-finite values"):
+        prepare_batch(
+            raw,
+            mean=mean,
+            std=std,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+def test_prepare_batch_float32_cast_overflow_raises_value_error() -> None:
+    """Finite normalized values must remain finite at the model-facing dtype."""
+    raw = _make_raw()
+    mel = _unwrap_array(raw.get("mel_spec")).astype(np.float64)
+    mel.flat[0] = float(np.finfo(np.float32).max) * 2
+    raw["mel_spec"] = mel
+
+    with pytest.raises(ValueError, match="float32 conversion produced non-finite values"):
+        prepare_batch(
+            raw,
+            mean=np.zeros(mel.shape[1:], dtype=np.float64),
+            std=np.ones(mel.shape[1:], dtype=np.float64),
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_prepare_batch_parameter_out_of_range_raises_value_error(value: float) -> None:
     """Stored parameters outside their normalized range fail before rescaling.
