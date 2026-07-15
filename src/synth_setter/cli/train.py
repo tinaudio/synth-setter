@@ -112,10 +112,10 @@ def _checkpoint_prefix_uri(cfg: DictConfig, recovery_namespace: str) -> str:
     return f"{prefix}/{recovery_namespace}"
 
 
-def _append_checkpoint_uploader(
+def _configure_checkpoint_durability(
     cfg: DictConfig, callbacks: list[Callback], recovery_namespace: str
 ) -> None:
-    """Append an uploader only when exactly one ModelCheckpoint can produce durable saves.
+    """Validate and configure opt-in crash-durable checkpoint mirroring.
 
     :param cfg: Hydra config carrying the opt-in durability flag and destination.
     :param callbacks: Callback list mutated in place; ModelCheckpoint enables crash saves.
@@ -130,10 +130,12 @@ def _append_checkpoint_uploader(
             "training.upload_checkpoints_during_training requires exactly one "
             f"ModelCheckpoint; found {len(model_checkpoints)}"
         )
+    prefix_uri = _checkpoint_prefix_uri(cfg, recovery_namespace)
+    r2_io.ensure_r2_env_loaded()
     model_checkpoint = model_checkpoints[0]
     model_checkpoint.save_last = True
     model_checkpoint.save_on_exception = True
-    callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg, recovery_namespace)))
+    callbacks.append(CheckpointUploader(prefix_uri))
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
@@ -257,7 +259,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     recovery_namespace = _make_recovery_namespace(run_id)
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
-    _append_checkpoint_uploader(cfg, callbacks, recovery_namespace)
+    _configure_checkpoint_durability(cfg, callbacks, recovery_namespace)
 
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, run_id, "training")

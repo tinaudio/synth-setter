@@ -13,12 +13,21 @@ from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.train import (
-    _append_checkpoint_uploader,
     _checkpoint_prefix_uri,
+    _configure_checkpoint_durability,
     _make_recovery_namespace,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import _MAX_UPLOAD_ATTEMPTS, CheckpointUploader
+
+
+@pytest.fixture(autouse=True)
+def _stub_durability_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests offline unless they explicitly replace the R2 preflight.
+
+    :param monkeypatch: Replaces the R2 environment/authentication probe.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
 
 
 class _FakeCheckpointCallback:
@@ -529,63 +538,100 @@ def test_checkpoint_prefix_uri_rejects_override_with_trailing_slash() -> None:
         )
 
 
-def test_append_uploader_attaches_callback_when_enabled() -> None:
+def test_configure_durability_attaches_callback_when_enabled() -> None:
     """The flag enabled (with a ModelCheckpoint present) appends one ``CheckpointUploader``."""
     callbacks: list[Callback] = [ModelCheckpoint()]
-    _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
+    _configure_checkpoint_durability(_cfg(during_training=True), callbacks, "run-id")
     assert sum(isinstance(cb, CheckpointUploader) for cb in callbacks) == 1
 
 
-def test_append_uploader_noop_when_disabled() -> None:
+def test_configure_durability_preflights_r2_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Durability validates R2 before training can start.
+
+    :param monkeypatch: Records the R2 environment/authentication probe.
+    """
+    preflights = 0
+
+    def _record_preflight() -> None:
+        nonlocal preflights
+        preflights += 1
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _record_preflight)
+    _configure_checkpoint_durability(_cfg(during_training=True), [ModelCheckpoint()], "run-id")
+    assert preflights == 1
+
+
+def test_configure_durability_propagates_failed_r2_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable durability destination aborts before callback mutation.
+
+    :param monkeypatch: Makes the R2 environment/authentication probe fail.
+    """
+    model_checkpoint = ModelCheckpoint(save_last=False, save_on_exception=False)
+    callbacks: list[Callback] = [model_checkpoint]
+
+    def _raise_unavailable() -> None:
+        raise RuntimeError("R2 authentication failed")
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _raise_unavailable)
+    with pytest.raises(RuntimeError, match="R2 authentication failed"):
+        _configure_checkpoint_durability(_cfg(during_training=True), callbacks, "run-id")
+    assert callbacks == [model_checkpoint]
+    assert model_checkpoint.save_last is False
+    assert model_checkpoint.save_on_exception is False
+
+
+def test_configure_durability_noop_when_disabled() -> None:
     """The flag disabled leaves the callback list untouched."""
     callbacks: list[Callback] = []
-    _append_checkpoint_uploader(_cfg(during_training=False), callbacks, "run-id")
+    _configure_checkpoint_durability(_cfg(during_training=False), callbacks, "run-id")
     assert callbacks == []
 
 
-def test_append_uploader_noop_when_flag_absent() -> None:
+def test_configure_durability_noop_when_flag_absent() -> None:
     """A config that never set the flag attaches nothing."""
     callbacks: list[Callback] = []
-    _append_checkpoint_uploader(_cfg(), callbacks, "run-id")
+    _configure_checkpoint_durability(_cfg(), callbacks, "run-id")
     assert callbacks == []
 
 
-def test_append_uploader_appends_after_existing_model_checkpoint() -> None:
+def test_configure_durability_appends_after_existing_model_checkpoint() -> None:
     """The uploader is appended last, preserving a pre-existing ModelCheckpoint's position."""
     existing = ModelCheckpoint()
     callbacks: list[Callback] = [existing]
-    _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
+    _configure_checkpoint_durability(_cfg(during_training=True), callbacks, "run-id")
     assert callbacks[0] is existing
     assert isinstance(callbacks[-1], CheckpointUploader)
 
 
-def test_append_uploader_rejects_missing_model_checkpoint() -> None:
+def test_configure_durability_rejects_missing_model_checkpoint() -> None:
     """Durability fails before training when no checkpoint writer is configured."""
     callbacks: list[Callback] = []
     with pytest.raises(ValueError, match="exactly one ModelCheckpoint; found 0"):
-        _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
+        _configure_checkpoint_durability(_cfg(during_training=True), callbacks, "run-id")
     assert callbacks == []
 
 
-def test_append_uploader_enables_save_on_exception() -> None:
+def test_configure_durability_enables_save_on_exception() -> None:
     """Appending the uploader flips ``save_on_exception`` on the ModelCheckpoint (default off)."""
     model_checkpoint = ModelCheckpoint()
     assert model_checkpoint.save_on_exception is False
-    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint], "run-id")
+    _configure_checkpoint_durability(_cfg(during_training=True), [model_checkpoint], "run-id")
     assert model_checkpoint.save_on_exception is True
 
 
-def test_append_uploader_enables_save_last() -> None:
+def test_configure_durability_enables_save_last() -> None:
     """Appending the uploader ensures ModelCheckpoint exposes ``last_model_path``."""
     model_checkpoint = ModelCheckpoint(save_last=False)
-    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint], "run-id")
+    _configure_checkpoint_durability(_cfg(during_training=True), [model_checkpoint], "run-id")
     assert model_checkpoint.save_last is True
 
 
-def test_append_uploader_rejects_multiple_model_checkpoints() -> None:
+def test_configure_durability_rejects_multiple_model_checkpoints() -> None:
     """Durability fails before training when checkpoint ownership is ambiguous."""
     callbacks: list[Callback] = [ModelCheckpoint(), ModelCheckpoint()]
     with pytest.raises(ValueError, match="exactly one ModelCheckpoint; found 2"):
-        _append_checkpoint_uploader(_cfg(during_training=True), callbacks, "run-id")
+        _configure_checkpoint_durability(_cfg(during_training=True), callbacks, "run-id")
     assert len(callbacks) == 2
     assert not any(isinstance(callback, CheckpointUploader) for callback in callbacks)

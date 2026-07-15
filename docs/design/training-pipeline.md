@@ -113,8 +113,8 @@ python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/tra
 # Launch a single long-running training pod
 make runpod-train EXPERIMENT=surge/flow_simple
 
-# If the pod dies, resume from the W&B model artifact:
-make resume EXPERIMENT=surge/flow_simple RUN_ID=<train_wandb_run_id>
+# If the pod dies, download its launch-scoped R2 last.ckpt (Section 6.2), then resume:
+uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt"
 
 # Or specify a W&B artifact alias directly:
 python -m synth_setter.cli.train \
@@ -122,7 +122,7 @@ python -m synth_setter.cli.train \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). On main, checkpoint durability is W&B-only (see Section 6.2).
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). The current entrypoint also supports opt-in launch-scoped crash checkpoints as described in Section 6.2.
 
 ### Docker
 
@@ -238,13 +238,13 @@ ______________________________________________________________________
 
 ### 5.2 R2 Checkpoint Durability
 
-| Property     | Value                                                                                                                                     |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**  | At train end, on global-zero, best-effort — `_upload_best_checkpoint` uploads the best checkpoint to R2; the model artifact references it |
-| **Input**    | `best.ckpt`                                                                                                                               |
-| **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` + a `model-{config_id}` artifact referencing it as an `s3://` URI                   |
-| **Compute**  | One rclone upload at train end                                                                                                            |
-| **Contract** | Degrades to a lineage-only artifact when R2 is unreachable or no checkpoint was written; training is never aborted                        |
+| Property     | Value                                                                                                                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**  | At train end, `_upload_best_checkpoint` uploads the best checkpoint. With `upload_checkpoints_during_training=true`, `CheckpointUploader` also mirrors completed rank-0 saves and the exception checkpoint. |
+| **Input**    | Train-end `best.ckpt`; opt-in `last.ckpt` revisions                                                                                                                                                         |
+| **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` plus its W&B reference; opt-in `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt` recovery object                             |
+| **Compute**  | One rclone upload at train end; opt-in synchronous uploads on checkpoint cadence                                                                                                                            |
+| **Contract** | Degrades to a lineage-only artifact when R2 is unreachable or no checkpoint was written; training is never aborted                                                                                          |
 
 ### 5.3 Resume
 
@@ -281,7 +281,7 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 └── config.yaml               # Frozen experiment config
 ```
 
-The best checkpoint is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact (see §6.2, §7.5); intermediate checkpoints stay local. The per-run path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) writes to; the train-end best-checkpoint upload uses the per-`config_id` path `checkpoints/{config_id}/model.ckpt`.
+The best checkpoint is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact (see §6.2, §7.5). Intermediate checkpoints stay local by default; opt-in durability mirrors `last.ckpt` to a launch-scoped recovery object. The per-run path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) writes to; the current train-end and crash-recovery paths are detailed in §6.2.
 
 ### 6.1 Dataset Access
 
@@ -333,8 +333,8 @@ To recover a crashed launch, copy the URI from that log line and materialize it 
 
 ```bash
 export RECOVERY_URI='r2://intermediate-data/checkpoints/<config-id>/<wandb-run-id>-<uuid>/last.ckpt'
-uv run python -c 'import os; from pathlib import Path; from synth_setter.pipeline.r2_io import download_to_path; download_to_path(os.environ["RECOVERY_URI"], Path("last.ckpt"))'
-uv run synth-setter-train <original-overrides> ckpt_path="$PWD/last.ckpt"
+uv run python -c 'import os; from pathlib import Path; from synth_setter.pipeline.r2_io import download_to_path, ensure_r2_env_loaded; ensure_r2_env_loaded(); download_to_path(os.environ["RECOVERY_URI"], Path("last.ckpt"))'
+uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt"
 ```
 
 Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises the upload, real rclone-backed download, byte equality, and exception propagation.
@@ -548,7 +548,7 @@ ______________________________________________________________________
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                          |
 | **`train_wandb_run_id`** | W&B run ID for a specific training run. Default format: `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
-| **durable checkpoint**   | A checkpoint persisted outside the training pod as a W&B model artifact.                                                                                                                          |
+| **durable checkpoint**   | A checkpoint persisted outside the training pod: a W&B-referenced train-end model or a launch-scoped R2 crash-recovery object.                                                                    |
 | **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).                                |
 | **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                                                            |
 
