@@ -36,6 +36,10 @@ tags: ["dev", "generate_dataset"]
 # Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
+# Dynamic jqueue-based shard claiming instead of a static rank/world slice;
+# the operator populates the queue at launch.
+use_shard_queue: false
+
 # Run synth-setter-finalize-dataset inline after generate completes.
 # Local-run path only; ignored (with an INFO log) when
 # skypilot_launch.compute_template is set.

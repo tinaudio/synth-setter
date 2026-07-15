@@ -25,6 +25,7 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
         "train_val_test_seeds": None,
         "base_seed": 42,
         "mask_degenerate_bins": False,
+        "use_shard_queue": False,
         "num_params": 92,
         "num_shards": 3,
         "r2": {

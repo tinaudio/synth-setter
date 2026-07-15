@@ -49,7 +49,9 @@ from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from tests._vst import PLUGIN_PATH
+from tests._vst import (
+    PLUGIN_PATH,
+)
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 
@@ -212,6 +214,61 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
 
 @pytest.mark.fake_vst
+def test_from_hydra_queue_mode_renders_queued_shards_and_drains_queue(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``from_hydra`` with ``use_shard_queue=true`` claims, renders, and acks every shard.
+
+    Drives the real worker entrypoint end-to-end like its static-partition
+    sibling above, but with the run's work queue as the shard source: a real
+    jqueue queue (``LocalFileSystemStorage``) whose state file sits at the
+    sanctioned ``metadata/shard-queue.json`` key inside the fake R2 root. Only
+    the S3/credentials seam (``_shard_queue_for_spec``) is bypassed. Asserts
+    every queued shard lands at its spec-derived R2 URI and the queue is
+    drained (all claims acked).
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
+        and ``tmp_path``-pinned paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Bridges local-rclone probe errors and injects the
+        file-backed queue.
+    """
+    from jqueue import LocalFileSystemStorage
+
+    from synth_setter.pipeline.shard_queue import ShardQueue
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/test-run/"
+        # Disable the default wandb logger: generate() would call wandb.init() and block.
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    queue_state = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-queue.json"
+    queue = ShardQueue(storage=LocalFileSystemStorage(str(queue_state)))
+    queue.populate([shard.shard_id for shard in spec.shards])
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
+    )
+
+    render_shard = stub_renderer(spec)
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+
+    for shard in spec.shards:
+        assert shard_has_complete_attempt(spec, shard.shard_id)
+    assert queue.claim(shard_count=spec.num_shards) is None, "queue must be drained after the run"
+
+
+@pytest.mark.fake_vst
 def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_marker(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
@@ -282,6 +339,56 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
     # The attempt-start marker is the only allowed trace of the failed attempt.
     assert staged
     assert all(name.endswith(".rendering") for name in staged)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_queue_mode_real_vst_writes_consumable_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Queue mode stages one real VST Lance shard that validates from fake R2.
+
+    :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Injects file-backed queue storage.
+    :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
+    """
+    from jqueue import LocalFileSystemStorage
+
+    from synth_setter.pipeline.shard_queue import ShardQueue
+
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-queue/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    queue_state = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-queue.json"
+    queue = ShardQueue(storage=LocalFileSystemStorage(str(queue_state)))
+    queue.populate(shard.shard_id for shard in spec.shards)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
+    )
+
+    from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    assert len(list(staging_root.rglob("*.valid"))) == 1
+    assert validate_all_shards_from_r2(spec) == []
+    assert queue.claim(shard_count=spec.num_shards) is None
+    assert queue.claim(shard_count=spec.num_shards) is None
 
 
 @pytest.mark.requires_vst

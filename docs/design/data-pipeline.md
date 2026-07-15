@@ -57,7 +57,10 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > in §7.4 / §7.7 is not yet built). When `render.parallel=True`, owned shards
 > dispatch concurrently via a thread pool sized to half the worker's
 > affinity-aware CPU count; transient renderer subprocess failures are retried
-> up to `render.max_retries` times (default 0 = strict fail-fast). The
+> up to `render.max_retries` times (default 0 = strict fail-fast).
+> `use_shard_queue=true` instead claims shard IDs dynamically from the run's
+> jqueue work queue (§7.1); queue mode renders one claim at a time and
+> ignores `render.parallel`. The
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
 
@@ -201,7 +204,7 @@ R2 serves as both the **data plane** and the **control plane**:
 | **Data plane**    | Actual dataset content | Lance fragment data + split datasets, stats.npz               |
 | **Control plane** | Coordination metadata  | Spec, worker reports, debug logs, `metadata/dataset.complete` |
 
-Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: R2 has no atomic test-and-set, so mutual exclusion is not possible. This is acceptable because all operations are idempotent and produce deterministic outputs ([§7.7](#77-concurrency-semantics)).
+Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: the pipeline does not rely on conditional writes for data-plane mutual exclusion — all operations are idempotent and produce deterministic outputs; the opt-in shard queue ([§7.1](#71-storage-as-the-source-of-truth)) is the sole CAS consumer ([§7.7](#77-concurrency-semantics)).
 
 ### Reconciliation Correctness
 
@@ -351,6 +354,7 @@ All structured files in the pipeline, in one place:
 | ---------------------- | ----------------------------------------------------------------------- | ---------- | ------------------------------- | -------------------------------- |
 | Config                 | `metadata/config.yaml`                                                  | YAML       | User                            | `generate`                       |
 | Input spec             | `metadata/input_spec.json`                                              | JSON       | `generate` (first run)          | `generate`, `status`, `finalize` |
+| Shard work queue       | `metadata/shard-queue.json`                                             | JSON       | `generate` (operator populate)  | Workers (claim/ack via CAS)      |
 | Lance fragment sidecar | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.fragment.json`   | JSON       | Workers                         | `finalize` (commits fragment)    |
 | Lance shard stats      | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.shard-stats.npz` | NumPy      | Workers                         | `finalize` (stats reduction)     |
 | Lance fragment data    | `train.lance/data/*`, `val.lance/data/*`, `test.lance/data/*`           | Lance      | Workers                         | `finalize` (manifest commit)     |
@@ -399,14 +403,14 @@ The pipeline uses R2 as both the data layer and the coordination layer. Integrit
 
 **Why R2 for coordination and not a database or queue:**
 
-Object storage lacks atomic compare-and-set, locking, and transactions. A traditional coordination system (Redis, Postgres, SQS) would provide these. We use R2 anyway — this is a deliberate trade-off, not a convenience choice.
+The design avoids depending on compare-and-set, locking, and transactions (R2 does offer conditional puts; only the opt-in shard queue uses them). A traditional coordination system (Redis, Postgres, SQS) would provide these natively. We use R2 anyway — this is a deliberate trade-off, not a convenience choice.
 
 The pipeline doesn't need what coordination systems provide:
 
-- **No atomic compare-and-set** — workers write to per-attempt metadata filenames, and Lance fragment object names are owned by Lance. Concurrent attempts for the same logical shard never decide canonical membership themselves; finalize selects the winners ([§7.7](#77-concurrency-semantics)).
+- **No compare-and-set for canonical membership** — workers write to per-attempt metadata filenames, and Lance fragment object names are owned by Lance. Concurrent attempts for the same logical shard never decide canonical membership themselves; finalize selects the winners ([§7.7](#77-concurrency-semantics)).
 - **No locking** — each shard is assigned to one worker per invocation. The assignment is a simple partition of the missing set. No lock acquisition needed.
 - **No transactions** — stages are independent. There is no multi-shard operation that must succeed or fail atomically.
-- **No queue** — work discovery is reconciliation (compare spec against storage). A queue would be a second source of truth for "what work remains" — and a less reliable one than the files themselves.
+- **No queue for completion truth** — work discovery is reconciliation (compare spec against storage). A queue deciding "what work remains" would be a second source of truth — and a less reliable one than the files themselves. Optional *distribution* is different: `use_shard_queue=true` spreads shard IDs across machines dynamically via a [jqueue](https://github.com/janbjorge/jqueue) `DirectQueue` whose single JSON state object lives in R2 under the run prefix (`metadata/shard-queue.json`, using R2's conditional `If-Match` writes — R2 does support compare-and-set puts). The queue only routes claims; the per-shard R2 probe stays the sole completion authority, so a stale or duplicated queue entry costs at most a skip-probe, never a wrong dataset.
 
 What a coordination system *would* cost:
 
@@ -494,7 +498,7 @@ Shard IDs are logical and deterministic: `shard-000000` through `shard-000479`, 
 - **No naming collisions** — each worker attempt writes unique sidecar filenames (`{worker_id}-{attempt_uuid}.*`), and canonical membership is decided only by finalize
 - **Infrastructure details** (worker IDs) appear in staging filenames and metadata, not in canonical shard paths
 
-**Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. But the shard's identity is independent of which worker computes it. If Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
+**Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. With `use_shard_queue=true`, assignment is instead a dynamic claim from the run's work queue. Either way the shard's identity is independent of which worker computes it: if Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
 
 **Shard write protocol:**
 
@@ -645,7 +649,7 @@ The finalize step runs with `MODE=finalize-shards`. Scoped and validated on the 
 - If `metadata/dataset.complete` exists but outputs are missing → stale marker from a crashed finalize, cleaned up on next run
 - Two concurrent finalize processes both write `metadata/dataset.complete` — this is fine, they produce identical outputs ([§7.7](#77-concurrency-semantics))
 
-**Why `metadata/dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics that don't exist and can't exist (R2 has no atomic test-and-set). The name should communicate what it means: finalization is complete.
+**Why `metadata/dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics the design deliberately does not implement — the marker records completion, it does not arbitrate it. The name should communicate what it means: finalization is complete.
 
 **Finalize idempotency:** Finalize reruns from scratch unless `metadata/dataset.complete` plus all finalized outputs are present and valid. No partial checkpoints — if finalize crashes after `train.lance/` but before `stats.npz`, the next run starts over. This is simple and correct: finalize processes data already in R2, so reruns are cheap (minutes).
 
@@ -686,7 +690,7 @@ Both invocations read the staging prefix, both see the same missing shards, both
 
 **Scenario: concurrent `finalize` on the same quiescent run_id**
 
-Two finalize invocations both read the input spec, validate the same stable attempt set, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+Two finalize invocations both read the input spec, validate the same stable attempt set, select winners, produce final outputs, and write `metadata/dataset.complete`. Both use the same deterministic winner rule and produce identical canonical outputs. `metadata/dataset.complete` does not provide mutex semantics — by design it records completion rather than arbitrating it. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
 
 Three properties make this idempotence hold for a *sequential* re-run after a crash, not just concurrent invocations. Winner selection is monotonic (earliest `.valid` `LastModified`), each split is a replace-semantics commit over the full winner set (never an append), and `metadata/dataset.complete` is written last. A finalize that dies after committing `train.lance` but before the marker re-runs to the identical result: the winners are unchanged and the commit rebuilds the manifest rather than appending rows. A straggler attempt that lands after a completed finalize cannot change the outcome either — its later `LastModified` loses to the existing winner.
 

@@ -28,6 +28,8 @@ which reads the shard's staged ``.valid`` marker under ``fake_r2_remote``).
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -39,6 +41,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from jqueue import DirectQueue, InMemoryStorage
 
 from synth_setter.cli.generate_dataset import (
     build_generate_args,
@@ -47,6 +50,7 @@ from synth_setter.cli.generate_dataset import (
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.shard_queue import SHARD_QUEUE_ENTRYPOINT, ShardQueue
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
@@ -634,25 +638,8 @@ class TestRunFromSpecUri:
                 run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
 
 
-class TestRun:
-    """Render → upload, per owned shard.
-
-    No spec upload — ``main()`` writes it once.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Pin rank=0/world=1 explicitly so partition-agnostic tests are insulated from host env.
-
-        ``read_rank_world_from_env`` defaults to ``(0, 1)`` when both vars are
-        absent, but this fixture also overwrites any value the developer's shell
-        may have exported (e.g. an in-flight multi-worker debugging session) so
-        the partition-agnostic tests in this class stay deterministic. Tests
-        that probe multi-worker partitioning override via ``monkeypatch.setenv``;
-        the default-fallback test overrides via ``monkeypatch.delenv``.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+class RenderSeamFixtures:
+    """Shared render/rclone-seam fixtures for ``generate()`` dispatch test classes."""
 
     @pytest.fixture(autouse=True)
     def _default_shard_absent_in_r2(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -662,6 +649,8 @@ class TestRun:
         ``shard_has_complete_attempt`` to ``False`` insulates the render-path
         tests from any host state. Tests that exercise the skip-existing path
         override this with their own ``monkeypatch.setattr``.
+
+        :param monkeypatch: Pytest fixture used to patch the completion probe.
         """
         monkeypatch.setattr(
             "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
@@ -691,6 +680,29 @@ class TestRun:
             side_effect=stub_renderer(spec),
         ) as mock_check_call:
             yield mock_check_call
+
+
+class TestRun(RenderSeamFixtures):
+    """Render → upload, per owned shard.
+
+    No spec upload — ``main()`` writes it once.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin rank=0/world=1 explicitly so partition-agnostic tests are insulated from host env.
+
+        ``read_rank_world_from_env`` defaults to ``(0, 1)`` when both vars are
+        absent, but this fixture also overwrites any value the developer's shell
+        may have exported (e.g. an in-flight multi-worker debugging session) so
+        the partition-agnostic tests in this class stay deterministic. Tests
+        that probe multi-worker partitioning override via ``monkeypatch.setenv``;
+        the default-fallback test overrides via ``monkeypatch.delenv``.
+
+        :param monkeypatch: Pytest fixture used to set env vars.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
     def test_invokes_generate_vst_dataset_with_spec_derived_args(
         self,
@@ -1300,11 +1312,14 @@ class TestRun:
 
         generate(spec, tmp_path, [])
 
-        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
-        summary_lines = [m for m in info_messages if "rendered=" in m and "skipped=" in m]
-        assert len(summary_lines) == 1, f"expected exactly one summary line, got: {info_messages}"
-        assert "rendered=2" in summary_lines[0]
-        assert "skipped=1" in summary_lines[0]
+        info_calls = mock_logger.info.call_args_list
+        summary_calls = [
+            c for c in info_calls if "rendered=" in str(c.args[0]) and "skipped=" in str(c.args[0])
+        ]
+        assert len(summary_calls) == 1, f"expected exactly one summary line, got: {info_calls}"
+        assert summary_calls[0].kwargs["rendered"] == 2
+        assert summary_calls[0].kwargs["skipped"] == 1
+        assert "of 3 assigned" in summary_calls[0].kwargs["assignment"]
 
     @patch("synth_setter.cli.generate_dataset.logger")
     def test_run_logs_generation_speed_from_rendered_samples(
@@ -1334,12 +1349,11 @@ class TestRun:
 
         generate(spec, tmp_path, [])
 
-        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
-        speed_lines = [m for m in info_messages if "generation speed:" in m]
-        assert len(speed_lines) == 1, f"expected one speed line, got: {info_messages}"
-        expected_samples = 2 * spec.render.samples_per_shard
-        assert f"{expected_samples} samples" in speed_lines[0]
-        assert "samples/s" in speed_lines[0]
+        info_calls = mock_logger.info.call_args_list
+        speed_calls = [c for c in info_calls if "generation speed:" in str(c.args[0])]
+        assert len(speed_calls) == 1, f"expected one speed line, got: {info_calls}"
+        assert speed_calls[0].kwargs["samples"] == 2 * spec.render.samples_per_shard
+        assert "samples/s" in str(speed_calls[0].args[0])
 
     def test_run_probe_failure_propagates(
         self,
@@ -1593,6 +1607,304 @@ class TestRun:
         generate(spec, tmp_path, [])
 
         provenance.assert_not_called()
+
+
+# generate() with use_shard_queue — dynamic claim/ack dispatch
+
+
+def _queue_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
+    """Return an ``n``-shard DatasetSpec that opts into queue distribution.
+
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param n: Number of train shards (10000 samples each).
+    :returns: Validated spec with ``use_shard_queue=True``.
+    """
+    kwargs = _base_spec_kwargs(
+        tmp_path,
+        train_val_test_sizes=[2 * n, 0, 0],
+        use_shard_queue=True,
+    )
+    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+def test_shard_queue_for_spec_builds_s3_queue_over_run_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The queue seam binds env storage credentials to the run's queue-state key.
+
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param monkeypatch: Injects the canonical ``SYNTH_SETTER_STORAGE_*`` env.
+    """
+    from synth_setter.cli.generate_dataset import _shard_queue_for_spec
+    from synth_setter.pipeline.shard_queue import _ConditionalCreateS3Storage
+
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://endpoint.example")
+    spec = _queue_spec(tmp_path)
+
+    queue = _shard_queue_for_spec(spec)
+
+    storage = queue.storage
+    assert isinstance(storage, _ConditionalCreateS3Storage)
+    assert storage.bucket == spec.r2.bucket
+    assert storage.key == f"{spec.r2.prefix}metadata/shard-queue.json"
+    assert storage.endpoint_url == "https://endpoint.example"
+
+
+class TestRunWithShardQueue(RenderSeamFixtures):
+    """``generate()`` with ``use_shard_queue=True`` claims shards from the run queue."""
+
+    @pytest.fixture()
+    def memory_queue(self, monkeypatch: pytest.MonkeyPatch) -> ShardQueue:
+        """Route ``generate()``'s queue construction to an in-memory jqueue.
+
+        The queue semantics stay real (jqueue ``DirectQueue`` over
+        ``InMemoryStorage``); only the S3/credentials seam is bypassed.
+
+        :param monkeypatch: Replaces ``_shard_queue_for_spec`` with the fake-backed queue.
+        :returns: The queue ``generate()`` will claim from.
+        """
+        queue = ShardQueue(storage=InMemoryStorage())
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
+        )
+        return queue
+
+    def test_generate_renders_every_queued_shard_and_drains_queue(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        memory_queue: ShardQueue,
+        tmp_path: Path,
+    ) -> None:
+        """All queued shards render, upload, and are acked off the queue.
+
+        :param patched_subprocess: Fixture-activation only; the renderer
+            materializes each shard so the real rclone upload runs.
+        :param memory_queue: Queue ``generate()`` claims from.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _queue_spec(tmp_path, n=3)
+        memory_queue.populate([shard.shard_id for shard in spec.shards])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        generate(spec, tmp_path, [])
+
+        for shard in spec.shards:
+            assert shard_has_complete_attempt(spec, shard.shard_id)
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
+
+    def test_generate_renders_only_queued_shards_not_full_spec_range(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        memory_queue: ShardQueue,
+        tmp_path: Path,
+    ) -> None:
+        """The queue, not the spec's shard range, decides this worker's assignment.
+
+        :param patched_subprocess: Fixture-activation only.
+        :param memory_queue: Queue holding a single shard of the three-shard spec.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _queue_spec(tmp_path, n=3)
+        memory_queue.populate([1])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        generate(spec, tmp_path, [])
+
+        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[2].shard_id)
+
+    @pytest.mark.parametrize("invalid_shard_id", [-1, 3, 10_000])
+    def test_generate_invalid_queue_shard_id_retires_without_rendering(
+        self,
+        invalid_shard_id: int,
+        patched_subprocess: MagicMock,
+        memory_queue: ShardQueue,
+        tmp_path: Path,
+    ) -> None:
+        """Persisted queue IDs outside the spec range fail before rendering.
+
+        :param invalid_shard_id: Negative, upper-bound, or far-out shard ID.
+        :param patched_subprocess: Renderer spy that must remain unused.
+        :param memory_queue: Queue receiving the raw untrusted payload.
+        :param tmp_path: Per-test work directory.
+        """
+        spec = _queue_spec(tmp_path, n=3)
+        asyncio.run(
+            DirectQueue(memory_queue.storage).enqueue(
+                SHARD_QUEUE_ENTRYPOINT,
+                json.dumps({"shard_id": invalid_shard_id}).encode(),
+            )
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=rf"shard_id {invalid_shard_id}.*outside.*\[0, 3\)",
+        ):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
+        # The poison job must be retired, not left claimable for a peer.
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        state = asyncio.run(DirectQueue(memory_queue.storage).read_state())
+        assert not state.jobs
+
+    def test_generate_render_failure_retires_claim_and_propagates(
+        self,
+        patched_subprocess: MagicMock,
+        memory_queue: ShardQueue,
+        tmp_path: Path,
+    ) -> None:
+        """A failed render retires its job from the queue and fails the run.
+
+        Retirement (not re-queueing) keeps a deterministically failing shard
+        from cascading across the fleet; the empty-queue assertion via
+        ``populate`` proves the job was removed, not left in-progress.
+
+        :param patched_subprocess: Overridden to raise on the renderer call.
+        :param memory_queue: Queue holding the single shard.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _queue_spec(tmp_path, n=1)
+        memory_queue.populate([0])
+        patched_subprocess.side_effect = subprocess.CalledProcessError(
+            1, "generate_vst_dataset.py"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path, [])
+
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        assert memory_queue.populate([0]) == 1  # empty queue ⇒ job was retired
+
+    def test_generate_retire_ack_failure_never_masks_render_exception(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """When the retiring ack also fails, the render's exception still propagates.
+
+        :param patched_subprocess: Overridden to raise on the renderer call.
+        :param monkeypatch: Injects the exploding-ack queue.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+
+        class _AckExplodes(ShardQueue):
+            """Queue whose retire/ack path always fails."""
+
+            def ack(self, job_id: str) -> None:
+                """Simulate a storage failure during retirement.
+
+                :param job_id: Ignored.
+                :raises RuntimeError: Always.
+                """
+                raise RuntimeError("injected ack failure")
+
+        queue = _AckExplodes(storage=InMemoryStorage())
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
+        )
+        spec = _queue_spec(tmp_path, n=1)
+        queue.populate([0])
+        patched_subprocess.side_effect = subprocess.CalledProcessError(
+            1, "generate_vst_dataset.py"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path, [])
+
+    def test_generate_keyboard_interrupt_retires_claim_and_propagates(
+        self,
+        patched_subprocess: MagicMock,
+        memory_queue: ShardQueue,
+        tmp_path: Path,
+    ) -> None:
+        """Ctrl-C mid-render retires the claim — the design intent of the broad except.
+
+        :param patched_subprocess: Overridden to raise ``KeyboardInterrupt``.
+        :param memory_queue: Queue holding the single shard.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _queue_spec(tmp_path, n=1)
+        memory_queue.populate([0])
+        patched_subprocess.side_effect = KeyboardInterrupt()
+
+        with pytest.raises(KeyboardInterrupt):
+            generate(spec, tmp_path, [])
+
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        assert memory_queue.populate([0]) == 1  # empty queue ⇒ claim was retired
+
+    def test_generate_queue_mode_ignores_render_parallel_with_warning(
+        self,
+        patched_subprocess: MagicMock,  # noqa: ARG002
+        memory_queue: ShardQueue,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``render.parallel=true`` + queue mode warns and never enters the thread pool.
+
+        :param patched_subprocess: Fixture-activation only; renders succeed.
+        :param memory_queue: Queue holding both shards.
+        :param monkeypatch: Guards the parallel dispatcher against being called.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        base = _queue_spec(tmp_path, n=2)
+        spec = base.model_copy(
+            update={"render": base.render.model_copy(update={"parallel": True})}
+        )
+        memory_queue.populate([0, 1])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
+            raise AssertionError("_dispatch_shards_parallel must not run in queue mode")
+
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
+            _parallel_must_not_fire,
+        )
+        from loguru import logger as loguru_logger
+
+        warnings: list[str] = []
+        sink_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING")
+        try:
+            generate(spec, tmp_path, [])
+        finally:
+            loguru_logger.remove(sink_id)
+
+        assert any("render.parallel=true is ignored" in w for w in warnings)
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
+
+    def test_generate_shard_already_in_r2_is_acked_without_render(
+        self,
+        patched_subprocess: MagicMock,
+        memory_queue: ShardQueue,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The R2 skip-probe stays authoritative in queue mode: present → ack, no render.
+
+        :param patched_subprocess: Introspected to assert no renderer call ran.
+        :param memory_queue: Queue holding the single shard.
+        :param monkeypatch: Marks the shard present in R2.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_a, **_k: True,
+        )
+        spec = _queue_spec(tmp_path, n=1)
+        memory_queue.populate([0])
+
+        generate(spec, tmp_path, [])
+
+        assert _renderer_argv_lists(patched_subprocess) == []
+        assert memory_queue.claim(shard_count=spec.num_shards) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1956,6 +2268,94 @@ class TestMainDispatchBranches:
             path = output_dir / artifact
             assert path.is_file(), f"extras did not write {artifact}"
             assert path.stat().st_size > 0, f"{artifact} is empty"
+
+    def test_use_shard_queue_local_run_populates_queue_before_generate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``use_shard_queue=true`` fills the run queue with every shard before generating.
+
+        :param monkeypatch: Pytest fixture used to patch argv and module functions.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "use_shard_queue=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        queue = ShardQueue(storage=InMemoryStorage())
+        monkeypatch.setattr(gd, "_shard_queue_for_spec", lambda _spec: queue)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_run(spec: DatasetSpec, _work_dir: object, _loggers: object) -> None:
+            recorded["spec"] = spec
+            recorded["claim_during_generate"] = queue.claim(shard_count=spec.num_shards)
+
+        monkeypatch.setattr(gd, "generate", _fake_run)
+
+        _call_hydra_main(gd.main)
+
+        spec = recorded["spec"]
+        assert isinstance(spec, DatasetSpec)
+        assert recorded["claim_during_generate"] is not None, (
+            "queue must be populated before generate runs"
+        )
+        drained = 0
+        while queue.claim(shard_count=spec.num_shards) is not None:
+            drained += 1
+        assert drained == spec.num_shards - 1
+
+    def test_use_shard_queue_dispatch_branch_populates_queue_before_launch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The SkyPilot branch fills the queue before any worker is launched.
+
+        :param monkeypatch: Pytest fixture used to patch argv and module functions.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+            "use_shard_queue=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        queue = ShardQueue(storage=InMemoryStorage())
+        monkeypatch.setattr(gd, "_shard_queue_for_spec", lambda _spec: queue)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_dispatch(_sky_cfg: object) -> None:
+            spec = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
+            recorded["claim_at_dispatch"] = queue.claim(shard_count=spec.num_shards)
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+
+        _call_hydra_main(gd.main)
+
+        assert recorded["claim_at_dispatch"] is not None, (
+            "queue must be populated before workers are dispatched"
+        )
+        uploaded_spec = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
+        drained = 0
+        while queue.claim(shard_count=uploaded_spec.num_shards) is not None:
+            drained += 1
+        assert drained == uploaded_spec.num_shards - 1
 
     def test_compute_template_set_calls_dispatch_via_skypilot(
         self,
