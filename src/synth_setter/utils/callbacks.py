@@ -9,7 +9,10 @@ Typical usage::
 
 import logging
 import os
+import shutil
 import subprocess
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -581,6 +584,160 @@ class PredictionWriter(BasePredictionWriter):
 
         if "params" in batch:
             torch.save(batch["params"], os.path.join(self.output_dir, "target-params.pt"))
+
+
+class ValAudioProbe(Callback):
+    """Render a fixed handful of validation predictions off-loop and log audio metrics.
+
+    ``val/param_mse`` says nothing about how a prediction *sounds*, and rendering the
+    whole split through the VST is far too slow to sit in the validation loop. This
+    stages the first val batch's leading ``num_samples`` samples, hands them to
+    ``probe_fn`` on a single worker thread, and logs the resulting metrics at the
+    *next* validation — so the training step never waits on a render.
+
+    At most one probe is in flight: when rendering is slower than the validation
+    cadence, epochs are skipped rather than queued, which bounds the backlog to zero.
+    A probe failure is logged and swallowed — a qualitative signal must never take a
+    training run down with it.
+    """
+
+    def __init__(
+        self,
+        *,
+        probe_root: str | Path,
+        probe_fn: Callable[[Path, int], dict[str, float]],
+        num_samples: int = 5,
+    ) -> None:
+        """Initialize the probe.
+
+        :param probe_root: Directory each ``step-<global_step>/`` probe is staged under.
+        :param probe_fn: Called on a worker thread with the staged probe dir and the
+            originating ``global_step``; returns the metrics to log.
+        :param num_samples: Upper bound on samples taken from the first val batch.
+        """
+        super().__init__()
+        self.probe_root = Path(probe_root)
+        self.num_samples = num_samples
+        self._probe_fn = probe_fn
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="val-audio-probe")
+        self._future: Future[dict[str, float]] | None = None
+        self._future_step: int | None = None
+        self._staged: tuple[Path, int] | None = None
+
+    def on_validation_batch_end(
+        self,
+        trainer: "Trainer",
+        pl_module: "LightningModule",
+        outputs: dict[str, torch.Tensor],
+        batch: dict[str, torch.Tensor | None],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Stage the first val batch's leading samples in ``PredictionWriter`` layout.
+
+        :param trainer: Supplies ``global_step`` and the rank/sanity gates.
+        :param pl_module: Unused; present for the Lightning hook signature.
+        :param outputs: ``validation_step`` return value; must carry ``preds``.
+        :param batch: Val batch supplying the ``params`` targets.
+        :param batch_idx: Only batch 0 is probed, so the same samples recur each epoch.
+        :param dataloader_idx: Unused; present for the Lightning hook signature.
+        :raises ValueError: when ``outputs`` has no ``preds`` key or ``batch`` has no
+            ``params`` tensor.
+        """
+        if (
+            batch_idx != 0
+            or dataloader_idx != 0
+            or trainer.sanity_checking
+            or not trainer.is_global_zero
+        ):
+            return
+        if not isinstance(outputs, dict) or "preds" not in outputs:
+            got = sorted(outputs) if isinstance(outputs, dict) else type(outputs).__name__
+            raise ValueError(
+                "ValAudioProbe requires validation_step to return a 'preds' key; got "
+                f"{got}. Wire the probe to a VST module (vst_ff, "
+                "vst_flow_matching, vst_fake_oracle) that returns its predictions."
+            )
+        params = batch.get("params")
+        if params is None:
+            raise ValueError(
+                "ValAudioProbe requires batch['params'] to re-render the target; got None."
+            )
+
+        probe_dir = self.probe_root / f"step-{trainer.global_step}"
+        predictions_dir = probe_dir / "predictions"
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        limit = self.num_samples
+        # No target-audio tensor: training val batches carry none (read_audio is a
+        # predict-only flag), so the probe re-renders the target from its params.
+        for name, tensor in (
+            ("pred", outputs["preds"]),
+            ("target-params", params),
+        ):
+            torch.save(tensor[:limit].detach().cpu(), predictions_dir / f"{name}-0.pt")
+        self._staged = (probe_dir, trainer.global_step)
+
+    def on_validation_epoch_end(self, trainer: "Trainer", pl_module: "LightningModule") -> None:
+        """Log a finished probe's metrics, then launch one for the samples just staged.
+
+        :param trainer: Unused; present for the Lightning hook signature.
+        :param pl_module: Receives the harvested metrics via ``log_dict``.
+        """
+        self._harvest(pl_module)
+        self._launch()
+
+    def teardown(self, trainer: "Trainer", pl_module: "LightningModule", stage: str) -> None:
+        """Stop accepting new probes; the in-flight one is left to finish.
+
+        Deliberately no ``cancel_futures``: at most one probe exists, and its
+        subprocesses block interpreter exit until they complete (bounded by their
+        scaled timeouts), so the final snapshot still reaches R2 instead of dying
+        with the process.
+
+        :param trainer: Unused; present for the Lightning hook signature.
+        :param pl_module: Unused; present for the Lightning hook signature.
+        :param stage: Unused; present for the Lightning hook signature.
+        """
+        self._pool.shutdown(wait=False)
+
+    def _harvest(self, pl_module: "LightningModule") -> None:
+        """Log the in-flight probe's metrics if it has finished; no-op while it runs.
+
+        :param pl_module: Receives the harvested metrics via ``log_dict``.
+        """
+        if self._future is None or not self._future.done():
+            return
+        future, step = self._future, self._future_step
+        self._future, self._future_step = None, None
+        try:
+            metrics = future.result()
+        except Exception as exc:
+            log.warning(f"val audio probe at step {step} failed: {exc}; skipping its metrics.")
+            return
+        if not metrics:
+            return
+        pl_module.log_dict(
+            {**metrics, "val_audio/probe_step": float(step)},
+            on_step=False,
+            on_epoch=True,
+            rank_zero_only=True,
+        )
+
+    def _launch(self) -> None:
+        """Submit the staged probe, or discard it while an earlier probe is still running."""
+        if self._staged is None:
+            return
+        probe_dir, step = self._staged
+        self._staged = None
+        if self._future is not None:
+            log.info(
+                f"val audio probe from step {self._future_step} still running; "
+                f"skipping the step-{step} probe."
+            )
+            shutil.rmtree(probe_dir, ignore_errors=True)
+            return
+        self._future = self._pool.submit(self._probe_fn, probe_dir, step)
+        self._future_step = step
 
 
 class LogPerParamMSE(Callback):

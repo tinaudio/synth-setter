@@ -202,6 +202,7 @@ def _write_batch(
     index: int,
     batch_size: int,
     with_target_params: bool,
+    with_target_audio: bool = True,
 ) -> None:
     """Write the ``.pt`` files one ``PredictionWriter`` batch would produce.
 
@@ -209,14 +210,17 @@ def _write_batch(
     :param index: Batch index that becomes the ``pred-<index>.pt`` suffix.
     :param batch_size: Number of rows per batch tensor.
     :param with_target_params: When True, also write ``target-params-<index>.pt``.
+    :param with_target_audio: When False, omit ``target-audio-<index>.pt`` — the
+        layout ``ValAudioProbe`` stages, since training val batches carry no raw audio.
     """
     rng = np.random.default_rng(index)
     # decode_model_output rescales pred params from [-1, 1] — the fixture must live on that range.
     encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
     torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
 
-    target_audio = rng.standard_normal((batch_size, _CHANNELS, _SAMPLES)).astype(np.float32)
-    torch.save(torch.from_numpy(target_audio), pred_dir / f"target-audio-{index}.pt")
+    if with_target_audio:
+        target_audio = rng.standard_normal((batch_size, _CHANNELS, _SAMPLES)).astype(np.float32)
+        torch.save(torch.from_numpy(target_audio), pred_dir / f"target-audio-{index}.pt")
 
     if with_target_params:
         torch.save(torch.from_numpy(encoded.copy()), pred_dir / f"target-params-{index}.pt")
@@ -437,3 +441,50 @@ def test_main_multiple_batches_produce_contiguous_sample_indices(
     # Set compare avoids the lexicographic ``sample_10`` ordering trap once batches grow.
     sample_dirs = {d.name for d in out_dir.iterdir() if d.is_dir()}
     assert sample_dirs == {f"sample_{i}" for i in range(5)}
+
+
+def test_main_rerender_target_tolerates_missing_target_audio_file(
+    runner: CliRunner, pred_dir: Path, out_dir: Path
+) -> None:
+    """``--rerender_target`` renders both wavs when no ``target-audio-*.pt`` was staged.
+
+    ``ValAudioProbe`` stages only ``pred`` and ``target-params`` tensors (training
+    val batches carry no raw audio), so the rerender path must not require the
+    target-audio file.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
+    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=True, with_target_audio=False)
+
+    result = _invoke_main(runner, pred_dir, out_dir, "--rerender_target")
+
+    assert result.exit_code == 0
+    for sample in range(2):
+        sample_dir = out_dir / f"sample_{sample}"
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "spec.png").is_file()
+
+
+def test_main_missing_target_audio_without_rerender_fails(
+    runner: CliRunner, pred_dir: Path, out_dir: Path
+) -> None:
+    """Without ``--rerender_target`` there is no target source, so the CLI must fail loudly.
+
+    :param runner: Parametrized ``runner`` value under test.
+    :param pred_dir: Parametrized ``pred_dir`` value under test.
+    :param out_dir: Parametrized ``out_dir`` value under test.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True, with_target_audio=False)
+
+    result = runner.invoke(
+        main,
+        [str(pred_dir), str(out_dir), f"--param_spec={_PARAM_SPEC_NAME}"],
+        catch_exceptions=True,
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "rerender_target" in str(result.exception)

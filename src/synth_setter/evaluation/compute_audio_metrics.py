@@ -46,6 +46,10 @@ from synth_setter.evaluation.shuffle_pred_audio import (
     shuffle_pred_audio,
 )
 
+# Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
+# the write sites below still spell them literally.
+AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
+
 
 def subdir_matches_pattern(sample_dir: Path) -> bool:
     """Return ``True`` if ``sample_dir`` contains ``pred.wav`` and ``target.wav``.
@@ -424,6 +428,38 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     if not metric_dfs:
         return pd.DataFrame()
     return pd.concat(metric_dfs)
+
+
+def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
+    """Flatten an aggregated-metrics CSV into ``{"<metric>_<stat>": value}``.
+
+    Reads either ``aggregated_metrics.csv`` or ``aggregated_metrics_shuffled.csv``
+    — both share the layout this module writes: metric names as rows,
+    :data:`AGGREGATED_METRICS_STATS` as columns. Keys are returned unprefixed;
+    namespacing them is the caller's policy.
+
+    :param csv_path: Aggregated-metrics CSV to read.
+    :returns: One entry per ``(metric, stat)`` cell.
+    :raises FileNotFoundError: when the producing subprocess returned 0 without writing
+        the CSV; surfaced so the silent-success failure mode is loud.
+    :raises ValueError: when the CSV is missing a required stat column.
+    """
+    if not csv_path.is_file():
+        raise FileNotFoundError(
+            f"{csv_path.name} missing at {csv_path} — the compute_audio_metrics "
+            "subprocess returned 0 but did not write the aggregated CSV."
+        )
+    df = pd.read_csv(csv_path, index_col=0)
+    missing = [stat for stat in AGGREGATED_METRICS_STATS if stat not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
+        )
+    return {
+        f"{metric}_{stat}": float(df.at[metric, stat])
+        for metric in df.index
+        for stat in AGGREGATED_METRICS_STATS
+    }
 
 
 @click.command()

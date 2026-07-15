@@ -16,6 +16,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
 from synth_setter.pipeline.schemas.spec import _get_git_sha
@@ -49,7 +50,6 @@ _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
 _SHUFFLE_PERMUTATION_FILENAME = "shuffle_permutation.csv"
-_AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -60,48 +60,29 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
-def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
+def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
     """Flatten ``aggregated_metrics.csv`` into ``{"audio/<name>_<stat>": value}``.
 
     :param metrics_dir: Directory containing the ``aggregated_metrics.csv`` produced by
         :mod:`synth_setter.evaluation.compute_audio_metrics`; rows are metric names,
-        columns are :data:`_AGGREGATED_METRICS_STATS`.
+        columns are :data:`~synth_setter.evaluation.compute_audio_metrics.AGGREGATED_METRICS_STATS`.
     :returns: One entry per ``(metric, stat)`` cell of the CSV.
     :raises FileNotFoundError: when the producing subprocess returned 0 without writing the
         CSV; surfaced so the silent-success failure mode is loud.
     :raises ValueError: when the CSV is missing a required stat column.
     """
-    csv_path = metrics_dir / _AGGREGATED_METRICS_FILENAME
-    if not csv_path.is_file():
-        raise FileNotFoundError(
-            f"{_AGGREGATED_METRICS_FILENAME} missing at {csv_path} — the compute_audio_metrics "
-            "subprocess returned 0 but did not write the aggregated CSV."
-        )
-    df = pd.read_csv(csv_path, index_col=0)
-    missing = [stat for stat in _AGGREGATED_METRICS_STATS if stat not in df.columns]
-    if missing:
-        raise ValueError(
-            f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
-        )
     result: dict[str, float] = {
-        f"audio/{metric}_{stat}": float(df.at[metric, stat])
-        for metric in df.index
-        for stat in _AGGREGATED_METRICS_STATS
+        f"audio/{name}": value
+        for name, value in load_aggregated_metrics(
+            metrics_dir / _AGGREGATED_METRICS_FILENAME
+        ).items()
     }
     shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
     if shuffled_path.is_file():
-        shuffled_df = pd.read_csv(shuffled_path, index_col=0)
-        missing_s = [s for s in _AGGREGATED_METRICS_STATS if s not in shuffled_df.columns]
-        if missing_s:
-            raise ValueError(
-                f"{shuffled_path} missing required stat columns {missing_s}; "
-                f"got {list(shuffled_df.columns)}."
-            )
         result.update(
             {
-                f"shuffled_audio/{metric}_{stat}": float(shuffled_df.at[metric, stat])
-                for metric in shuffled_df.index
-                for stat in _AGGREGATED_METRICS_STATS
+                f"shuffled_audio/{name}": value
+                for name, value in load_aggregated_metrics(shuffled_path).items()
             }
         )
     return result

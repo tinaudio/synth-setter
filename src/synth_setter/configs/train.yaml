@@ -14,6 +14,10 @@ defaults:
   - hydra: default
   - r2: default # bucket the train-end model artifact uploads/references its checkpoint under
 
+  # render settings the val audio probe re-renders predictions with; only needed
+  # when training.val_audio_probe is on (e.g. `render=surge_xt`)
+  - render: null
+
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
   - experiment: null
@@ -57,3 +61,9 @@ training:
   # Mirror each ModelCheckpoint write to R2 mid-run (synchronous on rank 0; best
   # for single-device runs) so a host crash before train-end can't strand it.
   upload_checkpoints_during_training: false
+  # Render a few val predictions per validation epoch on a worker thread, log
+  # `val_audio/*` metrics at the next validation, and archive the wavs to
+  # `r2://{r2.bucket}/probes/{config_id}/`. Requires a `render` group.
+  val_audio_probe: false
+  # Samples taken from the first val batch; each costs a plugin load plus a render.
+  val_audio_probe_samples: 5
