@@ -70,7 +70,7 @@ docs:
       - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
-        covers: "W&B callback integrations, visualization uploads"
+        covers: "Lightning callback behavior and opt-in R2 checkpoint durability"
 
   # ── W&B artifact & provenance reference ─────────────────────────
   - doc: docs/reference/artifact-provenance-reference.md
