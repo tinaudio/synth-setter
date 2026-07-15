@@ -110,7 +110,7 @@ python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/tra
 ### RunPod training (target state)
 
 ```bash
-# Launch a single long-running training pod with default-off mid-run durability
+# Launch a single long-running training pod; the shipped config opts into mid-run durability
 make runpod-train EXPERIMENT=surge/flow_simple
 
 # A successful run can resume from its train-end W&B model artifact:
@@ -122,7 +122,7 @@ python -m synth_setter.cli.train \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-A pod death before train end has no remote recovery checkpoint under the default launch. For crash recovery, the launcher must forward `training.upload_checkpoints_during_training=true`; then use the launch-scoped R2 recovery procedure in Section 6.2.
+The global training default remains off for local and arbitrary DDP runs. Both shipped single-GPU RunPod train configs explicitly forward `training.upload_checkpoints_during_training=true`; use the launch-scoped R2 recovery procedure in Section 6.2 after a pod death.
 
 In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). The current entrypoint also supports opt-in launch-scoped crash checkpoints as described in Section 6.2.
 
@@ -246,7 +246,7 @@ ______________________________________________________________________
 | **Input**    | Train-end `best.ckpt`; opt-in `last.ckpt` revisions                                                                                                                                                         |
 | **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` plus its W&B reference; opt-in `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt` recovery object                             |
 | **Compute**  | One rclone upload at train end; opt-in synchronous uploads on checkpoint cadence                                                                                                                            |
-| **Contract** | Degrades to a lineage-only artifact when R2 is unreachable or no checkpoint was written; training is never aborted                                                                                          |
+| **Contract** | Train-end upload is best-effort. Opt-in mid-run durability requires R2 at startup and fails before training when preflight cannot reach it; later transient upload failures do not abort training.          |
 
 ### 5.3 Resume
 
@@ -331,15 +331,26 @@ This gives us:
 
 The train-end `model.ckpt` remains a per-`config_id` object and is overwritten by later runs. Mid-run recovery objects are launch-scoped and do not overwrite one another; their exact URI is emitted as `Mid-run checkpoint uploaded to ...` in the training log.
 
-To recover a crashed launch, copy the URI from that log line and materialize it locally through the checksum-enabled R2 helper:
+To recover a crashed launch, copy the URI from that log line. If pod logs are unavailable, list the deterministic config/run prefix; multiple results mean the same W&B run ID was reused, so select the launch by object time and run context:
 
 ```bash
-export RECOVERY_URI='r2://intermediate-data/checkpoints/<config-id>/<wandb-run-id>-<uuid>/last.ckpt'
+export R2_BUCKET=intermediate-data
+export CONFIG_ID=flow-simple
+export WANDB_RUN_ID=flow-simple-20260715T000000000Z
+rclone lsf --checksum --recursive --files-only \
+  --include "${WANDB_RUN_ID}-*/last.ckpt" \
+  "r2:${R2_BUCKET}/checkpoints/${CONFIG_ID}"
+```
+
+Materialize the selected object locally through the checksum-enabled R2 helper:
+
+```bash
+export RECOVERY_URI='r2://intermediate-data/checkpoints/flow-simple/<listed-key>'
 uv run python -c 'import os; from pathlib import Path; from synth_setter.pipeline.r2_io import download_to_path, ensure_r2_env_loaded; ensure_r2_env_loaded(); download_to_path(os.environ["RECOVERY_URI"], Path("last.ckpt"))'
 uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt"
 ```
 
-Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises the upload, real rclone-backed download, byte equality, and exception propagation.
+Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises upload, real rclone-backed download, Lightning restore, and continued training progress.
 
 ### 6.3 Resume From W&B
 

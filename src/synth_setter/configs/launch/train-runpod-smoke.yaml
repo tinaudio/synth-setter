@@ -17,6 +17,7 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
   experiment=surge/ffn_simple
+  training.upload_checkpoints_during_training=true
   trainer.min_steps=10
   trainer.max_steps=10
   callbacks.model_checkpoint.every_n_train_steps=5

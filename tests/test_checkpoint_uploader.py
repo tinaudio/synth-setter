@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
-from lightning.pytorch import Trainer
+from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
@@ -18,7 +20,8 @@ from synth_setter.cli.train import (
     _make_recovery_namespace,
 )
 from synth_setter.pipeline import r2_io
-from synth_setter.utils.callbacks import _MAX_UPLOAD_ATTEMPTS, CheckpointUploader
+from synth_setter.utils import callbacks as callbacks_module
+from synth_setter.utils.callbacks import CheckpointUploader
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +31,16 @@ def _stub_durability_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     :param monkeypatch: Replaces the R2 environment/authentication probe.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+
+
+def _raise_programming_error(_local_path: Path, _uri: str) -> None:
+    """Raise an unexpected error from a patched upload transport.
+
+    :param _local_path: Unused local checkpoint path.
+    :param _uri: Unused remote checkpoint URI.
+    :raises RuntimeError: Always, to model a programming error.
+    """
+    raise RuntimeError("programming bug")
 
 
 class _FakeCheckpointCallback:
@@ -56,6 +69,7 @@ class _FakeTrainer:
         self.is_global_zero = is_global_zero
         self.world_size = world_size
         self.checkpoint_callback = _FakeCheckpointCallback(last_model_path)
+        self.callbacks: list[Callback] = []
 
 
 def _trainer(
@@ -108,7 +122,7 @@ def _stub_r2(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, str]]:
     :returns: The list each ``(local_path, uri)`` upload is appended to.
     """
     calls: list[tuple[Path, str]] = []
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         r2_io, "upload_to_uri", lambda local_path, uri: calls.append((local_path, uri))
     )
@@ -206,10 +220,10 @@ def test_uploader_swallows_upload_error_without_raising(
     :param tmp_path: Holds the fake checkpoint file the uploader reads.
     :param caplog: Captures the warning the swallowed failure must still emit.
     """
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
 
-    def _boom(_p: Path, _uri: str) -> None:
-        raise RuntimeError("r2 down")
+    def _boom(_local_path: Path, _uri: str) -> None:
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
     ckpt = tmp_path / "last.ckpt"
@@ -220,6 +234,22 @@ def test_uploader_swallows_upload_error_without_raising(
     assert "upload to r2://b/c/last.ckpt failed" in caplog.text
 
 
+def test_uploader_propagates_unexpected_upload_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Programming errors from the upload boundary are not hidden as R2 failures.
+
+    :param monkeypatch: Makes the upload transport raise an unexpected error.
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _raise_programming_error)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    with pytest.raises(RuntimeError, match="programming bug"):
+        CheckpointUploader("r2://b/c").on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)
+
+
 def test_uploader_retries_after_transient_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -228,10 +258,10 @@ def test_uploader_retries_after_transient_failure(
     :param monkeypatch: Swaps the R2 transport (first raising, then recording).
     :param tmp_path: Holds the fake checkpoint file the uploader reads.
     """
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
 
-    def _boom(_p: Path, _uri: str) -> None:
-        raise RuntimeError("r2 down")
+    def _boom(_local_path: Path, _uri: str) -> None:
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
     ckpt = tmp_path / "last.ckpt"
@@ -255,12 +285,12 @@ def test_uploader_stops_retrying_after_max_attempts(
     """
     attempts = 0
 
-    def _boom(_p: Path, _uri: str) -> None:
+    def _boom(_local_path: Path, _uri: str) -> None:
         nonlocal attempts
         attempts += 1
-        raise RuntimeError("r2 down")
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
 
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
     ckpt = tmp_path / "last.ckpt"
     ckpt.write_bytes(b"weights")
@@ -268,7 +298,7 @@ def test_uploader_stops_retrying_after_max_attempts(
     trainer = _trainer(str(ckpt))
     for batch_idx in range(10):
         uploader.on_train_batch_end(trainer, None, None, None, batch_idx)
-    assert attempts == _MAX_UPLOAD_ATTEMPTS
+    assert attempts == 3
 
 
 def test_uploader_resumes_after_new_checkpoint_follows_exhausted_retries(
@@ -284,17 +314,17 @@ def test_uploader_resumes_after_new_checkpoint_follows_exhausted_retries(
 
     def _upload(_local_path: Path, uri: str) -> None:
         if failing:
-            raise RuntimeError("r2 down")
+            raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
         recorded.append(uri)
 
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
     ckpt = tmp_path / "last.ckpt"
     ckpt.write_bytes(b"v1")
     os.utime(ckpt, (1000, 1000))
     uploader = CheckpointUploader("r2://b/c")
     trainer = _trainer(str(ckpt))
-    for batch_idx in range(_MAX_UPLOAD_ATTEMPTS + 2):  # exhaust retries on v1
+    for batch_idx in range(4):
         uploader.on_train_batch_end(trainer, None, None, None, batch_idx)
     assert recorded == []
 
@@ -348,16 +378,21 @@ def test_uploader_reuploads_equal_size_rewrite_at_same_mtime_after_new_save(
     os.utime(ckpt, (1000, 1000))
     uploader = CheckpointUploader("r2://b/c")
     trainer = _trainer(str(ckpt))
-    checkpoint_callback = cast(ModelCheckpoint, trainer.checkpoint_callback)
-    checkpoint_callback._last_global_step_saved = 1
+    save_token = 1
+    monkeypatch.setattr(callbacks_module, "_checkpoint_save_token", lambda _checkpoint: save_token)
     uploader.on_train_batch_end(trainer, None, None, None, 0)
 
     ckpt.write_bytes(b"v2")
     os.utime(ckpt, (1000, 1000))
-    checkpoint_callback._last_global_step_saved = 2
+    save_token = 2
     uploader.on_train_batch_end(trainer, None, None, None, 1)
 
     assert len(calls) == 2
+
+
+def test_checkpoint_save_token_reads_model_checkpoint_compatibility_field() -> None:
+    """The Lightning compatibility adapter reads the current completed-save token."""
+    assert callbacks_module._checkpoint_save_token(ModelCheckpoint()) == 0
 
 
 def test_uploader_swallows_missing_checkpoint_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -403,55 +438,36 @@ def test_uploader_flushes_final_checkpoint_on_train_end(
     ckpt = tmp_path / "last.ckpt"
     ckpt.write_bytes(b"weights")
     uploader = CheckpointUploader("r2://b/c")
-    uploader.on_train_end(_trainer(str(ckpt)))
+    uploader.on_train_end(_trainer(str(ckpt)), cast(LightningModule, object()))
     assert calls == [(ckpt, "r2://b/c/last.ckpt")]
 
 
-def test_uploader_uploads_on_validation_end(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("hook_name", "hook_args"),
+    [
+        ("on_validation_end", (None,)),
+        ("on_train_epoch_end", (None,)),
+        ("on_exception", (None, RuntimeError("cuda oom"))),
+    ],
+)
+def test_uploader_mirrors_checkpoint_from_lifecycle_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    hook_name: str,
+    hook_args: tuple[object, ...],
 ) -> None:
-    """A checkpoint written on the validation cadence is mirrored from ``on_validation_end``.
-
-    :param monkeypatch: Swaps the R2 transport for a recorder.
-    :param tmp_path: Holds the fake checkpoint file the uploader reads.
-    """
-    calls = _stub_r2(monkeypatch)
-    ckpt = tmp_path / "last.ckpt"
-    ckpt.write_bytes(b"weights")
-    uploader = CheckpointUploader("r2://b/c")
-    uploader.on_validation_end(_trainer(str(ckpt)))
-    assert calls == [(ckpt, "r2://b/c/last.ckpt")]
-
-
-def test_uploader_uploads_on_train_epoch_end(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A checkpoint written on the per-epoch cadence is mirrored from ``on_train_epoch_end``.
-
-    :param monkeypatch: Swaps the R2 transport for a recorder.
-    :param tmp_path: Holds the fake checkpoint file the uploader reads.
-    """
-    calls = _stub_r2(monkeypatch)
-    ckpt = tmp_path / "last.ckpt"
-    ckpt.write_bytes(b"weights")
-    uploader = CheckpointUploader("r2://b/c")
-    uploader.on_train_epoch_end(_trainer(str(ckpt)))
-    assert calls == [(ckpt, "r2://b/c/last.ckpt")]
-
-
-def test_uploader_mirrors_checkpoint_on_exception(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``on_exception`` mirrors the ``last.ckpt`` ModelCheckpoint writes on a mid-fit crash.
+    """Lifecycle hooks mirror the completed ``last.ckpt`` revision.
 
     :param monkeypatch: Swaps the R2 transport for a recorder.
     :param tmp_path: Holds the crash-time checkpoint file the uploader reads.
+    :param hook_name: Callback hook under test.
+    :param hook_args: Additional Lightning hook payload.
     """
     calls = _stub_r2(monkeypatch)
     ckpt = tmp_path / "last.ckpt"
-    ckpt.write_bytes(b"crash-weights")
+    ckpt.write_bytes(b"weights")
     uploader = CheckpointUploader("r2://b/c")
-    uploader.on_exception(_trainer(str(ckpt)), None, RuntimeError("cuda oom"))
+    getattr(uploader, hook_name)(_trainer(str(ckpt)), *hook_args)
     assert calls == [(ckpt, "r2://b/c/last.ckpt")]
 
 
@@ -477,16 +493,31 @@ def test_uploader_warns_once_under_ddp(
     assert caplog.text.count("stalls other DDP ranks") == 1
 
 
-def test_uploader_is_reordered_after_modelcheckpoint() -> None:
+def test_trainer_preserves_uploader_after_model_checkpoint() -> None:
     """Keep the uploader after ModelCheckpoint so it mirrors the current save."""
-    from lightning.pytorch.callbacks import Checkpoint, ModelCheckpoint
-    from lightning.pytorch.trainer.connectors.callback_connector import _CallbackConnector
+    model_checkpoint = ModelCheckpoint()
+    uploader = CheckpointUploader("r2://b/c", model_checkpoint)
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        callbacks=[model_checkpoint, uploader],
+        logger=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+    )
+    callbacks = cast(_FakeTrainer, trainer).callbacks
+    assert callbacks.index(model_checkpoint) < callbacks.index(uploader)
 
-    uploader = CheckpointUploader("r2://b/c")
-    assert isinstance(uploader, Checkpoint)
-    ordered = _CallbackConnector._reorder_callbacks([ModelCheckpoint(), uploader])
-    model_checkpoint = next(c for c in ordered if isinstance(c, ModelCheckpoint))
-    assert ordered.index(uploader) > ordered.index(model_checkpoint)
+
+def test_uploader_setup_rejects_replaced_model_checkpoint() -> None:
+    """Final Lightning callback topology cannot replace the configured writer."""
+    configured = ModelCheckpoint()
+    replacement = ModelCheckpoint()
+    uploader = CheckpointUploader("r2://b/c", configured)
+    trainer = _trainer()
+    cast(_FakeTrainer, trainer).callbacks = [uploader, replacement]
+    with pytest.raises(ValueError, match="replaced or reordered"):
+        uploader.setup(trainer, cast(LightningModule, object()), "fit")
 
 
 def test_uploader_warns_on_train_end_when_no_checkpoint_seen(
@@ -500,7 +531,7 @@ def test_uploader_warns_on_train_end_when_no_checkpoint_seen(
     _stub_r2(monkeypatch)
     uploader = CheckpointUploader("r2://b/c")
     with caplog.at_level(logging.WARNING):
-        uploader.on_train_end(_trainer(""))
+        uploader.on_train_end(_trainer(""), cast(LightningModule, object()))
     assert "save_last" in caplog.text
 
 
@@ -512,13 +543,18 @@ def test_checkpoint_prefix_uri_strips_the_basename() -> None:
     )
 
 
-def test_make_recovery_namespace_distinguishes_same_run_id_launches() -> None:
-    """Each launch gets an isolated recovery namespace even when its run ID collides."""
-    first = _make_recovery_namespace("flow-simple-20260715T000000000Z")
-    second = _make_recovery_namespace("flow-simple-20260715T000000000Z")
-    assert first.startswith("flow-simple-20260715T000000000Z-")
-    assert second.startswith("flow-simple-20260715T000000000Z-")
-    assert first != second
+def test_make_recovery_namespace_distinguishes_same_run_id_launches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each launch gets an exact isolated namespace even when its run ID collides.
+
+    :param monkeypatch: Supplies deterministic UUIDs at the production use site.
+    """
+    recovery_uuids = iter((UUID(int=1), UUID(int=2)))
+    monkeypatch.setattr("synth_setter.cli.train.uuid4", lambda: next(recovery_uuids))
+    run_id = "flow-simple-20260715T000000000Z"
+    assert _make_recovery_namespace(run_id) == f"{run_id}-{'0' * 31}1"
+    assert _make_recovery_namespace(run_id) == f"{run_id}-{'0' * 31}2"
 
 
 def test_checkpoint_prefix_uri_honors_override() -> None:

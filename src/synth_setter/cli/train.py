@@ -135,7 +135,7 @@ def _configure_checkpoint_durability(
     model_checkpoint = model_checkpoints[0]
     model_checkpoint.save_last = True
     model_checkpoint.save_on_exception = True
-    callbacks.append(CheckpointUploader(prefix_uri))
+    callbacks.append(CheckpointUploader(prefix_uri, model_checkpoint))
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
