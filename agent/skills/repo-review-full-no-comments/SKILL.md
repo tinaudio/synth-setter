@@ -170,11 +170,16 @@ sub-agents; you never launch those directly.
 > reviews visible without making ordinary investigation a failure:
 >
 > ```bash
-> progress_key=$(git branch --show-current | tr '/' '_')
+> is_non_pass=false
+> # Set true when Step 6 found any inline finding or PR-health flag.
+> progress_key=$(git branch --show-current | sha256sum | awk '{print $1}')
 > progress_path=".agent-reviews/repo-review-full-no-comments-progress.${progress_key}.txt"
 > current_head=$(git rev-parse HEAD)
 > current_upstream=$(git rev-parse '@{upstream}' 2>/dev/null || echo none)
-> current_status=$(git status --porcelain | sha256sum | awk '{print $1}')
+> status_porcelain=$(git status --porcelain)
+> worktree_state=clean
+> [[ -n "$status_porcelain" ]] && worktree_state=dirty
+> current_status=$(printf '%s' "$status_porcelain" | sha256sum | awk '{print $1}')
 > current_state="${current_head}|${current_upstream}|${current_status}"
 > previous_state=""
 > previous_count=0
@@ -182,11 +187,13 @@ sub-agents; you never launch those directly.
 >   read -r previous_count previous_state <"$progress_path" || true
 > fi
 > unchanged_count=0
-> [[ "$current_state" == "$previous_state" ]] && unchanged_count=$((previous_count + 1))
+> if "$is_non_pass" && [[ "$current_state" == "$previous_state" ]]; then
+>   unchanged_count=$((previous_count + 1))
+> fi
 > printf '%s %s\n' "$unchanged_count" "$current_state" >"$progress_path"
 > ```
 >
-> Include this line in every report Summary: `Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <clean|dirty>; unchanged review count <unchanged_count>.` If `unchanged_count` is greater
+> Include this line in every report Summary: `Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count <unchanged_count>.` If `unchanged_count` is greater
 > than zero, append: `Possible review loop: make coherent remediation durable or report the blocker before retrying.`
 >
 > **Write the report to `$REVIEW_PATH`** using this layout:
@@ -248,6 +255,7 @@ sub-agents; you never launch those directly.
 >
 >   - 0 BLOCK, 0 WARN
 >   - Reviewed at: <sha>
+>   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```
 >
 > - The sentinel file is the gate's contract; your returned report is the human
