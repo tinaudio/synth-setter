@@ -35,7 +35,7 @@ ______________________________________________________________________
 | `APPROVAL_BOT_APP_ID`                | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `APPROVAL_BOT_PRIVATE_KEY`           | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `ANTHROPIC_API_KEY`                  | (currently unused; retained for possible revival) | GitHub Secrets             |
-| `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` + `claude-code-review` workflows         | GitHub Secrets             |
+| `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` + `claude-repo-review-full` workflows    | GitHub Secrets             |
 
 ______________________________________________________________________
 
@@ -260,7 +260,7 @@ ______________________________________________________________________
 ### Anthropic (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`)
 
 **What:** `CLAUDE_CODE_OAUTH_TOKEN` authenticates `anthropics/claude-code-action`
-in the `claude` (`@claude` mentions) and `claude-code-review` (PR review)
+in the `claude` (`@claude` mentions) and `claude-repo-review-full` (PR review)
 workflows, which post to PRs and issues. `ANTHROPIC_API_KEY` is currently
 unused; the secret stays registered for possible future API-keyed workflows.
 
@@ -279,8 +279,8 @@ unused; the secret stays registered for possible future API-keyed workflows.
 
 **Verification:**
 
-Push any commit to an open PR (or re-run its latest `Claude Code Review` run)
-and confirm the run completes and posts review findings to the PR.
+Push any commit to an open PR (or re-run its latest `Claude Repo Review (Full)`
+run) and confirm the run completes and posts review findings to the PR.
 
 ______________________________________________________________________
 
