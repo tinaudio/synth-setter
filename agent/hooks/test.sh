@@ -100,8 +100,14 @@ if [[ "$1" == "pr" && "$2" == "checks" ]]; then
   exit "${GH_STUB_CHECKS_EXIT:-0}"
 fi
 if [[ "$1" == "api" && "$2" == "graphql" ]]; then
+  # --paginate concatenates one JSON doc per page; emit a second doc when
+  # $GH_STUB_REVIEW_THREADS_PAGE2 is set so pagination handling is testable.
   printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":%s}}}}}\n' \
     "${GH_STUB_REVIEW_THREADS:-[]}"
+  if [[ -n "${GH_STUB_REVIEW_THREADS_PAGE2:-}" ]]; then
+    printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":%s}}}}}\n' \
+      "${GH_STUB_REVIEW_THREADS_PAGE2}"
+  fi
   exit 0
 fi
 if [[ "$1" == "api" && "$2" == *"/pulls/"* ]]; then
@@ -1463,8 +1469,7 @@ it "pr-readiness-stop: off mode drains stdin before exiting (no SIGPIPE risk)" T
 
 readiness_thread() {
   # Usage: readiness_thread <isResolved> <totalCount> <firstAuthor> <lastAuthor>
-  # Echoes a one-element reviewThreads nodes array matching the probe's query
-  # shape (aliases `first`/`last` over the comments connection).
+  # → one-element reviewThreads nodes array in the probe's query shape.
   printf '[{"isResolved":%s,"first":{"totalCount":%s,"nodes":[{"author":{"login":"%s"},"path":"src/foo.py","line":10,"originalLine":10,"body":"needs a fix"}]},"last":{"nodes":[{"author":{"login":"%s"}}]}}]' \
     "$1" "$2" "$3" "$4"
 }
@@ -1517,13 +1522,8 @@ T_readiness_missing_probe_fails_open() {
 it "pr-readiness-stop: probe script missing → exit 0 (fail-open, never a hard error)" T_readiness_missing_probe_fails_open
 
 # ===========================================================================
-# pr_readiness_probe.sh — four-gate readiness probe (agent/_shared)
+# pr_readiness_probe.sh — four-gate probe (exit 0/1/2; gate 4 advisory-only)
 # ===========================================================================
-#
-# The probe is the single source of truth the Stop hook and the /pr-readiness
-# polling loop share. Exit contract: 0 = gates 1-3 hold, 1 = a gate failed,
-# 2 = usage/environment error (never a silent pass). Gate 4 (Copilot) is
-# advisory-only and never affects the exit code.
 
 run_probe() {
   # Usage: run_probe [args...] — captures stdout+stderr and appends EXIT:N.
@@ -1585,9 +1585,7 @@ T_probe_single_comment_thread_fails_gate3() {
 it "probe: unresolved thread with no reply → exit 1 listing path + author (gate 3)" T_probe_single_comment_thread_fails_gate3
 
 T_probe_self_review_single_comment_fails_gate3() {
-  # A self-authored finding (e.g. the review sentinel posting as the PR author)
-  # with no reply must still count as awaiting — author identity alone is not
-  # a reply.
+  # A sentinel finding self-posted by the PR author still awaits until replied.
   local out
   export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
   GH_STUB_REVIEW_THREADS=$(readiness_thread false 1 pr-author pr-author)
@@ -1649,6 +1647,19 @@ T_probe_gate4_reports_copilot_reviewed_head() {
   grep -q "abc1234" <<<"$out" || { echo "should reference the reviewed head sha; got: $out"; return 1; }
 }
 it "probe: Copilot has commented on head → Gate 4 advisory says head is reviewed" T_probe_gate4_reports_copilot_reviewed_head
+
+T_probe_awaiting_thread_on_second_page_fails_gate3() {
+  # >100 threads span pages; an awaiting thread on page 2 must still fail.
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 2 reviewer pr-author)
+  GH_STUB_REVIEW_THREADS_PAGE2=$(readiness_thread false 1 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS GH_STUB_REVIEW_THREADS_PAGE2
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 from a page-2 thread, got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "should name Gate 3; got: $out"; return 1; }
+}
+it "probe: awaiting thread on a later --paginate page → exit 1 (gate 3)" T_probe_awaiting_thread_on_second_page_fails_gate3
 
 T_probe_merged_pr_short_circuits_ready() {
   # Auto-merge can land mid-poll; the probe must terminate the loop as READY

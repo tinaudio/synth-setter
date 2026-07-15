@@ -36,6 +36,11 @@ command -v jq >/dev/null 2>&1 || fail_env "jq not on PATH"
 
 meta=$(gh pr view "$PR" --json state,mergeable,headRefOid,author,url 2>&1) \
   || fail_env "gh pr view ${PR} failed: ${meta}"
+# The 2>&1 capture (for the error message above) can prepend gh notices to the
+# JSON on success — validate before parsing so a jq failure can't exit 1 and
+# masquerade as a gate verdict.
+jq -e . >/dev/null 2>&1 <<<"$meta" \
+  || fail_env "gh pr view ${PR} returned non-JSON: ${meta}"
 pr_state=$(jq -r '.state // ""' <<<"$meta")
 mergeable=$(jq -r '.mergeable // ""' <<<"$meta")
 head_sha=$(jq -r '.headRefOid // ""' <<<"$meta")
@@ -56,7 +61,8 @@ gates_hold=1
 if gh pr checks "$PR" >/dev/null 2>&1; then
   echo "Gate 1 (CI): PASS — all checks green"
 else
-  echo "Gate 1 (CI): FAIL — checks failing or still pending (gh pr checks ${PR})"
+  echo "Gate 1 (CI): FAIL — checks failing or still pending" \
+    "(gh pr checks ${PR})"
   gates_hold=0
 fi
 
@@ -94,36 +100,47 @@ threads=$(gh api graphql --paginate \
 awaiting=$(jq -r --arg author "$pr_author" '
   .data.repository.pullRequest.reviewThreads.nodes[]
   | select(.isResolved | not)
-  | select((.first.totalCount == 1) or ((.last.nodes[0].author.login // "") != $author))
+  | select((.first.totalCount == 1)
+           or ((.last.nodes[0].author.login // "") != $author))
   | .first.nodes[0]
-  | "  - \(.path):\(.line // .originalLine // "?") @\(.author.login // "?"): \(.body | split("\n")[0] | .[0:100])"
+  | "  - \(.path):\(.line // .originalLine // "?") @\(.author.login // "?"): "
+    + (.body | split("\n")[0] | .[0:100])
 ' <<<"$threads") || fail_env "reviewThreads parse failed"
 
 if [[ -z "$awaiting" ]]; then
   echo "Gate 3 (review threads): PASS — no unresolved threads awaiting a reply"
 else
   count=$(grep -c . <<<"$awaiting")
-  echo "Gate 3 (review threads): FAIL — ${count} unresolved thread(s) awaiting a reply:"
+  echo "Gate 3 (review threads): FAIL — ${count} unresolved thread(s)" \
+    "awaiting a reply:"
   printf '%s\n' "$awaiting"
-  echo "  Drive /pr-review-resolver: reply inline with a fix-commit SHA or justification."
+  echo "  Drive /pr-review-resolver: reply inline with a fix-commit SHA" \
+    "or justification."
   gates_hold=0
 fi
 
 if [[ "$gates_hold" == "1" && "$gates_only" == "0" ]]; then
   short_head=${head_sha:0:7}
-  copilot_hits=$(
-    { gh api "repos/${owner}/${name}/pulls/${PR}/comments" --paginate 2>/dev/null || true
-      gh api "repos/${owner}/${name}/pulls/${PR}/reviews" --paginate 2>/dev/null || true; } \
-      | jq -r --arg head "$head_sha" \
-          '[.[] | select(((.user.login // "") | test("copilot"; "i")) and .commit_id == $head)] | length' \
-      | awk '{ total += $1 } END { print total + 0 }'
-  ) || copilot_hits=""
-  if [[ -z "$copilot_hits" ]]; then
-    echo "Gate 4 (Copilot, advisory): could not query Copilot activity — check manually"
+  copilot_err=0
+  comments_json=$(gh api "repos/${owner}/${name}/pulls/${PR}/comments" \
+    --paginate 2>/dev/null) || copilot_err=1
+  reviews_json=$(gh api "repos/${owner}/${name}/pulls/${PR}/reviews" \
+    --paginate 2>/dev/null) || copilot_err=1
+  copilot_hits=$(printf '%s\n%s\n' "$comments_json" "$reviews_json" \
+    | jq -r --arg head "$head_sha" '[.[]
+        | select(((.user.login // "") | test("copilot"; "i"))
+                 and .commit_id == $head)] | length' \
+    | awk '{ total += $1 } END { print total + 0 }') || copilot_err=1
+  if [[ "$copilot_err" == "1" ]]; then
+    echo "Gate 4 (Copilot, advisory): could not query Copilot activity" \
+      "— check manually"
   elif [[ "$copilot_hits" -gt 0 ]]; then
-    echo "Gate 4 (Copilot, advisory): Copilot has reviewed head ${short_head} — fresh findings appear as Gate 3 threads"
+    echo "Gate 4 (Copilot, advisory): Copilot has reviewed head" \
+      "${short_head} — fresh findings appear as Gate 3 threads"
   else
-    echo "Gate 4 (Copilot, advisory): no Copilot activity on head ${short_head} yet — wait ~60s (up to 15 min), then docs/pr-readiness-loop.md step 6a"
+    echo "Gate 4 (Copilot, advisory): no Copilot activity on head" \
+      "${short_head} yet — wait ~60s (up to 15 min), then" \
+      "docs/pr-readiness-loop.md step 6a"
   fi
 fi
 
@@ -132,5 +149,6 @@ if [[ "$gates_hold" == "1" ]]; then
   exit 0
 fi
 
-echo "NOT READY: fix the failing gate(s) above, push, and re-probe. See docs/pr-readiness-loop.md."
+echo "NOT READY: fix the failing gate(s) above, push, and re-probe." \
+  "See docs/pr-readiness-loop.md."
 exit 1
