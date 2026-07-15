@@ -158,7 +158,8 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
 
     :param cfg: Hydra config carrying the opt-in flag, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
-    :raises ValueError: If the probe is enabled without a ``render`` config group.
+    :raises ValueError: If the probe is enabled without a ``render`` config group, or
+        ``training.val_audio_probe_samples`` is not a positive integer.
     """
     if not OmegaConf.select(cfg, "training.val_audio_probe"):
         return
@@ -166,6 +167,11 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
         raise ValueError(
             "training.val_audio_probe=true requires a render config group "
             "(e.g. `render=surge_xt`); cfg.render is unset."
+        )
+    num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
+    if not isinstance(num_samples, int) or num_samples < 1:
+        raise ValueError(
+            f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
         )
     settings = ProbeRenderSettings(
         param_spec_name=cfg.render.param_spec_name,
@@ -183,9 +189,7 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
             probe_fn=partial(
                 run_audio_probe, settings=settings, upload_uri=_derive_probe_uri(cfg)
             ),
-            # Explicit default (a missing key must not stage the whole batch); int()
-            # rejects a fractional override before it crashes tensor slicing mid-run.
-            num_samples=int(OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)),
+            num_samples=num_samples,
         )
     )
 

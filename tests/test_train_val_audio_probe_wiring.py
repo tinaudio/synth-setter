@@ -91,3 +91,18 @@ def test_derive_probe_uri_uses_bucket_and_run_config_id() -> None:
     uri = _derive_probe_uri(_cfg(enabled=True))
 
     assert uri.startswith("r2://intermediate-data/probes/")
+
+
+@pytest.mark.parametrize(
+    "bad_samples", [0, -1, 2.5, None], ids=["zero", "negative", "float", "null"]
+)
+def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples: object) -> None:
+    """A non-positive-integer sample count fails with a directed error, not a mid-run crash.
+
+    :param bad_samples: Invalid ``training.val_audio_probe_samples`` override.
+    """
+    cfg = _cfg(enabled=True)
+    cfg.training.val_audio_probe_samples = bad_samples
+
+    with pytest.raises(ValueError, match="positive integer"):
+        _configure_val_audio_probe(cfg, [])

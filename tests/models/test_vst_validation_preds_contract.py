@@ -177,3 +177,38 @@ def test_validation_step_preds_are_the_oracle_targets() -> None:
     outputs = module.validation_step(batch, batch_idx=0)
 
     assert torch.equal(outputs["preds"], batch["params"])
+
+
+def test_validation_step_preds_depend_on_input() -> None:
+    """Different mel inputs produce different feed-forward predictions.
+
+    Guards against a module that returns constants (e.g. a detached head or a dead input path)
+    while still passing the shape and finiteness pins.
+    """
+    torch.manual_seed(0)
+    module = _feed_forward_module()
+    batch_a = _batch()
+    batch_b = {**batch_a, "mel_spec": batch_a["mel_spec"] + 1.0}
+
+    preds_a = module.validation_step(batch_a, batch_idx=0)["preds"]
+    preds_b = module.validation_step(batch_b, batch_idx=0)["preds"]
+
+    assert not torch.allclose(preds_a, preds_b)
+
+
+def test_flow_matching_validation_preds_vary_with_sampling_noise() -> None:
+    """The flow-matching sampler is stochastic by design: fresh noise, fresh preds.
+
+    Pins that validation sampling draws new noise per call rather than caching a
+    trajectory, while the shape/finiteness contract holds for every draw.
+    """
+    torch.manual_seed(0)
+    module = _flow_matching_module()
+    batch = _batch()
+
+    preds_a = module.validation_step(batch, batch_idx=0)["preds"]
+    preds_b = module.validation_step(batch, batch_idx=0)["preds"]
+
+    assert preds_a.shape == preds_b.shape == batch["params"].shape
+    assert torch.isfinite(preds_a).all() and torch.isfinite(preds_b).all()
+    assert not torch.equal(preds_a, preds_b)
