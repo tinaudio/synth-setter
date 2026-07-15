@@ -171,7 +171,23 @@ def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
 
     with (
         patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
-        pytest.raises(SystemExit, match=r"data_file must end in one of"),
+        pytest.raises(SystemExit, match=r"data_file must end in .lance"),
+    ):
+        _run_main_with_argv(_cli_argv(str(data_file)))
+
+    mock_lance.assert_not_called()
+
+
+def test_main_rejects_known_non_lance_suffix(tmp_path: Path) -> None:
+    """A known legacy format suffix cannot reach the Lance writer.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    data_file = tmp_path / "shard-000000.h5"
+
+    with (
+        patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
+        pytest.raises(SystemExit, match=r"data_file must end in .lance"),
     ):
         _run_main_with_argv(_cli_argv(str(data_file)))
 

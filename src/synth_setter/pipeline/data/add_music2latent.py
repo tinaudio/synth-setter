@@ -181,7 +181,7 @@ def augment_shards(shards: list[Path], m2l_encode: M2LEncodeFn, batch_size: int 
             logger.info("adding_music2latent", shard=shard_path.name, rows=dataset.count_rows())
             add_music2latent(dataset, m2l_encode, batch_size=batch_size)
         # One bad shard must not abort the remaining shards.
-        except (OSError, ValueError, RuntimeError) as exc:
+        except (OSError, ValueError, RuntimeError, pa.ArrowException) as exc:
             logger.error("add_music2latent_failed", shard=shard_path.name, error=str(exc))
             failures += 1
             continue

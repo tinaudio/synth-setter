@@ -255,7 +255,7 @@ def stream_stats_lance(
     existing: WelfordState = (0, 0, 0)
     folded_any = False
     for shard_uri in shard_uris:
-        logger.info(f"Processing {Path(str(shard_uri)).name}...")
+        logger.info("Processing %s...", Path(str(shard_uri)).name)
         existing = fold_lance_shard_into_welford(
             existing, shard_uri, storage_options=storage_options
         )
@@ -277,18 +277,14 @@ def get_stats_lance(directory: str | Path, mask_degenerate: bool = False) -> Non
         on :func:`get_stats_directory` for the downstream rationale.
     :raises FileNotFoundError: When ``directory`` contains no shards.
     :returns: ``None``. Writes ``stats.npz`` to ``directory / "stats.npz"``.
-    :rtype: None
     """
     directory = Path(directory)
     shard_paths = sorted(directory.glob(_SHARD_GLOB))
     if not shard_paths:
         raise FileNotFoundError(f"no {_SHARD_GLOB} files in {directory}")
-    # ``ValueError`` on a malformed shard propagates from
-    # ``stream_stats_lance → fold_lance_shard_into_welford``; pydoclint's
-    # :raises: section only mirrors local raises.
     mean, std = stream_stats_lance(shard_paths, mask_degenerate=mask_degenerate)
     out_file = directory / "stats.npz"
-    logger.info(f"Saving to {out_file}")
+    logger.info("Saving to %s", out_file)
     np.savez(out_file, mean=mean, std=std)
 
 

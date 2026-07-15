@@ -12,6 +12,7 @@ Reading a shard needs a storage-format subclass; the concrete entry point is
 
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+import sys
 from typing import ClassVar, NotRequired, Protocol, TypedDict
 
 import numpy as np
@@ -810,7 +811,12 @@ class VSTDataModule(LightningDataModule):
                 dataset.dataset_file.close()
 
 
-# Deprecated aliases: archived W&B run configs and external job scripts resolve the
-# old ``_target_`` paths, so Hydra must keep finding these names.
-SurgeXTDataset = VSTDataset
-SurgeDataModule = VSTDataModule
+# Archived Hydra targets resolve after the circular Lance import completes.
+if "synth_setter.data.lance_datamodule" not in sys.modules:
+    from synth_setter.data.lance_datamodule import LanceVSTDataModule, LanceVSTDataset
+
+    SurgeXTDataset = LanceVSTDataset
+    SurgeDataModule = LanceVSTDataModule
+else:
+    SurgeXTDataset = VSTDataset
+    SurgeDataModule = VSTDataModule

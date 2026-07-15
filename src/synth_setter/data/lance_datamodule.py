@@ -654,3 +654,10 @@ class LanceVSTDataModule(VSTDataModule):
         for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
             if hasattr(self, name):
                 delattr(self, name)
+
+
+# Complete deprecated bindings deferred by the circular base-module import.
+from synth_setter.data import vst_datamodule as _vst_datamodule
+
+_vst_datamodule.SurgeXTDataset = LanceVSTDataset
+_vst_datamodule.SurgeDataModule = LanceVSTDataModule

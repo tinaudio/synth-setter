@@ -24,6 +24,8 @@ import synth_setter.models
 # broken shim fails collection; the concrete symbols come from the renamed modules.
 from synth_setter.data.lance_datamodule import LanceVSTDataModule, LanceVSTDataset
 from synth_setter.data.surge_datamodule import SurgeDataModule, SurgeXTDataset
+from synth_setter.data.vst_datamodule import SurgeDataModule as VSTPathSurgeDataModule
+from synth_setter.data.vst_datamodule import SurgeXTDataset as VSTPathSurgeXTDataset
 from synth_setter.models.surge_fake_oracle_module import SurgeFakeOracleModule
 from synth_setter.models.surge_ff_module import SurgeFeedForwardModule
 from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModule
@@ -56,6 +58,8 @@ def test_vst_flow_matching_import_does_not_initialize_data_vst_package() -> None
         (SurgeFakeOracleModule, VSTFakeOracleModule),
         (SurgeDataModule, LanceVSTDataModule),
         (SurgeXTDataset, LanceVSTDataset),
+        (VSTPathSurgeDataModule, LanceVSTDataModule),
+        (VSTPathSurgeXTDataset, LanceVSTDataset),
     ],
 )
 def test_deprecated_alias_is_renamed_class(alias: type, renamed: type) -> None:

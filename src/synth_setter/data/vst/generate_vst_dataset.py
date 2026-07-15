@@ -235,11 +235,8 @@ def main() -> None:
     ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
-    if OutputFormat.from_extension(suffix) is None:
-        raise SystemExit(
-            f"data_file must end in one of {sorted(f.extension for f in OutputFormat)}, "
-            f"got {suffix!r}"
-        )
+    if OutputFormat.from_extension(suffix) is not OutputFormat.LANCE:
+        raise SystemExit(f"data_file must end in .lance, got {suffix!r}")
 
     make_lance_dataset(args.data_file, render_cfg)
 
