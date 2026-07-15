@@ -1,6 +1,89 @@
 # CHANGELOG
 
 
+## v8.49.0 (2026-07-15)
+
+### Continuous Integration
+
+- Make pre-PR remediation progress durable
+  ([#1889](https://github.com/tinaudio/synth-setter/pull/1889),
+  [`11d2cc7`](https://github.com/tinaudio/synth-setter/commit/11d2cc77447d8625bca6347ab4e62558dc903d66))
+
+* ci: make pre-PR remediation progress durable
+
+* ci: clarify pre-PR remediation guidance
+
+* ci: record pre-PR review progress
+
+* ci: refine review loop progress tracking
+
+* ci: count repeated non-PASS reviews
+
+* ci: derive review progress state counts
+
+### Features
+
+- **ci-automation**: Bump python floor to 3.12
+  ([#1797](https://github.com/tinaudio/synth-setter/pull/1797),
+  [`2bf03c3`](https://github.com/tinaudio/synth-setter/commit/2bf03c36d649889112b8cbfecc3ba6f402d98d53))
+
+* feat(ci-automation): bump python floor to 3.12
+
+* fix(ci-automation): repair stale worker python venv
+
+* fix(ci-automation): pin Python 3.12.13 runtime safely
+
+* fix(ci-automation): align launcher cache with Python pin
+
+* fix(ci-automation): install macOS deps into managed venv
+
+* internal-fix(ci-automation): validate Python patch version
+
+Exercise the existing-venv make branch with the canonical interpreter and pin the remote worker
+  command chain end to end. Align the worker helper with the project shell contract.
+
+* chore(cli): route Hydra __main__ calls through a typed cast
+
+pyright keeps the undecorated one-arg signature for functions whose decorator returns Any, so the
+  bare `main()` in the three Hydra entrypoints reports a missing `cfg` argument whenever the file is
+  touched (train.py was frozen into the pyright exclude list for the same reason). Cast the wrapper
+  to its real no-arg call shape at the call site; no runtime change.
+
+* chore(deps): synchronize lockfile package version
+
+* internal-fix(ci-automation): bootstrap stale workers safely
+
+* internal-fix(ci-automation): keep source overlay parseable
+
+### Refactoring
+
+- **data**: Type param spec registry names
+  ([#1879](https://github.com/tinaudio/synth-setter/pull/1879),
+  [`170dbcd`](https://github.com/tinaudio/synth-setter/commit/170dbcd625f298d04f2d79e138d6f49fea601339))
+
+* refactor(data): type param spec registry names
+
+* fix(data): reject conflicting spec registration
+
+* test(data): expect typed registered param spec key
+
+### Testing
+
+- (fix) prioritize DawDreamer gui validation
+  ([#1877](https://github.com/tinaudio/synth-setter/pull/1877),
+  [`4f2ea74`](https://github.com/tinaudio/synth-setter/commit/4f2ea74c252835ca70d8438507db7e09bd59251a))
+
+* fix(schema): prioritize DawDreamer gui validation
+
+* test(schema): cover DawDreamer GUI-disabled config
+
+---------
+
+- (fix) use local workflow fixture import
+  ([#1896](https://github.com/tinaudio/synth-setter/pull/1896),
+  [`cd86245`](https://github.com/tinaudio/synth-setter/commit/cd862454ebad447f2ec28d0e5d72656f2745c114))
+
+
 ## v8.48.1 (2026-07-14)
 
 ### Bug Fixes
