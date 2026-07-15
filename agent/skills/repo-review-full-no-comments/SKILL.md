@@ -198,6 +198,7 @@ sub-agents; you never launch those directly.
 >
 > - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
 > - Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
+> - If there are any BLOCK or WARN findings, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
 >
 > Rules for the rendering:
 >
@@ -239,6 +240,14 @@ sub-agents; you never launch those directly.
   wants the comments posted after all, they can rerun with `/repo-review-full`
   — the analysis is deterministic enough that re-running is cheap relative to
   the value of an explicit "no, don't post" mode.
+- A non-PASS report starts a remediation loop, not a license to retry the same
+  review. Before another review or a handoff, make any coherent remediation
+  durable: run relevant checks, commit it, and push the current branch. If
+  progress cannot safely be committed or pushed, report the concrete blocker.
+  On a repeated report, compare `HEAD` and `git status --porcelain` with the
+  prior attempt; unchanged state means stop retrying and recover from the
+  blocker. This is advisory so investigation and deliberately uncommitted
+  experiments remain possible.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.
