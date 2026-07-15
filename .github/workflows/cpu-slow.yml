@@ -55,9 +55,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Registers the binfmt_misc aarch64 handler so BuildKit can exec arm64
-      # binaries; test_ultramaster_docker_arm64_target_skips_source_build builds
-      # the KR-106 stage for linux/arm64 and fails without it.
+      # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
+      # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
