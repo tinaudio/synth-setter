@@ -13,6 +13,7 @@ import shutil
 import sys
 import tomllib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import yaml
@@ -265,7 +266,8 @@ def _path_without_opencode(tmp_path: Path) -> str:
     bin_dir.mkdir()
     for tool in ("jq", "uv"):
         target = shutil.which(tool)
-        assert target is not None, f"{tool} is required to run the shell launcher"
+        if target is None:
+            pytest.fail(f"{tool} is required to run the shell launcher")
         (bin_dir / tool).symlink_to(target)
     return f"{bin_dir}:/usr/bin:/bin"
 
@@ -277,17 +279,15 @@ def _run_opencode_launcher_py(argv: list[str]) -> tuple[int, str]:
     :returns: Exit code and captured stdout.
     """
     stdout = io.StringIO()
-    original_argv = sys.argv
-    sys.argv = [str(_OPENCODE_LAUNCHER_PY), *argv]
-    try:
-        with (
-            contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(io.StringIO()),
-            pytest.raises(SystemExit) as exit_info,
-        ):
-            runpy.run_path(str(_OPENCODE_LAUNCHER_PY), run_name="__main__")
-    finally:
-        sys.argv = original_argv
+    # patch.object restores sys.argv even when the launcher raises, so runs
+    # stay isolated from each other.
+    with (
+        mock.patch.object(sys, "argv", [str(_OPENCODE_LAUNCHER_PY), *argv]),
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(io.StringIO()),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        runpy.run_path(str(_OPENCODE_LAUNCHER_PY), run_name="__main__")
     code = exit_info.value.code
     return (code if isinstance(code, int) else 1), stdout.getvalue()
 
@@ -381,6 +381,8 @@ def test_opencode_shell_launcher_extracts_last_message_final_text(tmp_path: Path
     :param tmp_path: Temporary directory containing the fake opencode executable.
     """
     sh = importlib.import_module("sh")
+    # Final-message part ids sort lexically ("prt_10" < "prt_2") in the reverse
+    # of their emission order, pinning that extraction preserves stream order.
     events = [
         {"type": "step_start", "part": {"type": "step-start", "messageID": "msg_1"}},
         {
@@ -389,16 +391,15 @@ def test_opencode_shell_launcher_extracts_last_message_final_text(tmp_path: Path
         },
         {
             "type": "text",
-            "part": {"id": "prt_2", "messageID": "msg_2", "type": "text", "text": "partial"},
+            "part": {"id": "prt_2", "messageID": "msg_2", "type": "text", "text": "## first"},
         },
         {
             "type": "text",
-            "part": {
-                "id": "prt_2",
-                "messageID": "msg_2",
-                "type": "text",
-                "text": "structured report",
-            },
+            "part": {"id": "prt_10", "messageID": "msg_2", "type": "text", "text": "partial"},
+        },
+        {
+            "type": "text",
+            "part": {"id": "prt_10", "messageID": "msg_2", "type": "text", "text": "## second"},
         },
         {"type": "step_finish", "part": {"type": "step-finish", "messageID": "msg_2"}},
     ]
@@ -415,7 +416,7 @@ def test_opencode_shell_launcher_extracts_last_message_final_text(tmp_path: Path
         _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
     )
 
-    assert str(result) == "structured report"
+    assert str(result) == "## first\n\n## second"
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -493,6 +494,30 @@ def test_opencode_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> None:
 
     assert exc_info.value.exit_code != 0
     assert b"timed out" in exc_info.value.stderr
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.skipif(
+    shutil.which("opencode") is None,
+    reason=(
+        "needs the opencode CLI + auth; run manually: "
+        "agent/_shared/run_opencode_review_agent.sh pr-review-worker-fast "
+        "--prompt 'Reply with exactly the word OK and nothing else.'"
+    ),
+)
+def test_opencode_shell_launcher_real_cli_returns_model_text() -> None:
+    """Drive the real opencode CLI once to prove auth, event parsing, and exit flow."""
+    sh = importlib.import_module("sh")
+
+    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "Reply with exactly the word OK and nothing else.",
+        _cwd=REPO_ROOT,
+    )
+
+    assert "OK" in str(result)
 
 
 def test_opencode_config_reviewer_agent_denies_mutations() -> None:

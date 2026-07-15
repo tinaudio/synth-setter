@@ -4,15 +4,21 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 launcher="${repo_root}/agent/_shared/run_opencode_review_agent.py"
-resolved="$(uv run --no-project --script "${launcher}" "$@")"
+if ! resolved="$(uv run --no-project --script "${launcher}" "$@")"; then
+  echo "failed to resolve the opencode launcher command" >&2
+  exit 1
+fi
 dry_run_filter='if (.dry_run | type) == "boolean" then
   (.dry_run | tostring)
 else
   error("invalid dry_run")
 end'
-dry_run="$(jq -er "${dry_run_filter}" <<<"${resolved}")"
+if ! dry_run="$(jq -er "${dry_run_filter}" <<<"${resolved}")"; then
+  echo "invalid launcher output: dry_run" >&2
+  exit 1
+fi
 
-if [[ ${dry_run} == true ]]; then
+if [[ "${dry_run}" == true ]]; then
   printf '%s\n' "${resolved}"
   exit 0
 fi
@@ -31,7 +37,10 @@ then
 else
   error("invalid command")
 end'
-command_lines="$(jq -er "${command_filter}" <<<"${resolved}")"
+if ! command_lines="$(jq -er "${command_filter}" <<<"${resolved}")"; then
+  echo "invalid launcher output: command" >&2
+  exit 1
+fi
 # `read` (not `mapfile`) so macOS bash 3.2 works. Each line is one argv element.
 command=()
 while IFS= read -r line; do
@@ -42,7 +51,10 @@ prompt_filter='if (.prompt | type) == "string" then
 else
   error("invalid prompt")
 end'
-prompt="$(jq -er "${prompt_filter}" <<<"${resolved}")"
+if ! prompt="$(jq -er "${prompt_filter}" <<<"${resolved}")"; then
+  echo "invalid launcher output: prompt" >&2
+  exit 1
+fi
 event_file="$(mktemp)"
 log_file="$(mktemp)"
 trap 'rm -f "${event_file}" "${log_file}"' EXIT
@@ -58,14 +70,16 @@ wait "${run_pid}" || status=$?
 kill "${watchdog_pid}" >/dev/null 2>&1 || true
 # Reap the watchdog so bash doesn't print job-control noise to stderr.
 wait "${watchdog_pid}" 2>/dev/null || true
-if [[ ${status} -ne 0 ]]; then
+if [[ "${status}" -ne 0 ]]; then
   cat "${log_file}" >&2
-  if [[ ${status} -eq 143 ]]; then
+  if [[ "${status}" -eq 143 ]]; then
     echo "opencode run timed out after ${timeout_s}s" >&2
   fi
   exit 1
 fi
-# shellcheck disable=SC2016  # $final is a jq variable, not a shell expansion
+# Keep only the final message's text parts, in emission order, latest state per
+# part id (the ordered reduce avoids group_by's lexical re-sort of part ids).
+# shellcheck disable=SC2016  # $final/$part/$i are jq variables, not shell expansions
 report_filter='[
   .[]
   | select(.type == "text")
@@ -75,8 +89,10 @@ report_filter='[
 | if length == 0 then error("missing assistant text") else . end
 | (last | .messageID) as $final
 | map(select(.messageID == $final))
-| group_by(.id)
-| map(last | .text)
+| reduce .[] as $part ([];
+    (map(.id) | index($part.id)) as $i
+    | if $i == null then . + [$part] else .[$i] = $part end)
+| map(.text)
 | join("\n\n")'
 if ! report="$(jq -ers "${report_filter}" "${event_file}")"; then
   cat "${log_file}" >&2
