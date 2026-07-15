@@ -15,7 +15,7 @@ clean-logs: ## Clean logs
 	rm -rf logs/**
 
 format: ## Run pre-commit hooks
-	pre-commit run -a
+	./.venv/bin/pre-commit run -a
 
 GATE ?=
 count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
@@ -33,7 +33,7 @@ UNAME_S := $(shell uname -s)
 HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
 
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	./.venv/bin/pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # test-full-* split per hardware. test-full-cpu can parallelize; test-full-gpu and
 # test-full-mps run serially because GPU/MPS tests need exclusive device access.
