@@ -18,11 +18,13 @@ def test_setup_uv_steps_pin_supported_version() -> None:
     setup_steps = []
     for workflow_path in workflow_paths:
         document = yaml.safe_load(workflow_path.read_text())
-        jobs = document.get("jobs", {"composite": document})
-        for job in jobs.values():
+        for job in document.get("jobs", {}).values():
             for step in job.get("steps", []):
                 if str(step.get("uses", "")).startswith("astral-sh/setup-uv@"):
                     setup_steps.append((workflow_path, step))
+        for step in document.get("runs", {}).get("steps", []):
+            if str(step.get("uses", "")).startswith("astral-sh/setup-uv@"):
+                setup_steps.append((workflow_path, step))
 
     assert setup_steps
     for workflow_path, step in setup_steps:

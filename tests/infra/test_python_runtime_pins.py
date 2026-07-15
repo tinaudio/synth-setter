@@ -185,9 +185,9 @@ def test_make_install_accepts_existing_canonical_python(
     precommit.write_text("#!/bin/bash\nexit 0\n")
     precommit.chmod(0o755)
 
-    uv_bin = tmp_path / "home/.local/bin"
-    uv_bin.mkdir(parents=True)
-    uv = uv_bin / "uv"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
     uv.write_text(
         '#!/bin/bash\nif [[ "$1" == "--version" ]]; then echo "uv 0.11.28"; fi\nexit 0\n'
     )
@@ -197,7 +197,7 @@ def test_make_install_accepts_existing_canonical_python(
     result = subprocess.run(
         ["/usr/bin/make", "install"],
         cwd=tmp_path,
-        env={**os.environ, "HOME": str(tmp_path / "home")},
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
         check=False,
         capture_output=True,
         text=True,

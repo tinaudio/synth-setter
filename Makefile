@@ -102,11 +102,13 @@ deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifa
 	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
 
 install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, set up pre-commit
-	@test -x "$$HOME/.local/bin/uv" && \
-		[ "$$($$HOME/.local/bin/uv --version | awk '{print $$2}')" = "0.11.28" ] || \
+	@UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
+	{ [ -x "$$UV" ] && [ "$$($$UV --version | awk '{print $$2}')" = "0.11.28" ]; } || \
+	{ [ -x "$$HOME/.local/bin/uv" ] && [ "$$($$HOME/.local/bin/uv --version | awk '{print $$2}')" = "0.11.28" ]; } || \
 		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/0.11.28/install.sh | sh; }
 	@set -e; \
-	UV="$$HOME/.local/bin/uv"; \
+	UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
+	[ "$$($$UV --version 2>/dev/null | awk '{print $$2}')" = "0.11.28" ] || UV="$$HOME/.local/bin/uv"; \
 	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
 	[ "$$($$UV --version | awk '{print $$2}')" = "0.11.28" ] || { echo "ERROR: uv 0.11.28 required"; exit 1; }; \
 	if [ -d .venv ]; then \
