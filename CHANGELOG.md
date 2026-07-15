@@ -1,6 +1,234 @@
 # CHANGELOG
 
 
+## v9.0.0 (2026-07-15)
+
+### Automation
+
+- Preserve sanitized Claude failure diagnostics
+  ([#1958](https://github.com/tinaudio/synth-setter/pull/1958),
+  [`37a8d31`](https://github.com/tinaudio/synth-setter/commit/37a8d313e9f47ab699a3226dd23385c8c47a4d67))
+
+* fix(ci-automation): preserve Claude failure diagnostics
+
+* fix(ci-automation): share Claude diagnostic upload
+
+* fix(ci-automation): redact Claude diagnostic content
+
+- Run a parallel OpenCode pass in every PR review worker
+  ([#1933](https://github.com/tinaudio/synth-setter/pull/1933),
+  [`0f4a040`](https://github.com/tinaudio/synth-setter/commit/0f4a040fd9c03ac599c188e86a766285079b663b))
+
+* automation: add a parallel opencode pass to every PR review worker
+
+Each repo-review-full fan-out worker now launches a second, background review of its checklist
+  through the OpenCode CLI (Go-plan models pinned per role: kimi-k2.7-code for correctness, glm-5.2
+  for the rest) and merges attributed findings into its single report, so two model families cover
+  every checklist. The launcher pair mirrors the codex one; a repo opencode.json pins a read-only
+  reviewer agent, and a missing or failing opencode CLI degrades to the native pass with a note, so
+  CI is unaffected.
+
+* internal-fix(review): harden the opencode launcher against review findings
+
+Preserve final-message part order with an ordered jq reduce instead of group_by, which re-sorts part
+  ids lexically and could scramble report sections. Add explicit error checks on every command
+  substitution, quote test-expression variables, isolate the launcher test helper via
+  mock.patch.object, and add a slow real-CLI e2e test that skips with the exact manual command where
+  opencode is unavailable.
+
+* test: cover the opencode launcher --prompt-file path directly
+
+Addresses a WARN from the pre-PR review: the python launcher's prompt-file branch was only exercised
+  through the shell wrapper.
+
+* docs: apply doc-drift fixes for the opencode review pass
+
+Scope the worker-brief subprocess carve-out to agent-launching subprocesses (the old wording forbade
+  the mktemp/git/gh commands the fan-out spec itself requires), clarify that a degraded pass both
+  tags findings and appends the skip note, and register the review fan-out surfaces in doc-map.yaml
+  plus the routing contract tests in the tests/infra catalog rows.
+
+### Build System
+
+- Refresh uv.lock in release commits ([#1955](https://github.com/tinaudio/synth-setter/pull/1955),
+  [`fcfd014`](https://github.com/tinaudio/synth-setter/commit/fcfd014281195f1d3276a4be36a5dc0c5497075c))
+
+* fix(ci-automation): refresh uv.lock in semantic-release commits
+
+chore(release) commits bump project.version in pyproject.toml but left uv.lock's synth-setter entry
+  at the old version, so every release landed main with a stale lock: uv lock --check failed, every
+  uv invocation rewrote the lock, and the pyright pre-commit hook (which shells out to uv run)
+  failed with 'files were modified by this hook' on any commit touching a Python file. [skip ci] on
+  release commits kept uv-lock-check from ever catching it.
+
+Give semantic-release a build_command that regenerates the lock after the version stamp (the PSR
+  action container ships pip but no uv, hence the pip install) and list uv.lock in assets so the
+  refreshed lock rides in the release commit. A tests/infra invariant test pins lock-vs-pyproject
+  version agreement so any future drift fails the suite.
+
+Fixes #1913
+
+* test(ci-automation): exercise release lock refresh
+
+* test(ci-automation): require release uv pin
+
+* test(ci-automation): decouple release pin from host uv
+
+### Continuous Integration
+
+- Pin uv version across CI and worktrees
+  ([#1953](https://github.com/tinaudio/synth-setter/pull/1953),
+  [`0af4e15`](https://github.com/tinaudio/synth-setter/commit/0af4e154a0f388fb7b7e644b2a8f1b6ab641768f))
+
+* fix(ci-automation): pin uv 0.11.28 across environments
+
+* test(ci-automation): cover uv bootstrap selection
+
+* test(ci-automation): reject unresolved uv drift
+
+* fix(ci-automation): quote uv bootstrap executable
+
+* fix(ci-automation): harden uv bootstrap pipeline
+
+* build(ci-automation): refresh lock with uv 0.11.28
+
+- Replace stock Claude code-review workflow with repo-review-full
+  ([#1943](https://github.com/tinaudio/synth-setter/pull/1943),
+  [`7443b55`](https://github.com/tinaudio/synth-setter/commit/7443b55c3082bf235335ab08ee4d782e5f76a560))
+
+* ci: drop stock Claude code-review workflow in favor of repo-review-full
+
+The stock code-review plugin workflow fully overlaps with claude-repo-review-full.yml, which runs
+  the repo-owned /repo-review-full pipeline on the same pull_request triggers and has caught more.
+
+Also bump the anthropics/claude-code-action pin from e90deca to current v1 (1253134) so runs whose
+  Claude result carries is_error:true fail the job (anthropics/claude-code-action#1496) instead of
+  passing green with no review posted, and repoint the workflow's doc-map/reference/rotation doc
+  rows at the surviving workflow.
+
+Refs #1938
+
+* docs: fix stale concurrency-gotcha row for the deleted review workflow
+
+The Known gotchas / Concurrency section still named claude-code-review and its claude-review-<PR#>
+  group; repoint it at claude-repo-review-full and its actual group key.
+
+* ci: bump claude-code-action pin in claude.yml to match
+
+Same e90deca -> 1253134 (v1) bump as claude-repo-review-full.yml, so @claude mention runs also fail
+  loudly on is_error:true results instead of passing green.
+
+### Documentation
+
+- Drop dangling comparisons to the deleted review workflow
+  ([#1949](https://github.com/tinaudio/synth-setter/pull/1949),
+  [`69f6040`](https://github.com/tinaudio/synth-setter/commit/69f6040ecaabdb0410c4f6fc717cc1da3d1c8308))
+
+Two comments in claude-repo-review-full.yml compared against the stock code-review workflow removed
+  in this PR; state the constraints directly.
+
+Refs #1938
+
+### Internal-Feat
+
+- **ci**: Enforce readiness gate 3 with a shared probe
+  ([#1948](https://github.com/tinaudio/synth-setter/pull/1948),
+  [`3cc63b1`](https://github.com/tinaudio/synth-setter/commit/3cc63b192c632dcc7d57c36dac13756cc4cfb488))
+
+* internal-feat(ci): enforce PR review-thread replies via a shared readiness probe
+
+Agents driving PRs polled CI alone and ended turns with unanswered review comments: the pr-readiness
+  Stop hook decided only gates 1-2 (CI green, mergeable), and the loop docs recommended /loop on gh
+  pr checks, which never surfaces a comment landing mid-wait (live case: PR #1847 sat CI-green +
+  MERGEABLE with 10 unresolved sentinel threads).
+
+Add agent/_shared/pr_readiness_probe.sh — a one-shot four-gate report (CI, mergeable, unresolved
+  review threads awaiting a reply via GraphQL reviewThreads, advisory Copilot status) with an exit
+  0/1/2 contract, a --gates-only mode that skips the advisory REST lookups, and a READY
+  short-circuit for merged/closed PRs so a poll terminates when auto-merge lands. A thread awaits a
+  reply when it is unresolved and has a single comment or its last comment is not the PR author's,
+  so self-authored sentinel findings still count as unanswered.
+
+The Stop hook now delegates gate evaluation to the probe, making gate 3 blocking; a missing probe or
+  probe environment error fails open. Docs and the pr-readiness skill switch the polling loop to the
+  probe.
+
+Refs #1932
+
+* internal-fix(ci): harden readiness probe parsing and gate-4 error path
+
+Address the pre-PR review findings: validate the gh pr view capture before jq parsing (the 2>&1
+  error capture can prepend gh notices to the JSON, and an unguarded parse failure would exit 1 and
+  masquerade as a gate verdict), make the gate-4 'could not query' branch reachable by checking each
+  REST fetch's exit instead of swallowing failures before jq, wrap over-length output lines,
+  condense test comments, and cover an awaiting thread on a second --paginate page.
+
+* internal-fix(ci): drop the decorative banner from the probe test section
+
+The pre-PR comment-hygiene pass flags decorative separators (C9); replace the three-line banner
+  introduced for the probe section with a single descriptive comment.
+
+* internal-fix(ci): name the probe's body-preview length and tighten a doc-map entry
+
+Extract the gate-3 listing's 100-char truncation into BODY_PREVIEW_CHARS (passed to jq via
+  --argjson) and consolidate the Stop-hook doc-map covers phrase, per the pre-PR review warns. The
+  SH1 shebang findings are declined: the repo convention is #!/usr/bin/env bash across all 16 shell
+  scripts (tracked as a rule conflict in the shell-style checklist).
+
+* internal-fix(ci): tighten readiness probe guidance
+
+Condense the probe and Stop-hook comments flagged by the comment-hygiene review, and make the
+  skill's CI-wait step explicitly prefer the four-gate probe while retaining gh pr checks --watch as
+  a one-shot option.
+
+### Refactoring
+
+- **data-pipeline**: Remove HDF5 and WebDataset formats, Lance-only
+  ([#1827](https://github.com/tinaudio/synth-setter/pull/1827),
+  [`9689149`](https://github.com/tinaudio/synth-setter/commit/9689149731f1d6e1bcb32a60d0df0ae7a7dfe23c))
+
+* refactor(data-pipeline)!: remove HDF5 and WebDataset formats, Lance-only
+
+Lance becomes the sole dataset format. Collapse ``OutputFormat`` to a single LANCE member and delete
+  every HDF5/WebDataset dispatch path: per-shard writers, shard validators, finalize/stats branches,
+  the h5/wds ``r2_location`` URI helpers, and the HDF5-only maintenance modules (reshard,
+  rewrite_to_latest, r2_report, cadence_sweep_489). Port surge_xt_interactive to Lance random-access
+  reads and make ``VSTDataset._open`` abstract so a format subclass (LanceVSTDataModule) is
+  required. Remove the ``copy_dataset_root_uri`` dataset-copy feature, which was HDF5-only by
+  design.
+
+Drop the h5py, hdf5plugin, webdataset, and orphaned dask dependencies; flip the default
+  ``output_format`` to lance; reduce CI format matrices to Lance-only; prune h5/wds prose from the
+  docs. Legacy-format rejection is pinned as an explicit contract: ``.h5`` / ``.tar`` suffixes map
+  to no format and the ``hdf5`` / ``wds`` spec tokens raise ``ValidationError``.
+
+Rebuilt fresh off current main (superseding the stale refactor/remove-h5-wds-formats branch),
+  reconciled against main's Lance fragment-staging finalize (#1784), DawDreamer backend, and
+  lance.torch dataloaders so those additions are preserved.
+
+Closes #1813
+
+BREAKING CHANGE: HDF5 and WebDataset dataset formats are removed; only Lance is supported. Existing
+  ``.h5`` / ``.tar`` datasets in R2 are no longer readable by this codebase.
+
+* fix(testing): align Lance-only integration contracts
+
+* fix(data-pipeline): resolve Lance-only review findings
+
+* fix(testing): assert staged Lance worker output
+
+* test(data-pipeline): raise Lance-only patch coverage
+
+* fix(data-pipeline): close final Lance review gaps
+
+* chore(data-pipeline): resolve final review hygiene
+
+### Breaking Changes
+
+- **data-pipeline**: Hdf5 and WebDataset dataset formats are removed; only Lance is supported.
+  Existing ``.h5`` / ``.tar`` datasets in R2 are no longer readable by this codebase.
+
+
 ## v8.54.1 (2026-07-15)
 
 ### Bug Fixes
