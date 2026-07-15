@@ -31,7 +31,6 @@ from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
@@ -334,29 +333,6 @@ def _render_in_batches(
         _render_loop()
 
 
-def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
-    """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields.
-
-    Single source of truth for the render-derived attrs the HDF5
-    ``audio.attrs`` sidecar, the wds ``metadata.json`` tar member, and the
-    Lance schema metadata expose. Keeping projection here means the writers
-    can never drift.
-
-    :param render_cfg: Per-shard renderer config from the dataset spec.
-    :returns: Strict ``ShardMetadata`` with every render-derived field filled.
-    :rtype: ShardMetadata
-    """
-    return ShardMetadata(
-        velocity=render_cfg.velocity,
-        signal_duration_seconds=render_cfg.signal_duration_seconds,
-        sample_rate=render_cfg.sample_rate,
-        channels=render_cfg.channels,
-        min_loudness=render_cfg.min_loudness,
-        base_seed=render_cfg.base_seed,
-        attempts_per_sample=render_cfg.attempts_per_sample,
-    )
-
-
 def make_hdf5_dataset(
     hdf5_file: Path | str,
     render_cfg: RenderConfig,
@@ -389,7 +365,7 @@ def make_hdf5_dataset(
         contract as ``fixed_synth_params_list``.
     """
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     # Validate before opening the file so a bad fixed-params list (e.g. a copy
     # source whose row count != samples_per_shard) fails without leaving an
     # empty output shard on disk.
@@ -460,7 +436,7 @@ def make_wds_dataset(
         contract as ``fixed_synth_params_list``.
     """
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     start_idx = 0
 
     _validate_fixed_params_lengths(
@@ -523,7 +499,7 @@ def make_lance_dataset(
     )
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     start_idx = 0
 
     _validate_fixed_params_lengths(
@@ -537,7 +513,7 @@ def make_lance_dataset(
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch, len(fragments)))
+        fragments.append(lance_fragment(lance_dir, schema, record_batch))
 
     # Commit only after a clean render: orphaned fragment data files from a failed
     # run stay uncommitted (no dataset manifest references them).

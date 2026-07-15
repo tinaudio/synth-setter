@@ -80,7 +80,7 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 - `shards/` is written only by finalize *(future state — current workers write directly into the run prefix; finalize stage does not yet exist, see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 - Lance `fragment.json` sidecars store only a schema version and Lance's exact serialized `FragmentMetadata.to_json()` payload; logical identity (shard, split, worker, attempt) is derived from the path, filename, and spec, not stored. Per-shard normalization state is stored as `{worker_id}-{attempt_uuid}.shard-stats.npz`; finalize reduces selected winners into dataset-level `stats.npz`.
 - All `rclone` operations use `--checksum`
-- Datasets are immutable once `metadata/dataset.complete` exists. New versions require a new `dataset_wandb_run_id`. *(future state — completion-marker handling lands with finalize, [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- Datasets are immutable once the `dataset.complete` marker exists. New versions require a new `dataset_wandb_run_id`. *(finalize writes the marker at the run prefix root today; relocation under `metadata/` is [#385](https://github.com/tinaudio/synth-setter/issues/385))*
 
 #### Materialized spec: two destinations, two purposes
 

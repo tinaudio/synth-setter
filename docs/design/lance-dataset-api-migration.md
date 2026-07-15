@@ -91,23 +91,32 @@ after an rclone download. A review against the pinned library
 
 - `iter_lance_column_rows(uri, column, *, storage_options=None)` →
   `lance.dataset(uri, storage_options=...).to_batches(columns=[column])`.
-- `stats.stream_stats_lance(...)` threads `storage_options` through to the above.
-- `finalize_lance`: open each shard with `lance.dataset(s3_uri, storage_options)`,
-  stream `.to_batches()`, and `write_dataset` the split directly to its `s3://`
-  URI. Drops the per-shard download and the split upload.
-- `validate_shard._validate_lance_shard`: open via `lance.dataset(s3_uri, storage_options)`, validate `schema` (fixed-shape tensor types) + `count_rows`.
+- `stats.fold_lance_shard_into_welford(...)` threads `storage_options` through
+  to the above (the fragment pipeline superseded the original
+  `stream_stats_lance` wrapper — finalize now reduces staged Welford sidecars).
+- `finalize_lance` (historical row-streaming form): open each shard with
+  `lance.dataset(s3_uri, storage_options)`, stream `.to_batches()`, and
+  `write_dataset` the split directly to its `s3://` URI. Superseded by the
+  fragment-commit finalize in `pipeline/data/lance_finalize.py`, which commits
+  staged fragment metadata without decoding rows.
+- `validate_shard._validate_lance_shard`: open via `lance.dataset(...)`,
+  validate `schema` (fixed-shape tensor types) + `count_rows` — now the
+  worker-side local pre-staging check; the from-R2 path validates staged
+  winner attempts.
 
 ### R2 layout
 
-- `shard-XXXXXX.lance` and `<split>.lance` are now directory prefixes, not
-  objects, keyed off `OutputFormat.is_directory`. The worker uploads each shard
-  tree with `r2_io.upload_dir` and skip-probes the committed dataset via
-  `r2_io.r2_directory_exists("<shard>/_versions")` (a crashed render leaves
-  orphan `data/` files with no manifest, so probing any object would strand an
-  unreadable shard); training download uses `download_dir_no_overwrite` (already
-  directory-recursive). `dataset.complete` marker and `stats.npz` are unchanged.
-  `OutputFormat.from_extension` still matches on the `.lance` name suffix of the
-  directory.
+- `<split>.lance` datasets are directory prefixes, not objects. Under the
+  fragment pipeline the worker no longer uploads per-shard dataset trees:
+  each shard stages one uncommitted fragment straight into its split's
+  `data/` directory plus a sidecar/stats/marker set under
+  `metadata/workers/shards/shard-XXXXXX/`, and the resume skip-probe asks
+  `shard_has_complete_attempt` against that staging prefix (a crashed render
+  leaves orphan `data/` files and an orphaned `.rendering` marker, never a
+  skippable attempt). Training download uses `download_dir_no_overwrite`
+  (already directory-recursive). `dataset.complete` marker and `stats.npz`
+  are unchanged. `OutputFormat.from_extension` still matches on the `.lance`
+  name suffix.
 
 ## Affected files
 

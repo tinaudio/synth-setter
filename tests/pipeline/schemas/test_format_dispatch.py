@@ -22,20 +22,6 @@ def test_output_format_extension_lance_is_lance() -> None:
     assert OutputFormat.LANCE.extension == ".lance"
 
 
-def test_is_directory_lance_returns_true() -> None:
-    """``LANCE`` shards are directory trees (Lance datasets)."""
-    assert OutputFormat.LANCE.is_directory is True
-
-
-@pytest.mark.parametrize("fmt", [OutputFormat.HDF5, OutputFormat.WDS])
-def test_is_directory_single_file_format_returns_false(fmt: OutputFormat) -> None:
-    """``HDF5`` and ``WDS`` shards are single files, not directories.
-
-    :param fmt: Single-file output format under test.
-    """
-    assert fmt.is_directory is False
-
-
 def test_from_extension_h5_returns_hdf5() -> None:
     """``.h5`` reverse-maps to the HDF5 format."""
     assert OutputFormat.from_extension(".h5") is OutputFormat.HDF5

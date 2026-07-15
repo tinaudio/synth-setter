@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -229,11 +230,17 @@ class TestR2StorageOptions:
 class TestR2DirectoryExists:
     """Tests for r2_directory_exists — prefix existence probe via non-recursive ``rclone lsf``.
 
-    Present case is state-based against the fake-local remote. The absent case
-    stays mock-based: on R2 ``lsf`` returns empty stdout for a missing prefix,
-    while the local backend exits non-zero — the same divergence ``object_size``
-    documents.
+    Present and missing-prefix cases are state-based against the fake-local
+    remote; both backends normalize a missing prefix to ``False`` via the
+    shared listing probe.
     """
+
+    def test_missing_prefix_returns_false(self, fake_r2_remote: Path) -> None:
+        """A never-created prefix reads as absent on the local backend too.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.r2_directory_exists("r2://bucket/never/created") is False
 
     def test_present_prefix_returns_true(self, fake_r2_remote: Path) -> None:
         """A prefix containing at least one object returns ``True``.
@@ -250,6 +257,7 @@ class TestR2DirectoryExists:
         """Empty ``rclone lsf`` stdout (R2's missing-prefix shape) returns ``False``."""
         completed = MagicMock(spec=subprocess.CompletedProcess)
         completed.stdout = ""
+        completed.returncode = 0
         with patch("synth_setter.pipeline.r2_io.subprocess.run", return_value=completed):
             assert r2_io.r2_directory_exists("r2://bucket/missing.lance") is False
 
@@ -824,14 +832,10 @@ class TestShardUri:
 
 
 class TestObjectSize:
-    """Tests for object_size — existence + size probe via `rclone lsf --format=s`.
+    """Exercise object-size and absence probes across local and R2 semantics.
 
-    Present and zero-size cases are state-based against the fake-local remote.
-    Absent and probe-failure cases stay mock-based: on R2 ``lsf`` returns empty
-    stdout for a missing key (the bucket exists, the key does not); on the
-    local backend the parent directory may not exist, so ``lsf`` exits non-zero
-    instead — a behavior divergence the fixture deliberately leaves outside
-    its coverage (see issue #1124's "Out of scope" note).
+    R2 returns empty stdout for a missing key under an existing bucket; both
+    backends normalize absence to ``None``.
     """
 
     @staticmethod
@@ -872,10 +876,23 @@ class TestObjectSize:
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("")):
             assert r2_io.object_size("r2://bucket/key.h5") is None
 
+    def test_absent_parent_directory_returns_none(self, fake_r2_remote: Path) -> None:
+        """A missing parent directory means the object is absent; return None.
+
+        The local backend errors "directory not found" where R2 lists empty —
+        both normalize to ``None`` so the local compute mode probes identically.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.object_size("r2://bucket/never/created/key.h5") is None
+
     def test_probe_failure_propagates(self) -> None:
-        """Non-zero rclone exit raises CalledProcessError — fail-fast on env issues."""
-        err = subprocess.CalledProcessError(returncode=1, cmd=["rclone"])
-        with patch.object(r2_io.subprocess, "run", side_effect=err):
+        """Non-zero rclone exit (not a missing dir) raises — fail-fast on env issues."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsf: AccessDenied"
+        completed.returncode = 1
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
             with pytest.raises(subprocess.CalledProcessError):
                 r2_io.object_size("r2://bucket/key.h5")
 
@@ -903,9 +920,16 @@ class TestObjectSize:
         with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("42")) as mock_run:
             r2_io.object_size("r2://bucket/path/key.h5")
         args = mock_run.call_args[0][0]
-        assert args == ["rclone", "lsf", "--format=s", "r2:bucket/path/key.h5"]
+        assert args == [
+            "rclone",
+            "lsf",
+            "--format=s",
+            "--retries=3",
+            "--contimeout=30s",
+            "r2:bucket/path/key.h5",
+        ]
         kwargs = mock_run.call_args[1]
-        assert kwargs.get("check") is True
+        assert kwargs.get("check") is False
         assert kwargs.get("capture_output") is True
         assert kwargs.get("text") is True
 
@@ -913,6 +937,191 @@ class TestObjectSize:
         """Local paths are rejected via _to_rclone_path."""
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.object_size("local/key.h5")
+
+
+class TestListEntries:
+    """Tests for list_entries — mtime-carrying directory listing via `rclone lsjson`."""
+
+    def test_missing_directory_lists_empty(self, fake_r2_remote: Path) -> None:
+        """An absent staging directory is a normal reconciliation answer, not an error.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        assert r2_io.list_entries("r2://bucket/never/created/") == []
+
+    def test_recursive_listing_returns_sorted_relative_paths_with_mtimes(
+        self, fake_r2_remote: Path
+    ) -> None:
+        """Nested files list with slash-joined relative paths, sorted, mtimes parsed.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        root = fake_r2_remote / "bucket" / "staging"
+        (root / "shard-000001").mkdir(parents=True)
+        (root / "shard-000000").mkdir(parents=True)
+        (root / "shard-000001" / "b.valid").write_bytes(b"")
+        (root / "shard-000000" / "a.valid").write_bytes(b"xy")
+
+        entries = r2_io.list_entries("r2://bucket/staging/", recursive=True)
+
+        assert [entry.path for entry in entries] == [
+            "shard-000000/a.valid",
+            "shard-000001/b.valid",
+        ]
+        assert entries[0].size == 2
+        assert entries[0].mtime.tzinfo is not None
+
+    def test_non_recursive_listing_excludes_nested_files(self, fake_r2_remote: Path) -> None:
+        """Without ``recursive`` only the top level lists.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        root = fake_r2_remote / "bucket" / "staging"
+        (root / "nested").mkdir(parents=True)
+        (root / "top.valid").write_bytes(b"")
+        (root / "nested" / "deep.valid").write_bytes(b"")
+
+        entries = r2_io.list_entries("r2://bucket/staging/")
+
+        assert [entry.path for entry in entries] == ["top.valid"]
+
+    def test_listing_record_schema_drift_fails_at_strict_json_boundary(self) -> None:
+        """Malformed rclone records fail with the offending field named contextually."""
+        payload = '[{"Path": "a.valid", "ModTime": "2026-01-01T00:00:00Z", "Size": "2"}]'
+
+        with patch.object(r2_io, "_run_listing_probe", return_value=payload):
+            with pytest.raises(ValueError, match="Size"):
+                r2_io.list_entries("r2://bucket/staging/")
+
+    def test_listing_failure_other_than_missing_directory_propagates(self) -> None:
+        """A genuine rclone failure raises rather than reading as "no attempts staged"."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: AccessDenied"
+        completed.returncode = 1
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://bucket/staging/", recursive=True)
+
+    def test_local_missing_directory_exit_lists_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The local backend's exit-code-3 missing directory reads as absent.
+
+        :param monkeypatch: Selects the local rclone backend for the probe.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 3
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            assert r2_io.list_entries("r2://bucket/staging/") == []
+
+    def test_local_non_missing_exit_with_directory_text_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only rclone's missing-directory exit code is normalized for local probes.
+
+        :param monkeypatch: Selects the local rclone backend for the probe.
+        """
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 1
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://bucket/staging/")
+
+    @pytest.mark.parametrize("remote_type", [None, "s3"])
+    def test_s3_missing_bucket_exit_propagates(
+        self, monkeypatch: pytest.MonkeyPatch, remote_type: str | None
+    ) -> None:
+        """S3's exit-code-3 missing bucket is infrastructure failure, not absence.
+
+        :param monkeypatch: Selects the explicit or default S3 backend.
+        :param remote_type: Explicit ``s3`` or unset, whose default is also S3.
+        """
+        if remote_type is None:
+            monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        else:
+            monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", remote_type)
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = ""
+        completed.stderr = "Failed to lsjson: directory not found"
+        completed.returncode = 3
+
+        with patch.object(r2_io.subprocess, "run", return_value=completed):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.list_entries("r2://missing-bucket/staging/")
+
+    def test_invokes_rclone_lsjson_with_reliability_flags(self) -> None:
+        """Argv pin: the listing probe carries the shared retry/contimeout flags."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = "[]"
+        completed.returncode = 0
+        with patch.object(r2_io.subprocess, "run", return_value=completed) as mock_run:
+            r2_io.list_entries("r2://bucket/staging/", recursive=True)
+        assert mock_run.call_args[0][0] == [
+            "rclone",
+            "lsjson",
+            "--files-only",
+            "--use-server-modtime",
+            "--retries=3",
+            "--contimeout=30s",
+            "-R",
+            "r2:bucket/staging/",
+        ]
+
+
+class TestLanceTarget:
+    """Tests for lance_target — r2:// URI to Lance (uri, storage_options) resolution."""
+
+    def test_local_remote_resolves_to_cwd_relative_path_without_options(
+        self, fake_r2_remote: Path
+    ) -> None:
+        """The local compute mode reads the same bytes rclone writes.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir
+            (sets ``RCLONE_CONFIG_R2_TYPE=local`` and chdirs there).
+        """
+        target, options = r2_io.lance_target("r2://bucket/run/train.lance")
+
+        assert target == str(fake_r2_remote / "bucket" / "run" / "train.lance")
+        assert options is None
+
+    def test_non_r2_uri_rejected_in_local_mode_too(self, fake_r2_remote: Path) -> None:
+        """A bare path fails fast instead of resolving to a nonsense cwd-relative target.
+
+        :param fake_r2_remote: Local-typed rclone remote (local-backend mode).
+        """
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.lance_target("bucket/run/train.lance")
+
+    @pytest.mark.parametrize("remote_type", [None, "s3"])
+    def test_s3_remote_resolves_to_s3_uri_with_storage_options(
+        self, monkeypatch: pytest.MonkeyPatch, remote_type: str | None
+    ) -> None:
+        """Unset and explicit-``s3`` remote types both pair the s3:// URI with credentials.
+
+        :param monkeypatch: Pins the R2 credential env vars the options read.
+        :param remote_type: ``RCLONE_CONFIG_R2_TYPE`` value; ``None`` leaves it unset.
+        """
+        if remote_type is None:
+            monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+        else:
+            monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", remote_type)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://r2.example")
+
+        target, options = r2_io.lance_target("r2://bucket/run/train.lance")
+
+        assert target == "s3://bucket/run/train.lance"
+        assert options is not None and options["endpoint"] == "https://r2.example"
 
 
 class TestPurgePrefix:
@@ -1015,7 +1224,7 @@ class TestEnsureR2EnvLoaded:
     """
 
     @pytest.fixture(autouse=True)
-    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         """Drop storage/rclone env and the workspace dotenv so each test starts from a known state.
 
         :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
@@ -1025,6 +1234,10 @@ class TestEnsureR2EnvLoaded:
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
+        yield
+        for key in list(os.environ):
+            if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
+                os.environ.pop(key)
 
     def test_legacy_dotenv_values_reach_the_rclone_subprocess(self, tmp_path: Path) -> None:
         """Legacy dotenv credentials are projected into the rclone auth-ping env.

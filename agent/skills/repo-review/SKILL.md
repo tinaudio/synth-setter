@@ -128,7 +128,7 @@ WARN items (bloat patterns — flag when the diff adds them):
 
 - [pipeline] All `rclone` operations include `--checksum`. (P13)
 - [pipeline] No writes to `data/shards/` outside `finalize` stage. (P12)
-- [pipeline] Workers only write under `metadata/workers/`. Finalize only writes to `data/`. (P11)
+- [pipeline] Workers write reconciliation artifacts under `metadata/workers/`. Lance workers may also write uncommitted fragment data into split `data/` directories; finalize remains the sole writer of manifests, transactions, stats, and completion artifacts. (P11)
 - [pipeline] Shard IDs are logical (`shard-000042`), deterministic, infrastructure-independent. No `pod_id` / `host` / `runner_id` in shard names. (P14)
 - [pipeline] Specs are immutable after creation — no code path mutates a frozen spec in place. (P15)
 - [pipeline] `.valid` marker is written as the last step of shard lifecycle (commit point). Earlier writes leave shards in a partial state with no marker. (P16)

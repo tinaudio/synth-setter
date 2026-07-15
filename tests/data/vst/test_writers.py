@@ -18,7 +18,7 @@ import pytest
 from synth_setter.data.vst import writers
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
+from synth_setter.data.vst.writers import _render_in_batches
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -51,8 +51,8 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
 
 
-def test_shard_metadata_from_render_projects_render_provenance_fields() -> None:
-    """``_shard_metadata_from_render`` returns a strict ``ShardMetadata`` with renderer values."""
+def test_render_config_shard_metadata_projects_render_provenance_fields() -> None:
+    """``RenderConfig.shard_metadata`` returns a strict ``ShardMetadata`` with renderer values."""
     render_cfg = _smoke_render_cfg(
         velocity=64,
         signal_duration_seconds=2.5,
@@ -63,7 +63,7 @@ def test_shard_metadata_from_render_projects_render_provenance_fields() -> None:
         attempts_per_sample=9,
     )
 
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
 
     assert isinstance(meta, ShardMetadata)
     assert meta.velocity == 64
@@ -75,7 +75,7 @@ def test_shard_metadata_from_render_projects_render_provenance_fields() -> None:
     assert meta.attempts_per_sample == 9
 
 
-def test_shard_metadata_from_render_round_trips_through_json() -> None:
+def test_render_config_shard_metadata_round_trips_through_json() -> None:
     """The projected metadata serializes and re-validates as a strict ``ShardMetadata``.
 
     Pinning JSON round-trip is what the wds tar's ``metadata.json`` member
@@ -83,7 +83,7 @@ def test_shard_metadata_from_render_round_trips_through_json() -> None:
     """
     render_cfg = _smoke_render_cfg()
 
-    meta = _shard_metadata_from_render(render_cfg)
+    meta = render_cfg.shard_metadata()
     rehydrated = ShardMetadata.model_validate_json(meta.model_dump_json())
 
     assert rehydrated == meta

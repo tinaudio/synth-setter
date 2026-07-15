@@ -14,6 +14,20 @@ STATS_NPZ_FILENAME = "stats.npz"
 # "this run is ready to consume" signal. Written strictly last by finalize.
 DATASET_COMPLETE_FILENAME = "dataset.complete"
 
+# Dataset card (provenance record of the selected attempts) written by finalize.
+DATASET_CARD_FILENAME = "dataset.json"
+
+# Per-attempt artifact suffixes for the staging reconciliation protocol — see #1776.
+LANCE_FRAGMENT_SIDECAR_SUFFIX = ".fragment.json"
+LANCE_SHARD_STATS_SUFFIX = ".shard-stats.npz"
+ATTEMPT_VALID_SUFFIX = ".valid"
+ATTEMPT_INVALID_SUFFIX = ".invalid"
+ATTEMPT_RENDERING_SUFFIX = ".rendering"
+
+# Welford state arrays a `.shard-stats.npz` sidecar must carry; finalize
+# reduces the winners' states into dataset-level stats.npz (#1776).
+LANCE_SHARD_STATS_KEYS = ("count", "mean", "m2")
+
 # Env-var name reserved for the worker to locate the materialized DatasetSpec.
 # Today's consumers: the launcher (``dispatch_via_skypilot``) injects the value
 # into each rank's ``task.update_envs``; the CI helper (``pipeline.ci.spec_uri``)

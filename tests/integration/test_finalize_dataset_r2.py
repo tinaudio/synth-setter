@@ -106,15 +106,19 @@ def staged_wds_spec() -> Iterator[DatasetSpec]:
 
 @pytest.fixture()
 def staged_lance_spec() -> Iterator[DatasetSpec]:
-    """Yield a 1-shard Lance ``DatasetSpec`` with its shard dataset pre-uploaded to R2.
+    """Yield a 1-shard Lance ``DatasetSpec`` with one staged attempt on real R2.
 
-    Mirrors :func:`staged_wds_spec` but for the Lance directory format: the shard
-    is a dataset directory uploaded under ``spec.r2.shard_uri`` so ``finalize_lance``
-    exercises the real direct-from-R2 streaming read.
+    Mirrors :func:`staged_wds_spec` but for the Lance fragment path (#1776):
+    the shard renders locally, then ``stage_lance_shard_attempt`` writes its
+    uncommitted fragment into ``train.lance/data/`` on R2 and uploads the
+    sidecar + stats + ``.valid`` staging set — the same worker code path
+    production runs.
 
-    :yields DatasetSpec: A frozen spec whose train split is one 4-row Lance shard
-        already present on R2 at ``spec.r2.shard_uri(spec.shards[0])``.
+    :yields DatasetSpec: A frozen spec whose train split is one 4-row Lance
+        shard staged under ``metadata/workers/shards/shard-000000/``.
     """
+    from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
+
     if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
     r2_io.ensure_r2_env_loaded()
@@ -147,8 +151,9 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
     with tempfile.TemporaryDirectory() as raw_local:
         local = Path(raw_local) / spec.shards[0].filename
         write_minimal_lance_shard(local, spec)
-        # Lance shards are directories: upload the tree under the shard URI.
-        r2_io.upload_dir(local, spec.r2.shard_uri(spec.shards[0]))
+        stage_lance_shard_attempt(
+            spec, spec.shards[0], local, worker_id="it-worker", attempt_uuid=uuid.uuid4().hex[:8]
+        )
     try:
         yield spec
     finally:
@@ -159,18 +164,27 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
         )
 
 
-def test_finalize_lance_writes_split_and_stats_to_real_r2(
+def test_finalize_lance_commits_staged_fragment_on_real_r2(
     staged_lance_spec: DatasetSpec,
 ) -> None:
-    """``finalize_lance`` streams the R2 shard into a split dataset written back to R2.
+    """``finalize_lance`` commits the staged winner fragment into the R2 split dataset.
 
-    Exercises the direct-R2 path end-to-end: read shard from R2 via
-    ``storage_options`` → stream stats → write the train split dataset straight
-    to its ``s3://`` URI → upload ``stats.npz``. The split reads back with the
-    pinned on-disk version and the expected row count.
+    Exercises the fragment path end-to-end over object storage: winner
+    selection from the real R2 listing (``LastModified``), structural checks,
+    a manifest-only ``Overwrite`` commit of in-place fragment data, Welford
+    reduction into ``stats.npz``, and the ``dataset.json`` audit record. The
+    split's rows are actually read back (not ``count_rows``, which cannot see
+    a dangling fragment) at the pinned on-disk version.
 
-    :param staged_lance_spec: Fixture-provided spec whose train shard dataset is on R2.
+    :param staged_lance_spec: Fixture-provided spec with one staged Lance attempt on R2.
     """
+    from synth_setter.data.vst.shapes import (
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        dataset_field_shapes,
+    )
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+
     spec = staged_lance_spec
     with tempfile.TemporaryDirectory() as raw_work_dir:
         finalize_dataset.finalize_lance(spec, Path(raw_work_dir))
@@ -178,10 +192,23 @@ def test_finalize_lance_writes_split_and_stats_to_real_r2(
     assert r2_io.object_size(spec.r2.stats_uri()) is not None, (
         f"expected stats.npz at {spec.r2.stats_uri()} after finalize"
     )
-    split_uri = spec.r2.split_lance_uri("train")
-    assert r2_io.r2_directory_exists(split_uri), f"expected split dataset at {split_uri}"
-    dataset = lance.dataset(r2_io.to_s3_uri(split_uri), storage_options=r2_io.r2_storage_options())
-    assert dataset.count_rows() == spec.render.samples_per_shard
+    with r2_io.downloaded_to_tempfile(spec.r2.stats_uri()) as stats_path:
+        with np.load(stats_path) as stats:
+            assert set(stats.files) == {"mean", "std"}
+            expected_shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
+            for key in ("mean", "std"):
+                assert stats[key].shape == expected_shape
+                assert np.issubdtype(stats[key].dtype, np.floating)
+                assert np.isfinite(stats[key]).all()
+    assert r2_io.object_size(spec.r2.dataset_card_uri()) is not None, (
+        f"expected dataset.json at {spec.r2.dataset_card_uri()} after finalize"
+    )
+    split_s3, storage_options = r2_io.lance_target(spec.r2.split_lance_uri("train"))
+    rows = list(
+        iter_lance_column_rows(split_s3, PARAM_ARRAY_FIELD, storage_options=storage_options)
+    )
+    assert len(rows) == spec.render.samples_per_shard
+    dataset = lance.dataset(split_s3, storage_options=storage_options)
     assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
 
 

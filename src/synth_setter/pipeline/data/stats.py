@@ -5,7 +5,7 @@ import re
 import tarfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple, TypeAlias
 
 import dask.array as da
 import h5py
@@ -13,10 +13,13 @@ import numpy as np
 from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.vst_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
+from synth_setter.data.vst_datamodule import VSTDataset
 
 logger = logging.getLogger(__name__)
+
+WelfordValue: TypeAlias = np.ndarray | int
+WelfordState: TypeAlias = tuple[int, WelfordValue, WelfordValue]
 
 _SHARD_GLOB = "shard-*.tar"
 _MEL_SPEC_MEMBER_RE = re.compile(rf"^\d{{8}}\.{re.escape(MEL_SPEC_FIELD)}\.npy$")
@@ -206,6 +209,31 @@ def update(existing, new):
     return count, mean, M2
 
 
+def merge_welford(
+    existing: WelfordState, other: WelfordState
+) -> WelfordState:
+    """Merge two Welford states (Chan et al. parallel combine).
+
+    Lets finalize reduce per-attempt ``(count, mean, m2)`` shard sidecars into
+    one dataset-level state without touching any rows. The zero state
+    ``(0, 0, 0)`` is the identity, so it seeds a fold.
+
+    :param existing: Welford state ``(count, mean, M2)`` accumulated so far.
+    :param other: Welford state to fold in.
+    :returns: Combined Welford state over both inputs' rows.
+    Both non-identity states must carry identically shaped mean and M2 arrays.
+    """
+    count_a, mean_a, m2_a = existing
+    count_b, mean_b, m2_b = other
+    count = count_a + count_b
+    if count == 0:
+        return existing
+    delta = mean_b - mean_a
+    mean = mean_a + delta * (count_b / count)
+    m2 = m2_a + m2_b + delta * delta * (count_a * count_b / count)
+    return count, mean, m2
+
+
 def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
     variance = M2 / count if count > 1 else 0
@@ -286,8 +314,8 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
 
 
 def _fold_shard_into_welford(
-    existing: tuple[int, Any, Any], shard_path: Path
-) -> tuple[int, Any, Any]:
+    existing: WelfordState, shard_path: Path
+) -> WelfordState:
     """Fold every mel row from one shard into the Welford accumulator.
 
     :param existing: Welford state ``(count, mean, M2)`` before this shard.
@@ -328,7 +356,7 @@ def stream_stats_wds(
     :raises FileNotFoundError: ``shard_paths`` yielded zero paths; partial
         stats are never written silently for an empty input set.
     """
-    existing: tuple[int, Any, Any] = (0, 0, 0)
+    existing: WelfordState = (0, 0, 0)
     folded_any = False
     for shard_path in shard_paths:
         logger.info(f"Processing {shard_path.name}...")
@@ -339,19 +367,18 @@ def stream_stats_wds(
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
-def _fold_lance_shard_into_welford(
-    existing: tuple[int, Any, Any],
+def fold_lance_shard_into_welford(
+    existing: WelfordState,
     shard_uri: str | Path,
     *,
     storage_options: dict[str, str] | None = None,
-) -> tuple[int, Any, Any]:
+) -> WelfordState:
     """Fold every Lance ``mel_spec`` row from one shard into Welford state.
 
     :param existing: Welford state ``(count, mean, M2)`` before this shard.
     :param shard_uri: One ``shard-*.lance`` dataset (local path or ``s3://`` URI).
     :param storage_options: Object-store config for a cloud ``shard_uri``; ``None`` local.
     :returns: Updated Welford state after every readable mel row was folded.
-    :rtype: tuple[int, Any, Any]
     :raises ValueError: The shard carried no readable ``mel_spec`` rows.
     """
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
@@ -366,35 +393,6 @@ def _fold_lance_shard_into_welford(
             "rows; aborting so partial stats are never written silently"
         )
     return existing
-
-
-def stream_stats_lance(
-    shard_uris: Iterable[str | Path],
-    mask_degenerate: bool = False,
-    *,
-    storage_options: dict[str, str] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Stream Welford mean/std across an iterable of ``shard-*.lance`` datasets.
-
-    :param shard_uris: Iterable of Lance shard datasets in fold order (local
-        paths or ``s3://`` URIs).
-    :param mask_degenerate: See :func:`get_stats_wds`.
-    :param storage_options: Object-store config for cloud ``shard_uris``; ``None`` local.
-    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :rtype: tuple[np.ndarray, np.ndarray]
-    :raises FileNotFoundError: ``shard_uris`` yielded zero entries.
-    """
-    existing: tuple[int, Any, Any] = (0, 0, 0)
-    folded_any = False
-    for shard_uri in shard_uris:
-        logger.info(f"Processing {Path(str(shard_uri)).name}...")
-        existing = _fold_lance_shard_into_welford(
-            existing, shard_uri, storage_options=storage_options
-        )
-        folded_any = True
-    if not folded_any:
-        raise FileNotFoundError("stream_stats_lance received no shard URIs")
-    return finalize(existing, mask_degenerate=mask_degenerate)
 
 
 def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:

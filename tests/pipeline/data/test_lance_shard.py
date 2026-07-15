@@ -197,14 +197,67 @@ def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Pat
     shard = tmp_path / "shard-000000.lance"
 
     fragments = [
-        lance_fragment(shard, schema, record_batch_from_arrays(first, schema), 0),
-        lance_fragment(shard, schema, record_batch_from_arrays(second, schema), 1),
+        lance_fragment(shard, schema, record_batch_from_arrays(first, schema)),
+        lance_fragment(shard, schema, record_batch_from_arrays(second, schema)),
     ]
     commit_lance_dataset(shard, schema, fragments)
 
     dataset = lance.dataset(str(shard))
     assert dataset.count_rows() == 2 * _FIELD_SHAPES[AUDIO_FIELD][0]
     assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
+    np.testing.assert_array_equal(decoded, expected)
+
+
+def test_lance_fragment_forwards_native_file_bound_and_storage_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Distributed fragment writes pin the native file bound and storage version.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Captures the Lance distributed-writer arguments.
+    """
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def _capture(*args: object, **kwargs: object) -> list[object]:
+        captured.update(kwargs)
+        return [sentinel]
+
+    monkeypatch.setattr(lance.fragment, "write_fragments", _capture)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    fragment = lance_fragment(
+        tmp_path / "shard-000000.lance",
+        schema,
+        record_batch_from_arrays(_arange_arrays(offset=0), schema),
+    )
+
+    assert fragment is sentinel
+    assert captured["max_bytes_per_file"] == LANCE_MAX_BYTES_PER_FILE
+    assert captured["data_storage_version"] == LANCE_DATA_STORAGE_VERSION
+    assert captured["mode"] == "append"
+
+
+def test_lance_fragment_streams_multiple_batches_into_one_fragment(tmp_path: Path) -> None:
+    """One fragment preserves every batch from a streamed shard source.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first = _arange_arrays(offset=0)
+    second = _arange_arrays(offset=1000)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    batches = (
+        record_batch_from_arrays(first, schema),
+        record_batch_from_arrays(second, schema),
+    )
+
+    fragment = lance_fragment(shard, schema, iter(batches))
+    commit_lance_dataset(shard, schema, [fragment])
+
+    assert lance.dataset(str(shard)).count_rows() == 4
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
     np.testing.assert_array_equal(decoded, expected)

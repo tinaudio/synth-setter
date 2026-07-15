@@ -15,16 +15,22 @@ to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
   as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
   shape helpers; and the summed row count per field equals
   ``spec.render.samples_per_shard``.
-- Lance path: schema metadata parses as a strict ``ShardMetadata``; every
-  field is a fixed-shape tensor column whose dtype and inner shape match the
-  same shape helpers; and ``num_rows`` equals ``spec.render.samples_per_shard``.
+- Lance path (local shard, worker-side pre-staging check): schema metadata
+  parses as a strict ``ShardMetadata``; every field is a fixed-shape tensor
+  column whose dtype and inner shape match the same shape helpers; and
+  ``num_rows`` equals ``spec.render.samples_per_shard``. Values must be finite,
+  audio must lie in ``[-1, 1]``, and parameters in ``[0, 1]``.
+- Lance path (from R2): structural check of each shard's staged winner
+  attempt — sidecar + stats + ``.valid`` present, sidecar round-trips through
+  Lance, row counts agree, fragment data files exist under the assigned split.
+  No rows are decoded; full shape/value checks already ran worker-side.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
-Iterates `spec.shards` from R2 (under
-`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`): HDF5/WDS shards
-download to a tempfile first, Lance shards stream directly from R2.
+Iterates `spec.shards` from R2: HDF5/WDS shards download to a tempfile from
+`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`; Lance shards are
+reconciled from the `metadata/workers/shards/` staging prefix.
 """
 
 from __future__ import annotations
@@ -46,8 +52,10 @@ if TYPE_CHECKING:
     import lance
 
 from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
+    PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile
@@ -442,7 +450,9 @@ def _validate_lance_dataset(
 ) -> list[str]:
     """Validate an open Lance shard dataset's schema, metadata, and row count.
 
-    Shared by the local-path and direct-from-R2 validators.
+    Local-path validation only (the worker's pre-staging check); the from-R2
+    path validates staged winner attempts instead — see
+    :func:`_validate_all_lance_shards_from_r2`.
 
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.
@@ -473,13 +483,37 @@ def _validate_lance_dataset(
         errors.append(f"dataset has {num_rows} rows, expected {spec.render.samples_per_shard}")
 
     expected_shapes = _expected_dataset_shapes(spec)
+    schema_errors: list[str] = []
     for name in DATASET_FIELD_NAMES:
         field = schema.field(name) if name in schema.names else None
         if field is None:
-            errors.append(f"missing column: {name!r}")
+            schema_errors.append(f"missing column: {name!r}")
             continue
-        errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+        schema_errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+    errors.extend(schema_errors)
+    if not schema_errors:
+        errors.extend(_validate_lance_values(dataset))
     return errors
+
+
+def _validate_lance_values(dataset: lance.LanceDataset) -> list[str]:
+    """Validate finite and normalized values before a worker stages a shard.
+
+    :param dataset: Structurally valid local Lance shard dataset.
+    :returns: One error per violated field value contract.
+    """
+    errors: set[str] = set()
+    for batch in dataset.to_batches(columns=list(DATASET_FIELD_NAMES)):
+        for name, column in zip(DATASET_FIELD_NAMES, batch.columns, strict=True):
+            values = column.to_numpy_ndarray()
+            if not np.isfinite(values).all():
+                errors.add(f"column {name!r} contains non-finite values")
+                continue
+            if name == AUDIO_FIELD and ((values < -1) | (values > 1)).any():
+                errors.add(f"column {name!r} contains values outside [-1, 1]")
+            if name == PARAM_ARRAY_FIELD and ((values < 0) | (values > 1)).any():
+                errors.add(f"column {name!r} contains values outside [0, 1]")
+    return sorted(errors)
 
 
 def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, ...]) -> list[str]:
@@ -620,8 +654,9 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """Validate every shard in ``spec.shards`` from R2.
 
     HDF5/WDS shards download to a tempfile before validating; Lance shards
-    short-circuit to :func:`_validate_all_lance_shards_from_r2`, which streams
-    each dataset directly from R2 (no local download).
+    short-circuit to :func:`_validate_all_lance_shards_from_r2`, which
+    structurally checks each shard's staged winner attempt (#1776) without
+    decoding any rows.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration; each
         listed shard lives under ``r2://{spec.r2.bucket}/{spec.r2.prefix}``.
@@ -642,27 +677,41 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
 
 
 def _validate_all_lance_shards_from_r2(spec: DatasetSpec) -> list[str]:
-    """Validate every Lance shard by streaming it directly from R2 via ``storage_options``.
+    """Structurally validate every Lance shard's staged winner attempt (#1776).
+
+    Lance workers stage per-attempt fragments, not per-shard datasets, so this
+    checks each shard's would-be winner the same way finalize will: complete
+    attempt set present, sidecar round-trips through Lance, row count matches
+    spec and stats, fragment data files exist under the assigned split. Full
+    shape/value validation already ran worker-side against the local render —
+    re-reading rows here would decode data the design keeps untouched.
+    Structural failures aggregate per shard; environmental failures (rclone
+    auth/network, surfacing as ``CalledProcessError``) propagate and abort per
+    ``r2_io``'s fail-fast contract, so an outage never reads as bad data.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration.
     :returns: Aggregated error strings across all shards, each prefixed with the
         shard filename.
     """
-    import lance
+    from synth_setter.pipeline.data.lance_finalize import (
+        select_checked_winner,
+        staged_complete_attempts,
+    )
 
-    from synth_setter.pipeline import r2_io
-
-    storage_options = r2_io.r2_storage_options()
+    attempts = staged_complete_attempts(spec)
     errors: list[str] = []
     for shard in spec.shards:
-        s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
+        shard_attempts = attempts.get(shard.shard_id)
+        if not shard_attempts:
+            errors.append(
+                f"{shard.filename}: no staged-valid attempt under "
+                f"{spec.r2.shard_staging_dir_uri(shard.shard_id)}"
+            )
+            continue
         try:
-            dataset = lance.dataset(s3_uri, storage_options=storage_options)
-            shard_errors = _validate_lance_dataset(dataset, spec, base_seed=shard.seed)
-        except (OSError, ValueError, RuntimeError) as exc:
-            shard_errors = [f"path is not a valid Lance dataset: {s3_uri}: {exc}"]
-        for err in shard_errors:
-            errors.append(f"{shard.filename}: {err}")
+            select_checked_winner(spec, shard_attempts)
+        except ValueError as exc:
+            errors.append(f"{shard.filename}: {exc}")
     return errors
 
 

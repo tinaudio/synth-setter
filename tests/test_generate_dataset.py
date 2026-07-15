@@ -37,16 +37,16 @@ from typing import cast
 from unittest.mock import patch
 
 import h5py
-import lance
 import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
+from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests._vst import PLUGIN_PATH
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 
@@ -56,6 +56,9 @@ from tests.helpers.dummy_shards import stub_renderer
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_REAL_PLUGIN_VST3 = (
+    Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
+).resolve()
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -179,11 +182,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     skip-existing probe loop (#750) runs with no real plugin and no real R2.
     Parametrized over ``output_format`` so every format's config surface
     runs the same loop with its own shard suffix (#1600). Asserts
-    (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
-    lands under its spec-derived R2 URI with the format's suffix, (3) the Lance
-    leg writes at the pinned ``LANCE_DATA_STORAGE_VERSION`` (#1714), and (4) a
-    second ``from_hydra`` pass renders nothing because the probe finds all
-    shards already present.
+    (1) ``smoke-shard`` partitions into one shard per split, (2) every hdf5/wds
+    shard lands under its spec-derived R2 URI while every Lance shard stages a
+    complete attempt (sidecar + stats + ``.valid``) with its fragment data
+    under the assigned split dataset (#1776), and (3) a second ``from_hydra``
+    pass renders nothing because the probe finds all shards already present.
 
     :param output_format: Dataset output format the run is pinned to.
     :param shard_suffix: File suffix the format's shards must carry.
@@ -207,30 +210,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # Disable the default wandb logger: generate() would call wandb.init() and block.
         cfg_dataset.logger = None
 
-    # Local rclone errors on a missing path; real R2 returns None. Wrap to bridge
-    # that gap so the skip probe sees the absent-object contract unchanged.
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
-
-    # Same local-vs-real bridge for the directory (Lance) skip-probe: a local
-    # rclone remote errors on an absent prefix where real R2 lists empty.
-    real_directory_exists = r2_io.r2_directory_exists
-
-    def _fake_r2_directory_exists(r2_uri: str) -> bool:
-        try:
-            return real_directory_exists(r2_uri)
-        except subprocess.CalledProcessError:
-            return False
-
-    monkeypatch.setattr(r2_io, "r2_directory_exists", _fake_r2_directory_exists)
-
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
@@ -242,22 +221,32 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ):
         from_hydra(cfg_dataset)
 
+    # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    split_of = {
+        shard_id: split
+        for split, (lo, hi) in spec.split_shard_ranges.items()
+        for shard_id in range(lo, hi)
+    }
     for shard in spec.shards:
         assert shard.filename.endswith(shard_suffix)
-        if spec.output_format.is_directory:
-            # Probe the committed manifest, mirroring the production skip-probe:
-            # asserts the shard landed AND was committed (not orphaned fragments).
-            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
-                f"committed shard missing in fake R2: {shard.filename}"
+        if output_format == "lance":
+            # Require one shared attempt identity; independent suffix matches can combine partial attempts — see #1776.
+            staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
+            staged_names = [p.name for p in staging.iterdir()]
+            bases_by_suffix = {
+                suffix: {n.removesuffix(suffix) for n in staged_names if n.endswith(suffix)}
+                for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering")
+            }
+            shared_bases = set.intersection(*bases_by_suffix.values())
+            assert len(shared_bases) == 1, (
+                f"expected one complete staged attempt for {shard.filename}, "
+                f"got files: {sorted(staged_names)}"
             )
-            if output_format == "lance":
-                # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
-                shard_key = spec.r2.shard_uri(shard).removeprefix(r2_io.R2_URI_SCHEME)
-                shard_dir = fake_r2_remote / shard_key
-                assert (
-                    lance.dataset(str(shard_dir)).data_storage_version
-                    == LANCE_DATA_STORAGE_VERSION
-                ), f"shard {shard.filename} not written at pinned storage version"
+            split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
+            assert list(split_data.glob("*.lance")), (
+                f"no fragment data under {split_data} for {shard.filename}"
+            )
         else:
             size = r2_io.object_size(spec.r2.shard_uri(shard))
             assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
@@ -278,6 +267,124 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_marker(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A corrupt render fails loudly before staging — no ``.valid`` ever lands (#1776).
+
+    Drives the real worker entrypoint with a stub renderer that writes a shard
+    holding double the spec's rows. Worker-side validation must reject it, the
+    run must fail, and the staging directory must hold no ``.valid`` marker or
+    sidecar (the shard stays "missing" for the next reconciliation pass).
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker rank/world env and the
+        moduleinfo-only plugin so the renderer-version guard passes.
+    """
+    from synth_setter.pipeline.data.lance_shard import (
+        lance_schema,
+        record_batch_from_arrays,
+        write_lance_dataset,
+    )
+    from tests.helpers.subprocess_args import find_script_index
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/invalid-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    def _render_oversized_shard(args: list[str]) -> None:
+        from synth_setter.data.vst.shapes import (
+            DATASET_FIELD_DTYPES,
+            dataset_field_shapes,
+        )
+
+        output_file = Path(args[find_script_index(args) + 1])
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        oversized = spec.render.model_copy(
+            update={"samples_per_shard": spec.render.samples_per_shard * 2}
+        )
+        shapes = dataset_field_shapes(oversized, spec.num_params)
+        schema = lance_schema(shapes, oversized.shard_metadata())
+        arrays = {
+            field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
+            for field, shape in shapes.items()
+        }
+        write_lance_dataset(output_file, schema, [record_batch_from_arrays(arrays, schema)])
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_oversized_shard,
+    ):
+        with pytest.raises(RuntimeError, match="failed local validation"):
+            from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    staged = [p.name for p in staging_root.rglob("*") if p.is_file()]
+    assert not [name for name in staged if name.endswith((".valid", ".fragment.json"))], (
+        f"invalid render must not stage a complete attempt, found: {staged}"
+    )
+    # The attempt-start marker is the only allowed trace of the failed attempt.
+    assert staged
+    assert all(name.endswith(".rendering") for name in staged)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A real VST Lance render stages complete attempts that resume skips.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the real rclone process.
+    :param monkeypatch: Pins the single-worker rank and world size.
+    :param tmp_path: Scratch directory for finalize sidecars and statistics.
+    """
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 1, 1]
+        cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-lance-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    first_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert len(first_attempts) == len(spec.shards)
+
+    from_hydra(cfg_dataset)
+
+    resumed_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert resumed_attempts == first_attempts
+
+    assert validate_all_shards_from_r2(spec) == []
 
 
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(

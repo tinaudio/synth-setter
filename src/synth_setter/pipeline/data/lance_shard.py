@@ -8,7 +8,6 @@ from pathlib import Path
 import lance
 import numpy as np
 import pyarrow as pa
-from lance.fragment import LanceFragment
 from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
@@ -122,32 +121,41 @@ def write_lance_dataset(
 def lance_fragment(
     uri: Path | str,
     schema: pa.Schema,
-    batch: pa.RecordBatch,
-    fragment_id: int,
+    batch: pa.RecordBatch | Iterable[pa.RecordBatch],
     *,
     storage_options: dict[str, str] | None = None,
 ) -> lance.fragment.FragmentMetadata:
-    """Write one record batch as a Lance fragment under ``uri`` (push source).
+    """Write record batches as one Lance fragment under ``uri`` (push source).
 
     Writes the data file immediately and returns its metadata; collect the results
     for :func:`commit_lance_dataset`. Streams batches without buffering a shard.
+    Lance's object-store client retries individual requests with bounded backoff;
+    replaying this whole call could consume the stream twice and leak fragments.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every fragment.
-    :param batch: One record batch to persist as a fragment.
-    :param fragment_id: Zero-based fragment index, contiguous within the dataset.
+    :param batch: One record batch — or an iterable of them, streamed into a
+        single fragment — to persist.
     :param storage_options: Object-store config for a cloud ``uri`` (see
         :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
     :returns: Fragment metadata for the commit.
+    :raises ValueError: Lance splits the input into more than one fragment.
     """
-    return LanceFragment.create(
-        str(uri),
+    fragments = lance.fragment.write_fragments(
         batch,
-        fragment_id=fragment_id,
+        str(uri),
         schema=schema,
+        mode="append",
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
         storage_options=storage_options,
     )
+    if len(fragments) != 1:
+        raise ValueError(
+            f"expected one Lance fragment under {uri}, wrote {len(fragments)}; "
+            "reduce the render batch or samples per shard"
+        )
+    return fragments[0]
 
 
 def commit_lance_dataset(
@@ -158,6 +166,9 @@ def commit_lance_dataset(
     storage_options: dict[str, str] | None = None,
 ) -> None:
     """Commit fragments from :func:`lance_fragment` as a fresh Lance dataset.
+
+    Lance's object-store client supplies bounded request retries; the commit is
+    not replayed here because its success may be ambiguous after a lost response.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema the dataset is created with.

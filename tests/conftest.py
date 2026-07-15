@@ -894,7 +894,7 @@ def _build_surge_smoke_lance_datasets(
     The Lance counterpart to :func:`_build_surge_smoke_datasets`: ``render_train_lance``
     is the only difference between the real-VST and fake fixtures. It renders
     ``train.lance`` through the production :func:`make_lance_dataset` writer, then this
-    folds the mel rows into ``stats.npz`` via :func:`stream_stats_lance` and clones the
+    folds the mel rows into ``stats.npz`` via :func:`fold_lance_shard_into_welford` and clones the
     split into ``val``/``test``. No HDF5 file is produced — every shard carries the
     exact on-disk format the pipeline's Lance finalize emits.
 
@@ -906,7 +906,7 @@ def _build_surge_smoke_lance_datasets(
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
-    from synth_setter.pipeline.data.stats import stream_stats_lance
+    from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
     smoke_dataset_dir = tmp_path / "data" / "smoke-lance"
     smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -916,7 +916,8 @@ def _build_surge_smoke_lance_datasets(
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
-    mean, std = stream_stats_lance([train_lance], mask_degenerate=True)
+    welford = fold_lance_shard_into_welford((0, 0, 0), train_lance)
+    mean, std = finalize(welford, mask_degenerate=True)
     np.savez(smoke_dataset_dir / "stats.npz", mean=mean, std=std)
 
     shutil.copytree(train_lance, smoke_dataset_dir / "val.lance")

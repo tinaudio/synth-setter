@@ -12,11 +12,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 from synth_setter.pipeline.schemas.object_storage import (
@@ -27,6 +29,7 @@ from synth_setter.pipeline.schemas.object_storage import (
 
 __all__ = [
     "R2_URI_SCHEME",
+    "RemoteEntry",
     "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
@@ -34,6 +37,8 @@ __all__ = [
     "from_s3_uri",
     "is_r2_reachable",
     "is_r2_uri",
+    "lance_target",
+    "list_entries",
     "object_size",
     "purge_prefix",
     "r2_directory_exists",
@@ -207,6 +212,153 @@ def r2_storage_options() -> dict[str, str]:
     return _storage_config_from_sources().lance_storage_options()
 
 
+def lance_target(r2_uri: str) -> tuple[str, dict[str, str] | None]:
+    """Resolve an ``r2://`` URI to the ``(uri, storage_options)`` pair Lance opens.
+
+    Normally returns ``(s3://bucket/key, r2_storage_options())``. When the
+    ``r2:`` remote is env-configured as rclone's ``local`` backend (the local
+    compute mode dev/tests use — see ``fake_r2_remote``), Lance must read the
+    same bytes rclone writes, so the URI resolves to the cwd-relative
+    ``<bucket>/<key>`` path rclone's local backend uses, with no options.
+
+    :param r2_uri: Canonical ``r2://bucket/key`` URI string.
+    :returns: ``(uri_or_path, storage_options)`` for ``lance.dataset`` /
+        ``LanceFragment.create`` / ``LanceDataset.commit``.
+    :raises ValueError: ``r2_uri`` is not an ``r2://`` URI — fails fast on both
+        backends instead of resolving a nonsense cwd-relative local path.
+    """
+    if not is_r2_uri(r2_uri):
+        raise ValueError(f"not an r2:// URI: {r2_uri!r}")
+    if os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower() == "local":
+        return str(Path.cwd() / r2_uri[len(R2_URI_SCHEME) :]), None
+    return to_s3_uri(r2_uri), r2_storage_options()
+
+
+@dataclass(frozen=True)
+class RemoteEntry:
+    """One object from a :func:`list_entries` listing.
+
+    .. attribute :: path
+
+        Object key relative to the listed directory (``/``-joined for nested
+        entries under a recursive listing).
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp (R2 ``LastModified``; local
+        backend: file mtime).
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    path: str
+    mtime: datetime
+    size: int
+
+
+class _RcloneListEntry(BaseModel):
+    """Strict JSON boundary for one ``rclone lsjson`` file record.
+
+    .. attribute :: model_config
+
+        Strict, frozen parsing configuration for external records.
+
+    .. attribute :: path
+
+        Object key relative to the listed prefix.
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp.
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    path: str = Field(alias="Path")
+    mtime: datetime = Field(alias="ModTime")
+    size: int = Field(alias="Size")
+
+
+_RCLONE_LIST_ADAPTER = TypeAdapter(list[_RcloneListEntry])
+
+
+# Listing probes share rclone's retry/contimeout reliability flags with the
+# transfer helpers; ``--checksum`` and ``--timeout`` don't apply to listings.
+_PROBE_RELIABILITY_FLAGS = ("--retries=3", "--contimeout=30s")
+
+
+def _run_listing_probe(args: Sequence[str]) -> str | None:
+    """Run an rclone listing probe, normalizing a missing directory to absent.
+
+    S3 backends list a missing key/prefix as empty output; the local backend
+    exits 3 for a missing directory. Only that local-backend result becomes
+    ``None``: on S3 the same exit code can mean a missing bucket, which is an
+    infrastructure failure rather than an absent key.
+
+    :param args: Full rclone argv for a listing subcommand (``lsf`` / ``lsjson``).
+    :returns: The probe's stdout, or ``None`` when a local-backend target directory is absent.
+    :raises subprocess.CalledProcessError: Any S3 failure, or a local-backend failure other than
+        a missing directory.
+    """
+    result = subprocess.run(  # noqa: S603 — args from validated URIs
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        remote_type = os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower()
+        if result.returncode == 3 and remote_type == "local":
+            return None
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    return result.stdout
+
+
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:  # noqa: DOC502
+    """List files under an ``r2://`` directory with storage-assigned mtimes.
+
+    Uses ``rclone lsjson --files-only`` so the mtime is the storage server's
+    ``LastModified`` — the single-authority timestamp winner selection trusts
+    (design doc §7.6). A missing directory lists as empty rather than raising:
+    absence of staged work is a normal reconciliation answer, not an error.
+
+    :param r2_uri: Directory ``r2://bucket/key/`` URI to list.
+    :param recursive: List nested entries (``-R``) instead of one level.
+    :returns: Entries sorted by ``path``; empty when the directory is absent.
+    :raises subprocess.CalledProcessError: rclone failed for a reason other
+        than a missing directory (auth, network, config).
+    """
+    args = [  # noqa: S607 — rclone resolved by the image's PATH.
+        "rclone",
+        "lsjson",
+        "--files-only",
+        "--use-server-modtime",
+        *_PROBE_RELIABILITY_FLAGS,
+    ]
+    if recursive:
+        args.append("-R")
+    args.append(_to_rclone_path(r2_uri))
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return []
+    records = _RCLONE_LIST_ADAPTER.validate_json(stdout)
+    entries = [
+        RemoteEntry(
+            path=item.path,
+            mtime=item.mtime,
+            size=item.size,
+        )
+        for item in records
+    ]
+    return sorted(entries, key=lambda entry: entry.path)
+
+
 def is_r2_uri(uri: str) -> bool:
     """Return True if `uri` is an `r2://bucket/key` URI."""
     return uri.startswith(R2_URI_SCHEME)
@@ -365,17 +517,20 @@ def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
     return f"{R2_URI_SCHEME}{bucket}/{prefix}{shard_filename}"
 
 
-def object_size(r2_uri: str) -> int | None:
+# DOC503: the documented CalledProcessError propagates from _run_listing_probe.
+def object_size(r2_uri: str) -> int | None:  # noqa: DOC503
     """Return the size in bytes of the R2 object at ``r2_uri``, or ``None`` if it does not exist.
 
     Uses ``rclone lsf --format=s`` for a size-only single-line listing: integer stdout if the
-    object exists, empty stdout if it does not. A non-zero rclone exit (auth, network, etc.) raises
-    ``subprocess.CalledProcessError`` so callers fail fast on environmental issues rather than
-    silently masking them. ``--checksum`` does not apply to listings.
+    object exists, empty stdout if it does not. A missing parent directory also reads as absent —
+    S3 backends list it empty while the local backend (local compute mode) errors, so both
+    normalize to ``None``. ``--checksum`` does not apply to listings.
 
     A zero-size object exists and returns ``0``. Callers that want to treat zero-size as absent
     (e.g. defending against half-uploaded objects) test ``size and size > 0`` themselves.
 
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason other than a
+        missing directory (auth, network, config) — callers fail fast on environmental issues.
     :raises RuntimeError: stdout is non-empty but not an integer; chained to the
         underlying ``ValueError`` so the probed URI survives the failure path.
     """
@@ -383,12 +538,13 @@ def object_size(r2_uri: str) -> int | None:
         "rclone",
         "lsf",
         "--format=s",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
-    )
-    out = result.stdout.strip()
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return None
+    out = stdout.strip()
     if not out:
         return None
     try:
@@ -401,26 +557,28 @@ def object_size(r2_uri: str) -> int | None:
         ) from exc
 
 
-def r2_directory_exists(r2_uri: str) -> bool:
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def r2_directory_exists(r2_uri: str) -> bool:  # noqa: DOC502
     """Return whether any object exists under the ``r2_uri`` prefix.
 
-    Directory counterpart of :func:`object_size`; a non-zero rclone exit (auth,
-    network) raises ``CalledProcessError`` so an outage isn't read as absent.
+    Directory counterpart of :func:`object_size` — a missing prefix reads as
+    ``False`` on both the S3 and local backends.
 
     :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
     :returns: ``True`` if the prefix contains at least one object.
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason
+        other than a missing directory (auth, network, config).
     """
     # rclone lsf is non-recursive by default, so this lists only the prefix's
     # immediate entries — an O(1) boolean probe, not a full-tree enumeration.
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "lsf",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
-    )
-    return bool(result.stdout.strip())
+    stdout = _run_listing_probe(args)
+    return bool(stdout and stdout.strip())
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:

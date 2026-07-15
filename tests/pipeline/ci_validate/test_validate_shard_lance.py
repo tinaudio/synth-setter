@@ -8,6 +8,7 @@ from pathlib import Path
 import lance
 import numpy as np
 import pyarrow as pa
+import pytest
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -77,6 +78,40 @@ def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     write_minimal_lance_shard(shard, spec)
 
     assert validate_shard(shard, spec) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (AUDIO_FIELD, np.nan, "column 'audio' contains non-finite values"),
+        (MEL_SPEC_FIELD, np.inf, "column 'mel_spec' contains non-finite values"),
+        (PARAM_ARRAY_FIELD, np.nan, "column 'param_array' contains non-finite values"),
+        (AUDIO_FIELD, 1.01, "column 'audio' contains values outside [-1, 1]"),
+        (PARAM_ARRAY_FIELD, -0.01, "column 'param_array' contains values outside [0, 1]"),
+    ],
+)
+def test_validate_lance_shard_invalid_values_reports_field_contract(
+    field: str,
+    value: float,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    """Non-finite or out-of-range tensor values fail the worker staging gate.
+
+    :param field: Dataset field receiving the invalid value.
+    :param value: Non-finite or out-of-range value written at the first element.
+    :param message: Expected validation error naming the violated field contract.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    arrays = _zero_arrays(shapes)
+    arrays[field].flat[0] = value
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    assert message in validate_shard(shard, spec)
 
 
 def test_lance_record_batch_preserves_transposed_tensor_shape(tmp_path: Path) -> None:

@@ -3441,3 +3441,31 @@ class TestValidateCopySource:
 
         with pytest.raises(ValueError, match="param_spec_name"):
             _validate_copy_source(target)
+
+
+def test_worker_id_sanitizes_hostname_for_object_key_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Characters outside ``[A-Za-z0-9._-]`` in the hostname become ``-``.
+
+    :param monkeypatch: Pins ``platform.node`` to a hostile hostname.
+    """
+    from synth_setter.cli import generate_dataset
+
+    monkeypatch.setattr(generate_dataset.platform, "node", lambda: "pod@host:1/x")
+
+    assert generate_dataset._worker_id() == "pod-host-1-x"
+
+
+def test_worker_id_empty_hostname_falls_back_to_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ``platform.node()`` yields the ``worker`` fallback, never ``""``.
+
+    :param monkeypatch: Pins ``platform.node`` to return an empty string.
+    """
+    from synth_setter.cli import generate_dataset
+
+    monkeypatch.setattr(generate_dataset.platform, "node", lambda: "")
+
+    assert generate_dataset._worker_id() == "worker"

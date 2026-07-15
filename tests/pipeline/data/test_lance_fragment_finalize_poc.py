@@ -82,7 +82,7 @@ def _arange_arrays(offset: int) -> dict[str, np.ndarray]:
 
 
 def _worker_writes_fragment(
-    split_uri: Path, schema: pa.Schema, arrays: dict[str, np.ndarray], fragment_id: int
+    split_uri: Path, schema: pa.Schema, arrays: dict[str, np.ndarray]
 ) -> tuple[lance.fragment.FragmentMetadata, str]:
     """Simulate a worker: write a fragment under ``split_uri`` and serialize it.
 
@@ -93,11 +93,10 @@ def _worker_writes_fragment(
     :param split_uri: Destination split dataset dir (``{split}.lance``).
     :param schema: Arrow schema shared by every fragment.
     :param arrays: One shard's field arrays.
-    :param fragment_id: Zero-based fragment index within the dataset.
     :returns: The live fragment metadata and its sidecar JSON string.
     """
     batch = record_batch_from_arrays(arrays, schema)
-    frag = lance_fragment(split_uri, schema, batch, fragment_id=fragment_id)
+    frag = lance_fragment(split_uri, schema, batch)
     return frag, json.dumps(frag.to_json())
 
 
@@ -127,7 +126,7 @@ def test_worker_fragment_sidecar_round_trips_and_commit_reads_back_written_value
     train_uri = tmp_path / "train.lance"
     written = _arange_arrays(offset=0)
 
-    _, sidecar_json = _worker_writes_fragment(train_uri, schema, written, fragment_id=0)
+    _, sidecar_json = _worker_writes_fragment(train_uri, schema, written)
     # Cross the R2 boundary: the sidecar survives a disk round-trip as text.
     sidecar_path = tmp_path / "shard-000000.fragment.json"
     sidecar_path.write_text(sidecar_json)
@@ -153,8 +152,8 @@ def test_duplicate_attempts_commit_winner_only_yields_single_shard_rows(
     loser_arrays = _arange_arrays(offset=_VALUE_STRIDE)
 
     # Both attempts write real fragment data into the same split dir.
-    winner, _ = _worker_writes_fragment(train_uri, schema, winner_arrays, fragment_id=0)
-    _worker_writes_fragment(train_uri, schema, loser_arrays, fragment_id=1)
+    winner, _ = _worker_writes_fragment(train_uri, schema, winner_arrays)
+    _worker_writes_fragment(train_uri, schema, loser_arrays)
 
     # Finalize commits the winner only.
     commit_lance_dataset(train_uri, schema, [winner])
@@ -173,7 +172,7 @@ def test_winner_set_commits_atomically_as_one_manifest_version(tmp_path: Path) -
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     train_uri = tmp_path / "train.lance"
     winners = [
-        _worker_writes_fragment(train_uri, schema, _arange_arrays(i * _VALUE_STRIDE), i)[0]
+        _worker_writes_fragment(train_uri, schema, _arange_arrays(i * _VALUE_STRIDE))[0]
         for i in range(3)
     ]
 
@@ -193,7 +192,7 @@ def test_recommitting_winner_set_is_idempotent(tmp_path: Path) -> None:
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     train_uri = tmp_path / "train.lance"
     written = _arange_arrays(offset=0)
-    winner, _ = _worker_writes_fragment(train_uri, schema, written, fragment_id=0)
+    winner, _ = _worker_writes_fragment(train_uri, schema, written)
 
     commit_lance_dataset(train_uri, schema, [winner])
     commit_lance_dataset(train_uri, schema, [winner])
@@ -215,7 +214,7 @@ def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> No
     staging_uri = tmp_path / "staging.lance"
     train_uri = tmp_path / "train.lance"
     # Worker writes the fragment data under staging, not under train.lance.
-    foreign, _ = _worker_writes_fragment(staging_uri, schema, _arange_arrays(0), 0)
+    foreign, _ = _worker_writes_fragment(staging_uri, schema, _arange_arrays(0))
 
     commit_lance_dataset(train_uri, schema, [foreign])
 

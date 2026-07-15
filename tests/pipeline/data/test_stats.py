@@ -46,6 +46,64 @@ def _existing_from_samples(
     return existing
 
 
+def test_merge_welford_two_states_matches_single_pass_over_all_rows(
+    stats_script: ModuleType,
+) -> None:
+    """Chan-et-al. merge of two per-shard states equals one pass over the union.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    rng = np.random.default_rng(1)
+    shard_a = rng.normal(size=(7, 3))
+    shard_b = rng.normal(loc=5.0, size=(13, 3))
+
+    merged = stats_script.merge_welford(
+        _existing_from_samples(stats_script, shard_a),
+        _existing_from_samples(stats_script, shard_b),
+    )
+    single_pass = _existing_from_samples(stats_script, np.concatenate([shard_a, shard_b]))
+
+    assert merged[0] == 20
+    np.testing.assert_allclose(merged[1], single_pass[1], rtol=1e-9)
+    np.testing.assert_allclose(merged[2], single_pass[2], rtol=1e-9)
+
+
+def test_merge_welford_chained_three_way_matches_single_pass(
+    stats_script: ModuleType,
+) -> None:
+    """Chained folds over three shards equal one pass over the union (associativity).
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    rng = np.random.default_rng(2)
+    shards = [rng.normal(loc=i * 3.0, size=(5 + i, 2)) for i in range(3)]
+
+    chained = (0, 0, 0)
+    for shard in shards:
+        chained = stats_script.merge_welford(chained, _existing_from_samples(stats_script, shard))
+    single_pass = _existing_from_samples(stats_script, np.concatenate(shards))
+
+    assert chained[0] == single_pass[0]
+    np.testing.assert_allclose(chained[1], single_pass[1], rtol=1e-9)
+    np.testing.assert_allclose(chained[2], single_pass[2], rtol=1e-9)
+
+
+def test_merge_welford_zero_state_is_identity_seed(stats_script: ModuleType) -> None:
+    """``(0, 0, 0)`` folds as identity on both sides and merges with itself.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    state = (2, np.array([1.0, 3.0]), np.array([0.5, 2.0]))
+
+    left = stats_script.merge_welford((0, 0, 0), state)
+    right = stats_script.merge_welford(state, (0, 0, 0))
+
+    assert left[0] == right[0] == 2
+    np.testing.assert_allclose(left[1], state[1])
+    np.testing.assert_allclose(right[2], state[2])
+    assert stats_script.merge_welford((0, 0, 0), (0, 0, 0)) == (0, 0, 0)
+
+
 def test_finalize_healthy_data_returns_positive_std(stats_script: ModuleType) -> None:
     """Welford output on random Gaussian data matches numpy and is positive everywhere.
 
@@ -250,7 +308,9 @@ def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: Mo
             stats_script.finalize(existing, mask_degenerate=True)
 
 
-def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Path) -> None:
+def test_fold_lance_shard_into_welford_matches_numpy(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
     """Lance stats fold projects ``mel_spec`` and matches numpy mean/std.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
@@ -260,7 +320,8 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
     shard = tmp_path / spec.shards[0].filename
     write_minimal_lance_shard(shard, spec)
 
-    mean, std = stats_script.stream_stats_lance([shard])
+    welford = stats_script.fold_lance_shard_into_welford((0, 0, 0), shard)
+    mean, std = stats_script.finalize(welford)
 
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 
