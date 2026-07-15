@@ -324,11 +324,11 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from datetime import UTC, datetime
 
+    from synth_setter.pipeline.data.finalize_progress import FinalizeProgressCallback
     from synth_setter.pipeline.data.lance_finalize import (
         CheckedLanceWinner,
         StagedLanceAttempt,
     )
-    from synth_setter.pipeline.data.finalize_progress import FinalizeProgressCallback
 
     def fake_select(
         spec: DatasetSpec,

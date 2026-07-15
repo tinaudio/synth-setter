@@ -37,13 +37,15 @@ spec builders shared across those lanes live in
 from __future__ import annotations
 
 import glob
+import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NoReturn, cast
 
 import pytest
 import wandb
+from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
@@ -57,7 +59,7 @@ from tests.helpers.finalize_shards import (
     uri_to_local_path,
     write_spec_to_root,
 )
-from tests.helpers.wandb_offline import read_run_binary
+from tests.helpers.wandb_offline import read_history_rows, read_run_binary
 
 
 @pytest.fixture()
@@ -332,6 +334,74 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
         "artifact metadata (n_samples / git_sha) not recorded in offline run binary"
     )
 
+    rows = read_history_rows(
+        Path(binary_files[0]),
+        until=lambda scanned: (
+            sum("finalize/shards_processed" in row for row in scanned) >= spec.num_shards
+            and any("finalize/elapsed_seconds" in row for row in scanned)
+        ),
+    )
+    shard_rows = [
+        row
+        for row in rows
+        if "finalize/shards_processed" in row and "finalize/elapsed_seconds" not in row
+    ]
+    assert [json.loads(row["finalize/shards_processed"]) for row in shard_rows] == list(
+        range(1, spec.num_shards + 1)
+    )
+    assert all(json.loads(row["finalize/shards_total"]) == spec.num_shards for row in shard_rows)
+    summary_rows = [row for row in rows if "finalize/elapsed_seconds" in row]
+    assert len(summary_rows) == 1
+    summary = summary_rows[0]
+    assert json.loads(summary["finalize/shards_processed"]) == spec.num_shards
+    assert json.loads(summary["finalize/artifacts_uploaded"]) == 4
+
+
+def test_finalize_keeps_r2_artifacts_when_live_metric_logging_fails(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A W&B history failure does not interrupt standalone finalization.
+
+    :param tmp_path: Hosts the spec JSON, scratch work dir, and offline run dir.
+    :param fake_r2_remote: Local-typed rclone remote holding final artifacts.
+    :param monkeypatch: Makes the live W&B metric sink fail for every progress row.
+    :param stub_finalize_setup: Installs the auth and absent-marker stubs.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+    metric_calls: list[Mapping[str, float]] = []
+
+    def fail_log_metrics(
+        self: WandbLogger,
+        metrics: Mapping[str, float],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        del self, args, kwargs
+        metric_calls.append(metrics)
+        raise RuntimeError("simulated W&B history outage")
+
+    monkeypatch.setattr(WandbLogger, "log_metrics", fail_log_metrics)
+    spec = build_lance_smoke_spec(task_name="finalize-metrics-swallow")
+    stub_finalize_lance_io(monkeypatch)
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
+    )
+
+    finalize_dataset.finalize(cfg)
+
+    assert len(metric_calls) == spec.num_shards + 5
+    assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
+    assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
+
 
 def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     tmp_path: Path,
@@ -363,8 +433,12 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
     wandb.teardown()
 
-    def boom(spec: DatasetSpec, work_dir: Path) -> NoReturn:
-        del spec, work_dir
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
         raise RuntimeError("simulated finalize_from_spec failure")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
@@ -485,8 +559,12 @@ def test_finalize_forces_wandb_resume_allow_when_wandb_cfg_present(
         "synth_setter.cli.finalize_dataset.instantiate_loggers", capture_instantiate
     )
 
-    def boom(spec: DatasetSpec, work_dir: Path) -> NoReturn:
-        del spec, work_dir
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
         raise RuntimeError("halt after logger setup")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
