@@ -1,3 +1,4 @@
+# pyright: reportUnnecessaryTypeIgnoreComment=true
 """Behavioral tests for :mod:`synth_setter.data.lance_datamodule`.
 
 Covers the public symbols exposed by the module:
@@ -19,8 +20,10 @@ ML behavior, mirroring ``tests/data/test_surge_datamodule.py``.
 from __future__ import annotations
 
 import contextlib
+import random
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -31,8 +34,9 @@ from synth_setter.data.lance_datamodule import (
     LanceVSTDataModule,
     LanceVSTDataset,
 )
-from synth_setter.data.vst_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst_datamodule import ShiftedBatchSampler
+from synth_setter.param_spec_name import ParamSpecName
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
@@ -44,6 +48,22 @@ _MEL_N_FRAMES = 5
 _M2L_DIM_1 = 6
 _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
+
+if TYPE_CHECKING:
+
+    def _lance_datamodule_param_spec_name_contract(
+        plain: str, typed: ParamSpecName
+    ) -> None:
+        """Pin nominal typing at the Lance datamodule constructor.
+
+        :param plain: Arbitrary string rejected by the constructor contract.
+        :param typed: Explicitly constructed registry name accepted by the constructor.
+        """
+        LanceVSTDataModule(dataset_root=".", param_spec_name=typed)
+        LanceVSTDataModule(
+            dataset_root=".",
+            param_spec_name=plain,  # pyright: ignore[reportArgumentType]
+        )
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 
@@ -161,6 +181,7 @@ def _set_up_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: LanceVSTDataModule
     """
+    kwargs.setdefault("param_spec_name", ParamSpecName("surge_xt"))
     module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -575,10 +596,12 @@ class TestLanceVSTDataset:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        dataset = LanceVSTDataset(tmp_path / "missing.lance", batch_size=3, fake=True)
+        dataset = LanceVSTDataset(
+            tmp_path / "missing.lance", batch_size=3, fake=True, num_params=3
+        )
         assert dataset.dataset_file is None
         item = dataset[0]
-        assert _unwrap(item["params"]).shape == (3, len(param_specs["surge_xt"]))
+        assert _unwrap(item["params"]).shape == (3, 3)
 
 
 class TestLanceVSTDataModule:
@@ -689,7 +712,12 @@ class TestLanceVSTDataModule:
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        module = LanceVSTDataModule(dataset_root=dataset_root, batch_size=2, ot=False)
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
         module.setup()
         module.teardown()
         assert not module.train_dataset.dataset_file
@@ -713,17 +741,23 @@ class TestLanceVSTDataModule:
             item = next(iter(module.val_dataloader()))
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))
 
-    def test_val_dataloader_multi_worker_matches_single_worker(self, dataset_root: Path) -> None:
-        """``num_workers=2`` forked workers read the same batches as in-process loading.
-
-        Lance handles are not fork-safe, so ``LanceShardFile`` reopens per
-        worker — multi-worker loaders (the production default) must produce
-        the same data as ``num_workers=0``.
+    @pytest.mark.parametrize(
+        ("loader_name", "expected_batches"),
+        (("train_dataloader", 3), ("val_dataloader", 4), ("test_dataloader", 4), ("predict_dataloader", 4)),
+    )
+    def test_dataloader_multi_worker_matches_single_worker(
+        self, dataset_root: Path, loader_name: str, expected_batches: int
+    ) -> None:
+        """Each spawned loader returns the same parameter batches as in-process loading.
 
         :param dataset_root: Fixture-provided dataset-root directory.
+        :param loader_name: Public datamodule loader method to exercise.
+        :param expected_batches: Number of batches supplied by that loader.
         """
 
-        def collect(num_workers: int) -> torch.Tensor:
+        def collect(num_workers: int) -> list[dict[str, torch.Tensor | None]]:
+            random.seed(0)
+            np.random.seed(0)
             with _set_up_module(
                 dataset_root=dataset_root,
                 batch_size=2,
@@ -731,9 +765,53 @@ class TestLanceVSTDataModule:
                 num_workers=num_workers,
                 pin_memory=False,
             ) as module:
-                return torch.cat([_unwrap(b["params"]) for b in module.val_dataloader()])
+                loader = getattr(module, loader_name)()
+                if num_workers:
+                    context = loader.multiprocessing_context
+                    assert context is not None
+                    assert context.get_start_method() == "spawn"
+                batches = list(loader)
+            return batches
 
-        assert torch.allclose(collect(num_workers=2), collect(num_workers=0))
+        spawned_batches = collect(num_workers=2)
+        in_process_batches = collect(num_workers=0)
+        assert len(spawned_batches) == expected_batches
+        assert len(in_process_batches) == expected_batches
+        for spawned, in_process in zip(spawned_batches, in_process_batches, strict=True):
+            assert _unwrap(spawned["params"]).shape == (2, _NUM_PARAMS)
+            assert torch.allclose(_unwrap(spawned["params"]), _unwrap(in_process["params"]))
+            if loader_name == "predict_dataloader":
+                assert _unwrap(spawned["audio"]).shape == (
+                    2,
+                    _AUDIO_CHANNELS,
+                    _AUDIO_SAMPLES,
+                )
+
+    def test_dataloaders_multi_worker_use_spawn_context(self, dataset_root: Path) -> None:
+        """Every multi-worker Lance loader starts a clean interpreter per worker.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            num_workers=2,
+            pin_memory=False,
+        ) as module:
+            train_context = module.train_dataloader().multiprocessing_context
+            val_context = module.val_dataloader().multiprocessing_context
+            test_context = module.test_dataloader().multiprocessing_context
+            predict_context = module.predict_dataloader().multiprocessing_context
+
+        assert train_context is not None
+        assert train_context.get_start_method() == "spawn"
+        assert val_context is not None
+        assert val_context.get_start_method() == "spawn"
+        assert test_context is not None
+        assert test_context.get_start_method() == "spawn"
+        assert predict_context is not None
+        assert predict_context.get_start_method() == "spawn"
 
 
 class TestPipelineWriterCompatibility:

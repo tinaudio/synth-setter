@@ -1,7 +1,7 @@
 import random
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import ClassVar, Literal, NotRequired, Protocol, TypedDict
+from typing import ClassVar, NotRequired, Protocol, TypedDict
 
 import h5py
 import hdf5plugin  # noqa: F401  # side-effect import: registers HDF5 blosc filters for shard I/O
@@ -10,13 +10,11 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.ot import _hungarian_match
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-
-# Registry key whose spec width sizes fake-mode batches and seeds the
-# datamodule default when no ``param_spec_name`` is configured.
-_DEFAULT_PARAM_SPEC_NAME = "surge_xt"
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
@@ -192,7 +190,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         :param rescale_params: Whether to rescale params from ``[0, 1]`` to ``[-1, 1]``.
         :param fake: Whether to synthesise random batches instead of reading the shard.
         :param repeat_first_batch: Whether every index returns the first batch.
-        :param num_params: Param width for fake mode; defaults to the registry spec width.
+        :param num_params: Required param width for fake mode; ignored for shard-backed datasets.
+        :raises ValueError: If fake mode has no explicit ``num_params``.
         """
         self.batch_size = batch_size
         self.ot = ot
@@ -213,11 +212,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.rescale_params = rescale_params
 
         self.fake = fake
-        # Fake-mode width only; real mode reads the width from the shard's param_array.
-        self.num_params = (
-            num_params if num_params is not None else len(param_specs[_DEFAULT_PARAM_SPEC_NAME])
-        )
         if fake:
+            if num_params is None:
+                raise ValueError("num_params is required when fake=True")
+            self.num_params = num_params
             self.dataset_file = None
             return
 
@@ -536,9 +534,10 @@ class VSTDataModule(LightningDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
-        conditioning: Literal["mel", "m2l"] = "mel",
+        conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
-        param_spec_name: str = _DEFAULT_PARAM_SPEC_NAME,
+        *,
+        param_spec_name: ParamSpecName,
     ) -> None:
         """Store dataloader and dataset configuration for later ``setup``.
 
@@ -595,7 +594,7 @@ class VSTDataModule(LightningDataModule):
             unused because every split dataset is constructed eagerly.
         """
         # KeyError here fails fast on an unregistered param_spec_name.
-        num_params = len(param_specs[self.param_spec_name])
+        num_params = len(resolve_param_spec(self.param_spec_name))
         self.train_dataset = self.dataset_cls(
             self.dataset_root / f"train{self.shard_suffix}",
             batch_size=self.batch_size,

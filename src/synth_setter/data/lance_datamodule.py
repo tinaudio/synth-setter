@@ -17,8 +17,11 @@ from typing import ClassVar, cast
 import lance
 import numpy as np
 import pyarrow as pa
+import torch
+from lance.torch.data import get_safe_loader
+from torch.utils.data import DataLoader
 
-from synth_setter.data.vst_datamodule import VSTDataModule, VSTDataset
+from synth_setter.data.vst_datamodule import ShiftedBatchSampler, VSTDataModule, VSTDataset
 
 
 class LanceColumn:
@@ -104,19 +107,30 @@ class LanceShardFile:
         }
         self._dataset: lance.LanceDataset | None = dataset
         self._pid = os.getpid()
+        self._closed = False
+
+    def __getstate__(self) -> dict[str, object]:
+        """Drop the native handle before sending this shard to a spawned worker.
+
+        :returns: Pickle state that recreates the handle in the receiving process.
+        """
+        state = self.__dict__.copy()
+        state["_dataset"] = None
+        state["_pid"] = None
+        return state
 
     def live_dataset(self) -> lance.LanceDataset:
-        """Return the dataset handle, reopening after a fork.
+        """Return the dataset handle, reopening after a process boundary.
 
-        Lance datasets are not fork-safe, so a forked DataLoader worker must not reuse the handle
-        it inherited from the parent — each worker reopens its own on first read.
+        Lance datasets are process-local, so each DataLoader worker opens its own handle on first
+        read.
 
         :return: Dataset handle owned by the current process.
         :raises ValueError: If the shard has been closed.
         """
-        if self._dataset is None:
+        if self._closed:
             raise ValueError("I/O on closed LanceShardFile")
-        if os.getpid() != self._pid:
+        if self._dataset is None or os.getpid() != self._pid:
             self._dataset = lance.dataset(self._path)
             self._pid = os.getpid()
         return self._dataset
@@ -130,7 +144,7 @@ class LanceShardFile:
             read.
         :raises ValueError: If the shard has been closed.
         """
-        if self._dataset is None:
+        if self._closed:
             raise ValueError("I/O on closed LanceShardFile")
         if name not in self._inner_shapes:
             raise KeyError(name)
@@ -141,15 +155,34 @@ class LanceShardFile:
 
         :return: Whether the shard is still open.
         """
-        return self._dataset is not None
+        return not self._closed
 
     def close(self) -> None:
         """Release the underlying Lance dataset handle (idempotent)."""
         self._dataset = None
+        self._closed = True
 
 
 class LanceVSTDataset(VSTDataset):
     """``VSTDataset`` reading a ``.lance`` dataset directory instead of HDF5."""
+
+    def __getstate__(self) -> dict[str, object]:
+        """Remove the generator state that cannot cross a spawned worker boundary.
+
+        :returns: Pickle state with a generator recreated by ``__setstate__``.
+        """
+        state = self.__dict__.copy()
+        state["generator"] = None
+        state["_worker_reseed_done"] = False
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore a spawned worker's dataset state with a local generator.
+
+        :param state: Pickle state supplied by ``__getstate__``.
+        """
+        self.__dict__.update(state)
+        self.generator = torch.Generator()
 
     def _open(self, dataset_file: str | Path) -> LanceShardFile:
         """Open the ``.lance`` shard dataset read-only.
@@ -174,3 +207,57 @@ class LanceVSTDataModule(VSTDataModule):
 
     dataset_cls: ClassVar[type[VSTDataset]] = LanceVSTDataset
     shard_suffix: ClassVar[str] = ".lance"
+
+    def _dataloader(
+        self,
+        dataset: VSTDataset,
+        *,
+        sampler: ShiftedBatchSampler | None = None,
+    ) -> DataLoader:
+        """Build a loader that isolates Lance handles in spawned workers.
+
+        :param dataset: Split dataset the loader reads.
+        :param sampler: Optional training sampler; ``None`` keeps sequential order.
+        :returns: Dataloader over ``dataset``.
+        """
+        loader_kwargs = {
+            "batch_size": None,
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "sampler": sampler,
+            "shuffle": False,
+        }
+        if self.num_workers == 0:
+            return DataLoader(dataset, **loader_kwargs)
+        return get_safe_loader(dataset, **loader_kwargs)
+
+    def train_dataloader(self) -> DataLoader:
+        """Return the training dataloader with Lance's safe worker context.
+
+        :returns: Dataloader over the training dataset.
+        """
+        return self._dataloader(
+            self.train_dataset,
+            sampler=ShiftedBatchSampler(self.batch_size, len(self.train_dataset)),
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        """Return the validation dataloader with Lance's safe worker context.
+
+        :returns: Dataloader over the validation dataset.
+        """
+        return self._dataloader(self.val_dataset)
+
+    def test_dataloader(self) -> DataLoader:
+        """Return the test dataloader with Lance's safe worker context.
+
+        :returns: Dataloader over the test dataset.
+        """
+        return self._dataloader(self.test_dataset)
+
+    def predict_dataloader(self) -> DataLoader:
+        """Return the prediction dataloader with Lance's safe worker context.
+
+        :returns: Dataloader over the prediction dataset.
+        """
+        return self._dataloader(self.predict_dataset)

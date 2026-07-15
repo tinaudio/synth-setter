@@ -33,8 +33,9 @@ application code loads `SYNTH_SETTER_STORAGE_*` settings, passes a strict
 - Project Lance `storage_options` and rclone env from `StorageConfig`.
 - Keep rclone as the current transfer backend while making R2 an implementation
   detail.
-- Accept breaking changes in this pre-user migration; do not preserve
-  `R2Credentials` or legacy r2 credential promotion as public contracts.
+- Accept legacy `RCLONE_CONFIG_R2_{ACCESS_KEY_ID,SECRET_ACCESS_KEY,ENDPOINT}`
+  inputs for existing deployments while keeping `SYNTH_SETTER_STORAGE_*` as
+  the canonical application contract.
 
 ## Current PR Slice
 
@@ -44,8 +45,9 @@ This PR lands the credential slice of the provider-neutral direction:
   `StorageConfig`, `ObjectLocation`, and a small rclone-backed `ObjectStorage`
   facade.
 - `r2_io.r2_storage_options()`, `ensure_r2_env_loaded()`, and
-  `is_r2_reachable()` now read canonical `SYNTH_SETTER_STORAGE_*` settings and
-  project the current rclone env block at the subprocess boundary.
+  `is_r2_reachable()` resolve canonical `SYNTH_SETTER_STORAGE_*` settings or
+  compatible legacy rclone credentials, then project the rclone env block at
+  the subprocess boundary.
 - `SYNTH_SETTER_STORAGE_RCLONE_TYPE` is a temporary adapter setting for the
   rclone-backed facade (tests point it at rclone's `local` backend); the
   remote name is pinned to `r2` because every current consumer speaks that
@@ -59,6 +61,15 @@ The old `r2_io` module name, `r2://` helper surface, and `R2Location` dataset
 layout remain only as existing migration debt. They should move behind
 `ObjectStorage` / `DatasetStorageLayout` in the next phase rather than being
 expanded.
+
+## Environment resolution
+
+`storage_settings_from_sources()` resolves each setting in this order:
+canonical dotenv, canonical process environment, legacy dotenv alias, then
+legacy process-environment alias. Blank values are absent. `StorageConfig`
+defaults the provider to `r2`, the region to `auto`, and the rclone backend
+type to `s3`, so legacy credential-only deployments retain their previous R2
+behavior.
 
 ## Follow-Ups
 

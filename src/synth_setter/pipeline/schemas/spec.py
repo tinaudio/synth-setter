@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from synth_setter.param_spec_name import ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -266,7 +267,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "random parameter override."
         )
     )
-    param_spec_name: str = Field(
+    param_spec_name: ValidatedParamSpecName = Field(
         description=(
             "Key into the in-process param-spec registry; resolved inside the worker, "
             "not the launcher."
@@ -382,10 +383,22 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError("samples_per_render_batch must be positive")
         if self.samples_per_shard <= 0:
             raise ValueError("samples_per_shard must be positive")
-        if not self.param_spec_name.strip():
-            raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
             raise ValueError("renderer_version must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences that DawDreamer's blocking API cannot implement.
+
+        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
+        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
+                "call blocks the main thread and exposes no close-event API"
+            )
         return self
 
     @model_validator(mode="after")
@@ -404,20 +417,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
                 'plugin reloads (#714). Use "once" or "never" on Darwin.'
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
-        """Reject editor cadences that DawDreamer's blocking API cannot implement.
-
-        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
-        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
-        """
-        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
-            raise ValueError(
-                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
-                "call blocks the main thread and exposes no close-event API"
             )
         return self
 
@@ -1166,6 +1165,6 @@ class DatasetSpec(BaseModel):
         ``model_dump_json`` — which evaluates this computed field — does not
         transitively pull ``pedalboard`` into the launcher.
         """
-        from synth_setter.data.vst.param_spec_registry import param_specs
+        from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-        return len(param_specs[self.render.param_spec_name])
+        return len(resolve_param_spec(self.render.param_spec_name))

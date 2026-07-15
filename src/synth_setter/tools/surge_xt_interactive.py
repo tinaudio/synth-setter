@@ -39,6 +39,7 @@ from synth_setter.data.vst.core import (
 from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
 
@@ -1245,7 +1246,7 @@ def main(
     render_cfg = RenderConfig(
         plugin_path=plugin_path,
         plugin_state_path=plugin_state_path,
-        param_spec_name=param_spec_name,
+        param_spec_name=ParamSpecName(param_spec_name),
         renderer_version=extract_renderer_version(Path(plugin_path)),
         sample_rate=SAMPLE_RATE,
         channels=CHANNELS,

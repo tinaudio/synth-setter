@@ -14,6 +14,7 @@ from pydantic_settings import CliApp
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
 
 
@@ -50,7 +51,7 @@ def _smoke_spec() -> DatasetSpec:
     render_cfg = RenderConfig(
         plugin_path="plugins/Surge XT.vst3",
         plugin_state_path="presets/surge-base.vstpreset",
-        param_spec_name="surge_simple",
+        param_spec_name=ParamSpecName("surge_simple"),
         renderer_version="1.3.4",
         sample_rate=44100,
         channels=2,
