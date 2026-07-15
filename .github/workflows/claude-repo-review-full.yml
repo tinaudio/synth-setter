@@ -13,7 +13,7 @@ jobs:
   repo-review-full:
     runs-on: ubuntu-latest
     # repo-review-full fans out one agent per applicable checklist, so it needs
-    # more headroom than the single-agent code-review plugin (30 min).
+    # generous headroom.
     timeout-minutes: 55
     permissions:
       contents: read
@@ -32,13 +32,12 @@ jobs:
       # so no plugin_marketplaces is needed; the action discovers it as a project skill.
       - name: Run Claude repo-review-full
         id: repo-review-full
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342 # v1
+        uses: anthropics/claude-code-action@12531344451323133b0493233c759991ac61da12 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-          # Unlike the code-review plugin, /repo-review-full posts inline comments
-          # by default, so no extra flag is needed to make findings appear.
+          # /repo-review-full posts inline comments by default; no extra flag needed.
           prompt: >-
             /repo-review-full ${{ github.event.pull_request.number }}
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md

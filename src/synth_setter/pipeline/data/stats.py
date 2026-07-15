@@ -166,7 +166,12 @@ def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
     num_workers = 4
 
     logger.info("Starting Dask client (n_workers=%d)", num_workers)
-    with Client(n_workers=num_workers, threads_per_worker=8) as client:
+    # ``processes=False`` keeps workers in-process (threaded) so there are no
+    # Nanny subprocesses to reap: their teardown at ``Client.__exit__`` hangs
+    # and raises ``TimeoutError`` on macOS, crashing this call after mean/std
+    # were already computed (#1883). In-process workers also share this
+    # module's ``hdf5plugin`` Blosc2 filter registration.
+    with Client(n_workers=num_workers, threads_per_worker=8, processes=False) as client:
         # ``da.from_array`` reads lazily; the h5py.File must stay open through
         # the final ``.compute()`` so workers can pull chunks on demand.
         with h5py.File(filename, "r") as h5_file:
@@ -209,9 +214,7 @@ def update(existing, new):
     return count, mean, M2
 
 
-def merge_welford(
-    existing: WelfordState, other: WelfordState
-) -> WelfordState:
+def merge_welford(existing: WelfordState, other: WelfordState) -> WelfordState:
     """Merge two Welford states (Chan et al. parallel combine).
 
     Lets finalize reduce per-attempt ``(count, mean, m2)`` shard sidecars into
@@ -313,9 +316,7 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
             yield np.load(io.BytesIO(extracted.read()))
 
 
-def _fold_shard_into_welford(
-    existing: WelfordState, shard_path: Path
-) -> WelfordState:
+def _fold_shard_into_welford(existing: WelfordState, shard_path: Path) -> WelfordState:
     """Fold every mel row from one shard into the Welford accumulator.
 
     :param existing: Welford state ``(count, mean, M2)`` before this shard.

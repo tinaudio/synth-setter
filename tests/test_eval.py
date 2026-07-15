@@ -925,3 +925,36 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
+
+
+def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
+    """The datamodule eval instantiates carries the RAM-bounded worker default.
+
+    ``num_workers`` is applied per dataloader, so a run holding both a test and a
+    predict loader doubles the live worker count. Lance workers are ~1.4 GB each,
+    and the previous default of 11 put a 32 GB host past its RAM plus swap
+    (#1916).
+
+    Instantiates the datamodule the way ``evaluate`` does rather than asserting
+    the composed dict, so the default is checked where it is consumed. Composed
+    explicitly rather than via ``cfg_eval``: that fixture pins ``num_workers``
+    itself, so nothing else here would catch the default drifting back up.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                return_hydra_config=True,
+                overrides=[
+                    "datamodule=surge_simple",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "ckpt_path=.",
+                ],
+            )
+        HydraConfig().set_config(cfg)
+        datamodule = instantiate(cfg.datamodule)
+    finally:
+        GlobalHydra.instance().clear()
+    assert datamodule.num_workers == 4

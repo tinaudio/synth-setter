@@ -654,13 +654,15 @@ RUN export HOME="/home/${USERNAME}" \
  && pi --version
 
 # Hermes owns a separate per-user venv; pin and verify its upstream installer.
+# Its uv runs as ${USERNAME} and must not inherit UV_PYTHON_INSTALL_DIR: /opt/uv
+# is root-owned, so a managed-interpreter fetch there fails with EACCES.
 ARG HERMES_GIT_REF=v2026.7.7.2
 ARG HERMES_GIT_SHA=9de9c25f620ff7f1ce0fd5457d596052d5159596
 ARG HERMES_INSTALLER_SHA256=a93c65b01ea392e179cf872e182bd01a2b65c0c15f17833e9f9569033ef10e07
 RUN export HOME="/home/${USERNAME}" \
  && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh \
  && echo "${HERMES_INSTALLER_SHA256}  /tmp/hermes-install.sh" | sha256sum -c - \
- && env -u VIRTUAL_ENV bash /tmp/hermes-install.sh --branch "${HERMES_GIT_REF}" --commit "${HERMES_GIT_SHA}" --skip-browser \
+ && env -u VIRTUAL_ENV -u UV_PYTHON_INSTALL_DIR bash /tmp/hermes-install.sh --branch "${HERMES_GIT_REF}" --commit "${HERMES_GIT_SHA}" --skip-browser \
  && rm /tmp/hermes-install.sh \
  && hermes --version
 

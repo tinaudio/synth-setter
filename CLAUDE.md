@@ -103,6 +103,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 - `/repo-review` — MVP, single agent, inline checklist.
 - `/repo-review-full` — parallel agents, posts inline review comments.
 - `/repo-review-full-no-comments` — same fan-out, renders to chat (the pre-PR gate uses this).
+- Each fan-out worker runs a second parallel OpenCode-CLI pass (auto-skipped where `opencode` is unavailable, e.g. CI) and merges attributed findings into its report.
 - `/fix-review-comments` — applies the sentinel's comment-hygiene findings, commits, and re-reviews.
 
 See [agent/skills/repo-review/SKILL.md](agent/skills/repo-review/SKILL.md) and [agent/skills/\_shared/repo-review-full-analysis.md](agent/skills/_shared/repo-review-full-analysis.md).

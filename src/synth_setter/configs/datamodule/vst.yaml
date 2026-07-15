@@ -4,7 +4,9 @@ download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
-num_workers: 11
+# Per dataloader, so enabling validation doubles the live worker count. Sized
+# against host RAM, not cores — see getting-started.md §8.
+num_workers: 4
 predict_file: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.
