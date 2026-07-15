@@ -115,7 +115,10 @@ def _dawdreamer_fx_bank(bank: str, anchor_index: int) -> tuple[HostParam, ...]:
     """
     return (
         HostParam(index=anchor_index, name=f"FX {bank} FX Type"),
-        *(HostParam(index=anchor_index + slot, name=f"FX {bank} -") for slot in range(1, 13)),
+        *(
+            HostParam(index=anchor_index + slot, name=f"FX {bank} Param {slot}")
+            for slot in range(1, 13)
+        ),
     )
 
 
@@ -238,7 +241,7 @@ def test_join_param_map_resolves_fx_slots_by_anchor_position(
     result = join_param_map("test", pedalboard, clap, dawdreamer)
 
     assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
-    assert result.params["fx_a1_delay_time"].dawdreamer.name == "FX A1 -"
+    assert result.params["fx_a1_delay_time"].dawdreamer.name == "FX A1 Param 1"
 
 
 def test_join_param_map_rejects_unanchored_fx_slot(registry: dict[str, ParamSpec]) -> None:

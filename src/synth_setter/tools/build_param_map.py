@@ -322,7 +322,7 @@ def _resolve_dawdreamer_fx_bank(
     slots: dict[int, HostParam] = {}
     for slot in range(1, _SURGE_FX_SLOT_COUNT + 1):
         parameter = by_index.get(anchor_index + slot)
-        expected_name = f"FX {bank} -"
+        expected_name = f"FX {bank} Param {slot}"
         if parameter is None or parameter.name.casefold() != expected_name.casefold():
             errors.append(f"DawDreamer FX {bank} slot {slot} is missing or invalid")
             continue
