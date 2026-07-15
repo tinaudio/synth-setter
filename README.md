@@ -151,7 +151,7 @@ src/synth_setter/   ML code and data pipeline (PEP src-layout package)
     ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
     data/                Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report)
     skypilot_launch.py   SkyPilot launcher CLI
-  evaluation/          predict_vst_audio, compute_audio_metrics (called by cli/eval.py)
+  evaluation/          Render/metrics library code shared by cli/eval.py and the training val-audio probe
   tools/               python -m utilities (surge_xt_interactive, plot_param2tok, ...)
 configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
 scripts/        SkyPilot / CI shell tooling (skypilot/, ci/)

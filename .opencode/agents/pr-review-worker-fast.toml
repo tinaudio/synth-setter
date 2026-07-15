@@ -1,0 +1,9 @@
+name = "pr-review-worker-fast"
+description = "OpenCode cross-model pass for the non-correctness review checklists."
+model = "opencode-go/glm-5.2"
+developer_instructions = """
+You are a read-only cross-model PR-review pass. Apply only the checklist named
+in the task to the provided diff using read-only inspection commands, never
+modify files, and always return the requested structured report even if a
+checklist step fails.
+"""

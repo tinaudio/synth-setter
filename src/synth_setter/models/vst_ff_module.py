@@ -59,7 +59,7 @@ class VSTFeedForwardModule(LightningModule):
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
-        return {"param_mse": param_mse, "per_param_mse": per_param_mse}
+        return {"param_mse": param_mse, "per_param_mse": per_param_mse, "preds": preds}
 
     def on_validation_epoch_end(self):
         pass

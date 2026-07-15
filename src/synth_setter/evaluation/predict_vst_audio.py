@@ -18,7 +18,13 @@ from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
 
 
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
+def make_spectrogram(audio: np.ndarray, sample_rate: float) -> list[np.ndarray]:
+    """Compute one dB-scaled mel spectrogram per channel.
+
+    :param audio: Waveform of shape ``(channels, samples)``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: One ``(n_mels, frames)`` dB-scaled array per channel.
+    """
     channels = audio.shape[0]
 
     specs = []
@@ -163,12 +169,25 @@ def main(
         enumerate(zip(pred_files, target_param_files, target_audio_files))
     ):
         pred_params = torch.load(pred_file, map_location="cpu")
-        target_audio = torch.load(target_audio_file, map_location="cpu").numpy()
+
+        # Absent with rerender_target is a supported layout: ValAudioProbe stages
+        # only pred + target-params, because training val batches carry no raw audio.
+        if target_audio_file.is_file():
+            target_audio = torch.load(target_audio_file, map_location="cpu").numpy()
+        else:
+            target_audio = None
 
         if target_param_file is None:
             target_params = None
         else:
             target_params = torch.load(target_param_file, map_location="cpu")
+
+        if target_audio is None and not (rerender_target and target_params is not None):
+            raise ValueError(
+                f"{target_audio_file} is missing and --rerender_target is off (or "
+                "target params are absent): there is no target audio source. Stage "
+                "target-audio tensors or pass --rerender_target with target params."
+            )
 
         # 5. iterate over its internal rows and render the audio
         for j in trange(pred_params.shape[0]):
@@ -193,6 +212,9 @@ def main(
 
             target_synth_params: dict[str, float] | None = None
             target_note_params: NoteParams | None = None
+            # Dataset audio when staged; the rerender branch fills it only when absent,
+            # so a staged tensor keeps the spectrogram on dataset audio.
+            target_for_spec = target_audio[j] if target_audio is not None else None
 
             out_target = os.path.join(sample_dir, "target.wav")
             if rerender_target and target_params is not None:
@@ -213,6 +235,8 @@ def main(
                 )
                 with AudioFile(out_target, "w", sample_rate, channels) as f:
                     f.write(new_target.T)
+                if target_for_spec is None:
+                    target_for_spec = new_target
 
             else:
                 with AudioFile(out_target, "w", sample_rate, channels) as f:
@@ -225,7 +249,7 @@ def main(
             if not skip_spectrogram:
                 write_spectrograms(
                     pred_audio,
-                    target_audio[j],
+                    target_for_spec,
                     sample_rate,
                     os.path.join(sample_dir, "spec.png"),
                 )

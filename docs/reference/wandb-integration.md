@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `b389c72` (2026-06-11, `fix/1604-exit-keyed-subprocess-streaming`)
+> **Code version**: `5b785f1` (2026-07-15, `feat/val-audio-probe`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -99,12 +99,15 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                           | Logged key                       | Trigger                                         | Symbol                                                                            |
-| ---------------------------------- | -------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`              |
-| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/synth_setter/utils/callbacks.py::PlotPositionalEncodingSimilarity._log_plot` |
-| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`            |
-| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                             |
+| Callback                           | Logged key                                           | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ---------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`              | `plot` (image)                                       | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)                         | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotPositionalEncodingSimilarity._log_plot`                                    |
+| `PlotLearntProjection`             | `assignment`, `value` (images)                       | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`                   | `per_param_mse/{name}` per param                     | `on_validation_epoch_end` (via `self.log_dict`)                                                                                                                   | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in)           | `val_audio/<metric>_<stat>` + `val_audio/probe_step` | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+
+`ValAudioProbe`'s keys mirror §2i's `audio/*` metric set under the `val_audio/` prefix; the wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
 
 ### 2d. Callbacks — Non-W&B
 
