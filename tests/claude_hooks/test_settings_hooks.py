@@ -231,6 +231,7 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
     ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
+    ("PR checkbox trigger", "bash agent/hooks/pr-checkbox-trigger.sh"),
     ("PR-readiness gate", "bash agent/hooks/pr-readiness-stop.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),
