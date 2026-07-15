@@ -165,6 +165,30 @@ sub-agents; you never launch those directly.
 > `.agent-reviews/repo-review-full-no-comments.<40-char-sha>.md`. **Do not
 > hand-write the filename** — always go through the helper.
 >
+> **Record review progress.** Before writing the report, record a compact
+> per-branch state file under `.agent-reviews/`. It makes repeated no-progress
+> reviews visible without making ordinary investigation a failure:
+>
+> ```bash
+> progress_key=$(git branch --show-current | tr '/' '_')
+> progress_path=".agent-reviews/repo-review-full-no-comments-progress.${progress_key}.txt"
+> current_head=$(git rev-parse HEAD)
+> current_upstream=$(git rev-parse '@{upstream}' 2>/dev/null || echo none)
+> current_status=$(git status --porcelain | sha256sum | awk '{print $1}')
+> current_state="${current_head}|${current_upstream}|${current_status}"
+> previous_state=""
+> previous_count=0
+> if [[ -f "$progress_path" ]]; then
+>   read -r previous_count previous_state <"$progress_path" || true
+> fi
+> unchanged_count=0
+> [[ "$current_state" == "$previous_state" ]] && unchanged_count=$((previous_count + 1))
+> printf '%s %s\n' "$unchanged_count" "$current_state" >"$progress_path"
+> ```
+>
+> Include this line in every report Summary: `Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <clean|dirty>; unchanged review count <unchanged_count>.` If `unchanged_count` is greater
+> than zero, append: `Possible review loop: make coherent remediation durable or report the blocker before retrying.`
+>
 > **Write the report to `$REVIEW_PATH`** using this layout:
 >
 > ```markdown
@@ -198,7 +222,7 @@ sub-agents; you never launch those directly.
 >
 > - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
 > - Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
-> - If there are any BLOCK or WARN findings, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
+> - If there are any findings or PR-health flags, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
 >
 > Rules for the rendering:
 >
