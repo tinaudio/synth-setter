@@ -11,6 +11,8 @@ on:
       - "scripts/**"
       - "environment.yaml"
       - "pyproject.toml"
+      # This is the only test env without a project `.venv`, so it is the only
+      # one that catches `agent/_shared` entry points assuming one — see #1914.
       - "agent/_shared/**"
       - ".github/workflows/test-conda.yml"
   pull_request:
@@ -22,6 +24,8 @@ on:
       - "scripts/**"
       - "environment.yaml"
       - "pyproject.toml"
+      # This is the only test env without a project `.venv`, so it is the only
+      # one that catches `agent/_shared` entry points assuming one — see #1914.
       - "agent/_shared/**"
       - ".github/workflows/test-conda.yml"
 
