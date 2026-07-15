@@ -365,6 +365,15 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
     np.testing.assert_allclose(std, expected.std(axis=0))
 
 
+def test_stream_stats_lance_rejects_empty_shard_sequence(stats_script: ModuleType) -> None:
+    """An empty input is rejected instead of returning meaningless zero statistics.
+
+    :param stats_script: Imported stats module fixture.
+    """
+    with pytest.raises(FileNotFoundError, match="no shard URIs"):
+        stats_script.stream_stats_lance([])
+
+
 def test_stream_stats_lance_shard_with_zero_readable_rows_raises(
     stats_script: ModuleType, tmp_path: Path
 ) -> None:

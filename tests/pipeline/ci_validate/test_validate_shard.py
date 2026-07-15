@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from synth_setter.pipeline.ci import validate_shard as validate_shard_module
-from synth_setter.pipeline.ci.validate_shard import validate_shard
+from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2, validate_shard
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 
 
@@ -80,6 +80,17 @@ class TestValidateShard:
 
         assert len(errors) == 1
         assert "unsupported shard suffix" in errors[0]
+
+    def test_r2_validation_rejects_unknown_output_format(self, real_spec: DatasetSpec) -> None:
+        """An unregistered format cannot silently select a shard validator.
+
+        :param real_spec: Valid spec copied before injecting an unknown format.
+        """
+        invalid_spec = real_spec.model_copy()
+        object.__setattr__(invalid_spec, "output_format", "parquet")
+
+        with pytest.raises(ValueError, match="unsupported output_format"):
+            validate_all_shards_from_r2(invalid_spec)
 
 
 class TestMain:

@@ -23,6 +23,7 @@ from synth_setter.pipeline.data.add_music2latent import (
     MUSIC2LATENT_FIELD,
     M2LEncodeFn,
     add_music2latent,
+    augment_shards,
     discover_shards,
     get_shard_id,
     load_m2l_audio_encoder,
@@ -190,7 +191,6 @@ def test_music2latent_record_batch_rejects_wrong_rank_latents(encode: M2LEncodeF
         music2latent_record_batch(audio, encode)
 
 
-@pytest.mark.slow
 def test_add_music2latent_writes_column_and_keeps_other_columns(tmp_path: Path) -> None:
     """The latent column lands while pre-existing columns are left untouched.
 
@@ -207,7 +207,6 @@ def test_add_music2latent_writes_column_and_keeps_other_columns(tmp_path: Path) 
     np.testing.assert_allclose(latents, _fake_m2l(audio))
 
 
-@pytest.mark.slow
 def test_add_music2latent_rejects_rerun_when_column_exists(tmp_path: Path) -> None:
     """A second run on an augmented shard raises before touching the dataset.
 
@@ -221,7 +220,6 @@ def test_add_music2latent_rejects_rerun_when_column_exists(tmp_path: Path) -> No
         add_music2latent(lance.dataset(str(uri)), _fake_m2l)
 
 
-@pytest.mark.slow
 def test_add_music2latent_rejects_dataset_without_audio_column(tmp_path: Path) -> None:
     """A dataset lacking the audio column raises before the UDF runs.
 
@@ -277,7 +275,63 @@ def test_discover_shards_filters_to_half_open_range(tmp_path: Path) -> None:
     assert kept == [1, 2]
 
 
-@pytest.mark.slow
+def test_augment_shards_skips_complete_shard_and_continues_after_bad_shard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One corrupt shard is counted while later shards are still augmented.
+
+    :param monkeypatch: Replaces Lance opens and augmentation with observable fakes.
+    """
+    paths = [Path(f"shard-{index:06d}.lance") for index in range(3)]
+    datasets = {
+        paths[0].name: SimpleNamespace(schema=SimpleNamespace(names=[MUSIC2LATENT_FIELD])),
+        paths[2].name: SimpleNamespace(schema=SimpleNamespace(names=[AUDIO_FIELD]), count_rows=lambda: 4),
+    }
+    augmented: list[str] = []
+
+    def open_dataset(path: str) -> SimpleNamespace:
+        name = Path(path).name
+        if name == paths[1].name:
+            raise OSError("corrupt dataset")
+        return datasets[name]
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_music2latent.lance.dataset", open_dataset)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_music2latent.add_music2latent",
+        lambda dataset, encode, *, batch_size: augmented.append(paths[2].name),
+    )
+
+    assert augment_shards(paths, _fake_m2l, batch_size=8) == 1
+    assert augmented == [paths[2].name]
+
+
+def test_main_invalid_selection_exits_before_loading_encoder(tmp_path: Path) -> None:
+    """Mutually exclusive shard selectors fail before model loading.
+
+    :param tmp_path: Empty shard root passed to the CLI.
+    """
+    result = CliRunner().invoke(main, [str(tmp_path), "--shard", "1", "--shard-range", "0", "2"])
+
+    assert result.exit_code == 1
+
+
+def test_main_augmentation_failure_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial backfill is reported as failure instead of success.
+
+    :param tmp_path: Shard root containing one discoverable dataset path.
+    :param monkeypatch: Replaces encoder loading and augmentation.
+    """
+    (tmp_path / "shard-000000.lance").mkdir()
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+    )
+    monkeypatch.setattr("synth_setter.pipeline.data.add_music2latent.augment_shards", lambda *args: 1)
+
+    assert CliRunner().invoke(main, [str(tmp_path)]).exit_code == 1
+
+
 def test_main_adds_column_to_every_shard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The CLI backfills the latent column across all discovered shards.
 
@@ -296,7 +350,6 @@ def test_main_adds_column_to_every_shard(tmp_path: Path, monkeypatch: pytest.Mon
         assert MUSIC2LATENT_FIELD in lance.dataset(str(shard)).schema.names
 
 
-@pytest.mark.slow
 def test_main_skips_shards_already_having_the_column(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -367,7 +420,6 @@ def test_main_exits_1_when_encoder_load_fails(
     )
 
 
-@pytest.mark.slow
 def test_main_continues_past_failed_shard_and_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -409,7 +461,6 @@ def test_main_continues_past_failed_shard_and_exits_1(
     )
 
 
-@pytest.mark.slow
 def test_main_continues_past_unreadable_shard_and_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
