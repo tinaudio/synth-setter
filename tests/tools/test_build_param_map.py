@@ -106,22 +106,6 @@ def _valid_inputs() -> tuple[HostDump, ClapPluginInfo, HostDump]:
     )
 
 
-def _dawdreamer_fx_bank(bank: str, anchor_index: int) -> tuple[HostParam, ...]:
-    """Build one complete DawDreamer FX bank.
-
-    :param bank: Surge FX bank identifier.
-    :param anchor_index: Host-local FX Type index.
-    :returns: Complete anchor-plus-slot enumeration.
-    """
-    return (
-        HostParam(index=anchor_index, name=f"FX {bank} FX Type"),
-        *(
-            HostParam(index=anchor_index + slot, name=f"FX {bank} Param {slot}")
-            for slot in range(1, 13)
-        ),
-    )
-
-
 def test_join_param_map_preserves_verified_host_identities(registry: dict[str, ParamSpec]) -> None:
     """A valid join preserves each host identity.
 
@@ -200,10 +184,10 @@ def test_join_param_map_resolves_separate_clap_and_dawdreamer_oscillator_aliases
     assert identity.dawdreamer.index == 300
 
 
-def test_join_param_map_resolves_separate_clap_name_and_dawdreamer_fx_bank(
+def test_join_param_map_resolves_fx_host_name_from_semantic_key(
     registry: dict[str, ParamSpec], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An FX key resolves its CLAP name and DawDreamer bank independently.
+    """An FX key resolves its declared host name independently of Pedalboard.
 
     :param registry: Minimal builder registry.
     :param monkeypatch: Pytest monkeypatch fixture.
@@ -212,12 +196,12 @@ def test_join_param_map_resolves_separate_clap_name_and_dawdreamer_fx_bank(
     registry["test"] = ParamSpec([ContinuousParameter(semantic_key, 0.0, 1.0)], [])
     monkeypatch.setattr(
         build_param_map,
-        "_SURGE_FX_IDENTITIES",
-        {semantic_key: ("Independent CLAP FX", "B1", 1)},
+        "_SURGE_FX_NAMES",
+        {semantic_key: "Independent Host FX"},
     )
     pedalboard = _host_dump(HostParam(index=900, key=semantic_key, name="Preset Delay"))
-    clap = _clap(_clap_param(700, "Independent CLAP FX"))
-    dawdreamer = _host_dump(*_dawdreamer_fx_bank("B1", 45))
+    clap = _clap(_clap_param(700, "Independent Host FX"))
+    dawdreamer = _host_dump(HostParam(index=46, name="Independent Host FX"))
 
     identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
 
@@ -226,26 +210,10 @@ def test_join_param_map_resolves_separate_clap_name_and_dawdreamer_fx_bank(
     assert identity.dawdreamer.index == 46
 
 
-def test_join_param_map_resolves_fx_slots_by_anchor_position(
+def test_join_param_map_resolves_fx_slot_without_bank_anchor(
     registry: dict[str, ParamSpec],
 ) -> None:
-    """FX slots resolve from an anchored DawDreamer position.
-
-    :param registry: Minimal builder registry.
-    """
-    registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
-    pedalboard = _host_dump(HostParam(index=0, key="fx_a1_delay_time", name="FX A1 Delay - Time"))
-    clap = _clap(_clap_param(7, "FX A1 Param 1"))
-    dawdreamer = _host_dump(*reversed(_dawdreamer_fx_bank("A1", 40)))
-
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
-
-    assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
-    assert result.params["fx_a1_delay_time"].dawdreamer.name == "FX A1 Param 1"
-
-
-def test_join_param_map_rejects_unanchored_fx_slot(registry: dict[str, ParamSpec]) -> None:
-    """An FX slot without its anchor is rejected.
+    """A uniquely named FX slot resolves without positional bank metadata.
 
     :param registry: Minimal builder registry.
     """
@@ -254,26 +222,9 @@ def test_join_param_map_rejects_unanchored_fx_slot(registry: dict[str, ParamSpec
     clap = _clap(_clap_param(7, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    with pytest.raises(ValueError, match="DawDreamer FX A1 anchor is missing or ambiguous"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard, clap, dawdreamer)
 
-
-def test_join_param_map_rejects_incomplete_dawdreamer_fx_bank(
-    registry: dict[str, ParamSpec],
-) -> None:
-    """A host-local FX bank with a missing slot is rejected.
-
-    :param registry: Minimal builder registry.
-    """
-    registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
-    pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="Renamed Delay"))
-    clap = _clap(_clap_param(700, "FX A1 Param 1"))
-    dawdreamer = _host_dump(
-        *[param for param in _dawdreamer_fx_bank("A1", 40) if param.index != 45]
-    )
-
-    with pytest.raises(ValueError, match="DawDreamer FX A1 slot 5 is missing or invalid"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+    assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
 
 
 def test_join_param_map_resolves_dynamic_fx_from_semantic_key_not_pedalboard_name(
@@ -286,7 +237,7 @@ def test_join_param_map_resolves_dynamic_fx_from_semantic_key_not_pedalboard_nam
     registry["test"] = ParamSpec([ContinuousParameter("fx_a1_delay_time", 0.0, 1.0)], [])
     pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="My Delay Time"))
     clap = _clap(_clap_param(700, "FX A1 Param 1"))
-    dawdreamer = _host_dump(*_dawdreamer_fx_bank("A1", 40))
+    dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
     result = join_param_map("test", pedalboard, clap, dawdreamer)
 
@@ -426,10 +377,10 @@ def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpe
         join_param_map("test", pedalboard, clap, dawdreamer)
 
 
-def test_join_param_map_rejects_duplicate_dawdreamer_fx_anchor(
+def test_join_param_map_rejects_ambiguous_dawdreamer_fx_name(
     registry: dict[str, ParamSpec],
 ) -> None:
-    """An FX bank must have exactly one host-local anchor.
+    """An FX host name must select exactly one DawDreamer identity.
 
     :param registry: Minimal builder registry.
     """
@@ -437,10 +388,13 @@ def test_join_param_map_rejects_duplicate_dawdreamer_fx_anchor(
     pedalboard = _host_dump(HostParam(index=900, key="fx_a1_delay_time", name="Delay"))
     clap = _clap(_clap_param(700, "FX A1 Param 1"))
     dawdreamer = _host_dump(
-        *_dawdreamer_fx_bank("A1", 40), HostParam(index=400, name="FX A1 FX Type")
+        HostParam(index=41, name="FX A1 Param 1"),
+        HostParam(index=400, name="fx_a1_param_1"),
     )
 
-    with pytest.raises(ValueError, match="DawDreamer FX A1 anchor is missing or ambiguous"):
+    with pytest.raises(
+        ValueError, match="DawDreamer name 'FX A1 Param 1' is missing or ambiguous"
+    ):
         join_param_map("test", pedalboard, clap, dawdreamer)
 
 

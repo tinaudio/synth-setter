@@ -8,7 +8,7 @@ import pytest
 from synth_setter.data.vst.param_map import SynthParamMap, load_param_map
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import as_file, param_map
-from synth_setter.tools.build_param_map import _SURGE_FX_IDENTITIES
+from synth_setter.tools.build_param_map import _SURGE_FX_NAMES
 
 
 @pytest.fixture(params=("surge_xt", "surge_simple", "surge_4"))
@@ -83,10 +83,10 @@ def test_committed_map_dawdreamer_fx_names_match_host_label(committed_map: Synth
 
     :param committed_map: Packaged map.
     """
-    for semantic_key, (_clap_name, bank, slot) in _SURGE_FX_IDENTITIES.items():
+    for semantic_key, host_name in _SURGE_FX_NAMES.items():
         identity = committed_map.params.get(semantic_key)
         if identity is None:
             continue
-        assert identity.dawdreamer.name == f"FX {bank} Param {slot}", (
+        assert identity.dawdreamer.name == host_name, (
             f"{semantic_key}: stale DawDreamer label {identity.dawdreamer.name!r}"
         )
