@@ -7,4 +7,4 @@ Use ``ConditioningMode`` to annotate routing boundaries::
 
 from typing import Literal
 
-type ConditioningMode = Literal["mel", "m2l"]
+ConditioningMode = Literal["mel", "m2l"]

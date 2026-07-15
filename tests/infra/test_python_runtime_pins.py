@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -136,6 +137,26 @@ def test_python_source_tools_target_python_312(project_root: Path) -> None:
         repository for repository in precommit["repos"] if "interrogate" in repository["repo"]
     )
     assert interrogate["hooks"][0]["language_version"] == "python3.12"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "src/synth_setter/conditioning.py",
+        "src/synth_setter/param_spec_name.py",
+    ],
+)
+def test_dev_snapshot_overlay_aliases_parse_on_python_311(
+    project_root: Path, relative_path: str
+) -> None:
+    """Modules imported before worker repair retain Python 3.11 grammar.
+
+    :param project_root: Repository root fixture.
+    :param relative_path: Source module overlaid onto the rolling worker image.
+    """
+    source = (project_root / relative_path).read_text()
+
+    ast.parse(source, filename=relative_path, feature_version=(3, 11))
 
 
 def test_local_environment_provisioning_pins_python_31213(project_root: Path) -> None:

@@ -25,4 +25,4 @@ def _reject_blank(value: ParamSpecName) -> ParamSpecName:
     return value
 
 
-type ValidatedParamSpecName = Annotated[ParamSpecName, AfterValidator(_reject_blank)]
+ValidatedParamSpecName = Annotated[ParamSpecName, AfterValidator(_reject_blank)]
