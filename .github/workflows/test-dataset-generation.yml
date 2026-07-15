@@ -143,19 +143,7 @@ jobs:
           pip install --no-deps -e .
           pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0" "pydantic>=2,<3" python-dotenv
 
-      # Provider axis:
-      #   schedule, cron `0 * * * *` (hourly) → skypilot-local
-      #   schedule, cron `0 7 * * 0` (weekly) → skypilot-local + runpod + oci
-      #   workflow_dispatch                   → respect inputs.provider
-      #   anything else                       → empty array → downstream skips
-      #
-      # Output-format axis (intentionally single-valued — `lance` is the only
-      # format today; the axis is kept so re-adding a format is a one-value change):
-      #   schedule (either cron) → lance
-      #   workflow_dispatch      → single format derived by Hydra-composing the
-      #     dispatched experiment config; the cell whose `matrix.output_format`
-      #     doesn't match would deterministically fail the spec-format
-      #     cross-check, so collapse the matrix to that one format.
+      # Keep the format axis so future formats can be added without restructuring the matrix.
       #
       # The Hydra compose in the workflow_dispatch branch captures stderr to a
       # temp file so a missing-experiment / config-typing / missing-key failure

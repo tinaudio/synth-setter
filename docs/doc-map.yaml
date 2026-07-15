@@ -140,7 +140,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
         covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass that adds an `audio_mp3` Arrow binary preview column and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes (neither a training input)."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
-        covers: "`python -m synth_setter.pipeline.data.add_music2latent` CLI — adds a `music2latent` dataset to Lance shards via reader/writer multiprocessing around a GPU encode loop."
+        covers: "Adds music2latent embeddings to Lance datasets"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
@@ -182,7 +182,7 @@ docs:
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `skypilot-local` (kind cluster) + RunPod + OCI: generate → validate-spec → validate-shard, per-provider artifacts. No `pull_request` trigger after #1164/#1170 — presubmit launcher / R2 round-trip duty moves to test-local-launcher-roundtrip.yml. Hourly `schedule` (`0 * * * *`) runs `skypilot-local × {lance}`; weekly `schedule` (`0 7 * * 0`) runs all providers × `{lance}` (only paid-capacity touch outside manual dispatch). Cred bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+        covers: "Dataset-generation smoke workflow across supported providers"
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
@@ -483,7 +483,7 @@ docs:
     description: Interactive Surge XT prediction audition and patch-recording guide
     sources:
       - pattern: "src/synth_setter/tools/surge_xt_interactive.py"
-        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch Lance output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/synth_setter/cli/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
+        covers: "Interactive Surge XT audition and patch-recording CLI"
       - pattern: "src/synth_setter/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
@@ -494,7 +494,7 @@ docs:
         covers: "Render captured patches into a Lance train split"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Source of truth for the (channels, n_mels, n_frames) trailing-dims of mel_spec output and (channels, time_samples) trailing-dims of audio output written by make_lance_dataset"
+        covers: "Mel and audio tensor-shape contract for Lance writers"
         scope: "interactive"
 
   - doc: docs/guides/adding-a-new-synth.md

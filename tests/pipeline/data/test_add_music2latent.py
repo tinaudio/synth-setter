@@ -138,7 +138,7 @@ def test_music2latent_record_batch_builds_fixed_shape_tensor() -> None:
     assert np.isfinite(latents).all()
 
 
-def test_load_m2l_audio_encoder_preserves_stereo_rows_and_flattens_channel_latents(
+def test_load_m2l_audio_encoder_preserves_stereo_rows_and_forwards_batch_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The adapter maps ``(B, C, T)`` audio to row-aligned ``(B, C*D, T')`` latents.
@@ -149,13 +149,13 @@ def test_load_m2l_audio_encoder_preserves_stereo_rows_and_flattens_channel_laten
     class _Encoder:
         def encode(self, audio: np.ndarray, *, max_batch_size: int) -> torch.Tensor:
             assert audio.shape == (6, 5)
-            assert max_batch_size == 64
+            assert max_batch_size == 7
             return torch.from_numpy(np.repeat(audio[:, None, :2], 4, axis=1))
 
     monkeypatch.setitem(sys.modules, "music2latent", SimpleNamespace(EncoderDecoder=_Encoder))
     audio = np.arange(30, dtype=np.float32).reshape(3, 2, 5)
 
-    latents = load_m2l_audio_encoder()(audio)
+    latents = load_m2l_audio_encoder(max_batch_size=7)(audio)
 
     assert latents.shape == (3, 8, 2)
     np.testing.assert_array_equal(latents[0, :4], np.repeat(audio[0, 0, :2][None], 4, axis=0))
@@ -275,6 +275,41 @@ def test_discover_shards_filters_to_half_open_range(tmp_path: Path) -> None:
     assert kept == [1, 2]
 
 
+def test_discover_shards_includes_finalized_splits_in_canonical_order(tmp_path: Path) -> None:
+    """Finalized train, validation, and test datasets are eligible augmentation inputs.
+
+    :param tmp_path: Root containing finalized split dataset directories.
+    """
+    for name in ("test.lance", "train.lance", "val.lance"):
+        (tmp_path / name).mkdir()
+
+    assert [path.name for path in discover_shards(tmp_path)] == [
+        "train.lance",
+        "val.lance",
+        "test.lance",
+    ]
+
+
+def test_main_forwards_encoder_batch_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI forwards its memory cap to encoder construction.
+
+    :param tmp_path: Root containing one discoverable dataset path.
+    :param monkeypatch: Records encoder construction and avoids augmentation.
+    """
+    (tmp_path / "train.lance").mkdir()
+    observed: list[int] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder",
+        lambda batch_size: observed.append(batch_size) or _fake_m2l,
+    )
+    monkeypatch.setattr("synth_setter.pipeline.data.add_music2latent.augment_shards", lambda *args: 0)
+
+    result = CliRunner().invoke(main, [str(tmp_path), "--encode-batch-size", "11"])
+
+    assert result.exit_code == 0, result.output
+    assert observed == [11]
+
+
 def test_augment_shards_skips_complete_shard_and_continues_after_bad_shard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -325,7 +360,7 @@ def test_main_augmentation_failure_exits_nonzero(
     """
     (tmp_path / "shard-000000.lance").mkdir()
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda _: _fake_m2l
     )
     monkeypatch.setattr("synth_setter.pipeline.data.add_music2latent.augment_shards", lambda *args: 1)
 
@@ -340,7 +375,7 @@ def test_main_adds_column_to_every_shard(tmp_path: Path, monkeypatch: pytest.Mon
     """
     data_dir = _write_shard_dir(tmp_path, [0, 1, 2])
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda _: _fake_m2l
     )
 
     result = CliRunner().invoke(main, [str(data_dir)])
@@ -360,7 +395,7 @@ def test_main_skips_shards_already_having_the_column(
     """
     data_dir = _write_shard_dir(tmp_path, [0, 1])
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda _: _fake_m2l
     )
     done = data_dir / "shard-000000.lance"
     add_music2latent(lance.dataset(str(done)), _fake_m2l)
@@ -384,7 +419,7 @@ def test_main_warns_and_returns_when_no_shards(
     empty = tmp_path / "empty"
     empty.mkdir()
 
-    def fail_load() -> M2LEncodeFn:
+    def fail_load(_: int) -> M2LEncodeFn:
         raise AssertionError("encoder must not load when there are no shards")
 
     monkeypatch.setattr(
@@ -406,7 +441,7 @@ def test_main_exits_1_when_encoder_load_fails(
     """
     data_dir = _write_shard_dir(tmp_path, [0])
 
-    def boom() -> M2LEncodeFn:
+    def boom(_: int) -> M2LEncodeFn:
         raise RuntimeError("encoder load blew up")
 
     monkeypatch.setattr("synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", boom)
@@ -430,7 +465,7 @@ def test_main_continues_past_failed_shard_and_exits_1(
     """
     data_dir = _write_shard_dir(tmp_path, [0, 1, 2])
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda _: _fake_m2l
     )
 
     real_add = add_music2latent
@@ -474,7 +509,7 @@ def test_main_continues_past_unreadable_shard_and_exits_1(
     corrupt.mkdir()
     (corrupt / "garbage.bin").write_bytes(b"not a lance dataset")
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", lambda _: _fake_m2l
     )
 
     result = CliRunner().invoke(main, [str(data_dir)])

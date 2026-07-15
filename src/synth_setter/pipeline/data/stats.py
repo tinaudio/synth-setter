@@ -249,7 +249,6 @@ def stream_stats_lance(
     :param mask_degenerate: See :func:`get_stats_lance`.
     :param storage_options: Object-store config for cloud ``shard_uris``; ``None`` local.
     :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :rtype: tuple[np.ndarray, np.ndarray]
     :raises FileNotFoundError: ``shard_uris`` yielded zero entries.
     """
     existing: WelfordState = (0, 0, 0)

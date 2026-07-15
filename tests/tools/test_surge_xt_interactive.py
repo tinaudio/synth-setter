@@ -1190,7 +1190,8 @@ class TestMaybeEvalCapturedPatches:
         :param tmp_path: Per-test tmp dir holding the source and replicated Lance dirs.
         """
         train_path = tmp_path / "train.lance"
-        _write_stub_lance_dir(train_path, b"train-content")
+        rows = np.arange(12, dtype=np.float32).reshape(3, 4)
+        _write_param_array_lance(train_path, rows)
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
         runner = _RecordingEvalRunner()
@@ -1205,8 +1206,11 @@ class TestMaybeEvalCapturedPatches:
             eval_runner=runner,
         )
 
+        import lance
+
         for sibling in ("test.lance", "val.lance", "predict.lance"):
-            assert (tmp_path / sibling / "data").read_bytes() == b"train-content"
+            copied = lance.dataset(str(tmp_path / sibling)).to_table()["param_array"]
+            np.testing.assert_array_equal(copied.combine_chunks().to_numpy_ndarray(), rows)
         assert runner.calls == [
             (3, tmp_path, ckpt_path, SURGE_SIMPLE, "presets/surge-simple.vstpreset")
         ]

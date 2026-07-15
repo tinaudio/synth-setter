@@ -43,6 +43,7 @@ MUSIC2LATENT_FIELD: str = "music2latent"
 # Per-forward GPU batch cap, independent of Lance's read batch size — caps GPU
 # memory per encode call.
 M2L_ENCODE_MAX_BATCH: int = 64
+_FINALIZED_SPLIT_ORDER = {"train.lance": 0, "val.lance": 1, "test.lance": 2}
 
 M2LEncodeFn: TypeAlias = Callable[[np.ndarray], np.ndarray]
 
@@ -114,7 +115,7 @@ def add_music2latent(
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
 
 
-def load_m2l_audio_encoder() -> M2LEncodeFn:
+def load_m2l_audio_encoder(max_batch_size: int = M2L_ENCODE_MAX_BATCH) -> M2LEncodeFn:
     """Build a music2latent encode callable over an ``(B, C, T)`` batch.
 
     The ``music2latent`` import is deferred so this module stays importable (and
@@ -122,6 +123,7 @@ def load_m2l_audio_encoder() -> M2LEncodeFn:
     knob: music2latent owns its own placement. The returned callable holds a single
     encoder, so it is reused across shards without reloading the model.
 
+    :param max_batch_size: Maximum flattened channel rows per encoder forward pass.
     :returns: Encode callable mapping ``(B, C, T)`` to ``(B, C*D, T)`` float32.
     """
     from music2latent import EncoderDecoder
@@ -131,7 +133,7 @@ def load_m2l_audio_encoder() -> M2LEncodeFn:
     def encode(audio: np.ndarray) -> np.ndarray:
         batch, channels = audio.shape[0], audio.shape[1]
         flat = np.ascontiguousarray(rearrange(audio, "b c t -> (b c) t"), dtype=np.float32)
-        latents = encoder.encode(flat, max_batch_size=M2L_ENCODE_MAX_BATCH)
+        latents = encoder.encode(flat, max_batch_size=max_batch_size)
         latents = rearrange(latents, "(b c) d t -> b (c d) t", b=batch, c=channels)
         return latents.cpu().numpy()
 
@@ -144,7 +146,7 @@ def discover_shards(
     shard_range: tuple[int, int] | None = None,
     shard: int | None = None,
 ) -> list[Path]:
-    """List ``shard-*.lance`` datasets under ``data_dir``, filtered and id-sorted.
+    """List generated shards or finalized split datasets under ``data_dir``.
 
     :param data_dir: Directory holding ``shard-<id>.lance`` dataset directories.
     :param shard_range: Half-open ``[lo, hi)`` id range to keep; ``None`` keeps all.
@@ -155,11 +157,20 @@ def discover_shards(
     if shard_range is not None and shard is not None:
         raise ValueError("cannot specify both shard_range and shard")
     shards = list(data_dir.glob("shard-*.lance"))
+    if shard_range is None and shard is None:
+        shards.extend(data_dir / name for name in _FINALIZED_SPLIT_ORDER if (data_dir / name).is_dir())
     if shard_range is not None:
         shards = [s for s in shards if get_shard_id(s) in range(*shard_range)]
     if shard is not None:
         shards = [s for s in shards if get_shard_id(s) == shard]
-    shards.sort(key=get_shard_id)
+    shards.sort(
+        key=lambda path: (
+            0 if path.name.startswith("shard-") else 1,
+            get_shard_id(path)
+            if path.name.startswith("shard-")
+            else _FINALIZED_SPLIT_ORDER[path.name],
+        )
+    )
     return shards
 
 
@@ -198,6 +209,13 @@ def augment_shards(shards: list[Path], m2l_encode: M2LEncodeFn, batch_size: int 
     help="Rows per UDF call; defaults to the Lance default (ignored for v1 datasets).",
 )
 @click.option(
+    "--encode-batch-size",
+    type=click.IntRange(min=1),
+    default=M2L_ENCODE_MAX_BATCH,
+    show_default=True,
+    help="Maximum flattened channel rows per music2latent encoder forward pass.",
+)
+@click.option(
     "--shard-range",
     type=int,
     nargs=2,
@@ -208,6 +226,7 @@ def augment_shards(shards: list[Path], m2l_encode: M2LEncodeFn, batch_size: int 
 def main(
     data_dir: str,
     batch_size: int | None,
+    encode_batch_size: int,
     shard_range: tuple[int, int] | None,
     shard: int | None,
 ) -> None:
@@ -219,6 +238,7 @@ def main(
 
     :param data_dir: Local directory holding ``shard-<id>.lance`` dataset directories.
     :param batch_size: Rows per UDF call; ``None`` uses the Lance default.
+    :param encode_batch_size: Maximum flattened channel rows per encoder forward pass.
     :param shard_range: Half-open ``[lo, hi)`` shard-id range to process.
     :param shard: Single shard id to process (mutually exclusive with ``shard_range``).
     """
@@ -232,7 +252,7 @@ def main(
         return
 
     try:
-        m2l_encode = load_m2l_audio_encoder()
+        m2l_encode = load_m2l_audio_encoder(encode_batch_size)
     except (OSError, RuntimeError, ImportError) as exc:
         logger.error("encoder_load_failed", error=str(exc))
         sys.exit(1)
