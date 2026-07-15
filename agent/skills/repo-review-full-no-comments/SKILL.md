@@ -26,14 +26,21 @@ agent you launch that agent and relay its result.
 1. Capture the target argument: if the command was invoked with an explicit
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
-2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute when an explicit
-   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
-   verbatim (Step 1 of the brief already resolves PR-or-local-branch mode). Do
-   not otherwise edit the brief. **Never spawn this orchestrator on a Fable
-   model** (any id containing `fable`) — pass an explicit `model` such as
-   `sonnet` or `opus`.
-3. The agent returns the **full rendered Markdown report** ending in a final
+2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
+   unset. If it is set, stop and explain that it overrides the project
+   review-agent models; do not run a gate with an overridden model policy.
+3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
+   the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
+   may not expose a custom-role selector, run
+   `agent/_shared/run_codex_review_agent.sh pr-review-orchestrator --skill-brief agent/skills/repo-review-full-no-comments/SKILL.md` (append
+   `--target <N>` only when an explicit target was passed). The launcher reads
+   the project agent file and supplies its pinned model, reasoning effort, and
+   developer instructions directly to `codex exec`. The prompt is the entire
+   "## Orchestrator agent brief" section below. Only substitute an explicit
+   `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
+   is unavailable, stop with a configuration error; do not fall back to an
+   inherited or anonymous agent.
+4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
    append any narration of your own. Do not re-run the pipeline.
@@ -48,9 +55,8 @@ sub-agents; you never launch those directly.
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
 >
-> **Model policy: no Fable.** Pass an explicit `model` whose id does not contain
-> `fable` (e.g. `sonnet` or `opus`) to every per-skill review sub-agent you
-> spawn.
+> **Model policy.** Use the named PR-review worker roles from the shared
+> analysis. Do not supply per-invocation model overrides.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >

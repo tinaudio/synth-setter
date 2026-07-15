@@ -19,12 +19,21 @@ fan out the reviews, aggregate findings, or call `post_review.py` yourself.
 
 1. Capture the PR argument: if the command was invoked with an explicit `<N>`,
    keep it; otherwise the orchestrator resolves the PR from the current branch.
-2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute when an explicit
-   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
-   verbatim (it already tells the orchestrator to resolve the PR from the
-   current branch). Do not otherwise edit the brief.
-3. Relay the agent's returned `html_url` and one-line summary to the user
+2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
+   unset. If it is set, stop and explain that it overrides the project
+   review-agent models; do not run a gate with an overridden model policy.
+3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
+   the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
+   may not expose a custom-role selector, run
+   `agent/_shared/run_codex_review_agent.sh pr-review-orchestrator --skill-brief agent/skills/repo-review-full/SKILL.md` (append `--target <N>`
+   only when an explicit target was passed). The launcher reads the project
+   agent file and supplies its pinned model, reasoning effort, and developer
+   instructions directly to `codex exec`. The prompt is the entire
+   "## Orchestrator agent brief" section below. Only substitute an explicit
+   `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
+   is unavailable, stop with a configuration error; do not fall back to an
+   inherited or anonymous agent.
+4. Relay the agent's returned `html_url` and one-line summary to the user
    verbatim. Do not re-run or second-guess the pipeline.
 
 Spawn only this one orchestrator. It launches its own parallel per-skill review
