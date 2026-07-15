@@ -1,6 +1,362 @@
 # CHANGELOG
 
 
+## v8.54.0 (2026-07-15)
+
+### Automation
+
+- Pin PR gate review models ([#1906](https://github.com/tinaudio/synth-setter/pull/1906),
+  [`14d41b3`](https://github.com/tinaudio/synth-setter/commit/14d41b39e3721c1e828459a1a8fc25b6c43ad511))
+
+### Build System
+
+- (fix) unbreak devcontainer-tools build broken by hermes uv env
+  ([#1924](https://github.com/tinaudio/synth-setter/pull/1924),
+  [`135a958`](https://github.com/tinaudio/synth-setter/commit/135a9584d2370b8bbee9d99bf7660b845be662e5))
+
+* fix(docker): stop the hermes installer inheriting UV_PYTHON_INSTALL_DIR
+
+The devcontainer-tools stage fails to build, which blocks image publishing on main:
+
+→ Installing managed uv into /home/dev/.hermes/bin ... error: Failed to create Python minor version
+  link directory Caused by: Permission denied (os error 13) at path "/opt/uv/python/.tmpCcc1Rl"
+
+The stage runs as ${USERNAME} from line 630, so the hermes installer's uv inherits the image-wide
+  `UV_PYTHON_INSTALL_DIR=/opt/uv/python`. That path is root-owned, so fetching a managed interpreter
+  into it fails with EACCES. The line already unsets VIRTUAL_ENV for the same reason;
+  UV_PYTHON_INSTALL_DIR belongs with it.
+
+Hermes owns a separate per-user venv, so its interpreter belongs under the user's home rather than
+  the shared /opt/uv tree that /venv/main reads.
+
+Reproduced the mechanism directly, root-owned dir and non-root user, uv 3.12:
+
+inheriting UV_PYTHON_INSTALL_DIR=/opt/uv/python: error: failed to create directory
+  `/opt/uv/python/.temp`: Permission denied exit=2 with UV_PYTHON_INSTALL_DIR unset: +
+  cpython-3.12.13-linux-x86_64-gnu (python3.12) exit=0
+
+Refs #1817
+
+* test(docker): pin the hermes installer's env isolation
+
+`test_devcontainer_tools_installs_hermes_and_pi` asserts the hermes install command verbatim, so
+  adding `-u UV_PYTHON_INSTALL_DIR` broke it. The image build runs `pytest -k "not slow"`, so this
+  surfaced as a Docker build failure rather than a test failure — and `test.yml` has no `docker/**`
+  path trigger, so nothing ran it on the previous push.
+
+Updates the verbatim assertion, and adds a test that pins the constraint rather than the string: the
+  hermes install line must unset both `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR`. The first breaks on
+  any edit to that line; the second states why the unset is load-bearing, so a future edit dropping
+  it fails with a reason.
+
+Both fail against the previous Dockerfile and pass against this one.
+
+Refs #1923
+
+### Features
+
+- **training**: Async validation audio probe with R2 sound snapshots
+  ([#1925](https://github.com/tinaudio/synth-setter/pull/1925),
+  [`3a6c3fe`](https://github.com/tinaudio/synth-setter/commit/3a6c3fe153d34775dba616ee20a27d2dfe714259))
+
+* feat(training): async validation audio probe with R2 sound snapshots
+
+val/param_mse says nothing about how a prediction sounds, and rendering the whole val split through
+  the VST cannot sit in the training loop. A rank-0 ValAudioProbe callback stages the first val
+  batch's leading samples (preds + params) once per validation epoch, renders and scores them on a
+  worker thread via the existing predict_vst_audio -> compute_audio_metrics chain, archives the wav
+  snapshot to r2://{bucket}/probes/{config_id}/step-{N}/, and logs val_audio/* scalars at the next
+  validation. At most one probe is in flight; probe failures are logged, never raised into the fit
+  loop.
+
+The target wav is re-rendered from its params (--rerender_target): training val batches carry no raw
+  audio (read_audio is predict-only), and reading audio on the val loader would cost far more than
+  the probe. predict_vst_audio now tolerates an absent target-audio tensor in rerender mode. The
+  three VST modules return preds from validation_step so the callback can stage without re-sampling,
+  and eval's aggregated-metrics CSV parsing moved to compute_audio_metrics.load_aggregated_metrics
+  so the read contract lives next to the writer.
+
+Off by default: training.val_audio_probe=true plus a render group (train.yaml gained render: null)
+  enables it.
+
+* test(training): unit-cover run_audio_probe and address probe review warns
+
+Add tests/evaluation/test_audio_probe.py: argv construction (render-field forwarding, optional-flag
+  gating, Linux wrapper prefix, --rerender_target), staged-sample counting, and run_audio_probe
+  driven with a fake subprocess runner that writes real stage outputs plus a real rclone upload
+  against fake_r2_remote — pinning stage order, the predictions/ upload exclusion, and the returned
+  val_audio/* metric dict.
+
+Also from the pre-PR review pass: pin preds finiteness in the contract test (raw predictions are
+  unbounded by design, so a range assertion would be wrong), switch probe logging to lazy
+  pattern-parameters, document probe_fn's return contract and failure semantics, and record the
+  FileNotFoundError/ValueError propagated from load_aggregated_metrics.
+
+* fix(evaluation): resolve second review-pass findings for the audio probe
+
+Fix make_spectrogram's wrong return annotation (list, not ndarray) and add its shape contract; share
+  the postprocessing timeout budgets between audio_probe and cli/eval.py instead of duplicating
+  them; delete the commented-out debug block in PlotLearntProjection; correct the stale
+  target_for_spec comment (the rerender branch fills it only when no dataset audio was staged);
+  reject fractional val_audio_probe_samples via int(); condense two over-long comments.
+
+* fix(training): prune harvested probe dirs and drop leftover dead code
+
+Delete the second commented-out debug block in PlotLearntProjection (the first was removed last
+  pass; this one sat three lines below it). Prune a probe's local directory at harvest once its
+  metrics are logged — the R2 snapshot is the archive, so local disk use stays bounded across long
+  runs with tight val cadences; failed probes keep their directory for debugging.
+
+* test(training): validate probe sample count and pin prediction dependence
+
+Reject a non-positive-integer training.val_audio_probe_samples with a directed ValueError at wiring
+  time — OmegaConf.select only substitutes its default for a missing key, so a null override
+  previously reached int(None) as an opaque mid-run TypeError, and a fractional override truncated
+  silently. Pin two more prediction contracts: feed-forward preds depend on the mel input (a
+  constant-output regression passes shape and finiteness checks), and flow-matching validation
+  sampling draws fresh noise per call.
+
+* docs: cover the val audio probe across design and reference docs
+
+Apply the doc-drift advisory for PR #1925: add the probes/ prefix to the storage-provenance R2
+  layout, a ValAudioProbe row (one-validation-late cadence) to the wandb-integration callback table,
+  training-pipeline §6.4 for the opt-in flags and render-group requirement, the render group note to
+  configuration-reference §2.3, the audio-less rerender staging contract to eval-pipeline §5.2, and
+  drift-resistant evaluation/ descriptions in architecture.md and README. Map audio_probe.py and the
+  train.py wiring in doc-map.yaml so future probe drift is visible.
+
+* fix(training): reject val_audio_probe when validation is disabled
+
+Live validation surfaced a silent no-op: the surge experiment base ships trainer.limit_val_batches:
+  0, so a validation-hooked probe wired into an ffn_full-lineage run never stages anything. Fail at
+  wiring time with a directed ValueError naming the override, and note the requirement in train.yaml
+  and training-pipeline §6.4.
+
+* fix(training): make ValAudioProbe ddp_spawn-safe and address CI review
+
+The callback held a live ThreadPoolExecutor from construction, which ddp_spawn (trainer=ddp_sim)
+  cannot pickle. Create the pool lazily on first launch and drop process-local state (pool,
+  in-flight future, staged slot) in __getstate__ so a spawned rank starts with a clean slot. Also
+  reject boolean val_audio_probe_samples (bool passes isinstance int), unpack
+  load_aggregated_metrics' two-clause comprehension into a loop, and tighten three doc-map covers
+  strings per the review's comment-hygiene findings.
+
+### Internal-Fix
+
+- **ci**: Stop the codex review launcher inheriting caller stdin
+  ([#1908](https://github.com/tinaudio/synth-setter/pull/1908),
+  [`9c15acf`](https://github.com/tinaudio/synth-setter/commit/9c15acf2d6cc8febafa6c1518383d91648a2e196))
+
+* internal-fix(ci): stop codex review launcher inheriting caller stdin
+
+`codex exec` appends piped stdin to the prompt and blocks until EOF even when the prompt is supplied
+  as an argv positional. The launcher inherited the caller's stdin, so any caller holding it open (a
+  pipe, a `while read` loop, a supervising harness) deadlocked the worker: zero events, no output,
+  no error. Since the full-review skills now fail closed rather than fall back to an anonymous
+  worker, one stalled worker hangs the whole review gate.
+
+Redirect the subprocess from /dev/null. The prompt is already complete by construction, so stdin can
+  only block or contaminate it.
+
+The existing shell tests missed this because their fake `codex` never reads stdin; the new test's
+  fake echoes back whatever stdin it received.
+
+uv.lock carries a forced version sync: the lock on main still pins 8.51.0 while release-please has
+  moved to 8.53.0, so every `uv run` regenerates it.
+
+Fixes #1907 Refs #1561
+
+* internal-fix(ci): keep review launcher within line limits and harden fake
+
+Address review WARNs on the stdin fix: wrap the codex exec invocation and its comment under 80
+  columns, and build the fake codex event with `jq -cn` so the echoed stdin is JSON-escaped rather
+  than spliced into a string.
+
+Refs #1907
+
+- **pipeline**: Run stats Dask workers in-process to avoid macOS teardown timeout
+  ([#1929](https://github.com/tinaudio/synth-setter/pull/1929),
+  [`8589413`](https://github.com/tinaudio/synth-setter/commit/8589413058ee91db237a192a24880a4d55a9025c))
+
+`get_stats_hdf5` created its `dask.distributed.Client` with the default process-based workers,
+  spawning four Nanny subprocesses. On macOS, tearing those subprocesses down at `Client.__exit__`
+  hangs and raises `TimeoutError` — crashing the HDF5 stats subprocess *after* mean/std were already
+  computed, which surfaced as a spurious failure in the `_write_smoke_stats_npz` fixture (#1883).
+
+Pass `processes=False` so workers run as in-process threads: there are no Nanny subprocesses to
+  reap, and the threaded workers share the module's `hdf5plugin` Blosc2 filter registration. Add a
+  regression test pinning the in-process worker construction.
+
+Refs #1883
+
+### Testing
+
+- Drop bash-4 mapfile from the review fan-out snippets
+  ([#1917](https://github.com/tinaudio/synth-setter/pull/1917),
+  [`2fd54cb`](https://github.com/tinaudio/synth-setter/commit/2fd54cb2cc2fc5f83bc6173d9dc942f277dc4f1e))
+
+The lance-review opt-in snippet is duplicated by contract between the fan-out router and the skill
+  itself, and both copies open with `mapfile`, a bash 4+ builtin. macOS ships bash 3.2 as
+  `/bin/bash`, so an orchestrator running either snippet there fails skill selection with `mapfile:
+  command not found` and silently reviews the diff without the Lance checklist.
+
+Replaced with the `while IFS= read -r` loop already used for this in `capture-state.sh` and
+  `no-baseline-additions.sh`. Both copies change together so the identical-pattern invariant between
+  them holds.
+
+Verified under bash 3.2: `mapfile` is command-not-found, while the replacement yields the same array
+  for populated input and the same empty array when the grep matches nothing, so the `-gt 0` guard
+  still skips correctly.
+
+Refs #1561
+
+- Pin rclone 1.68.2 instead of apt's broken 1.60.1
+  ([#1920](https://github.com/tinaudio/synth-setter/pull/1920),
+  [`7384f1b`](https://github.com/tinaudio/synth-setter/commit/7384f1b75ee88d95fc4cd0fa877cb11de893f803))
+
+* fix(ci-automation): pin rclone 1.68.2 instead of apt's 1.60.1
+
+`setup-r2` installed rclone with `apt-get install rclone`, and ubuntu-latest's candidate is
+  1.60.1+dfsg — a 2022 build whose S3 backend fails the first write of every process against R2 with
+  `NotImplemented: Not Implemented`.
+
+Uploads that go through `r2_io._rclone_argv` survive it because that helper passes `--retries=3`, so
+  attempt 1 fails and attempt 2 succeeds; the CI logs show that pattern on every object. `rclone
+  rcat` cannot retry — its stdin is consumed and unrewindable — so the same defect is fatal there,
+  which is why `test_end_to_end_report_against_r2` is the one caller that fails outright.
+
+Isolated to the version, holding creds, bucket and image constant:
+
+rclone 1.60.1: rcat exit=1 ERROR: Failed to copy: NotImplemented rclone 1.68.2: rcat exit=0
+
+Every upload in CI therefore pays a guaranteed-failing round-trip plus retry backoff. Seven
+  workflows opt into `install-rclone`, so all of them do.
+
+1.68.2 matches the version already used in local dev worktrees. The Docker image's rclone is
+  untouched: it is deliberately pinned to 1.53 for `rclone mount`'s bare `fusermount` dependency,
+  and ships its own binary rather than using this step.
+
+The version is passed as `PINNED_RCLONE_VERSION`, not `RCLONE_VERSION` — rclone maps `RCLONE_*`
+  environment variables onto its own flags, so `RCLONE_VERSION` is read as `--version` and aborts
+  with a bool-parse error.
+
+Refs #1817
+
+* fix(ci-automation): verify the pinned rclone download and pin its behaviour
+
+Review caught that the download had no integrity check, and that the only test touching this step
+  asserted `"rclone" in step["run"]` — trivially true, and green even if the install were entirely
+  broken.
+
+The repo already verifies every binary it fetches against a pinned SHA256: pueue, Dexed, OBXF and
+  Six Sines all do it, and the base image is pinned by digest. This step now follows that
+  convention. `curl -f` rejects a truncated download but not a same-length tampered one, and the
+  binary lands in /usr/local/bin via sudo, so the gap was real. The digest is checked before `sudo
+  install`, and the installed binary must report the pinned version.
+
+Three tests now pin what the step promises: that the version is pinned and apt is not used, that the
+  archive is checksum-verified before install, and that no install-step env var is
+  `RCLONE_`-prefixed — rclone maps those onto its own flags, which is how `RCLONE_VERSION` silently
+  became `--version`.
+
+All three fail against the previous apt-based step and pass against this one.
+
+- Register QEMU so cpu-slow arm64 buildx test can run
+  ([#1915](https://github.com/tinaudio/synth-setter/pull/1915),
+  [`09ca1bb`](https://github.com/tinaudio/synth-setter/commit/09ca1bb60bf1e67a98035715cdaa1b232c0ad503))
+
+* fix(ci-automation): register QEMU so the cpu-slow arm64 build can exec
+
+`test_ultramaster_docker_arm64_target_skips_source_build` shells out to `docker buildx build
+  --platform linux/arm64` and has never passed in CI. The `ubuntu-latest` runner has no binfmt_misc
+  handler for aarch64, so BuildKit pulls the arm64 layers fine and then dies on the first step that
+  executes an arm64 binary:
+
+#10 0.129 exec /bin/bash: exec format error #10 ERROR: process "/bin/bash -euxo pipefail -c case
+  ..." exit code: 255
+
+The build reaching `builder-base 2/5` before failing rules out the buildx driver as the cause; only
+  the exec of an emulated binary fails, which is binfmt's job. `setup-qemu-action` registers the
+  handler host-globally, so it only has to precede the test step.
+
+The test landed in #1796 without a matching workflow change, so this closes a CI gap rather than
+  fixing a regression.
+
+Refs #1817
+
+* style(ci-automation): condense the QEMU step comment
+
+Two lines with an issue reference, per the comment-hygiene guideline.
+
+* fix(ci-automation): disable QEMU image caching to match job permissions
+
+`setup-qemu-action` defaults `cache-image: true`, which saves the binfmt image through the Actions
+  cache API and needs `actions: write`. This job declares `permissions: {contents: read, issues:
+  write}`, and an explicit block sets every unlisted scope to `none`, so the cache save would be
+  denied. Pull the image each run instead.
+
+* Revert "fix(ci-automation): disable QEMU image caching to match job permissions"
+
+This reverts commit 16130246. The premise was wrong: `cache-image` does not use the Actions cache
+  API, so it never needed `actions: write`. The action simply `docker pull`s the binfmt image and
+  keeps it in the local image store.
+
+Run 29410874258 settles it — the step ran with the default `cache-image: true` under this job's
+  `permissions: {contents: read, issues: write}` and succeeded:
+
+##[group]Pulling binfmt Docker image [command]/usr/bin/docker pull
+  docker.io/tonistiigi/binfmt:latest Status: Downloaded newer image for tonistiigi/binfmt:latest
+
+The setting was a speculative fix for a failure that does not occur, so it goes back to the default.
+
+- Run the conda test job on agent/_shared changes
+  ([#1918](https://github.com/tinaudio/synth-setter/pull/1918),
+  [`3c3e128`](https://github.com/tinaudio/synth-setter/commit/3c3e128ffa15b757be2b19528a8032468a3e91d8))
+
+* fix(ci-automation): run the conda test job on agent/_shared changes
+
+The conda job is the one that caught the launcher's missing pydantic, because it is the only test
+  environment with no project `.venv`. Its path filter listed no `agent/**` entry at all, so a
+  launcher-only change never ran the job that can detect this class of breakage.
+
+Refs #1561
+
+* docs(ci-automation): say why the conda job watches agent/_shared
+
+- Unbreak codex launcher on conda and macOS
+  ([#1914](https://github.com/tinaudio/synth-setter/pull/1914),
+  [`b5b0009`](https://github.com/tinaudio/synth-setter/commit/b5b0009088bc034e9f712a4a568672f8f6a521a0))
+
+* internal-fix(ci-automation): unbreak the codex review launcher on conda and macOS
+
+The launcher carried two environment defects that turned its three shell tests red on main, and with
+  them every branch cut from main.
+
+Dependency resolution went through `uv run --no-sync`, binding the launcher to the project
+  environment. The conda test job has no `.venv`, so uv created a bare one, honoured `--no-sync` by
+  installing nothing, and the launcher died on `ModuleNotFoundError: No module named 'pydantic'`.
+  The Docker image build runs the suite too, so it failed the same way. The launcher is a standalone
+  entry point that callers run from outside the project environment, so it now declares its
+  dependency inline (PEP 723) and resolves it with `uv run --no-project --script`. That also stops
+  it leaving a stray `.venv` in the repo root.
+
+Argv splitting used `mapfile`, a bash 4+ builtin absent from the bash 3.2 that macOS runners ship as
+  `/bin/bash`, so the macOS job failed with `mapfile: command not found`. Only the non-dry-run test
+  reaches that line, which is why the other two passed there. Replaced with the `while read` loop
+  already used for this in `capture-state.sh` and `no-baseline-additions.sh`.
+
+Refs #1561
+
+* fix(ci-automation): run the Tests workflow on agent/_shared changes
+
+`tests/infra/test_pr_review_model_routing.py` exists to test
+  `agent/_shared/run_codex_review_agent.{py,sh}`, but the Tests workflow's path filter listed
+  `agent/hooks/**` and `agent/skills/**` and not `agent/_shared/**`. A PR touching only the launcher
+  therefore merged without ever running the tests that cover it, which is how the two defects in the
+  preceding commit reached main: #1906 ran them only because it happened to add files under
+  `tests/`.
+
+
 ## v8.53.0 (2026-07-15)
 
 ### Features
