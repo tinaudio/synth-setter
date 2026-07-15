@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v8.53.0 (2026-07-15)
+
+### Features
+
+- **training**: Infer immutable dataset artifact lineage
+  ([#1881](https://github.com/tinaudio/synth-setter/pull/1881),
+  [`2777c9b`](https://github.com/tinaudio/synth-setter/commit/2777c9be321b042232c2f2ab0ba1f261ba971f42))
+
+* feat(training): infer dataset artifact lineage from local spec
+
+* test(training): cover automatic dataset lineage entrypoints
+
+* fix(training): hydrate dataset before recording lineage
+
+* fix(training): pin dataset lineage to frozen run
+
+* fix(training): preserve remote dataset provenance
+
+* fix(training): recover dataset lineage after remote failures
+
+* test(training): cover lineage without rclone
+
+
 ## v8.52.0 (2026-07-15)
 
 ### Features
