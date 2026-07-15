@@ -70,7 +70,7 @@ docs:
       - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
-        covers: "Lightning callback behavior and opt-in R2 checkpoint durability"
+        covers: "Lightning callback behavior, opt-in R2 checkpoint durability, and the ValAudioProbe val_audio/* logging cadence (harvested one validation late)"
 
   # ── W&B artifact & provenance reference ─────────────────────────
   - doc: docs/reference/artifact-provenance-reference.md
@@ -245,7 +245,7 @@ docs:
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
     sources:
       - pattern: "src/synth_setter/cli/train.py"
-        covers: "Training entry point, Hydra config composition, operator-workspace bootstrap (sets ``$PROJECT_ROOT`` so ``configs/paths/default.yaml`` interpolates under any install layout)"
+        covers: "Training entry point, Hydra config composition, operator-workspace bootstrap (sets ``$PROJECT_ROOT`` so ``configs/paths/default.yaml`` interpolates under any install layout), and the opt-in val-audio probe wiring (_configure_val_audio_probe / _derive_probe_uri, §6.4)"
       - pattern: "src/synth_setter/models/**"
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
       - pattern: "src/synth_setter/data/**"
@@ -296,6 +296,8 @@ docs:
         covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv + shuffle_permutation.csv)"
       - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
         covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs; auto-invoked by compute_audio_metrics.main() when params_are_uniform returns True. params_are_uniform is also the gating predicate imported by compute_audio_metrics."
+      - pattern: "src/synth_setter/evaluation/audio_probe.py"
+        covers: "run_audio_probe / ProbeRenderSettings — the training val-audio probe's render→score→R2-archive chain, plus the postprocessing timeout budgets shared with cli/eval.py; the audio-less staging layout it feeds predict_vst_audio (--rerender_target, no target-audio tensors)"
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
