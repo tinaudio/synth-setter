@@ -293,6 +293,21 @@ class LogMelEncoder(nn.Module):
         super().__init__()
         if not math.isfinite(amin) or amin <= 0:
             raise ValueError(f"amin must be positive and finite, got {amin}")
+        nyquist = sample_rate / 2
+        if not math.isfinite(f_min) or not 0 <= f_min < nyquist:
+            raise ValueError(f"f_min must be finite and below Nyquist, got {f_min}")
+        if f_max is not None and (not math.isfinite(f_max) or not f_min < f_max <= nyquist):
+            raise ValueError(
+                f"f_max must be finite, above f_min, and no greater than Nyquist, got {f_max}"
+            )
+        for name, value in (
+            ("hop_length", hop_length),
+            ("kernel_size", kernel_size),
+            ("n_fft", n_fft),
+            ("n_mels", n_mels),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
         if not math.isfinite(power) or power <= 0:
             raise ValueError(f"power must be positive and finite, got {power}")
         if top_db is not None and (not math.isfinite(top_db) or top_db < 0):

@@ -229,7 +229,7 @@ class CNNResidualMLP(nn.Module):
 
 
 class LogMelCNNResidualMLP(nn.Module):
-    """Predict parameters with a log-mel CNN encoder and residual MLP trunk.
+    """Predict normalized parameters with a log-mel CNN encoder and residual MLP trunk.
 
     :param in_dim: Expected waveform length in samples.
     :param channels: Channel count in the encoder's first convolutional block.
@@ -310,6 +310,6 @@ class LogMelCNNResidualMLP(nn.Module):
         """Predict parameters from a batch of mono waveforms.
 
         :param x: Waveforms shaped ``(batch, samples)``.
-        :returns: Parameter predictions shaped ``(batch, out_dim)``.
+        :returns: Normalized parameter predictions shaped ``(batch, out_dim)``.
         """
-        return self.trunk(self.encoder(x))
+        return torch.sigmoid(self.trunk(self.encoder(x)))

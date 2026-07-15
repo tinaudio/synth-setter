@@ -1,5 +1,6 @@
 """Behavioral tests for waveform encoders."""
 
+from collections.abc import Callable
 from functools import partial
 
 import librosa
@@ -59,6 +60,20 @@ def test_log_mel_frontend_four_second_audio_returns_bounded_embedding() -> None:
 
     assert prediction.shape == (2, 3)
     assert sum(parameter.numel() for parameter in model.parameters()) < 100_000
+
+
+def test_log_mel_frontend_predictions_stay_in_normalized_parameter_range() -> None:
+    """TorchSynth predictions stay inside the renderer's normalized domain."""
+    predictions = _log_mel_model()(torch.randn(16, 4_410))
+
+    assert torch.all((0 <= predictions) & (predictions <= 1))
+
+
+def test_log_mel_frontend_initial_predictions_center_normalized_range() -> None:
+    """Initial predictions stay near the normalized target mean."""
+    predictions = _log_mel_model()(torch.randn(16, 4_410))
+
+    torch.testing.assert_close(predictions.mean(), torch.tensor(0.5), rtol=0, atol=0.1)
 
 
 def test_log_mel_frontend_sign_inversion_returns_same_embedding() -> None:
@@ -131,6 +146,58 @@ def test_log_mel_frontend_invalid_top_db_raises(top_db: float) -> None:
         _log_mel_encoder(top_db=top_db)
 
 
+@pytest.mark.parametrize(
+    ("factory", "frequency_name"),
+    [
+        pytest.param(partial(_log_mel_encoder, f_min=-1.0), "f_min", id="negative-f-min"),
+        pytest.param(partial(_log_mel_encoder, f_min=float("inf")), "f_min", id="infinite-f-min"),
+        pytest.param(partial(_log_mel_encoder, f_min=float("nan")), "f_min", id="nan-f-min"),
+        pytest.param(partial(_log_mel_encoder, f_min=22_050.0), "f_min", id="f-min-at-nyquist"),
+        pytest.param(
+            partial(_log_mel_encoder, f_max=0.0),
+            "f_max",
+            id="f-max-not-greater-than-f-min",
+        ),
+        pytest.param(partial(_log_mel_encoder, f_max=float("inf")), "f_max", id="infinite-f-max"),
+        pytest.param(partial(_log_mel_encoder, f_max=float("nan")), "f_max", id="nan-f-max"),
+        pytest.param(partial(_log_mel_encoder, f_max=22_051.0), "f_max", id="f-max-above-nyquist"),
+    ],
+)
+def test_log_mel_frontend_invalid_frequency_bound_raises(
+    factory: Callable[[], LogMelEncoder], frequency_name: str
+) -> None:
+    """Invalid mel-frequency bounds fail before producing non-finite features.
+
+    :param factory: Encoder factory containing the invalid bound.
+    :param frequency_name: Constructor argument receiving the invalid bound.
+    """
+    with pytest.raises(ValueError, match=frequency_name):
+        factory()
+
+
+@pytest.mark.parametrize(
+    ("factory", "field"),
+    [
+        pytest.param(partial(_log_mel_encoder, hop_length=0), "hop_length", id="zero-hop-length"),
+        pytest.param(
+            partial(_log_mel_encoder, kernel_size=0), "kernel_size", id="zero-kernel-size"
+        ),
+        pytest.param(partial(_log_mel_encoder, n_fft=0), "n_fft", id="zero-n-fft"),
+        pytest.param(partial(_log_mel_encoder, n_mels=0), "n_mels", id="zero-n-mels"),
+    ],
+)
+def test_log_mel_frontend_non_positive_geometry_raises(
+    factory: Callable[[], LogMelEncoder], field: str
+) -> None:
+    """Non-positive frontend geometry fails at the configuration boundary.
+
+    :param factory: Encoder factory containing the zero size.
+    :param field: Constructor argument receiving the zero size.
+    """
+    with pytest.raises(ValueError, match=field):
+        factory()
+
+
 def test_log_mel_frontend_unknown_window_raises() -> None:
     """An unsupported Fourier window fails before transform construction."""
     with pytest.raises(ValueError, match="Unsupported window"):
@@ -180,22 +247,45 @@ def test_log_mel_spectrogram_power_one_matches_amplitude_decibels() -> None:
     np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
 
 
-def test_log_mel_spectrogram_htk_scale_changes_output() -> None:
-    """The HTK mel scale changes filter-bank output from the Slaney default."""
+def test_log_mel_spectrogram_htk_scale_matches_dataset_frontend() -> None:
+    """The HTK mel scale matches the stored-feature reference."""
     audio = torch.randn(1, 4_410)
-    baseline = _log_mel_encoder(top_db=None).log_mel_spectrogram(audio)
-    htk = _log_mel_encoder(mel_scale="htk", top_db=None).log_mel_spectrogram(audio)
+    expected = librosa.power_to_db(
+        librosa.feature.melspectrogram(
+            y=audio[0].numpy(),
+            sr=44_100,
+            n_fft=1_102,
+            hop_length=441,
+            n_mels=128,
+            window="hamming",
+            htk=True,
+        ),
+        ref=np.max,
+    )
 
-    assert not torch.allclose(htk, baseline)
+    actual = _log_mel_encoder(mel_scale="htk").log_mel_spectrogram(audio)[0].numpy()
+
+    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
 
 
-def test_log_mel_spectrogram_hann_window_changes_output() -> None:
-    """The Hann window changes spectral output from the Hamming default."""
+def test_log_mel_spectrogram_hann_window_matches_dataset_frontend() -> None:
+    """The Hann window matches the stored-feature reference."""
     audio = torch.randn(1, 4_410)
-    baseline = _log_mel_encoder(top_db=None).log_mel_spectrogram(audio)
-    hann = _log_mel_encoder(window="hann", top_db=None).log_mel_spectrogram(audio)
+    expected = librosa.power_to_db(
+        librosa.feature.melspectrogram(
+            y=audio[0].numpy(),
+            sr=44_100,
+            n_fft=1_102,
+            hop_length=441,
+            n_mels=128,
+            window="hann",
+        ),
+        ref=np.max,
+    )
 
-    assert not torch.allclose(hann, baseline)
+    actual = _log_mel_encoder(window="hann").log_mel_spectrogram(audio)[0].numpy()
+
+    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
 
 
 def test_log_mel_spectrogram_top_db_clips_relative_dynamic_range() -> None:

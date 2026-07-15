@@ -66,6 +66,7 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
                 "+trainer.limit_val_batches=1",
                 "trainer.val_check_interval=1.0",
                 "trainer.check_val_every_n_epoch=1",
+                "datamodule.resample_train_per_epoch=false",
                 "datamodule.train_val_test_sizes=[1,1,1]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
@@ -134,7 +135,7 @@ def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig
             overrides=[
                 "experiment=torchsynth/eval_ffn",
                 "trainer=cpu",
-                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.train_val_test_sizes=[2,32,2]",
                 "datamodule.batch_size=1",
                 "datamodule.num_workers=0",
             ],
