@@ -84,10 +84,10 @@ for lg in loggers:
 **Consuming an input** — `use_input_artifacts` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_artifact`; it is `@rank_zero_only` so a DDP run records each edge once:
 
 ```python
-use_input_artifacts(loggers, _consumed_artifact_refs(cfg))  # e.g. [("data-diva-v1", "latest")]
+use_input_artifacts(loggers, _consumed_artifact_refs(cfg))  # e.g. [("data-diva-v1", "diva-v1-20260520T000000000Z")]
 ```
 
-Consumed edges are opt-in: training reads `consumed_dataset_config_id` (null by default → no edge), so a run without it set records no input lineage and never calls `use_artifact`.
+Dataset edges are discovered from `input_spec.json` under `datamodule.download_dataset_root_uri` when configured, otherwise under `datamodule.dataset_root`. Its validated `task_name` and `run_id` resolve to the immutable `data-{task_name}:{run_id}` alias. A root without that frozen spec remains usable but records no dataset lineage.
 
 ______________________________________________________________________
 
@@ -105,11 +105,12 @@ ______________________________________________________________________
 
 ## 6. Aliases
 
-`:latest` is the only alias the landed code applies — W&B sets it automatically on every `log_artifact` call. Spec §4 reserves two more, neither yet wired:
+W&B automatically applies `:latest` to every artifact. Dataset finalization also applies the immutable `:{run_id}` alias, which train and eval use for dataset lineage. Spec §4 reserves two model aliases that are not yet wired:
 
 | Alias         | Set by           | When                                  | Status                                                                                                     |
 | ------------- | ---------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `:latest`     | W&B (automatic)  | every `log_artifact` call             | landed                                                                                                     |
+| `:{run_id}`   | dataset finalize | when the frozen dataset is finalized  | landed — train/eval use it to preserve dataset-version lineage                                             |
 | `:best`       | training script  | when the val metric improves          | planned — `_log_model_artifact` logs with no `aliases=[…]`                                                 |
 | `:production` | promote workflow | when a model is promoted to a Release | planned — promote workflow not implemented ([#1566](https://github.com/tinaudio/synth-setter/issues/1566)) |
 

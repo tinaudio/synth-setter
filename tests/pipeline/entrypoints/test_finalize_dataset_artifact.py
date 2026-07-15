@@ -10,7 +10,13 @@ mock of it. The offline end-to-end logging path is covered separately in
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
+from unittest.mock import MagicMock
 
+import pytest
+from lightning.pytorch.loggers import Logger
+
+from synth_setter.cli import finalize_dataset
 from synth_setter.cli.finalize_dataset import build_dataset_artifact
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
@@ -63,6 +69,33 @@ def test_build_dataset_artifact_type_is_dataset(
     """
     artifact = build_dataset_artifact(_spec(dataset_spec_factory))
     assert artifact.type == "dataset"
+
+
+def test_log_dataset_artifact_aliases_frozen_run_id(
+    dataset_spec_factory: Callable[..., DatasetSpec], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A finalized dataset can be consumed through its immutable run-id alias.
+
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
+    :param monkeypatch: Replaces the Lightning logger type at the W&B boundary.
+    """
+
+    class FakeWandbLogger:
+        """Minimal W&B logger boundary fake."""
+
+        def __init__(self) -> None:
+            self.experiment = MagicMock()
+
+    monkeypatch.setattr(finalize_dataset, "WandbLogger", FakeWandbLogger)
+    logger = FakeWandbLogger()
+
+    finalize_dataset._log_dataset_artifact(
+        cast(list[Logger], [logger]), _spec(dataset_spec_factory)
+    )
+
+    (artifact,) = logger.experiment.log_artifact.call_args.args
+    assert artifact.name == "data-finalize-art"
+    assert logger.experiment.log_artifact.call_args.kwargs == {"aliases": [_RUN_ID]}
 
 
 def test_build_dataset_artifact_metadata_carries_shard_count_n_samples_git_sha(

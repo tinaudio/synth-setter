@@ -1,7 +1,7 @@
 """Unit tests for ``train._consumed_artifact_refs`` and the lineage call seam.
 
-The pure helper maps the opt-in ``consumed_*`` cfg fields to the
-``(name, alias)`` lineage edges training feeds to ``use_input_artifacts``
+The pure helper maps the datamodule's local dataset root to the
+``(name, alias)`` lineage edge training feeds to ``use_input_artifacts``
 (``storage-provenance-spec.md`` §5). The seam tests below drive the real
 ``train(cfg)`` with its heavy collaborators stubbed and pin that the entrypoint
 actually calls ``use_input_artifacts`` with those edges, gated on
@@ -13,22 +13,26 @@ out of the canonical ``test_train.py`` per
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.train import _consumed_artifact_refs, train
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import write_spec_to_path
 
 
 def _seam_cfg(
     output_dir: Path,
     *,
-    dataset_id: str | None,
+    dataset_root: Path,
+    download_dataset_root_uri: str | None = None,
     train_flag: bool,
     test_flag: bool,
-    alias: str = "latest",
 ) -> DictConfig:
     """Build a minimal train cfg that drives ``train(cfg)`` under stubbed collaborators.
 
@@ -37,16 +41,20 @@ def _seam_cfg(
 
     :param output_dir: ``paths.output_dir`` — read only by ``task_wrapper``'s
         finally-block log line, never written to.
-    :param dataset_id: ``consumed_dataset_config_id`` value (``None`` = unset).
+    :param dataset_root: Local root whose frozen spec declares the dataset ID.
+    :param download_dataset_root_uri: Optional remote root to hydrate before use.
     :param train_flag: ``cfg.train`` — gates ``trainer.fit`` and the lineage edge.
     :param test_flag: ``cfg.test`` — gates ``trainer.test`` and the lineage edge.
-    :param alias: ``consumed_artifact_alias`` flowing into the edge.
     :returns: A ``DictConfig`` accepted by ``train``.
     """
     return OmegaConf.create(
         {
             "seed": None,
-            "datamodule": {"_target_": "stub.Datamodule"},
+            "datamodule": {
+                "_target_": "stub.Datamodule",
+                "dataset_root": str(dataset_root),
+                "download_dataset_root_uri": download_dataset_root_uri,
+            },
             "model": {"_target_": "stub.Model"},
             "trainer": {"_target_": "stub.Trainer"},
             "callbacks": None,
@@ -55,8 +63,6 @@ def _seam_cfg(
             "train": train_flag,
             "test": test_flag,
             "ckpt_path": None,
-            "consumed_dataset_config_id": dataset_id,
-            "consumed_artifact_alias": alias,
             "paths": {"output_dir": str(output_dir)},
         }
     )
@@ -93,27 +99,41 @@ def _stub_train_collaborators(logger_sentinel: object) -> Iterator[MagicMock]:
         yield spy
 
 
-def test_train_calls_use_input_artifacts_with_dataset_edge_when_id_set(tmp_path: Path) -> None:
-    """``train`` hands the logger and the ``data-{id}`` edge to ``use_input_artifacts``.
+def test_train_calls_use_input_artifacts_with_discovered_dataset_edge(
+    tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
+) -> None:
+    """``train`` hands the logger the dataset edge found from its local root.
 
     :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
     """
     logger_sentinel = MagicMock(name="loggers")
-    cfg = _seam_cfg(tmp_path, dataset_id="diva-v1", train_flag=True, test_flag=False)
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="diva-v1",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        tmp_path / "input_spec.json",
+    )
+    cfg = _seam_cfg(tmp_path, dataset_root=tmp_path, train_flag=True, test_flag=False)
 
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "latest")])
+    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
 
 
-def test_train_calls_use_input_artifacts_with_empty_edges_when_id_unset(tmp_path: Path) -> None:
-    """An unset dataset id drives the no-edge path: the spy is called with ``[]``.
+def test_train_calls_use_input_artifacts_with_empty_edges_without_provenance(
+    tmp_path: Path,
+) -> None:
+    """A local root without provenance drives the no-edge path.
 
     :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
     """
     logger_sentinel = MagicMock(name="loggers")
-    cfg = _seam_cfg(tmp_path, dataset_id=None, train_flag=True, test_flag=False)
+    cfg = _seam_cfg(tmp_path, dataset_root=tmp_path, train_flag=True, test_flag=False)
 
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
@@ -121,18 +141,82 @@ def test_train_calls_use_input_artifacts_with_empty_edges_when_id_unset(tmp_path
     spy.assert_called_once_with(logger_sentinel, [])
 
 
-def test_train_records_lineage_when_only_test_is_true(tmp_path: Path) -> None:
-    """A test-only run (``train=False, test=True``) still records the dataset edge.
+def test_train_remote_provenance_precedes_local_dataset_spec(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A training run records the configured remote dataset rather than stale local bytes.
 
-    :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
+    :param tmp_path: Local roots for both frozen specs and train output.
+    :param dataset_spec_factory: Factory producing valid frozen dataset specs.
+    :param monkeypatch: Bypasses credential setup so the real filesystem specs drive the test.
     """
+    local_root = tmp_path / "local-dataset"
+    remote_root = tmp_path / "remote-dataset"
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="local-lineage",
+            run_id="local-lineage-20260713T170000000Z",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        local_root / "input_spec.json",
+    )
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="remote-lineage",
+            run_id="remote-lineage-20260713T180000000Z",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        remote_root / "input_spec.json",
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
     logger_sentinel = MagicMock(name="loggers")
-    cfg = _seam_cfg(tmp_path, dataset_id="diva-v1", train_flag=False, test_flag=True)
+    cfg = _seam_cfg(
+        tmp_path,
+        dataset_root=local_root,
+        download_dataset_root_uri=str(remote_root),
+        train_flag=True,
+        test_flag=False,
+    )
 
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "latest")])
+    spy.assert_called_once_with(
+        logger_sentinel,
+        [("data-remote-lineage", "remote-lineage-20260713T180000000Z")],
+    )
+
+
+def test_train_records_lineage_when_only_test_is_true(
+    tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
+) -> None:
+    """A test-only run (``train=False, test=True``) still records the dataset edge.
+
+    :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    """
+    logger_sentinel = MagicMock(name="loggers")
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="diva-v1",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        tmp_path / "input_spec.json",
+    )
+    cfg = _seam_cfg(tmp_path, dataset_root=tmp_path, train_flag=False, test_flag=True)
+
+    with _stub_train_collaborators(logger_sentinel) as spy:
+        train(cfg)
+
+    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
 
 
 def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> None:
@@ -141,7 +225,7 @@ def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> N
     :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
     """
     logger_sentinel = MagicMock(name="loggers")
-    cfg = _seam_cfg(tmp_path, dataset_id="diva-v1", train_flag=False, test_flag=False)
+    cfg = _seam_cfg(tmp_path, dataset_root=tmp_path, train_flag=False, test_flag=False)
 
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
@@ -149,28 +233,6 @@ def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> N
     spy.assert_not_called()
 
 
-def test_consumed_artifact_refs_dataset_id_set_returns_data_edge() -> None:
-    """A set dataset config_id yields one ``data-{id}`` edge at the alias."""
-    cfg = OmegaConf.create(
-        {"consumed_dataset_config_id": "diva-v1", "consumed_artifact_alias": "latest"}
-    )
-
-    assert _consumed_artifact_refs(cfg) == [("data-diva-v1", "latest")]
-
-
-def test_consumed_artifact_refs_dataset_id_null_returns_empty() -> None:
-    """A null dataset config_id yields no edges — the opt-out no-op path."""
-    cfg = OmegaConf.create(
-        {"consumed_dataset_config_id": None, "consumed_artifact_alias": "latest"}
-    )
-
-    assert _consumed_artifact_refs(cfg) == []
-
-
-def test_consumed_artifact_refs_alias_override_is_honored() -> None:
-    """A non-default alias flows into the edge verbatim."""
-    cfg = OmegaConf.create(
-        {"consumed_dataset_config_id": "diva-v1", "consumed_artifact_alias": "v3"}
-    )
-
-    assert _consumed_artifact_refs(cfg) == [("data-diva-v1", "v3")]
+def test_consumed_artifact_refs_missing_dataset_root_returns_empty() -> None:
+    """A datamodule without a local root has no dataset artifact to consume."""
+    assert _consumed_artifact_refs(OmegaConf.create({"datamodule": {}})) == []

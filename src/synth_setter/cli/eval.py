@@ -17,6 +17,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
@@ -317,24 +318,24 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
     Eval consumes both the model it scores and the dataset it scores it on; the
-    model edge is recorded first to match the DAG's left-to-right read. Each
-    edge is opt-in: a null ``consumed_*_config_id`` is omitted, so an eval
-    without the fields set records no lineage and never calls ``use_artifact``.
+    model edge is recorded first to match the DAG's left-to-right read. Dataset
+    provenance comes from the datamodule's local or remote dataset root.
 
-    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id``,
-        ``consumed_dataset_config_id``, and ``consumed_artifact_alias``
-        (default ``latest``).
-    :returns: ``(name, alias)`` edges for whichever ids are set, model before
-        dataset; ``[]`` when both are null.
+    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
+        local or remote datamodule root.
+    :returns: ``(name, alias)`` refs for the optional model plus the discovered
+        dataset, in that order.
     """
-    alias = cfg.get("consumed_artifact_alias") or "latest"
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
-        refs.append((f"model-{train_id}", alias))
-    dataset_id = cfg.get("consumed_dataset_config_id")
-    if dataset_id:
-        refs.append((f"data-{dataset_id}", alias))
+        refs.append((f"model-{train_id}", "latest"))
+    ref = dataset_artifact_ref(
+        OmegaConf.select(cfg, "datamodule.dataset_root"),
+        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
+    )
+    if ref is not None:
+        refs.append(ref)
     return refs
 
 

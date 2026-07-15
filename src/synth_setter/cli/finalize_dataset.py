@@ -310,7 +310,7 @@ def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
         if not isinstance(lg, WandbLogger):
             continue
         try:
-            lg.experiment.log_artifact(build_dataset_artifact(spec))
+            lg.experiment.log_artifact(build_dataset_artifact(spec), aliases=[spec.run_id])
         except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort finalize
             logger.warning(f"_log_dataset_artifact failed on {type(lg).__name__}: {exc}")
 

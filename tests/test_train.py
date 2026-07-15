@@ -11,6 +11,8 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 from uuid import UUID
 
 import numpy as np
@@ -18,6 +20,7 @@ import pandas as pd
 import pytest
 import torch
 from hydra.core.hydra_config import HydraConfig
+from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -25,6 +28,8 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -52,6 +57,26 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
+
+
+class _RecordingWandbLogger(WandbLogger):
+    """A W&B logger boundary fake that records consumed artifact references."""
+
+    def __init__(self) -> None:
+        self.used_artifacts: list[str] = []
+
+    @property
+    def experiment(self) -> Any:  # type: ignore[override]
+        """Return the recorder without initializing an external W&B run."""
+        return self
+
+    def use_artifact(self, name_alias: str) -> None:
+        """Record the artifact reference the training entrypoint consumes.
+
+        :param name_alias: W&B artifact name with its alias.
+        """
+        self.used_artifacts.append(name_alias)
+
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
@@ -574,6 +599,33 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def test_train_lance_records_dataset_lineage_from_local_spec(
+    cfg_train_lance: DictConfig,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """A real Lance training run records its local dataset artifact as a W&B input.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="lineage-lance",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        dataset_root / "input_spec.json",
+    )
+    HydraConfig().set_config(cfg_train_lance)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
+        train(cfg_train_lance)
+
+    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
 
 
 @pytest.mark.parametrize("loader", ["legacy", "map"])
