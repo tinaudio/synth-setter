@@ -335,6 +335,32 @@ def test_uploader_reuploads_when_size_changes_at_same_mtime(
     assert len(calls) == 2
 
 
+def test_uploader_reuploads_equal_size_rewrite_at_same_mtime_after_new_save(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A new ModelCheckpoint save distinguishes an otherwise identical file key.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds equal-size checkpoint rewrites with a fixed mtime.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"v1")
+    os.utime(ckpt, (1000, 1000))
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt))
+    checkpoint_callback = cast(ModelCheckpoint, trainer.checkpoint_callback)
+    checkpoint_callback._last_global_step_saved = 1
+    uploader.on_train_batch_end(trainer, None, None, None, 0)
+
+    ckpt.write_bytes(b"v2")
+    os.utime(ckpt, (1000, 1000))
+    checkpoint_callback._last_global_step_saved = 2
+    uploader.on_train_batch_end(trainer, None, None, None, 1)
+
+    assert len(calls) == 2
+
+
 def test_uploader_swallows_missing_checkpoint_file(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``last_model_path`` at a vanished/rotated file is swallowed, no upload, no raise.
 
@@ -453,11 +479,7 @@ def test_uploader_warns_once_under_ddp(
 
 
 def test_uploader_is_reordered_after_modelcheckpoint() -> None:
-    """As a ``Checkpoint`` subclass, Lightning dispatches the uploader after ``ModelCheckpoint``.
-
-    Pins the fix for the one-write-stale bug: a plain ``Callback`` would be grouped
-    before the checkpoint callbacks and mirror the previous save.
-    """
+    """Keep the uploader after ModelCheckpoint so it mirrors the current save."""
     from lightning.pytorch.callbacks import Checkpoint, ModelCheckpoint
     from lightning.pytorch.trainer.connectors.callback_connector import _CallbackConnector
 

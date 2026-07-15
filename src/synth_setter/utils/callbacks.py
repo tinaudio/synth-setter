@@ -32,26 +32,9 @@ _LAST_CKPT_NAME = "last.ckpt"
 
 
 class CheckpointUploader(Checkpoint):
-    """Mirror ``ModelCheckpoint``'s ``last_model_path`` to R2 as it is (re)written.
+    """Best-effort rank-0 R2 mirror ordered after ModelCheckpoint saves.
 
-    Guards against a run killed mid-training (host OOM/hang) stranding the newest
-    checkpoint on local disk — the CLI's upload otherwise only fires at train-end.
-    Best-effort and rank-0-only; the change key, retry bound, and hook coverage are
-    documented on :meth:`_maybe_upload` and the module constants.
-
-    Subclasses ``Checkpoint`` (not plain ``Callback``) so Lightning's
-    ``_reorder_callbacks`` groups it with the checkpoint callbacks at the end of
-    the dispatch order; appended after ``ModelCheckpoint`` in
-    :func:`~synth_setter.cli.train._append_checkpoint_uploader`, it therefore runs
-    *after* each save within the same hook and mirrors the just-written bytes (a
-    plain ``Callback`` would run first and lag one write behind).
-
-    **Cost — read before enabling under DDP.** The upload runs *synchronously* on
-    the rank-0 training thread, so each ``save_last`` rewrite blocks rank 0 for the
-    copy's duration while other ranks stall at the next collective (grad
-    all-reduce). Intended for single-device or coarse-cadence runs; a one-time
-    warning fires under DDP. Off by default
-    (``training.upload_checkpoints_during_training``).
+    Uploads are synchronous; prefer single-device or coarse-cadence DDP runs.
     """
 
     def __init__(self, prefix_uri: str) -> None:
@@ -62,7 +45,9 @@ class CheckpointUploader(Checkpoint):
         super().__init__()
         self._dest_uri = f"{prefix_uri.rstrip('/')}/{_LAST_CKPT_NAME}"
         self._uploaded_key: tuple[str, float, int] | None = None
+        self._uploaded_save_step: int | None = None
         self._pending_key: tuple[str, float, int] | None = None
+        self._pending_save_step: int | None = None
         self._attempts = 0
         self._saw_checkpoint = False
         self._warned_ddp = False
@@ -70,18 +55,18 @@ class CheckpointUploader(Checkpoint):
     def _maybe_upload(self, trainer: Trainer) -> None:
         """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
 
-        Rank-0-only and de-duplicated by the ``(path, mtime, size)`` change key, so
-        every save hook can call it safely: a checkpoint whose key is unchanged since
-        the last successful upload is skipped, and one that keeps failing is retried
-        at most :data:`_MAX_UPLOAD_ATTEMPTS` times before backing off until its key
-        changes again.
+        Rank-0-only and de-duplicated by the ``(path, mtime, size)`` file key plus
+        ModelCheckpoint's completed-save step. The save step distinguishes equal-size
+        rewrites on filesystems with coarse timestamp resolution. Failed uploads retry
+        at most :data:`_MAX_UPLOAD_ATTEMPTS` times per completed save.
 
         :param trainer: The active trainer; supplies the rank flag and the
             ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
         """
         if not trainer.is_global_zero:
             return
-        source = getattr(trainer.checkpoint_callback, "last_model_path", "") or ""
+        checkpoint_callback = trainer.checkpoint_callback
+        source = getattr(checkpoint_callback, "last_model_path", "") or ""
         if not source:
             return
         self._saw_checkpoint = True
@@ -99,10 +84,12 @@ class CheckpointUploader(Checkpoint):
             log.debug("Checkpoint %s vanished before upload: %s", source, exc)
             return
         key = (source, stat.st_mtime, stat.st_size)
-        if key == self._uploaded_key:
+        save_step = getattr(checkpoint_callback, "_last_global_step_saved", None)
+        if key == self._uploaded_key and save_step == self._uploaded_save_step:
             return
-        if key != self._pending_key:
+        if key != self._pending_key or save_step != self._pending_save_step:
             self._pending_key = key
+            self._pending_save_step = save_step
             self._attempts = 0
         if self._attempts >= _MAX_UPLOAD_ATTEMPTS:
             return
@@ -114,41 +101,18 @@ class CheckpointUploader(Checkpoint):
             log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
             return
         self._uploaded_key = key
+        self._uploaded_save_step = save_step
 
     def on_train_batch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
-        """Mirror a checkpoint written on the ``every_n_train_steps`` cadence.
-
-        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
-        :param \\*args: Unused Lightning positional payload (module, outputs, batch, ...).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
-        """
         self._maybe_upload(trainer)
 
     def on_validation_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
-        """Mirror a checkpoint written on the validation cadence.
-
-        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
-        :param \\*args: Unused Lightning positional payload (module, ...).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
-        """
         self._maybe_upload(trainer)
 
     def on_train_epoch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
-        """Mirror a checkpoint written on the per-epoch cadence.
-
-        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
-        :param \\*args: Unused Lightning positional payload (module, ...).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
-        """
         self._maybe_upload(trainer)
 
     def on_train_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
-        """Flush the final checkpoint, warning if the run produced none to mirror.
-
-        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
-        :param \\*args: Unused Lightning positional payload (module, ...).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
-        """
         self._maybe_upload(trainer)
         if trainer.is_global_zero and not self._saw_checkpoint:
             log.warning(
@@ -158,19 +122,6 @@ class CheckpointUploader(Checkpoint):
             )
 
     def on_exception(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
-        """Mirror the checkpoint ``ModelCheckpoint`` writes when a fit raises.
-
-        On an in-process crash (e.g. CUDA OOM) Lightning dispatches ``on_exception``
-        before re-raising past the CLI's train-end upload. ``ModelCheckpoint`` writes a
-        fresh ``last.ckpt`` here only when ``save_on_exception`` is set — off by default,
-        so :func:`~synth_setter.cli.train._append_checkpoint_uploader` enables it — and,
-        running after it, this mirrors that write so the crash-time checkpoint is not
-        stranded on local disk.
-
-        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
-        :param \\*args: Unused Lightning positional payload (module, exception).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
-        """
         self._maybe_upload(trainer)
 
 

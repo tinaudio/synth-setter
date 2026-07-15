@@ -101,20 +101,10 @@ def _checkpoint_prefix_uri(cfg: DictConfig) -> str:
 
 
 def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> None:
-    """Attach a :class:`CheckpointUploader` when mid-run upload is enabled.
+    """Append an uploader only when an explicit ModelCheckpoint can produce durable saves.
 
-    Gated on ``training.upload_checkpoints_during_training`` (default off) so the
-    R2 write path is opt-in. Requires an explicit ``ModelCheckpoint``: the uploader
-    is itself a ``Checkpoint``, so appending it to a callback list without one would
-    make Lightning skip auto-adding its default ``ModelCheckpoint`` and write no
-    checkpoints at all — so with none present the uploader is skipped with a warning.
-    Also flips ``save_on_exception`` on each ``ModelCheckpoint`` (off by default) so a
-    mid-fit crash writes a ``last.ckpt`` for :meth:`CheckpointUploader.on_exception`
-    to mirror. Mutates ``callbacks`` in place; see :class:`CheckpointUploader` for the
-    after-``ModelCheckpoint`` dispatch ordering.
-
-    :param cfg: Hydra-composed train cfg; reads the durability flag and prefix inputs.
-    :param callbacks: Instantiated callback list mutated in place.
+    :param cfg: Hydra config carrying the opt-in durability flag and destination.
+    :param callbacks: Callback list mutated in place; ModelCheckpoint enables crash saves.
     """
     if not OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
         return

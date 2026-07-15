@@ -770,14 +770,7 @@ def _prediction_file_names() -> list[str]:
 def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
     cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``train()`` with the durability flag mirrors checkpoints to R2 during the run.
-
-    Runs a real two-epoch CPU fit with ``save_last`` and ``fake_r2_remote`` backing
-    ``r2:`` via rclone. Because ``on_train_end`` unconditionally flushes the final
-    checkpoint, asserting more than one upload proves a periodic hook mirrored an
-    earlier checkpoint *before* the run finished — the crash-durability guarantee a
-    single end-of-run flush can't. The final mirrored bytes must equal the local
-    checkpoint, catching a truncated/empty upload.
+    """Prove a periodic upload precedes the final flush and preserves checkpoint bytes.
 
     :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
