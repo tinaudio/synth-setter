@@ -25,6 +25,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -115,11 +116,14 @@ def test_train_torchsynth_experiment_renders_audio_online(
     metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
     audio, params, *_ = batch
     assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
+    assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
+    assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
 
 
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(

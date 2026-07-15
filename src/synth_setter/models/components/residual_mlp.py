@@ -5,7 +5,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from synth_setter.models.components.cnn import ResidualEncoder
+from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
@@ -189,7 +189,17 @@ class SpectralResidualMLP(ResidualMLP):
 
 
 class CNNResidualMLP(nn.Module):
-    """Spectrum-fronted ResidualEncoder followed by a ResidualMLP trunk."""
+    """Predict parameters with a global-FFT CNN encoder and residual MLP trunk.
+
+    :param in_dim: Expected waveform length in samples.
+    :param channels: Channel count in the encoder's first convolutional block.
+    :param encoder_blocks: Number of convolution and downsampling blocks.
+    :param trunk_blocks: Number of residual MLP blocks.
+    :param hidden_dim: Encoder output and MLP hidden width.
+    :param out_dim: Number of predicted parameters.
+    :param kernel_size: Encoder convolution kernel size.
+    :param norm: Encoder normalization type.
+    """
 
     def __init__(
         self,
@@ -201,14 +211,105 @@ class CNNResidualMLP(nn.Module):
         out_dim: int = 16,
         kernel_size: int = 7,
         norm: Literal["bn", "ln"] = "bn",
-    ):
+    ) -> None:
         super().__init__()
-
         self.encoder = ResidualEncoder(
             in_dim, channels, hidden_dim, encoder_blocks, kernel_size, norm
         )
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict parameters from a batch of mono waveforms.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Parameter predictions shaped ``(batch, out_dim)``.
+        """
         z = self.encoder(x)
         return self.trunk(z)
+
+
+class LogMelCNNResidualMLP(nn.Module):
+    """Predict normalized parameters with a log-mel CNN encoder and residual MLP trunk.
+
+    :param in_dim: Expected waveform length in samples.
+    :param channels: Channel count in the encoder's first convolutional block.
+    :param encoder_blocks: Number of convolution and pooling blocks.
+    :param trunk_blocks: Number of residual MLP blocks.
+    :param hidden_dim: Encoder output and MLP hidden width.
+    :param out_dim: Number of predicted parameters.
+    :param kernel_size: Encoder convolution kernel size.
+    :param norm: Encoder normalization type.
+    :param sample_rate: Waveform sample rate in Hz.
+    :param center: Whether STFT frames are centered on timestamps.
+    :param f_min: Lowest mel-filter frequency in Hz.
+    :param f_max: Highest mel-filter frequency in Hz; ``None`` selects Nyquist.
+    :param n_fft: Fourier transform size.
+    :param hop_length: Fourier frame stride.
+    :param n_mels: Mel-filter count.
+    :param pad_mode: Centering pad mode.
+    :param power: Magnitude exponent.
+    :param mel_norm: Mel-filter normalization.
+    :param mel_scale: Mel-frequency conversion formula.
+    :param window: Fourier window function.
+    :param amin: Positive logarithm floor.
+    :param top_db: Optional dynamic-range limit.
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 1024,
+        channels: int = 16,
+        encoder_blocks: int = 4,
+        trunk_blocks: int = 5,
+        hidden_dim: int = 2048,
+        out_dim: int = 16,
+        kernel_size: int = 7,
+        norm: Literal["bn", "ln"] = "bn",
+        *,
+        sample_rate: int,
+        center: bool = True,
+        f_min: float = 0.0,
+        f_max: float | None = None,
+        n_fft: int | None = None,
+        hop_length: int | None = None,
+        n_mels: int = 128,
+        pad_mode: Literal["constant", "reflect"] = "constant",
+        power: float = 2.0,
+        mel_norm: Literal["slaney"] | None = "slaney",
+        mel_scale: Literal["htk", "slaney"] = "slaney",
+        window: Literal["hamming", "hann"] = "hamming",
+        amin: float = 1e-10,
+        top_db: float | None = 80.0,
+    ) -> None:
+        super().__init__()
+        self.encoder = LogMelEncoder(
+            in_dim=in_dim,
+            hidden_dim=channels,
+            out_dim=hidden_dim,
+            sample_rate=sample_rate,
+            center=center,
+            f_min=f_min,
+            f_max=f_max,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+            pad_mode=pad_mode,
+            power=power,
+            mel_norm=mel_norm,
+            mel_scale=mel_scale,
+            window=window,
+            amin=amin,
+            top_db=top_db,
+            num_blocks=encoder_blocks,
+            kernel_size=kernel_size,
+            norm=norm,
+        )
+        self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict parameters from a batch of mono waveforms.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Normalized parameter predictions shaped ``(batch, out_dim)``.
+        """
+        return torch.sigmoid(self.trunk(self.encoder(x)))
