@@ -517,9 +517,6 @@ class PlotLearntProjection(Callback):
         if not isinstance(pl_module.vector_field, LearntProjection):
             return
 
-        # if not isinstance(pl_module.vector_field, ApproxEquivTransformer):
-        #     print("wrong vector field")
-        #     return
         fig_ass = self._plot_assignments(pl_module)
         fig_value = self._plot_projections(pl_module)
         self._log_plots(fig_ass, fig_value, trainer)
@@ -618,6 +615,7 @@ class ValAudioProbe(Callback):
         self._probe_fn = probe_fn
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="val-audio-probe")
         self._future: Future[dict[str, float]] | None = None
+        self._future_dir: Path | None = None
         self._future_step: int | None = None
         self._staged: tuple[Path, int] | None = None
 
@@ -700,17 +698,23 @@ class ValAudioProbe(Callback):
     def _harvest(self, pl_module: "LightningModule") -> None:
         """Log the in-flight probe's metrics if it has finished; no-op while it runs.
 
+        A harvested probe's local directory is pruned (the R2 snapshot is the
+        archive), bounding disk use across arbitrarily long runs; a failed
+        probe's directory is kept for debugging.
+
         :param pl_module: Receives the harvested metrics via ``log_dict``.
         """
         if self._future is None or not self._future.done():
             return
-        future, step = self._future, self._future_step
-        self._future, self._future_step = None, None
+        future, probe_dir, step = self._future, self._future_dir, self._future_step
+        self._future, self._future_dir, self._future_step = None, None, None
         try:
             metrics = future.result()
         except Exception as exc:
             log.warning("val audio probe at step %s failed: %s; skipping its metrics.", step, exc)
             return
+        if probe_dir is not None:
+            shutil.rmtree(probe_dir, ignore_errors=True)
         if not metrics:
             return
         pl_module.log_dict(
@@ -735,6 +739,7 @@ class ValAudioProbe(Callback):
             shutil.rmtree(probe_dir, ignore_errors=True)
             return
         self._future = self._pool.submit(self._probe_fn, probe_dir, step)
+        self._future_dir = probe_dir
         self._future_step = step
 
 

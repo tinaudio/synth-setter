@@ -325,3 +325,40 @@ def test_val_audio_probe_raises_when_outputs_lack_preds(tmp_path: Path) -> None:
             _batch(),
             0,
         )
+
+
+def test_val_audio_probe_prunes_probe_dir_after_successful_harvest(tmp_path: Path) -> None:
+    """A harvested probe's local directory is deleted so disk use stays bounded.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    probe = _probe(tmp_path, probe_fn=lambda probe_dir, step: {"val_audio/mss_mean": 0.1})
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    assert (tmp_path / "val_audio_probe" / "step-100").exists()
+
+    _run_validation(probe, _trainer(global_step=200), module)
+
+    assert not (tmp_path / "val_audio_probe" / "step-100").exists()
+    assert (tmp_path / "val_audio_probe" / "step-200").exists()
+
+
+def test_val_audio_probe_keeps_probe_dir_after_failed_probe(tmp_path: Path) -> None:
+    """A failed probe's directory is kept on disk for debugging.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+
+    def failing_probe(probe_dir: Path, step: int) -> dict[str, float]:
+        raise RuntimeError("render exploded")
+
+    probe = _probe(tmp_path, probe_fn=failing_probe)
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    _run_validation(probe, _trainer(global_step=200), module)
+
+    assert (tmp_path / "val_audio_probe" / "step-100").exists()
