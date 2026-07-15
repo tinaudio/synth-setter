@@ -520,11 +520,6 @@ class PlotLearntProjection(Callback):
         # if not isinstance(pl_module.vector_field, ApproxEquivTransformer):
         #     print("wrong vector field")
         #     return
-        #
-        # if not isinstance(pl_module.vector_field.projection, LearntProjection):
-        #     print("wrong projection")
-        #     return
-
         fig_ass = self._plot_assignments(pl_module)
         fig_value = self._plot_projections(pl_module)
         self._log_plots(fig_ass, fig_value, trainer)

@@ -183,9 +183,9 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
             probe_fn=partial(
                 run_audio_probe, settings=settings, upload_uri=_derive_probe_uri(cfg)
             ),
-            # Explicit default: a missing key must not become num_samples=None,
-            # which would stage (and render) the whole first val batch.
-            num_samples=OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5),
+            # Explicit default (a missing key must not stage the whole batch); int()
+            # rejects a fractional override before it crashes tensor slicing mid-run.
+            num_samples=int(OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)),
         )
     )
 

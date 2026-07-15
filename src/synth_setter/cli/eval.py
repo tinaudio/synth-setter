@@ -16,6 +16,12 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.evaluation.audio_probe import (
+    METRICS_TIMEOUT_OVERHEAD_SECONDS,
+    METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+    RENDER_TIMEOUT_OVERHEAD_SECONDS,
+    RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+)
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
@@ -40,12 +46,6 @@ from synth_setter.workspace import operator_workspace
 
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
-# Postprocessing subprocess timeouts scale with sample count so a larger eval
-# split can't spuriously time out; overhead covers fixed startup. See scaled_timeout.
-_RENDER_TIMEOUT_OVERHEAD_SECONDS = 300.0
-_RENDER_TIMEOUT_PER_SAMPLE_SECONDS = 60.0
-_METRICS_TIMEOUT_OVERHEAD_SECONDS = 180.0
-_METRICS_TIMEOUT_PER_SAMPLE_SECONDS = 30.0
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
@@ -241,8 +241,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                 check=True,
                 timeout=scaled_timeout(
                     n_render_samples,
-                    overhead_seconds=_RENDER_TIMEOUT_OVERHEAD_SECONDS,
-                    per_sample_seconds=_RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+                    overhead_seconds=RENDER_TIMEOUT_OVERHEAD_SECONDS,
+                    per_sample_seconds=RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
                 ),
             )
 
@@ -277,8 +277,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             timeout=scaled_timeout(
                 n_metric_samples,
                 workers=metric_workers,
-                overhead_seconds=_METRICS_TIMEOUT_OVERHEAD_SECONDS,
-                per_sample_seconds=_METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+                overhead_seconds=METRICS_TIMEOUT_OVERHEAD_SECONDS,
+                per_sample_seconds=METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
             ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)

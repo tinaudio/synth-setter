@@ -28,12 +28,12 @@ log = logging.getLogger(__name__)
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 
-# Mirror eval's postprocessing budgets: timeouts scale with sample count so a
-# slow render host can't spuriously trip them. See scaled_timeout.
-_RENDER_TIMEOUT_OVERHEAD_SECONDS = 300.0
-_RENDER_TIMEOUT_PER_SAMPLE_SECONDS = 60.0
-_METRICS_TIMEOUT_OVERHEAD_SECONDS = 180.0
-_METRICS_TIMEOUT_PER_SAMPLE_SECONDS = 30.0
+# Postprocessing budgets shared with cli/eval.py: timeouts scale with sample
+# count so a slow render host can't spuriously trip them. See scaled_timeout.
+RENDER_TIMEOUT_OVERHEAD_SECONDS = 300.0
+RENDER_TIMEOUT_PER_SAMPLE_SECONDS = 60.0
+METRICS_TIMEOUT_OVERHEAD_SECONDS = 180.0
+METRICS_TIMEOUT_PER_SAMPLE_SECONDS = 30.0
 
 # Raw prediction tensors stay local; the R2 snapshot is for listening to.
 _UPLOAD_EXCLUDE = "predictions/**"
@@ -175,8 +175,8 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             # 2× samples: --rerender_target renders both pred and target per sample.
             timeout=scaled_timeout(
                 n_samples * 2,
-                overhead_seconds=_RENDER_TIMEOUT_OVERHEAD_SECONDS,
-                per_sample_seconds=_RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+                overhead_seconds=RENDER_TIMEOUT_OVERHEAD_SECONDS,
+                per_sample_seconds=RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
             ),
         )
 
@@ -195,8 +195,8 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         timeout=scaled_timeout(
             n_samples,
             workers=num_workers,
-            overhead_seconds=_METRICS_TIMEOUT_OVERHEAD_SECONDS,
-            per_sample_seconds=_METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+            overhead_seconds=METRICS_TIMEOUT_OVERHEAD_SECONDS,
+            per_sample_seconds=METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
         ),
     )
 

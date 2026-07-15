@@ -18,7 +18,13 @@ from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
 
 
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
+def make_spectrogram(audio: np.ndarray, sample_rate: float) -> list[np.ndarray]:
+    """Compute one dB-scaled mel spectrogram per channel.
+
+    :param audio: Waveform of shape ``(channels, samples)``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: One ``(n_mels, frames)`` dB-scaled array per channel.
+    """
     channels = audio.shape[0]
 
     specs = []
@@ -206,7 +212,8 @@ def main(
 
             target_synth_params: dict[str, float] | None = None
             target_note_params: NoteParams | None = None
-            # Dataset audio when staged; the rerender branch overrides with its render.
+            # Dataset audio when staged; the rerender branch fills it only when absent,
+            # so a staged tensor keeps the spectrogram on dataset audio.
             target_for_spec = target_audio[j] if target_audio is not None else None
 
             out_target = os.path.join(sample_dir, "target.wav")

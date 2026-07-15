@@ -1000,9 +1000,8 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         }
         cfg_surge_real_train.training.val_audio_probe = True
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
-        # The smoke cfg's max_steps=1 stops fit mid-epoch, before its end-of-epoch
-        # val check — an integer interval forces a real validation after step 1
-        # (the sanity check alone never stages a probe).
+        # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
+        # forces a real validation after step 1 (the sanity check never stages a probe).
         cfg_surge_real_train.trainer.val_check_interval = 1
         cfg_surge_real_train.trainer.num_sanity_val_steps = 0
 
