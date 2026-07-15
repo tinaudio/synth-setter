@@ -185,7 +185,7 @@ def test_make_install_accepts_existing_canonical_python(
     precommit.write_text("#!/bin/bash\nexit 0\n")
     precommit.chmod(0o755)
 
-    fake_bin = tmp_path / "bin"
+    fake_bin = tmp_path / "bin with spaces"
     fake_bin.mkdir()
     uv = fake_bin / "uv"
     uv.write_text(

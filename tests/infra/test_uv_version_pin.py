@@ -9,7 +9,7 @@ UV_VERSION = "0.11.28"
 
 
 def test_setup_uv_steps_pin_supported_version() -> None:
-    """Every setup-uv step selects the supported exact release."""
+    """Cover workflow and composite-action Astral setup-uv invocations."""
     workflow_paths = [
         *sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml")),
         *sorted((REPO_ROOT / ".github" / "actions").glob("*/action.y*ml")),
@@ -32,7 +32,7 @@ def test_setup_uv_steps_pin_supported_version() -> None:
 
 
 def test_supported_bootstraps_pin_uv_version() -> None:
-    """Local and image bootstrap paths select the supported exact release."""
+    """Cover Makefile, Docker, and Tart uv installer pins."""
     expected_pins = {
         "Makefile": f"https://astral.sh/uv/{UV_VERSION}/install.sh",
         "docker/ubuntu22_04/Dockerfile": f"ghcr.io/astral-sh/uv:{UV_VERSION}",
