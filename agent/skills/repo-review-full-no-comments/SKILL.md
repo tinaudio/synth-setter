@@ -170,8 +170,11 @@ sub-agents; you never launch those directly.
 > reviews visible without making ordinary investigation a failure:
 >
 > ```bash
+> # `finding_count` and `pr_health_flag_count` are the Step 6 aggregate counts.
 > is_non_pass=false
-> # Set true when Step 6 found any inline finding or PR-health flag.
+> if ((finding_count > 0 || pr_health_flag_count > 0)); then
+>   is_non_pass=true
+> fi
 > progress_key=$(git branch --show-current | sha256sum | awk '{print $1}')
 > progress_path=".agent-reviews/repo-review-full-no-comments-progress.${progress_key}.txt"
 > current_head=$(git rev-parse HEAD)
