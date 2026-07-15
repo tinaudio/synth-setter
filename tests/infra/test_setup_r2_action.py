@@ -198,7 +198,7 @@ def test_setup_r2_exports_canonical_storage_secrets(
 
 @pytest.mark.infra
 def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
-    """`install-rclone` defaults off and gates the apt-get install step.
+    """`install-rclone` defaults off and gates the rclone install step.
 
     Docker-based callers ship rclone in the image and pass the default; only
     native runners opt in. The gate keeps the action a no-op install elsewhere.
@@ -212,6 +212,68 @@ def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
     step = _find_step(project_root, INSTALL_STEP_NAME)
     assert "install-rclone" in cast(str, step.get("if", ""))
     assert "rclone" in cast(str, step["run"])
+
+
+@pytest.mark.infra
+def test_setup_r2_installs_rclone_from_a_pinned_version_not_apt(project_root: Path) -> None:
+    """The install step pins a version and never falls back to apt.
+
+    Ubuntu's apt candidate is rclone 1.60.1, whose S3 backend fails the first
+    write of every process against R2 with ``NotImplemented`` (#1817). The
+    fetched URL and the installed binary must both carry the pinned version, so
+    a bumped version with a stale URL cannot pass.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    step = _find_step(project_root, INSTALL_STEP_NAME)
+    run = cast(str, step["run"])
+    version = cast(str, cast(dict[str, object], step["env"])["PINNED_RCLONE_VERSION"])
+
+    assert "apt-get" not in run, "apt ships rclone 1.60.1, which cannot write to R2"
+    assert "https://downloads.rclone.org/v${PINNED_RCLONE_VERSION}" in run
+    assert "rclone-v${PINNED_RCLONE_VERSION}-linux-amd64" in run
+    assert 'test "${installed}" = "rclone v${PINNED_RCLONE_VERSION}"' in run
+    assert version.count(".") == 2, f"expected an exact x.y.z pin, got {version!r}"
+
+
+@pytest.mark.infra
+def test_setup_r2_verifies_the_rclone_download_against_a_pinned_sha256(
+    project_root: Path,
+) -> None:
+    """The downloaded archive is checksum-verified before it is installed.
+
+    ``curl -f`` rejects a truncated download but not a same-length tampered one,
+    and the binary lands in ``/usr/local/bin`` via ``sudo``. Mirrors the pinned
+    SHA256 checks the image already applies to pueue and the VST bundles.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    step = _find_step(project_root, INSTALL_STEP_NAME)
+    run = cast(str, step["run"])
+    digest = cast(str, cast(dict[str, object], step["env"])["PINNED_RCLONE_SHA256"])
+
+    assert "sha256sum -c -" in run, "download must be verified before install"
+    assert run.index("sha256sum -c -") < run.index("sudo install"), (
+        "checksum must be verified before the binary is installed"
+    )
+    assert len(digest) == 64 and set(digest) <= set("0123456789abcdef"), (
+        f"expected a lowercase hex sha256, got {digest!r}"
+    )
+
+
+@pytest.mark.infra
+def test_setup_r2_rclone_version_env_var_is_not_rclone_prefixed(project_root: Path) -> None:
+    """No install-step env var can be swallowed by rclone's own flag mapping.
+
+    rclone maps ``RCLONE_<FLAG>`` env vars onto its flags, so a var named
+    ``RCLONE_VERSION`` is read as ``--version`` and aborts the step with a
+    bool-parse error before anything installs.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    step = _find_step(project_root, INSTALL_STEP_NAME)
+    swallowed = [key for key in cast(dict[str, object], step["env"]) if key.startswith("RCLONE_")]
+    assert not swallowed, f"rclone parses these as its own flags: {swallowed}"
 
 
 SETUP_R2_USES = "./.github/actions/setup-r2"

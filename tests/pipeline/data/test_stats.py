@@ -979,6 +979,44 @@ def test_get_stats_hdf5_closes_dask_client_and_h5_file(
         assert reopened.id.valid
 
 
+def test_get_stats_hdf5_runs_dask_workers_in_process(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``get_stats_hdf5`` uses in-process (threaded) Dask workers, not Nanny subprocesses.
+
+    Process-based workers spawn Nanny subprocesses whose teardown at
+    ``Client.__exit__`` hangs and raises ``TimeoutError`` on macOS,
+    crashing the stats subprocess after mean/std were already computed
+    (#1883). In-process workers have no subprocess to reap, and share the
+    module's ``hdf5plugin`` Blosc2 registration. Pin ``processes=False`` so
+    a regression to the process-based default resurfaces the CI timeout.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: Pytest tmp dir; hosts the seeded ``train.h5``.
+    :param monkeypatch: Pytest fixture used to swap the module-level
+        ``Client`` symbol for a spy that records its constructor kwargs.
+    """
+    from typing import Any
+
+    from dask.distributed import Client as _Client
+
+    captured_kwargs: list[dict[str, Any]] = []
+
+    class _SpyClient(_Client):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured_kwargs.append(kwargs)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(stats_script, "Client", _SpyClient)
+    train_h5 = tmp_path / "train.h5"
+    _write_tiny_mel_h5(train_h5)
+
+    stats_script.get_stats_hdf5(str(train_h5))
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("processes") is False
+
+
 def test_get_stats_hdf5_writes_sibling_stats_npz_with_mean_std_keys(
     stats_script: ModuleType, tmp_path: Path
 ) -> None:

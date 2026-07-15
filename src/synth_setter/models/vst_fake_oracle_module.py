@@ -111,14 +111,15 @@ class VSTFakeOracleModule(LightningModule):
         :param batch: Evaluation batch dict.
         :param log_key: Lightning log key (``"val/param_mse"`` or ``"test/param_mse"``).
 
-        :return: Dict with ``param_mse`` (scalar) and ``per_param_mse`` (shape ``(P,)``).
+        :return: Dict with ``param_mse`` (scalar), ``per_param_mse`` (shape ``(P,)``), and
+            ``preds`` (shape ``(B, P)``).
         :rtype: dict[str, torch.Tensor]
         """
         _, preds, targets, _ = self.model_step(batch)
         per_param_mse = (preds - targets).square().mean(dim=0)
         param_mse = per_param_mse.mean()
         self.log(log_key, param_mse, on_step=False, on_epoch=True, prog_bar=True)
-        return {"param_mse": param_mse, "per_param_mse": per_param_mse}
+        return {"param_mse": param_mse, "per_param_mse": per_param_mse, "preds": preds}
 
     def validation_step(
         self, batch: dict[str, torch.Tensor], batch_idx: int

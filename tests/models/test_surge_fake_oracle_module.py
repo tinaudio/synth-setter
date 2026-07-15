@@ -176,7 +176,7 @@ def test_validation_step_returns_zero_per_param_mse(batch_size: int) -> None:
 
     outputs = module.validation_step(batch, batch_idx=0)
 
-    assert set(outputs.keys()) == {"param_mse", "per_param_mse"}
+    assert set(outputs.keys()) == {"param_mse", "per_param_mse", "preds"}
     assert outputs["param_mse"].shape == ()
     assert outputs["per_param_mse"].shape == (_NUM_PARAMS,)
     assert outputs["param_mse"].item() == 0.0
@@ -194,7 +194,7 @@ def test_test_step_returns_zero_per_param_mse(batch_size: int) -> None:
 
     outputs = module.test_step(batch, batch_idx=0)
 
-    assert set(outputs.keys()) == {"param_mse", "per_param_mse"}
+    assert set(outputs.keys()) == {"param_mse", "per_param_mse", "preds"}
     assert outputs["param_mse"].shape == ()
     assert outputs["per_param_mse"].shape == (_NUM_PARAMS,)
     assert outputs["param_mse"].item() == 0.0
