@@ -33,7 +33,11 @@ from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
+from tests._vst import PLUGIN_PATH
 from tests.conftest import (
+    _SURGE_FIXTURE_CHANNELS,
+    _SURGE_FIXTURE_DURATION_SECONDS,
+    _SURGE_FIXTURE_SAMPLE_RATE,
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
     REAL_VST_VARIANTS,
@@ -937,3 +941,110 @@ def test_train_recovers_r2_checkpoint_after_fit_raises(
     HydraConfig().set_config(cfg_train)
     _, resumed_objects = train(cfg_train)
     assert resumed_objects["trainer"].global_step > saved_step
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("experiment_name", [_ORACLE_EXPERIMENT], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS[:1], indirect=True)
+def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
+    cfg_surge_real_train: DictConfig,
+    param_spec_name: str,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The val audio probe renders real audio, scores it, and archives it to R2.
+
+    Drives the whole chain for real — Surge XT renders the oracle's predictions through
+    the headless wrapper, ``compute_audio_metrics`` scores the wavs, and the real rclone
+    binary uploads the snapshot to the fake remote. The oracle predicts ``batch["params"]``
+    verbatim, so ``pred.wav`` and ``target.wav`` are renders of identical parameters and
+    the metrics land at their perfect-match bounds — which is what makes the returned
+    numbers assertable rather than merely present.
+
+    The smoke cfg runs a single validation, so the probe launches but is never harvested
+    by a second validation; this waits on the worker directly and asserts its real return
+    value. The harvest-and-log half of the loop is covered by ``test_val_audio_probe.py``.
+
+    :param cfg_surge_real_train: Surge XT smoke-test training config (h5 arm, oracle).
+    :param param_spec_name: Spec the smoke fixture dataset was rendered with — the probe
+        must decode and re-render with the same spec and its registry preset, or the
+        prediction rows decode against the wrong parameter layout.
+    :param fake_r2_remote: Backs ``r2:`` with the local filesystem; chdirs into tmp_path.
+    :param monkeypatch: Neutralizes the R2 auth ping (the fake remote needs no creds).
+    :param tmp_path: Doubles as the run's output dir and the fake R2 root.
+    """
+    import concurrent.futures
+
+    from synth_setter.data.vst.param_spec_registry import plugin_state_paths
+    from synth_setter.utils.callbacks import ValAudioProbe
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+
+    # fake_r2_remote chdirs into tmp_path, so the render config's repo-relative
+    # plugin/preset paths must be absolutized before they are handed to the renderer.
+    workspace = operator_workspace()
+    probe_samples = 2
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.render = {
+            "param_spec_name": param_spec_name,
+            "plugin_path": str(
+                Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else workspace / PLUGIN_PATH
+            ),
+            "plugin_state_path": str(workspace / plugin_state_paths[param_spec_name]),
+            "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
+            "channels": _SURGE_FIXTURE_CHANNELS,
+            "velocity": 100,
+            "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
+        }
+        cfg_surge_real_train.training.val_audio_probe = True
+        cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
+        # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
+        # forces a real validation after step 1 (the sanity check never stages a probe).
+        cfg_surge_real_train.trainer.val_check_interval = 1
+        cfg_surge_real_train.trainer.num_sanity_val_steps = 0
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    _, object_dict = train(cfg_surge_real_train)
+
+    probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
+    assert len(probes) == 1, "val_audio_probe=true did not wire exactly one ValAudioProbe"
+    probe = probes[0]
+    assert probe._future is not None, "validation ran but no probe was launched"
+    concurrent.futures.wait([probe._future], timeout=600)
+    metrics = probe._future.result()
+
+    step_dirs = sorted((tmp_path / "val_audio_probe").glob("step-*"))
+    assert len(step_dirs) == 1, f"expected one probe dir, got {[d.name for d in step_dirs]}"
+    probe_dir = step_dirs[0]
+
+    sample_dirs = sorted((probe_dir / "audio").glob("sample_*"))
+    # Staging is capped by the first val batch — the smoke cfg trains at batch_size=1.
+    expected_samples = min(probe_samples, cfg_surge_real_train.datamodule.batch_size)
+    assert len(sample_dirs) == expected_samples
+    for sample_dir in sample_dirs:
+        for wav_name in ("pred.wav", "target.wav"):
+            wav = sample_dir / wav_name
+            assert wav.is_file(), f"{wav} was not rendered"
+            assert wav.stat().st_size > 0, f"{wav} is empty"
+
+    assert set(metrics) == {
+        f"val_audio/{name}_{stat}"
+        for name in ("mss", "wmfcc", "sot", "rms")
+        for stat in ("mean", "std")
+    }
+    bounds = ORACLE_AUDIO_METRIC_BOUNDS
+    assert metrics["val_audio/mss_mean"] < bounds.mss_max
+    assert metrics["val_audio/wmfcc_mean"] < bounds.wmfcc_max
+    assert metrics["val_audio/sot_mean"] < bounds.sot_max
+    assert metrics["val_audio/rms_mean"] > bounds.rms_min
+
+    uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
+    landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())
+    assert landed, f"probe snapshot never reached {uploaded}"
+    assert any(p.endswith("pred.wav") for p in landed), f"no pred.wav in snapshot: {landed}"
+    assert any(p.endswith("aggregated_metrics.csv") for p in landed), f"no metrics: {landed}"
+    assert not [p for p in landed if p.endswith(".pt")], (
+        f"raw prediction tensors must stay local, but reached R2: {landed}"
+    )

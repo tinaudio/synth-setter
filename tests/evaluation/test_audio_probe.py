@@ -1,0 +1,215 @@
+"""Unit tests for :mod:`synth_setter.evaluation.audio_probe`.
+
+Covers the argv builder and sample counter in isolation, and drives
+``run_audio_probe`` with a fake subprocess runner that writes a real
+aggregated-metrics CSV plus a real rclone upload against ``fake_r2_remote`` —
+so URI construction, stage ordering, the upload exclusion, and the returned
+metric dict are all validated without a VST. The full render chain is covered
+by ``test_train.py::test_train_surge_xt_val_audio_probe_renders_scores_and_uploads``.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from contextlib import ExitStack
+from pathlib import Path
+
+import pytest
+import torch
+
+from synth_setter.evaluation import audio_probe
+from synth_setter.evaluation.audio_probe import (
+    ProbeRenderSettings,
+    _render_argv,
+    _staged_sample_count,
+    run_audio_probe,
+)
+
+_SETTINGS = ProbeRenderSettings(
+    param_spec_name="surge_4",
+    plugin_state_path="presets/surge-mini.vstpreset",
+    plugin_path="plugins/Surge XT.vst3",
+    sample_rate=8000.0,
+    channels=2,
+    velocity=100,
+    signal_duration_seconds=0.1,
+)
+
+
+def _stage(probe_dir: Path, rows: int = 3) -> None:
+    """Write the pred/target-params tensors ``ValAudioProbe`` stages.
+
+    :param probe_dir: Probe directory to create ``predictions/`` under.
+    :param rows: Row count of both staged tensors.
+    """
+    predictions = probe_dir / "predictions"
+    predictions.mkdir(parents=True)
+    torch.save(torch.zeros(rows, 4), predictions / "pred-0.pt")
+    torch.save(torch.zeros(rows, 4), predictions / "target-params-0.pt")
+
+
+def test_staged_sample_count_returns_pred_row_count(tmp_path: Path) -> None:
+    """The sample count is the staged prediction tensor's batch dimension.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    _stage(tmp_path, rows=3)
+
+    assert _staged_sample_count(tmp_path) == 3
+
+
+def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> None:
+    """The argv names both probe subdirs, every render field, and --rerender_target.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    with ExitStack() as stack:
+        argv = _render_argv(tmp_path, _SETTINGS, stack)
+
+    assert str(tmp_path / "predictions") in argv
+    assert str(tmp_path / "audio") in argv
+    assert "--rerender_target" in argv
+    for flag, value in (
+        ("--param_spec", "surge_4"),
+        ("--plugin_state_path", "presets/surge-mini.vstpreset"),
+        ("--plugin_path", "plugins/Surge XT.vst3"),
+        ("--sample_rate", "8000.0"),
+        ("--channels", "2"),
+        ("--velocity", "100"),
+        ("--signal_duration_seconds", "0.1"),
+    ):
+        assert argv[argv.index(flag) + 1] == value
+
+
+def test_render_argv_omits_unset_optional_fields(tmp_path: Path) -> None:
+    """``None`` render fields stay off the argv so the CLI's defaults apply.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    settings = ProbeRenderSettings(param_spec_name="surge_4", plugin_state_path="p.vstpreset")
+
+    with ExitStack() as stack:
+        argv = _render_argv(tmp_path, settings, stack)
+
+    for flag in ("--plugin_path", "--sample_rate", "--channels", "--velocity"):
+        assert flag not in argv
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="wrapper is prepended on Linux only")
+def test_render_argv_prepends_headless_wrapper_on_linux(tmp_path: Path) -> None:
+    """On Linux the Xvfb wrapper precedes the interpreter so the VST3 gets a display.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    with ExitStack() as stack:
+        argv = _render_argv(tmp_path, _SETTINGS, stack)
+
+        assert argv[0].endswith("run-linux-vst-headless.sh")
+        assert argv[1] == sys.executable
+
+
+def _fake_probe_subprocesses(probe_dir: Path, calls: list[list[str]]):
+    """Return a ``subprocess.run`` stand-in that materializes each stage's outputs.
+
+    :param probe_dir: Probe directory whose ``audio/`` / ``metrics/`` outputs to fake.
+    :param calls: Receives each invocation's argv for later assertions.
+    :returns: Callable with the ``subprocess.run`` signature the probe uses.
+    """
+
+    def fake_run(argv: list[str], *, check: bool, timeout: float):
+        calls.append(list(argv))
+        if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
+            sample_dir = probe_dir / "audio" / "sample_0"
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            (sample_dir / "pred.wav").write_bytes(b"RIFF")
+            (sample_dir / "target.wav").write_bytes(b"RIFF")
+        else:
+            metrics_dir = probe_dir / "metrics"
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            (metrics_dir / "aggregated_metrics.csv").write_text(
+                ",mean,std\nmss,1.5,0.1\nrms,0.9,0.05\n"
+            )
+        return subprocess.CompletedProcess(argv, 0)
+
+    return fake_run
+
+
+def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
+    tmp_path: Path, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe renders, scores, uploads (excluding tensors), and returns val_audio/* keys.
+
+    The subprocess stages are faked (each writes its real output files); the R2
+    upload runs through the real rclone binary against the fake remote.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param fake_r2_remote: Backs ``r2:`` with the local filesystem.
+    :param monkeypatch: Replaces the probe's ``subprocess.run``.
+    """
+    probe_dir = fake_r2_remote / "probe"
+    _stage(probe_dir)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(audio_probe.subprocess, "run", _fake_probe_subprocesses(probe_dir, calls))
+
+    metrics = run_audio_probe(
+        probe_dir, 5000, settings=_SETTINGS, upload_uri="r2://bucket/probes/run-1"
+    )
+
+    assert metrics == {
+        "val_audio/mss_mean": 1.5,
+        "val_audio/mss_std": 0.1,
+        "val_audio/rms_mean": 0.9,
+        "val_audio/rms_std": 0.05,
+    }
+    assert len(calls) == 2, "expected exactly a render call then a metrics call"
+    assert audio_probe._PREDICT_VST_AUDIO_MODULE in calls[0]
+    assert audio_probe._COMPUTE_AUDIO_METRICS_MODULE in calls[1]
+
+    landed = fake_r2_remote / "bucket" / "probes" / "run-1" / "step-5000"
+    uploaded = sorted(p.relative_to(landed).as_posix() for p in landed.rglob("*") if p.is_file())
+    assert "audio/sample_0/pred.wav" in uploaded
+    assert "metrics/aggregated_metrics.csv" in uploaded
+    assert not [p for p in uploaded if p.endswith(".pt")], (
+        f"staged tensors must stay local, got {uploaded}"
+    )
+
+
+def test_run_audio_probe_skips_upload_when_uri_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``upload_uri=None`` keeps the probe local and never touches r2_io.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the probe's ``subprocess.run`` and upload helper.
+    """
+    _stage(tmp_path)
+    monkeypatch.setattr(audio_probe.subprocess, "run", _fake_probe_subprocesses(tmp_path, []))
+
+    def _fail_upload(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("upload_dir must not be called without an upload_uri")
+
+    monkeypatch.setattr(audio_probe.r2_io, "upload_dir", _fail_upload)
+
+    metrics = run_audio_probe(tmp_path, 1, settings=_SETTINGS, upload_uri=None)
+
+    assert "val_audio/mss_mean" in metrics
+
+
+def test_run_audio_probe_propagates_render_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing render subprocess surfaces as CalledProcessError for the caller to log.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the probe's ``subprocess.run`` with a failing one.
+    """
+    _stage(tmp_path)
+
+    def failing_run(argv: list[str], *, check: bool, timeout: float):
+        raise subprocess.CalledProcessError(1, argv)
+
+    monkeypatch.setattr(audio_probe.subprocess, "run", failing_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)

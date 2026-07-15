@@ -76,7 +76,7 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, render, ...)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
@@ -86,6 +86,8 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
+- `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
+  `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement
 
 Reference: `training-pipeline.md` §4–5
 
