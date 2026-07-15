@@ -101,20 +101,25 @@ deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifa
 	  --junitxml deflake-artifacts/junit.xml \
 	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
 
+install: SHELL := /bin/bash
 install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, set up pre-commit
-	@command -v uv >/dev/null 2>&1 || [ -x "$$HOME/.local/bin/uv" ] || \
-		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-	@set -e; \
+	@set -euo pipefail; \
 	UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
-	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
-	if [ -d .venv ]; then \
+	if ! { [[ -x "$$UV" ]] && [[ "$$("$$UV" --version | awk '{print $$2}')" == "0.11.28" ]]; } && \
+		! { [[ -x "$$HOME/.local/bin/uv" ]] && [[ "$$("$$HOME/.local/bin/uv" --version | awk '{print $$2}')" == "0.11.28" ]]; }; then \
+		echo "Installing uv..."; curl -LsSf https://astral.sh/uv/0.11.28/install.sh | sh; \
+	fi; \
+	UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
+	[[ "$$("$$UV" --version 2>/dev/null | awk '{print $$2}')" == "0.11.28" ]] || UV="$$HOME/.local/bin/uv"; \
+	{ [[ -x "$$UV" ]] && [[ "$$("$$UV" --version | awk '{print $$2}')" == "0.11.28" ]]; } || { echo "ERROR: uv 0.11.28 required"; exit 1; }; \
+	if [[ -d .venv ]]; then \
 		PY_VER=$$(.venv/bin/python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null); \
-		[ "$$PY_VER" = "3.12.13" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.12.13 (rm -rf .venv to recreate)"; exit 1; }; \
+		[[ "$$PY_VER" == "3.12.13" ]] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.12.13 (rm -rf .venv to recreate)"; exit 1; }; \
 	else \
 		"$$UV" venv --python 3.12.13 --prompt synth-setter .venv; \
 	fi; \
 	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
-	if [ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]; then \
+	if [[ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]]; then \
 		echo "Skipping pre-commit install (core.hooksPath is set; run '.venv/bin/pre-commit install' manually if you want to override)."; \
 	else \
 		.venv/bin/pre-commit install; \

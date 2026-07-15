@@ -70,6 +70,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # Heavy runtime lives in PEP 735 groups since #1139; `--group dev`
@@ -115,6 +116,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # mkdocstrings imports the package, so the docs build needs the heavy

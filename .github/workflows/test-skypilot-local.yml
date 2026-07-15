@@ -66,6 +66,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # `sky local up` shells out to kind + kubectl. The runner image has

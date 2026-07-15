@@ -687,7 +687,7 @@ source .venv/bin/activate
 
 # The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
 # pip cannot install — drive the project install through uv.
-pip install uv
+pip install uv==0.11.28
 uv pip install --group dev -e .
 pre-commit install
 ```
@@ -702,7 +702,7 @@ conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
 # from the `dev` dependency-group (plain pip can't install groups). See #1139.
-pip install uv
+pip install uv==0.11.28
 uv pip install --group dev -e .
 pre-commit install
 ```

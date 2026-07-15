@@ -185,10 +185,12 @@ def test_make_install_accepts_existing_canonical_python(
     precommit.write_text("#!/bin/bash\nexit 0\n")
     precommit.chmod(0o755)
 
-    fake_bin = tmp_path / "bin"
+    fake_bin = tmp_path / "bin with spaces"
     fake_bin.mkdir()
     uv = fake_bin / "uv"
-    uv.write_text("#!/bin/bash\nexit 0\n")
+    uv.write_text(
+        '#!/bin/bash\nif [[ "$1" == "--version" ]]; then echo "uv 0.11.28"; fi\nexit 0\n'
+    )
     uv.chmod(0o755)
     (tmp_path / "Makefile").write_text((project_root / "Makefile").read_text())
 
@@ -202,6 +204,42 @@ def test_make_install_accepts_existing_canonical_python(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_make_install_rejects_wrong_uv_after_installer_returns(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """A bootstrap that cannot provide canonical uv fails before environment setup.
+
+    :param project_root: Repository root fixture.
+    :param tmp_path: Scratch checkout containing controlled tool executables.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "curl": "#!/bin/bash\nexit 0\n",
+        "uv": '#!/bin/bash\nif [[ "$1" == "--version" ]]; then echo "uv 0.11.7"; fi\nexit 0\n',
+    }.items():
+        executable = fake_bin / name
+        executable.write_text(body)
+        executable.chmod(0o755)
+    (tmp_path / "Makefile").write_text((project_root / "Makefile").read_text())
+
+    result = subprocess.run(
+        ["/usr/bin/make", "install"],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "ERROR: uv 0.11.28 required" in result.stdout + result.stderr
 
 
 def test_docker_runtime_uses_python_312(project_root: Path) -> None:
