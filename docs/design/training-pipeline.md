@@ -110,17 +110,19 @@ python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/tra
 ### RunPod training (target state)
 
 ```bash
-# Launch a single long-running training pod
+# Launch a single long-running training pod with default-off mid-run durability
 make runpod-train EXPERIMENT=surge/flow_simple
 
-# If the pod dies, download its launch-scoped R2 last.ckpt (Section 6.2), then resume:
-uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt"
+# A successful run can resume from its train-end W&B model artifact:
+make resume EXPERIMENT=surge/flow_simple RUN_ID=train-run-id
 
-# Or specify a W&B artifact alias directly:
+# Or specify that train-end artifact directly:
 python -m synth_setter.cli.train \
   experiment=surge/flow_simple \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
+
+A pod death before train end has no remote recovery checkpoint under the default launch. For crash recovery, the launcher must forward `training.upload_checkpoints_during_training=true`; then use the launch-scoped R2 recovery procedure in Section 6.2.
 
 In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). The current entrypoint also supports opt-in launch-scoped crash checkpoints as described in Section 6.2.
 
@@ -157,7 +159,7 @@ ______________________________________________________________________
 - **Checkpoint durability is the recovery mechanism.** No reconciliation layer.
 - **Reuse Lightning semantics.** Resume behavior should stay native to Lightning.
 - **Storage conventions are shared.** Training uses the same storage / provenance rules as data and eval.
-- **W&B for metrics, lineage, and checkpoint durability.**
+- **W&B for metrics and lineage; R2 for checkpoint durability.**
 
 ### What This System Deliberately Avoids
 
@@ -169,13 +171,13 @@ ______________________________________________________________________
 
 ### Success Metrics
 
-| Metric            | Target                                                       | How to Measure                                              |
-| ----------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| Resume durability | Best checkpoint survives pod death in R2                     | Resume from the `model-{config_id}` artifact's R2 reference |
-| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                             |
-| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                              |
-| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                                          |
-| Crash recovery UX | One documented command to resume                             | Runbook                                                     |
+| Metric            | Target                                                       | How to Measure                                          |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| Resume durability | Opt-in `last.ckpt` survives a pre-train-end pod death in R2  | Download the launch-scoped recovery object and continue |
+| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                         |
+| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                          |
+| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                                      |
+| Crash recovery UX | One documented command to resume                             | Runbook                                                 |
 
 ### Non-Goals
 
