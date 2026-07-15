@@ -455,11 +455,11 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
         raise ValueError(
             f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
         )
-    return {
-        f"{metric}_{stat}": float(df.at[metric, stat])
-        for metric in df.index
-        for stat in AGGREGATED_METRICS_STATS
-    }
+    flattened: dict[str, float] = {}
+    for metric in df.index:
+        for stat in AGGREGATED_METRICS_STATS:
+            flattened[f"{metric}_{stat}"] = float(df.at[metric, stat])
+    return flattened
 
 
 @click.command()

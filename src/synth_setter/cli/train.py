@@ -177,7 +177,8 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
             "`trainer.limit_val_batches=1.0`) to enable the probe."
         )
     num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
-    if not isinstance(num_samples, int) or num_samples < 1:
+    # bool is an int subclass, so `true` would otherwise pass as 1.
+    if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
         raise ValueError(
             f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
         )

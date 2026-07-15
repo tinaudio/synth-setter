@@ -613,11 +613,22 @@ class ValAudioProbe(Callback):
         self.probe_root = Path(probe_root)
         self.num_samples = num_samples
         self._probe_fn = probe_fn
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="val-audio-probe")
+        # Created lazily: ddp_spawn pickles callbacks, and a live executor can't travel.
+        self._pool: ThreadPoolExecutor | None = None
         self._future: Future[dict[str, float]] | None = None
         self._future_dir: Path | None = None
         self._future_step: int | None = None
         self._staged: tuple[Path, int] | None = None
+
+    def __getstate__(self) -> dict[str, object]:
+        """Drop process-local state so ddp_spawn can pickle the callback.
+
+        :returns: The instance dict with the executor, in-flight future, and staged-slot fields
+            reset; the restored copy starts with a clean slot.
+        """
+        state = self.__dict__.copy()
+        state.update(_pool=None, _future=None, _future_dir=None, _future_step=None, _staged=None)
+        return state
 
     def on_validation_batch_end(
         self,
@@ -693,7 +704,8 @@ class ValAudioProbe(Callback):
         :param pl_module: Unused; present for the Lightning hook signature.
         :param stage: Unused; present for the Lightning hook signature.
         """
-        self._pool.shutdown(wait=False)
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
 
     def _harvest(self, pl_module: "LightningModule") -> None:
         """Log the in-flight probe's metrics if it has finished; no-op while it runs.
@@ -738,6 +750,8 @@ class ValAudioProbe(Callback):
             )
             shutil.rmtree(probe_dir, ignore_errors=True)
             return
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="val-audio-probe")
         self._future = self._pool.submit(self._probe_fn, probe_dir, step)
         self._future_dir = probe_dir
         self._future_step = step

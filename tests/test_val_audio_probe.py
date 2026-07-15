@@ -362,3 +362,35 @@ def test_val_audio_probe_keeps_probe_dir_after_failed_probe(tmp_path: Path) -> N
     _run_validation(probe, _trainer(global_step=200), module)
 
     assert (tmp_path / "val_audio_probe" / "step-100").exists()
+
+
+def _noop_probe_fn(probe_dir: Path, step: int) -> dict[str, float]:
+    """Module-level probe_fn so the callback stays picklable, as production's partial is.
+
+    :param probe_dir: Ignored staged probe directory.
+    :param step: Ignored originating step.
+    :returns: Empty metrics dict.
+    """
+    return {}
+
+
+def test_val_audio_probe_is_picklable_after_launching_a_probe(tmp_path: Path) -> None:
+    """ddp_spawn pickles callbacks; the live executor and future must not travel.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    import pickle
+
+    probe = _probe(tmp_path, probe_fn=_noop_probe_fn)
+    _run_validation(probe, _trainer(global_step=100), _RecordingModule())
+    _drain(probe)
+
+    # noqa rationale: same-process roundtrip of our own object — the ddp_spawn contract.
+    restored = pickle.loads(pickle.dumps(probe))  # noqa: S301
+
+    assert isinstance(restored, ValAudioProbe)
+    assert restored.num_samples == probe.num_samples
+    # The restored copy starts with a clean slot and can launch its own probe.
+    _run_validation(restored, _trainer(global_step=200), _RecordingModule())
+    _drain(restored)
+    assert (tmp_path / "val_audio_probe" / "step-200").exists()
