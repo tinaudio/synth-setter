@@ -7,12 +7,15 @@ never downloads a music2latent checkpoint; the functional core, the Lance
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import torch
 from click.testing import CliRunner
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, PARAM_ARRAY_FIELD
@@ -22,6 +25,7 @@ from synth_setter.pipeline.data.add_music2latent import (
     add_music2latent,
     discover_shards,
     get_shard_id,
+    load_m2l_audio_encoder,
     main,
     music2latent_record_batch,
 )
@@ -131,6 +135,30 @@ def test_music2latent_record_batch_builds_fixed_shape_tensor() -> None:
     assert latents.shape == (5, 8, _M2L_TIME)  # (B, C*4, T)
     np.testing.assert_allclose(latents, _fake_m2l(audio))
     assert np.isfinite(latents).all()
+
+
+def test_load_m2l_audio_encoder_preserves_stereo_rows_and_flattens_channel_latents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The adapter maps ``(B, C, T)`` audio to row-aligned ``(B, C*D, T')`` latents.
+
+    :param monkeypatch: Installs a checkpoint-free stand-in for the external encoder.
+    """
+
+    class _Encoder:
+        def encode(self, audio: np.ndarray, *, max_batch_size: int) -> torch.Tensor:
+            assert audio.shape == (6, 5)
+            assert max_batch_size == 64
+            return torch.from_numpy(np.repeat(audio[:, None, :2], 4, axis=1))
+
+    monkeypatch.setitem(sys.modules, "music2latent", SimpleNamespace(EncoderDecoder=_Encoder))
+    audio = np.arange(30, dtype=np.float32).reshape(3, 2, 5)
+
+    latents = load_m2l_audio_encoder()(audio)
+
+    assert latents.shape == (3, 8, 2)
+    np.testing.assert_array_equal(latents[0, :4], np.repeat(audio[0, 0, :2][None], 4, axis=0))
+    np.testing.assert_array_equal(latents[0, 4:], np.repeat(audio[0, 1, :2][None], 4, axis=0))
 
 
 def test_music2latent_record_batch_rejects_row_count_mismatch() -> None:

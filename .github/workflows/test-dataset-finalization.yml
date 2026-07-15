@@ -27,6 +27,7 @@ on:
     paths:
       - "src/synth_setter/cli/finalize_dataset.py"
       - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard-lance.yaml"
       - "src/synth_setter/data/vst/shapes.py"
       - "src/synth_setter/data/vst/writers.py"
       - "src/synth_setter/pipeline/ci/validate_shard.py"

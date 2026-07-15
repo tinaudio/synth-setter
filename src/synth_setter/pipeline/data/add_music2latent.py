@@ -163,6 +163,32 @@ def discover_shards(
     return shards
 
 
+def augment_shards(shards: list[Path], m2l_encode: M2LEncodeFn, batch_size: int | None) -> int:
+    """Augment readable shards and return the number that failed.
+
+    :param shards: Shard paths to process in order.
+    :param m2l_encode: Loaded encoder reused across shards.
+    :param batch_size: Rows per Lance UDF call; ``None`` uses the Lance default.
+    :returns: Number of shards that could not be augmented.
+    """
+    failures = 0
+    for shard_path in shards:
+        try:
+            dataset = lance.dataset(str(shard_path))
+            if MUSIC2LATENT_FIELD in dataset.schema.names:
+                logger.info("music2latent_present_skipping", shard=shard_path.name)
+                continue
+            logger.info("adding_music2latent", shard=shard_path.name, rows=dataset.count_rows())
+            add_music2latent(dataset, m2l_encode, batch_size=batch_size)
+        # One bad shard must not abort the remaining shards.
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.error("add_music2latent_failed", shard=shard_path.name, error=str(exc))
+            failures += 1
+            continue
+        logger.info("added_music2latent", shard=shard_path.name)
+    return failures
+
+
 @click.command()
 @click.argument("data_dir", type=str)
 @click.option(
@@ -211,23 +237,7 @@ def main(
         logger.error("encoder_load_failed", error=str(exc))
         sys.exit(1)
 
-    failures = 0
-    for shard_path in shards:
-        try:
-            dataset = lance.dataset(str(shard_path))
-            if MUSIC2LATENT_FIELD in dataset.schema.names:
-                logger.info("music2latent_present_skipping", shard=shard_path.name)
-                continue
-            logger.info("adding_music2latent", shard=shard_path.name, rows=dataset.count_rows())
-            add_music2latent(dataset, m2l_encode, batch_size=batch_size)
-        # One bad shard (unreadable dataset, validation, Lance, or CUDA failure)
-        # must not abort the remaining shards; log it, count it, and keep going.
-        except (OSError, ValueError, RuntimeError) as exc:
-            logger.error("add_music2latent_failed", shard=shard_path.name, error=str(exc))
-            failures += 1
-            continue
-        logger.info("added_music2latent", shard=shard_path.name)
-
+    failures = augment_shards(shards, m2l_encode, batch_size)
     if failures:
         logger.error("add_music2latent_incomplete", failed=failures, total=len(shards))
         sys.exit(1)
