@@ -1827,7 +1827,7 @@ class TestBuildWorkerCmd:
         assert exec_idx != -1, f"exec step missing from cmd: {cmd!r}"
         assert sync_idx < exec_idx, "sync_worker_checkout must run before exec"
 
-    def test_cmd_repairs_stale_worker_python_after_sync(self, spec: DatasetSpec) -> None:
+    def test_cmd_repairs_stale_worker_python_before_sync(self, spec: DatasetSpec) -> None:
         """The PR checkout can raise the Python floor before the image is rebuilt.
 
         :param spec: Fixture-provided ``DatasetSpec``.
@@ -1839,8 +1839,9 @@ class TestBuildWorkerCmd:
         repair_idx = cmd.find("source scripts/ensure_worker_python.sh")
         exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
         assert repair_idx != -1, f"python repair step missing from cmd: {cmd!r}"
-        assert "rm -rf" not in cmd
-        assert sync_idx < repair_idx < exec_idx
+        assert "uv venv --python 3.12.13" in cmd
+        assert "bash scripts/sync_worker_checkout.sh --python-ready" in cmd
+        assert repair_idx < sync_idx < exec_idx
 
     def test_cmd_pins_spec_created_at_via_hydra_override(self, spec: DatasetSpec) -> None:
         """Worker compose must inherit launcher's created_at to land on the same r2.prefix.

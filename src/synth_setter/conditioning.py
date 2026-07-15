@@ -5,6 +5,6 @@ Use ``ConditioningMode`` to annotate routing boundaries::
     mode: ConditioningMode = "mel"
 """
 
-from typing import Literal, TypeAlias
+from typing import Literal
 
-ConditioningMode: TypeAlias = Literal["mel", "m2l"]
+type ConditioningMode = Literal["mel", "m2l"]

@@ -204,7 +204,8 @@ def test_worker_checkout_uses_guarded_runtime_repair(project_root: Path) -> None
 
     assert "source scripts/ensure_worker_python.sh" in script
     assert "rm -rf" not in script
-    assert 'local worker_venv="/venv/main"' in helper
+    assert 'local worker_venv="${1:-/venv/main}"' in helper
+    assert "--python-ready" in script
     assert f"uv venv --python {PYTHON_VERSION}" in helper
 
 

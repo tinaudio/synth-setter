@@ -27,7 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Python 3.11+ provides tomllib; the repository pins 3.12.13.
+      # tomllib avoids mutmut's legacy TOML parser failure on PEP 735 groups — see #1414.
       - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
         with:
