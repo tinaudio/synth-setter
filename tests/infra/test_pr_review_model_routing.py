@@ -1,4 +1,4 @@
-"""Contract tests for PR-review model routing across Claude and Codex."""
+"""Contract tests for PR-review model routing across Claude, Codex, and OpenCode."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import os
 import re
 import runpy
+import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -28,10 +29,12 @@ _ROLE_MODELS = {
     "pr-review-worker-deep": {
         "claude": ("sonnet", "high"),
         "codex": ("gpt-5.6-sol", "high"),
+        "opencode": ("opencode-go/kimi-k2.7-code", "high"),
     },
     "pr-review-worker-fast": {
         "claude": ("haiku", "medium"),
         "codex": ("gpt-5.6-terra", "medium"),
+        "opencode": ("opencode-go/glm-5.2", None),
     },
 }
 
@@ -58,6 +61,17 @@ def test_review_roles_pin_provider_models_and_effort() -> None:
         else:
             assert (
                 "always return the requested structured report" in codex["developer_instructions"]
+            )
+
+        if "opencode" in providers:
+            with (REPO_ROOT / ".opencode" / "agents" / f"{role}.toml").open("rb") as file:
+                opencode = tomllib.load(file)
+            assert opencode["name"] == role
+            assert opencode["description"]
+            assert (opencode["model"], opencode.get("variant")) == providers["opencode"]
+            assert (
+                "always return the requested structured report"
+                in opencode["developer_instructions"]
             )
 
 
@@ -235,3 +249,282 @@ def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> N
     )
 
     assert str(result) == "stdin=[]"
+
+
+_OPENCODE_LAUNCHER_PY = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.py"
+_OPENCODE_LAUNCHER_SH = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.sh"
+
+
+def _path_without_opencode(tmp_path: Path) -> str:
+    """Expose the shell launcher's dependencies on PATH without any opencode binary.
+
+    :param tmp_path: Temporary directory to host the restricted bin directory.
+    :returns: PATH string containing jq and uv plus the system directories.
+    """
+    bin_dir = tmp_path / "restricted-bin"
+    bin_dir.mkdir()
+    for tool in ("jq", "uv"):
+        target = shutil.which(tool)
+        assert target is not None, f"{tool} is required to run the shell launcher"
+        (bin_dir / tool).symlink_to(target)
+    return f"{bin_dir}:/usr/bin:/bin"
+
+
+def _run_opencode_launcher_py(argv: list[str]) -> tuple[int, str]:
+    """Drive the python launcher exactly as the shell wrapper does.
+
+    :param argv: Arguments after the script path.
+    :returns: Exit code and captured stdout.
+    """
+    stdout = io.StringIO()
+    original_argv = sys.argv
+    sys.argv = [str(_OPENCODE_LAUNCHER_PY), *argv]
+    try:
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(io.StringIO()),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            runpy.run_path(str(_OPENCODE_LAUNCHER_PY), run_name="__main__")
+    finally:
+        sys.argv = original_argv
+    code = exit_info.value.code
+    return (code if isinstance(code, int) else 1), stdout.getvalue()
+
+
+def test_opencode_role_pins_orchestrator_role_has_no_toml() -> None:
+    """Keep the opencode cross-model pass scoped to the review workers."""
+    assert not (REPO_ROOT / ".opencode" / "agents" / "pr-review-orchestrator.toml").exists()
+
+
+def test_opencode_launcher_dry_run_emits_pinned_command() -> None:
+    """Exercise the opencode launcher entry point without spending inference tokens."""
+    for role, providers in _ROLE_MODELS.items():
+        if "opencode" not in providers:
+            continue
+        model, variant = providers["opencode"]
+
+        code, output = _run_opencode_launcher_py([role, "--prompt", "routing probe", "--dry-run"])
+
+        assert code == 0
+        resolved = json.loads(output)
+        command = resolved["command"]
+        assert command[0:2] == ["opencode", "run"]
+        assert command[command.index("-m") + 1] == model
+        assert command[command.index("--agent") + 1] == "pr-reviewer"
+        assert command[command.index("--format") + 1] == "json"
+        if variant is None:
+            assert "--variant" not in command
+        else:
+            assert command[command.index("--variant") + 1] == variant
+        assert resolved["prompt"].endswith("routing probe")
+
+
+def test_opencode_launcher_orchestrator_role_rejected() -> None:
+    """Refuse roles that have no opencode execution policy."""
+    code, _ = _run_opencode_launcher_py(
+        ["pr-review-orchestrator", "--prompt", "routing probe", "--dry-run"]
+    )
+
+    assert code != 0
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_dry_run_without_binary_round_trips_json(tmp_path: Path) -> None:
+    """Keep the binary pre-flight after the dry-run branch so opencode-less CI can dry-run.
+
+    :param tmp_path: Temporary directory for the restricted PATH.
+    """
+    sh = importlib.import_module("sh")
+
+    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+        "pr-review-worker-deep",
+        "--prompt",
+        "routing probe",
+        "--dry-run",
+        _cwd=REPO_ROOT,
+        _env={"PATH": _path_without_opencode(tmp_path), "HOME": os.environ["HOME"]},
+    )
+
+    resolved = json.loads(str(result))
+    assert resolved["command"][resolved["command"].index("-m") + 1] == "opencode-go/kimi-k2.7-code"
+    assert resolved["prompt"].endswith("routing probe")
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_reads_prompt_file(tmp_path: Path) -> None:
+    """Exercise the production prompt-file path through the shell launcher.
+
+    :param tmp_path: Temporary directory for the worker prompt file.
+    """
+    sh = importlib.import_module("sh")
+    prompt_file = tmp_path / "worker-prompt.txt"
+    prompt_file.write_text("prompt-file routing probe")
+
+    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+        "pr-review-worker-fast",
+        "--prompt-file",
+        prompt_file,
+        "--dry-run",
+        _cwd=REPO_ROOT,
+    )
+
+    resolved = json.loads(str(result))
+    assert resolved["command"][resolved["command"].index("-m") + 1] == "opencode-go/glm-5.2"
+    assert resolved["prompt"].endswith("prompt-file routing probe")
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_extracts_last_message_final_text(tmp_path: Path) -> None:
+    """Return only the final state of the last message's text parts.
+
+    :param tmp_path: Temporary directory containing the fake opencode executable.
+    """
+    sh = importlib.import_module("sh")
+    events = [
+        {"type": "step_start", "part": {"type": "step-start", "messageID": "msg_1"}},
+        {
+            "type": "text",
+            "part": {"id": "prt_1", "messageID": "msg_1", "type": "text", "text": "earlier draft"},
+        },
+        {
+            "type": "text",
+            "part": {"id": "prt_2", "messageID": "msg_2", "type": "text", "text": "partial"},
+        },
+        {
+            "type": "text",
+            "part": {
+                "id": "prt_2",
+                "messageID": "msg_2",
+                "type": "text",
+                "text": "structured report",
+            },
+        },
+        {"type": "step_finish", "part": {"type": "step-finish", "messageID": "msg_2"}},
+    ]
+    fake = tmp_path / "opencode"
+    lines = "\n".join(json.dumps(event) for event in events)
+    fake.write_text(f"#!/bin/bash\ncat <<'EOF'\n{lines}\nEOF\n")
+    fake.chmod(0o755)
+
+    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> None:
+    """Keep the caller's stdin out of the opencode run.
+
+    :param tmp_path: Temporary directory containing the fake opencode executable.
+    """
+    sh = importlib.import_module("sh")
+    fake = tmp_path / "opencode"
+    fake.write_text(
+        "#!/bin/bash\n"
+        "leaked=$(cat)\n"
+        'jq -cn --arg text "stdin=[${leaked}]" \\\n'
+        '  \'{type: "text", part: {id: "prt_1", messageID: "msg_1",'
+        ' type: "text", text: $text}}\'\n'
+    )
+    fake.chmod(0o755)
+
+    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _in="caller-owned stdin payload",
+    )
+
+    assert str(result) == "stdin=[]"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_missing_binary_exits_nonzero(tmp_path: Path) -> None:
+    """Signal degrade-and-note to the caller when no opencode CLI is installed.
+
+    :param tmp_path: Temporary directory for the restricted PATH.
+    """
+    sh = importlib.import_module("sh")
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={"PATH": _path_without_opencode(tmp_path), "HOME": os.environ["HOME"]},
+        )
+
+    assert exc_info.value.exit_code == 3
+    assert b"opencode" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_opencode_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> None:
+    """Bound a hung opencode run instead of stalling the review worker.
+
+    :param tmp_path: Temporary directory containing the fake opencode executable.
+    """
+    sh = importlib.import_module("sh")
+    fake = tmp_path / "opencode"
+    fake.write_text("#!/bin/bash\nsleep 30\n")
+    fake.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "OPENCODE_REVIEW_TIMEOUT": "1",
+            },
+        )
+
+    assert exc_info.value.exit_code != 0
+    assert b"timed out" in exc_info.value.stderr
+
+
+def test_opencode_config_reviewer_agent_denies_mutations() -> None:
+    """Keep the shared opencode review agent read-only."""
+    config = json.loads((REPO_ROOT / "opencode.json").read_text())
+
+    reviewer = config["agent"]["pr-reviewer"]
+    assert reviewer["description"]
+    assert reviewer["permission"]["edit"] == "deny"
+    assert reviewer["permission"]["task"] == "deny"
+    assert reviewer["permission"]["bash"]["*"] == "deny"
+    assert reviewer["permission"]["bash"]["git diff*"] == "allow"
+
+
+def test_review_fanout_analysis_requires_opencode_pass_and_degrade() -> None:
+    """Pin the cross-model pass and its degrade contract in the fan-out spec."""
+    text = (
+        REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
+    ).read_text()
+
+    assert "run_opencode_review_agent.sh" in text
+    assert "flagged by:" in text
+    assert "opencode pass skipped/failed" in text
+
+
+def test_worker_agent_briefs_permit_only_opencode_launcher() -> None:
+    """Give workers the launcher carve-out without opening the orchestrator to it."""
+    for provider_dir, suffix in ((".claude", ".md"), (".codex", ".toml")):
+        for role in ("pr-review-worker-deep", "pr-review-worker-fast"):
+            text = (REPO_ROOT / provider_dir / "agents" / f"{role}{suffix}").read_text()
+            assert "run_opencode_review_agent.sh" in text
+        orchestrator = (
+            REPO_ROOT / provider_dir / "agents" / f"pr-review-orchestrator{suffix}"
+        ).read_text()
+        assert "run_opencode_review_agent.sh" not in orchestrator

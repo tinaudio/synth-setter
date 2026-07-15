@@ -128,6 +128,39 @@ grounding rule only holds if the agent can fetch the live Lance docs. The
 `pr-review-worker-fast` role inherits the parent agent's tools, including web
 access. `correctness-review` needs no web access and runs on the deep worker.
 
+### Cross-model opencode pass (every worker)
+
+Every worker prompt MUST additionally instruct the worker to run a second,
+parallel opencode pass of the same checklist and merge the two:
+
+1. **Before anything else**, write an opencode prompt to a unique temp file
+   (`mktemp`). It contains: the skill name and its checklist (the SKILL.md
+   checklist text or a faithful summary), the PR/branch metadata (repo, base
+   SHA, head SHA, file list), an instruction to inspect the diff via read-only
+   git/gh commands, and the exact per-agent output contract below.
+2. **Immediately launch the pass in the background** so it runs while the
+   native pass works:
+   `agent/_shared/run_opencode_review_agent.sh <your-role> --prompt-file <tmp>`
+   (Claude Code: the Bash tool's background mode; otherwise append `&`).
+   `<your-role>` is the worker role you are running as:
+   `pr-review-worker-deep` for `correctness-review`, `pr-review-worker-fast`
+   for everything else. The launcher owns model pinning and a hard timeout; do
+   not pass model flags.
+3. Run your native skill pass as specified above.
+4. Collect the background result. If the launcher exited zero and produced a
+   parseable report, **merge**: take the union of findings; collapse
+   near-duplicates (same `<path>:<line>` and the same defect) into one
+   finding. End every merged finding's description with its provenance:
+   `(flagged by: native)`, `(flagged by: opencode)`, or `(flagged by: both)`.
+   The merged report keeps the single-report contract and the 1500-word cap.
+5. **Degrade + note.** If the launcher exits non-zero (opencode missing,
+   timed out, errored) or returns nothing parseable, the native findings
+   stand unchanged;
+   mark every finding `(flagged by: native)` and append one final line to the
+   report: `_opencode pass skipped/failed: <one-line reason>._` Never block,
+   retry more than once, or drop native findings because the second pass
+   failed. CI has no opencode CLI, so this path is normal there.
+
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
 ### Per-agent output contract
@@ -148,6 +181,10 @@ Each agent returns a Markdown block:
 ```
 
 Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
+
+Each finding's description ends with its `(flagged by: …)` provenance from the
+cross-model pass; a degraded pass instead appends the single
+`_opencode pass skipped/failed: …_` line after `### What looks good`.
 
 ## Step 5: Aggregate findings
 
@@ -236,4 +273,8 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
   skill; each worker invokes its plugin skill via the Skill tool. The
   orchestration is your contribution; each plugin skill's authoritative
   checklist is the source of truth for its domain.
+- Each worker internally runs two model passes (native + opencode) but still
+  returns one report; the orchestrator's aggregation, tagging, and sentinel
+  contract are unchanged, and cross-skill findings are still never deduped —
+  only the within-worker native/opencode near-duplicates are collapsed.
 - For the concrete invocation pattern (parallel Agent tool calls in a single message, expected per-agent prompt shape), see the example trace recorded in PR #777's review history — that's the workflow this pipeline packages.
