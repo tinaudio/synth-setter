@@ -241,12 +241,8 @@ sub-agents; you never launch those directly.
   — the analysis is deterministic enough that re-running is cheap relative to
   the value of an explicit "no, don't post" mode.
 - A non-PASS report starts a remediation loop, not a license to retry the same
-  review. Before another review or a handoff, make any coherent remediation
-  durable: run relevant checks, commit it, and push the current branch. If
-  progress cannot safely be committed or pushed, report the concrete blocker.
-  On a repeated report, compare `HEAD` and `git status --porcelain` with the
-  prior attempt; unchanged state means stop retrying and recover from the
-  blocker. This is advisory so investigation and deliberately uncommitted
+  review. Follow the non-PASS Summary instruction before another review or a
+  handoff. This is advisory so investigation and deliberately uncommitted
   experiments remain possible.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
