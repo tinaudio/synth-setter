@@ -1,0 +1,45 @@
+name: Claude Repo Review (Full)
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# One full review per PR; a new push supersedes the in-flight review of the stale diff.
+concurrency:
+  group: claude-repo-review-full-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repo-review-full:
+    runs-on: ubuntu-latest
+    # repo-review-full fans out one agent per applicable checklist, so it needs
+    # more headroom than the single-agent code-review plugin (30 min).
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      # fetch-depth: 0 — one fan-out agent reads git blame/history for context.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The /repo-review-full skill is repo-local (.claude/skills -> agent/skills),
+      # so no plugin_marketplaces is needed; the action discovers it as a project skill.
+      - name: Run Claude repo-review-full
+        id: repo-review-full
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          # Unlike the code-review plugin, /repo-review-full posts inline comments
+          # by default, so no extra flag is needed to make findings appear.
+          prompt: >-
+            /repo-review-full ${{ github.event.pull_request.number }}
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options

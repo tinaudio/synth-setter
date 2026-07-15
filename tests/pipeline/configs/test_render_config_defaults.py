@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 from hydra import compose, initialize_config_module
 
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Off-default values for each field surfaced in ``render/surge_xt.yaml``.  Each
@@ -38,7 +39,7 @@ def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -
     config = RenderConfig(
         plugin_path="plugin.vst3",
         plugin_state_path="state.vstpreset",
-        param_spec_name="surge_xt",
+        param_spec_name=ParamSpecName("surge_xt"),
         renderer_version="1.0.0",
         sample_rate=44100,
         channels=2,

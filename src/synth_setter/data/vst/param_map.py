@@ -14,6 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.data.vst.clap_map import ClapParamRef, PluginFormatMap
+from synth_setter.param_spec_name import ValidatedParamSpecName
 
 
 class PedalboardParamRef(BaseModel):  # noqa: DOC601, DOC603
@@ -59,7 +60,7 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     plugin: str
-    param_spec_name: str
+    param_spec_name: ValidatedParamSpecName
     preset_resource: str
     preset_sha256: str
     pedalboard: BackendSnapshot

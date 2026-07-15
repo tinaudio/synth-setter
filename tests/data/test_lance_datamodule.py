@@ -1,3 +1,4 @@
+# pyright: reportUnnecessaryTypeIgnoreComment=true
 """Behavioral tests for :mod:`synth_setter.data.lance_datamodule`.
 
 Covers the public symbols exposed by the module:
@@ -22,6 +23,7 @@ import contextlib
 import random
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -32,8 +34,9 @@ from synth_setter.data.lance_datamodule import (
     LanceVSTDataModule,
     LanceVSTDataset,
 )
-from synth_setter.data.vst_datamodule import ShiftedBatchSampler
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst_datamodule import ShiftedBatchSampler
+from synth_setter.param_spec_name import ParamSpecName
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
@@ -45,6 +48,22 @@ _MEL_N_FRAMES = 5
 _M2L_DIM_1 = 6
 _M2L_DIM_2 = 7
 _NUM_PARAMS = 11
+
+if TYPE_CHECKING:
+
+    def _lance_datamodule_param_spec_name_contract(
+        plain: str, typed: ParamSpecName
+    ) -> None:
+        """Pin nominal typing at the Lance datamodule constructor.
+
+        :param plain: Arbitrary string rejected by the constructor contract.
+        :param typed: Explicitly constructed registry name accepted by the constructor.
+        """
+        LanceVSTDataModule(dataset_root=".", param_spec_name=typed)
+        LanceVSTDataModule(
+            dataset_root=".",
+            param_spec_name=plain,  # pyright: ignore[reportArgumentType]
+        )
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 
@@ -162,7 +181,7 @@ def _set_up_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: LanceVSTDataModule
     """
-    kwargs.setdefault("param_spec_name", "surge_xt")
+    kwargs.setdefault("param_spec_name", ParamSpecName("surge_xt"))
     module = LanceVSTDataModule(**kwargs)  # type: ignore[arg-type]
     module.setup()
     try:
@@ -694,7 +713,10 @@ class TestLanceVSTDataModule:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         module = LanceVSTDataModule(
-            dataset_root=dataset_root, batch_size=2, ot=False, param_spec_name="surge_xt"
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            param_spec_name=ParamSpecName("surge_xt"),
         )
         module.setup()
         module.teardown()

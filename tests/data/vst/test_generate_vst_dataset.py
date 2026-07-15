@@ -33,6 +33,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_sot,
     compute_wmfcc,
 )
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests._vst import (
     PLUGIN_PATH,
@@ -91,7 +92,7 @@ def _render_cfg(
     return RenderConfig(
         plugin_path=PLUGIN_PATH,
         plugin_state_path=_PRESET_PATH,
-        param_spec_name=_SPEC_NAME,
+        param_spec_name=ParamSpecName(_SPEC_NAME),
         renderer_version=_RENDERER_VERSION,
         sample_rate=int(_SAMPLE_RATE),
         channels=_CHANNELS,
