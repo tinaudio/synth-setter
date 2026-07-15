@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync the worker's checkout to $WORKER_GIT_REF if set; otherwise no-op.
+# Ensure the worker runtime, then sync to $WORKER_GIT_REF when set.
 #
 # Used by RunPod and OCI compute templates to bypass dev-snapshot image-bake
 # lag in PR CI: the launcher passes the PR head SHA via WORKER_GIT_REF and the
@@ -9,7 +9,26 @@
 # format is validated host-side by skypilot_launch.resolve_worker_env.
 set -euo pipefail
 
+python_ready=false
+if [[ "${1:-}" == "--python-ready" ]]; then
+  python_ready=true
+  shift
+fi
+if (( $# > 0 )); then
+  echo "Usage: $0 [--python-ready]" >&2
+  exit 2
+fi
+
+if [[ "$python_ready" == "false" ]]; then
+  # shellcheck source=scripts/ensure_worker_python.sh
+  source scripts/ensure_worker_python.sh
+fi
+
 if [[ -z "${WORKER_GIT_REF:-}" ]]; then
+  if [[ "$python_ready" == "false" &&
+    "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" ]]; then
+    uv pip install --group runtime -e .
+  fi
   exit 0
 fi
 

@@ -12,7 +12,7 @@ version = "8.48.1"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.13"
 # Lite import closure for the lite CI sites (validate_spec, ensure_r2_env_loaded,
 # load_image_config); heavy runtime is in [dependency-groups]. Pinned by
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
@@ -169,7 +169,7 @@ data = [
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
-  "dawdreamer; python_version < '3.13'",
+  "dawdreamer; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
   "librosa",
   "mido",
   "pedalboard",
@@ -344,7 +344,7 @@ testpaths = "tests/"
 
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 99
 exclude = ["logs", "data"]
 # Legacy files excluded until per-file lint cleanup is done (see issue #25).

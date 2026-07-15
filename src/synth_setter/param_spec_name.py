@@ -6,7 +6,7 @@ Use ``ParamSpecName`` for runtime registry keys and
     def resolve(name: ParamSpecName) -> object: ...
 """
 
-from typing import Annotated, NewType, TypeAlias
+from typing import Annotated, NewType
 
 from pydantic import AfterValidator
 
@@ -25,4 +25,4 @@ def _reject_blank(value: ParamSpecName) -> ParamSpecName:
     return value
 
 
-ValidatedParamSpecName: TypeAlias = Annotated[ParamSpecName, AfterValidator(_reject_blank)]
+ValidatedParamSpecName = Annotated[ParamSpecName, AfterValidator(_reject_blank)]
