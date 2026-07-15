@@ -36,7 +36,8 @@ prompt="$(jq -er "${prompt_filter}" <<<"${resolved}")"
 event_file="$(mktemp)"
 log_file="$(mktemp)"
 trap 'rm -f "${event_file}" "${log_file}"' EXIT
-if ! "${command[@]}" --json "${prompt}" >"${event_file}" 2>"${log_file}"; then
+# codex exec appends piped stdin to the prompt and blocks until EOF; the prompt is already complete.
+if ! "${command[@]}" --json "${prompt}" </dev/null >"${event_file}" 2>"${log_file}"; then
   cat "${log_file}" >&2
   exit 1
 fi

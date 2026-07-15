@@ -203,3 +203,35 @@ def test_codex_review_shell_launcher_captures_only_agent_message(tmp_path: Path)
     )
 
     assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> None:
+    """Keep the caller's stdin out of the worker prompt.
+
+    ``codex exec`` appends piped stdin to the prompt and blocks until EOF, so a
+    caller holding stdin open would stall the review gate.
+
+    :param tmp_path: Temporary directory containing the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "leaked=$(cat)\n"
+        'printf \'{"type":"item.completed","item":{"type":"agent_message",\'\n'
+        'printf \'"text":"stdin=[%s]"}}\\n\' "${leaked}"\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _in="caller-owned stdin payload",
+    )
+
+    assert str(result) == "stdin=[]"
