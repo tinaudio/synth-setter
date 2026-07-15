@@ -542,7 +542,7 @@ def test_finalize_rejects_winner_whose_fragment_data_file_is_absent(
     """
     spec = tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
-    # Shard 2 is val's only shard, so its fragment file is val.lance's only data.
+    # Removing every validation fragment makes the selected winner reference an absent file.
     val_data = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "val.lance" / "data"
     for fragment_file in val_data.iterdir():
         fragment_file.unlink()

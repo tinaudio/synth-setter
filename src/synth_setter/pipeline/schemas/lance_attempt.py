@@ -1,16 +1,4 @@
-"""Strict Pydantic contracts for the Lance staging/audit trust boundary.
-
-Two contracts live here: the per-attempt fragment sidecar and the
-``dataset.json`` audit-card models. The sidecar carries only what is not
-recoverable elsewhere — a schema version and Lance's own serialized fragment
-metadata; logical identity is derived, not stored (``worker_id``/
-``attempt_uuid`` from the filename, ``shard_id`` from the staging path,
-``split`` from the spec), so no field can drift from the path-derived truth
-(design: ``docs/design/data-pipeline.md`` §14.4).
-
-Typical boundary use is ``LanceFragmentSidecar.model_validate_json(payload)``
-before deserializing its opaque Lance fragment metadata.
-"""
+"""Strict Pydantic contracts for Lance staging metadata and dataset audit records."""
 
 from __future__ import annotations
 

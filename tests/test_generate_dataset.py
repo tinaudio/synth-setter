@@ -39,7 +39,9 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests._vst import PLUGIN_PATH
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 
@@ -49,6 +51,9 @@ from tests.helpers.dummy_shards import stub_renderer
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_REAL_PLUGIN_VST3 = (
+    Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
+).resolve()
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -330,6 +335,51 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
     # The attempt-start marker is the only allowed trace of the failed attempt.
     assert staged
     assert all(name.endswith(".rendering") for name in staged)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A real VST Lance render stages complete attempts that resume skips.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the real rclone process.
+    :param monkeypatch: Pins the single-worker rank and world size.
+    :param tmp_path: Scratch directory for finalize sidecars and statistics.
+    """
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 1, 1]
+        cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-lance-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    first_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert len(first_attempts) == len(spec.shards)
+
+    from_hydra(cfg_dataset)
+
+    resumed_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert resumed_attempts == first_attempts
+
+    assert validate_all_shards_from_r2(spec) == []
 
 
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(

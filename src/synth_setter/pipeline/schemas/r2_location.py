@@ -306,10 +306,8 @@ class R2Location(BaseModel):
     ) -> str:
         """R2 URI of a per-attempt staged artifact under ``metadata/workers/shards/``.
 
-        Lance attempts (#1776) stage their sidecar set here — ``ext`` of
-        ``".fragment.json"`` / ``".shard-stats.npz"`` / ``".valid"`` /
-        ``".rendering"`` (see ``pipeline.constants``). HDF5/WDS staging (#406)
-        will reuse the same shape with payload extensions.
+        Lance attempts (#1776) stage artifacts here using the canonical
+        suffixes from ``pipeline.constants``.
 
         :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
         :param worker_id: Worker identifier issued by the launcher.

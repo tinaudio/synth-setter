@@ -42,7 +42,7 @@ pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 
 
 def tiny_lance_spec() -> DatasetSpec:
-    """Build a 4-shard lance spec (train [0,2), val [2,3), test [3,4)) with tiny rows.
+    """Build a tiny Lance spec with non-empty train, validation, and test splits.
 
     :returns: Frozen spec whose render config keeps every per-field array small.
     """

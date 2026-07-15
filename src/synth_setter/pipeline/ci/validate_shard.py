@@ -18,7 +18,8 @@ to the HDF5 path (``.h5``), the wds tar path (``.tar``), or the Lance path
 - Lance path (local shard, worker-side pre-staging check): schema metadata
   parses as a strict ``ShardMetadata``; every field is a fixed-shape tensor
   column whose dtype and inner shape match the same shape helpers; and
-  ``num_rows`` equals ``spec.render.samples_per_shard``.
+  ``num_rows`` equals ``spec.render.samples_per_shard``. Values must be finite,
+  audio must lie in ``[-1, 1]``, and parameters in ``[0, 1]``.
 - Lance path (from R2): structural check of each shard's staged winner
   attempt — sidecar + stats + ``.valid`` present, sidecar round-trips through
   Lance, row counts agree, fragment data files exist under the assigned split.
@@ -51,8 +52,10 @@ if TYPE_CHECKING:
     import lance
 
 from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
+    PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile
@@ -480,13 +483,37 @@ def _validate_lance_dataset(
         errors.append(f"dataset has {num_rows} rows, expected {spec.render.samples_per_shard}")
 
     expected_shapes = _expected_dataset_shapes(spec)
+    schema_errors: list[str] = []
     for name in DATASET_FIELD_NAMES:
         field = schema.field(name) if name in schema.names else None
         if field is None:
-            errors.append(f"missing column: {name!r}")
+            schema_errors.append(f"missing column: {name!r}")
             continue
-        errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+        schema_errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+    errors.extend(schema_errors)
+    if not schema_errors:
+        errors.extend(_validate_lance_values(dataset))
     return errors
+
+
+def _validate_lance_values(dataset: lance.LanceDataset) -> list[str]:
+    """Validate finite and normalized values before a worker stages a shard.
+
+    :param dataset: Structurally valid local Lance shard dataset.
+    :returns: One error per violated field value contract.
+    """
+    errors: set[str] = set()
+    for batch in dataset.to_batches(columns=list(DATASET_FIELD_NAMES)):
+        for name, column in zip(DATASET_FIELD_NAMES, batch.columns, strict=True):
+            values = column.to_numpy_ndarray()
+            if not np.isfinite(values).all():
+                errors.add(f"column {name!r} contains non-finite values")
+                continue
+            if name == AUDIO_FIELD and ((values < -1) | (values > 1)).any():
+                errors.add(f"column {name!r} contains values outside [-1, 1]")
+            if name == PARAM_ARRAY_FIELD and ((values < 0) | (values > 1)).any():
+                errors.add(f"column {name!r} contains values outside [0, 1]")
+    return sorted(errors)
 
 
 def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, ...]) -> list[str]:

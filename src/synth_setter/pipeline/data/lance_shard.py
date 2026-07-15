@@ -129,6 +129,8 @@ def lance_fragment(
 
     Writes the data file immediately and returns its metadata; collect the results
     for :func:`commit_lance_dataset`. Streams batches without buffering a shard.
+    Lance's object-store client retries individual requests with bounded backoff;
+    replaying this whole call could consume the stream twice and leak fragments.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema shared by every fragment.
@@ -164,6 +166,9 @@ def commit_lance_dataset(
     storage_options: dict[str, str] | None = None,
 ) -> None:
     """Commit fragments from :func:`lance_fragment` as a fresh Lance dataset.
+
+    Lance's object-store client supplies bounded request retries; the commit is
+    not replayed here because its success may be ambiguous after a lost response.
 
     :param uri: Destination dataset directory (local path or ``s3://`` URI).
     :param schema: Arrow schema the dataset is created with.
