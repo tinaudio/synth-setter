@@ -42,3 +42,11 @@ jobs:
             /repo-review-full ${{ github.event.pull_request.number }}
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
+
+      - name: Upload Claude failure result
+        id: upload-claude-failure
+        if: ${{ failure() && steps.repo-review-full.outputs.execution_file != '' }}
+        uses: ./.github/actions/upload-claude-failure
+        with:
+          execution-file: ${{ steps.repo-review-full.outputs.execution_file }}
+          artifact-name: claude-failure-${{ github.run_id }}-${{ github.run_attempt }}
