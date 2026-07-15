@@ -1,0 +1,29 @@
+name: Upload Claude failure result
+description: Preserve the sanitized terminal result from a failed Claude Code action.
+
+inputs:
+  execution-file:
+    description: Path to the Claude Code SDK event log.
+    required: true
+  artifact-name:
+    description: Unique name for the diagnostic artifact.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Capture terminal result
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ inputs.execution-file }}
+      run: |
+        set -euo pipefail
+        jq '[.[] | select(.type == "result") | {type, subtype, is_error, result, errors, duration_ms, num_turns, total_cost_usd}]' \
+          "$EXECUTION_FILE" > "$RUNNER_TEMP/claude-failure.json"
+
+    - name: Upload terminal result
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/claude-failure.json
+        retention-days: 7

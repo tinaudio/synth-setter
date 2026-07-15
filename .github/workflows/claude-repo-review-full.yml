@@ -43,22 +43,10 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
-      - name: Capture Claude failure result
-        id: capture-claude-failure
-        if: ${{ failure() && steps.repo-review-full.outputs.execution_file != '' }}
-        continue-on-error: true
-        shell: bash
-        env:
-          EXECUTION_FILE: ${{ steps.repo-review-full.outputs.execution_file }}
-        run: |
-          jq '[.[] | select(.type == "result") | {type, subtype, is_error, result, errors, duration_ms, num_turns, total_cost_usd}]' \
-            "$EXECUTION_FILE" > "$RUNNER_TEMP/claude-failure.json"
-
       - name: Upload Claude failure result
         id: upload-claude-failure
-        if: ${{ always() && steps.capture-claude-failure.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ failure() && steps.repo-review-full.outputs.execution_file != '' }}
+        uses: ./.github/actions/upload-claude-failure
         with:
-          name: claude-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/claude-failure.json
-          retention-days: 7
+          execution-file: ${{ steps.repo-review-full.outputs.execution_file }}
+          artifact-name: claude-failure-${{ github.run_id }}-${{ github.run_attempt }}
