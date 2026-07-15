@@ -218,6 +218,10 @@ Local skills wrap the review workflow:
 - `/fix-review-comments` (applies the sentinel's comment-hygiene findings,
   commits, and re-reviews — the remediation half of the pre-PR comment gate).
 
+Each fan-out worker runs a second parallel OpenCode-CLI pass (auto-skipped
+where `opencode` is unavailable, e.g. CI) and merges attributed findings into
+its report.
+
 See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)
 and the shared analysis in
 [`agent/skills/_shared/repo-review-full-analysis.md`](agent/skills/_shared/repo-review-full-analysis.md).
