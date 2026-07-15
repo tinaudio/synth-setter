@@ -242,6 +242,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # inline-sky drives `sky.launch` directly from the runner Python;

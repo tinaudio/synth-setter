@@ -566,7 +566,7 @@ The client only communicates with the API server, so cloud-specific extras are n
 Using `uv`:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.28/install.sh | sh
 source ~/.zshrc   # or ~/.bashrc on Linux
 uv tool install --python 3.12.13 --with pip "skypilot-nightly"
 sky --version
@@ -1052,7 +1052,7 @@ kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check
 ### On the client machine
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.28/install.sh | sh
 source ~/.zshrc
 uv tool install --python 3.12.13 --with pip "skypilot-nightly"
 
