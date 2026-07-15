@@ -1,6 +1,8 @@
 """Lightning callbacks for plotting losses, similarities, projections, and prediction dumps."""
 
+import logging
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +19,62 @@ from synth_setter.models.components.transformer import (
 )
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.pipeline import r2_io
+
+log = logging.getLogger(__name__)
+
+
+class CheckpointUploader(Callback):
+    """Upload each checkpoint ``ModelCheckpoint`` writes to R2 as it lands.
+
+    The CLI's train-end checkpoint upload never fires when a run is killed
+    mid-training (host OOM/hang), stranding the newest checkpoint on local disk.
+    This mirrors ``ModelCheckpoint``'s ``last_model_path`` to a stable
+    ``{prefix_uri}/last.ckpt`` object whenever it is (re)written, so a crash
+    before train-end still leaves an off-host copy to resume from. ``save_last``
+    overwrites ``last.ckpt`` in place — its path never changes — so a fresh save
+    is detected by the file's mtime, not its name. The upload is synchronous and
+    fires only when ModelCheckpoint writes (its ``every_n_train_steps`` cadence,
+    not per batch), so the training-loop stall is rare. Best-effort and
+    rank-0-only: an unreachable R2 or a failed upload warns and is swallowed so
+    checkpoint persistence never aborts a training run, and the key is advanced
+    only on success so a transient failure re-uploads next batch.
+    """
+
+    def __init__(self, prefix_uri: str) -> None:
+        """Bind the upload target.
+
+        :param prefix_uri: ``r2://`` directory the run's ``last.ckpt`` uploads under.
+        """
+        self._dest_uri = f"{prefix_uri.rstrip('/')}/last.ckpt"
+        self._uploaded_key: tuple[str, float] | None = None
+
+    def on_train_batch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
+
+        :param trainer: The active trainer; supplies the rank flag and the
+            ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
+        :param \\*args: Unused Lightning positional payload (module, outputs, batch, ...).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        if not trainer.is_global_zero:
+            return
+        source = getattr(trainer.checkpoint_callback, "last_model_path", "") or ""
+        if not source:
+            return
+        try:
+            key = (source, os.path.getmtime(source))
+        except OSError:  # checkpoint pruned/rotated between save and this batch
+            return
+        if key == self._uploaded_key:
+            return
+        try:
+            r2_io.ensure_r2_env_loaded()
+            r2_io.upload_to_uri(Path(source), self._dest_uri)
+        except Exception as exc:  # noqa: BLE001 — persistence must never abort training
+            log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
+            return
+        self._uploaded_key = key
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

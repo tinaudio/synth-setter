@@ -30,6 +30,7 @@ from synth_setter.utils import (
     use_input_artifacts,
     watch_gradients,
 )
+from synth_setter.utils.callbacks import CheckpointUploader
 from synth_setter.workspace import operator_workspace
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
@@ -77,6 +78,34 @@ def _derive_checkpoint_uri(cfg: DictConfig) -> str:
     if override:
         return str(override)
     return f"r2://{cfg.r2.bucket}/checkpoints/{resolve_run_config_id(cfg)}/model.ckpt"
+
+
+def _checkpoint_prefix_uri(cfg: DictConfig) -> str:
+    """Return the ``r2://`` directory that mid-run checkpoints upload under.
+
+    The parent of :func:`_derive_checkpoint_uri` — its ``model.ckpt`` basename
+    stripped — so a periodic ``last.ckpt`` lands alongside the train-end
+    ``model.ckpt`` for the same run.
+
+    :param cfg: Hydra-composed train cfg forwarded to :func:`_derive_checkpoint_uri`.
+    :returns: The ``r2://`` prefix (no trailing slash) for this run's checkpoints.
+    """
+    return _derive_checkpoint_uri(cfg).rsplit("/", 1)[0]
+
+
+def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> None:
+    """Attach a :class:`CheckpointUploader` when mid-run upload is enabled.
+
+    Gated on ``training.upload_checkpoints_during_training`` (default off) so the
+    R2 write path is opt-in; a run that never sets it keeps the original
+    train-end-only upload behaviour. Mutates ``callbacks`` in place.
+
+    :param cfg: Hydra-composed train cfg; reads the durability flag and the
+        checkpoint-prefix inputs.
+    :param callbacks: The instantiated callback list the uploader is appended to.
+    """
+    if OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
+        callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
@@ -198,6 +227,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
+    _append_checkpoint_uploader(cfg, callbacks)
 
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "training")

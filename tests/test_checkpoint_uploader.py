@@ -1,0 +1,254 @@
+"""Tests for mid-run checkpoint durability.
+
+Covers the ``CheckpointUploader`` callback (uploads each ``ModelCheckpoint``
+write to R2 as it lands, so a host crash before train-end can't strand the
+latest checkpoint on local disk) and the CLI wiring that attaches it. The R2
+transport is monkeypatched — no ``rclone`` binary, no network — so only the
+callback's rank-gating, change-detection, best-effort error handling, and URI
+derivation run for real.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import cast
+
+import pytest
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import Callback
+from omegaconf import DictConfig, OmegaConf
+
+from synth_setter.cli.train import _append_checkpoint_uploader, _checkpoint_prefix_uri
+from synth_setter.pipeline import r2_io
+from synth_setter.utils.callbacks import CheckpointUploader
+
+
+class _FakeCheckpointCallback:
+    """Stand-in for Lightning's ``ModelCheckpoint`` exposing ``last_model_path``."""
+
+    def __init__(self, last_model_path: str) -> None:
+        """Bind the checkpoint path.
+
+        :param last_model_path: Path ``ModelCheckpoint`` last wrote (``""`` if none).
+        """
+        self.last_model_path = last_model_path
+
+
+class _FakeTrainer:
+    """Minimal trainer double carrying the rank flag and the checkpoint callback."""
+
+    def __init__(self, last_model_path: str = "", *, is_global_zero: bool = True) -> None:
+        """Bind the rank flag and the checkpoint callback double.
+
+        :param last_model_path: Path exposed via ``checkpoint_callback.last_model_path``.
+        :param is_global_zero: Whether this stands in for the rank-0 process.
+        """
+        self.is_global_zero = is_global_zero
+        self.checkpoint_callback = _FakeCheckpointCallback(last_model_path)
+
+
+def _trainer(last_model_path: str = "", *, is_global_zero: bool = True) -> Trainer:
+    """Return a ``_FakeTrainer`` typed as ``Trainer`` for the callback hook.
+
+    :param last_model_path: Path exposed via ``checkpoint_callback.last_model_path``.
+    :param is_global_zero: Whether this stands in for the rank-0 process.
+    :returns: The fake trainer cast to ``Trainer`` so the typed hook accepts it.
+    """
+    return cast(Trainer, _FakeTrainer(last_model_path, is_global_zero=is_global_zero))
+
+
+def _cfg(
+    *,
+    during_training: bool | None = None,
+    upload_checkpoints_uri: str | None = None,
+) -> DictConfig:
+    """Build a minimal train cfg for the prefix/append helpers.
+
+    :param during_training: Value for ``training.upload_checkpoints_during_training``;
+        ``None`` omits the key entirely (mirrors a config that never set it).
+    :param upload_checkpoints_uri: Optional verbatim ``r2://`` upload-target override.
+    :returns: A DictConfig carrying ``task_name``, ``r2.bucket``, and ``training``.
+    """
+    training: dict[str, object] = {"upload_checkpoints_uri": upload_checkpoints_uri}
+    if during_training is not None:
+        training["upload_checkpoints_during_training"] = during_training
+    return cast(
+        DictConfig,
+        OmegaConf.create(
+            {
+                "task_name": "flow-simple",
+                "r2": {"bucket": "intermediate-data"},
+                "training": training,
+            }
+        ),
+    )
+
+
+def _stub_r2(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, str]]:
+    """Patch R2 env-load to a no-op and record every ``upload_to_uri`` call.
+
+    :param monkeypatch: Pytest fixture used to swap the R2 transport.
+    :returns: The list each ``(local_path, uri)`` upload is appended to.
+    """
+    calls: list[tuple[Path, str]] = []
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", lambda p, uri: calls.append((p, uri)))
+    return calls
+
+
+def test_uploader_uploads_new_checkpoint_to_prefixed_last_ckpt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A freshly-written ``last_model_path`` uploads to ``{prefix}/last.ckpt``.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    uploader = CheckpointUploader("r2://intermediate-data/checkpoints/flow-simple")
+    uploader.on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)
+    assert calls == [(ckpt, "r2://intermediate-data/checkpoints/flow-simple/last.ckpt")]
+
+
+def test_uploader_skips_reupload_when_path_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The same ``last_model_path`` across batches uploads exactly once.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt))
+    uploader.on_train_batch_end(trainer, None, None, None, 0)
+    uploader.on_train_batch_end(trainer, None, None, None, 1)
+    assert len(calls) == 1
+
+
+def test_uploader_reuploads_when_last_ckpt_rewritten_in_place(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``save_last`` overwrites ``last.ckpt`` in place; a newer mtime re-uploads it.
+
+    Guards against keying change-detection on the (stable) path alone, which
+    would upload the first save and never its later overwrites.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the ``last.ckpt`` rewritten in place between batches.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"v1")
+    os.utime(ckpt, (1000, 1000))
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt))
+    uploader.on_train_batch_end(trainer, None, None, None, 0)
+    ckpt.write_bytes(b"v2")
+    os.utime(ckpt, (2000, 2000))  # newer mtime = a fresh ModelCheckpoint save
+    uploader.on_train_batch_end(trainer, None, None, None, 1)
+    assert [uri for _, uri in calls] == ["r2://b/c/last.ckpt", "r2://b/c/last.ckpt"]
+
+
+def test_uploader_skips_non_global_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-rank-0 process never uploads (DDP ranks must not race duplicates).
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    """
+    calls = _stub_r2(monkeypatch)
+    uploader = CheckpointUploader("r2://b/c")
+    uploader.on_train_batch_end(
+        _trainer("/x/last.ckpt", is_global_zero=False), None, None, None, 0
+    )
+    assert calls == []
+
+
+def test_uploader_noop_before_first_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty ``last_model_path`` (no checkpoint yet) uploads nothing.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    """
+    calls = _stub_r2(monkeypatch)
+    uploader = CheckpointUploader("r2://b/c")
+    uploader.on_train_batch_end(_trainer(""), None, None, None, 0)
+    assert calls == []
+
+
+def test_uploader_swallows_upload_error_and_retries_next_batch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed upload does not raise and is retried on the next batch.
+
+    :param monkeypatch: Swaps the R2 transport (first raising, then recording).
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+
+    def _boom(_p: Path, _uri: str) -> None:
+        raise RuntimeError("r2 down")
+
+    monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt))
+    uploader.on_train_batch_end(trainer, None, None, None, 0)  # must not raise
+
+    calls = _stub_r2(monkeypatch)
+    uploader.on_train_batch_end(trainer, None, None, None, 1)
+    assert calls == [(ckpt, "r2://b/c/last.ckpt")]
+
+
+def test_uploader_swallows_unreachable_r2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R2 being unreachable (env-load raises) is swallowed, no upload attempted.
+
+    :param monkeypatch: Makes ``ensure_r2_env_loaded`` raise, simulating absent R2 creds.
+    """
+
+    def _unavailable(*_a: object, **_k: object) -> None:
+        raise RuntimeError("no creds")
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
+    uploaded: list[str] = []
+    monkeypatch.setattr(r2_io, "upload_to_uri", lambda p, uri: uploaded.append(uri))
+    uploader = CheckpointUploader("r2://b/c")
+    uploader.on_train_batch_end(_trainer("/x/last.ckpt"), None, None, None, 0)
+    assert uploaded == []
+
+
+def test_checkpoint_prefix_uri_strips_the_basename() -> None:
+    """The prefix is the derived checkpoint URI with its ``model.ckpt`` basename removed."""
+    assert _checkpoint_prefix_uri(_cfg()) == "r2://intermediate-data/checkpoints/flow-simple"
+
+
+def test_checkpoint_prefix_uri_honors_override() -> None:
+    """A verbatim ``upload_checkpoints_uri`` override still yields its parent prefix."""
+    cfg = _cfg(upload_checkpoints_uri="r2://models/run/model.ckpt")
+    assert _checkpoint_prefix_uri(cfg) == "r2://models/run"
+
+
+def test_append_uploader_attaches_callback_when_enabled() -> None:
+    """The flag enabled appends exactly one ``CheckpointUploader``."""
+    callbacks: list[Callback] = []
+    _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], CheckpointUploader)
+
+
+def test_append_uploader_noop_when_disabled() -> None:
+    """The flag disabled leaves the callback list untouched."""
+    callbacks: list[Callback] = []
+    _append_checkpoint_uploader(_cfg(during_training=False), callbacks)
+    assert callbacks == []
+
+
+def test_append_uploader_noop_when_flag_absent() -> None:
+    """A config that never set the flag attaches nothing."""
+    callbacks: list[Callback] = []
+    _append_checkpoint_uploader(_cfg(), callbacks)
+    assert callbacks == []
