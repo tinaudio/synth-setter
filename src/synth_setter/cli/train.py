@@ -108,8 +108,11 @@ def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> N
 
     :param cfg: Hydra-composed train cfg; reads the durability flag and the
         checkpoint-prefix inputs.
-    :param callbacks: Instantiated callback list; the uploader is appended after
-        the existing callbacks, so it observes each ModelCheckpoint save.
+    :param callbacks: Instantiated callback list. The uploader is appended after
+        the existing ``ModelCheckpoint``; both are ``Checkpoint`` callbacks, and
+        Lightning's ``_reorder_callbacks`` preserves that order at the end of the
+        dispatch list, so the uploader runs *after* each save and mirrors the
+        fresh bytes.
     """
     if OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
         callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))

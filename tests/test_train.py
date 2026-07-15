@@ -799,7 +799,7 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
         cfg_train.training.upload_checkpoints_during_training = True
     train(cfg_train)
 
-    assert len(uploads) >= 2  # >=2 => a periodic mirror fired before the on_train_end flush
+    assert len(uploads) >= 2
     final_local, final_uri = uploads[-1]
     assert final_uri.endswith("/last.ckpt")
     mirrored = fake_r2_remote / final_uri.removeprefix("r2://")

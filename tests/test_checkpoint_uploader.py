@@ -36,24 +36,34 @@ class _FakeCheckpointCallback:
 class _FakeTrainer:
     """Minimal trainer double carrying the rank flag and the checkpoint callback."""
 
-    def __init__(self, last_model_path: str = "", *, is_global_zero: bool = True) -> None:
-        """Bind the rank flag and the checkpoint callback double.
+    def __init__(
+        self, last_model_path: str = "", *, is_global_zero: bool = True, world_size: int = 1
+    ) -> None:
+        """Bind the rank flag, world size, and the checkpoint callback double.
 
         :param last_model_path: Path exposed via ``checkpoint_callback.last_model_path``.
         :param is_global_zero: Whether this stands in for the rank-0 process.
+        :param world_size: Number of processes; ``> 1`` exercises the DDP warning.
         """
         self.is_global_zero = is_global_zero
+        self.world_size = world_size
         self.checkpoint_callback = _FakeCheckpointCallback(last_model_path)
 
 
-def _trainer(last_model_path: str = "", *, is_global_zero: bool = True) -> Trainer:
+def _trainer(
+    last_model_path: str = "", *, is_global_zero: bool = True, world_size: int = 1
+) -> Trainer:
     """Return a ``_FakeTrainer`` typed as ``Trainer`` for the callback hook.
 
     :param last_model_path: Path exposed via ``checkpoint_callback.last_model_path``.
     :param is_global_zero: Whether this stands in for the rank-0 process.
+    :param world_size: Number of processes; ``> 1`` exercises the DDP warning.
     :returns: The fake trainer cast to ``Trainer`` so the typed hook accepts it.
     """
-    return cast(Trainer, _FakeTrainer(last_model_path, is_global_zero=is_global_zero))
+    return cast(
+        Trainer,
+        _FakeTrainer(last_model_path, is_global_zero=is_global_zero, world_size=world_size),
+    )
 
 
 def _cfg(
@@ -386,6 +396,60 @@ def test_uploader_uploads_on_validation_end(
     uploader = CheckpointUploader("r2://b/c")
     uploader.on_validation_end(_trainer(str(ckpt)))
     assert calls == [(ckpt, "r2://b/c/last.ckpt")]
+
+
+def test_uploader_uploads_on_train_epoch_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A checkpoint written on the per-epoch cadence is mirrored from ``on_train_epoch_end``.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    uploader = CheckpointUploader("r2://b/c")
+    uploader.on_train_epoch_end(_trainer(str(ckpt)))
+    assert calls == [(ckpt, "r2://b/c/last.ckpt")]
+
+
+def test_uploader_warns_once_under_ddp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Under DDP (``world_size > 1``) a one-time synchronous-stall warning fires.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    :param caplog: Captures the one-time DDP warning.
+    """
+    _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"weights")
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt), world_size=2)
+    with caplog.at_level(logging.WARNING):
+        uploader.on_train_batch_end(trainer, None, None, None, 0)
+        ckpt.write_bytes(b"weights-2")
+        os.utime(ckpt, (2000, 2000))
+        uploader.on_train_batch_end(trainer, None, None, None, 1)
+    assert caplog.text.count("stalls other DDP ranks") == 1
+
+
+def test_uploader_is_reordered_after_modelcheckpoint() -> None:
+    """As a ``Checkpoint`` subclass, Lightning dispatches the uploader after ``ModelCheckpoint``.
+
+    Pins the fix for the one-write-stale bug: a plain ``Callback`` would be grouped
+    before the checkpoint callbacks and mirror the previous save.
+    """
+    from lightning.pytorch.callbacks import Checkpoint, ModelCheckpoint
+    from lightning.pytorch.trainer.connectors.callback_connector import _CallbackConnector
+
+    uploader = CheckpointUploader("r2://b/c")
+    assert isinstance(uploader, Checkpoint)
+    ordered = _CallbackConnector._reorder_callbacks([ModelCheckpoint(), uploader])
+    model_checkpoint = next(c for c in ordered if isinstance(c, ModelCheckpoint))
+    assert ordered.index(uploader) > ordered.index(model_checkpoint)
 
 
 def test_uploader_warns_on_train_end_when_no_checkpoint_seen(

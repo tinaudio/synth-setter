@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import BasePredictionWriter, Callback
+from lightning.pytorch.callbacks import BasePredictionWriter, Callback, Checkpoint
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
@@ -31,13 +31,20 @@ _MAX_UPLOAD_ATTEMPTS = 3
 _LAST_CKPT_NAME = "last.ckpt"
 
 
-class CheckpointUploader(Callback):
+class CheckpointUploader(Checkpoint):
     """Mirror ``ModelCheckpoint``'s ``last_model_path`` to R2 as it is (re)written.
 
     Guards against a run killed mid-training (host OOM/hang) stranding the newest
     checkpoint on local disk — the CLI's upload otherwise only fires at train-end.
     Best-effort and rank-0-only; the change key, retry bound, and hook coverage are
     documented on :meth:`_maybe_upload` and the module constants.
+
+    Subclasses ``Checkpoint`` (not plain ``Callback``) so Lightning's
+    ``_reorder_callbacks`` groups it with the checkpoint callbacks at the end of
+    the dispatch order; appended after ``ModelCheckpoint`` in
+    :func:`~synth_setter.cli.train._append_checkpoint_uploader`, it therefore runs
+    *after* each save within the same hook and mirrors the just-written bytes (a
+    plain ``Callback`` would run first and lag one write behind).
 
     **Cost — read before enabling under DDP.** The upload runs *synchronously* on
     the rank-0 training thread, so each ``save_last`` rewrite blocks rank 0 for the
