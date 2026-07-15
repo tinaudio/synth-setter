@@ -54,38 +54,37 @@ _SURGE_DAWDREAMER_OSCILLATOR_NAMES = {
         ("triangle", "Width 2"),
     )
 }
-_SURGE_FX_IDENTITIES = {
-    "fx_a1_delay_time": ("FX A1 Param 1", "A1", 1),
-    "fx_a1_modulation_rate": ("FX A1 Param 2", "A1", 2),
-    "fx_a1_modulation_depth": ("FX A1 Param 3", "A1", 3),
-    "fx_a1_delay_feedback": ("FX A1 Param 4", "A1", 4),
-    "fx_a1_eq_low_cut": ("FX A1 Param 5", "A1", 5),
-    "fx_a1_eq_high_cut": ("FX A1 Param 6", "A1", 6),
-    "fx_a1_output_mix": ("FX A1 Param 7", "A1", 7),
-    "fx_a1_output_width": ("FX A1 Param 8", "A1", 8),
-    "fx_a2_delay_time_left": ("FX A2 Param 1", "A2", 1),
-    "fx_a2_delay_time_right": ("FX A2 Param 2", "A2", 2),
-    "fx_a2_feedback_eq_feedback": ("FX A2 Param 3", "A2", 3),
-    "fx_a2_feedback_eq_crossfeed": ("FX A2 Param 4", "A2", 4),
-    "fx_a2_feedback_eq_low_cut": ("FX A2 Param 5", "A2", 5),
-    "fx_a2_feedback_eq_high_cut": ("FX A2 Param 6", "A2", 6),
-    "fx_a2_modulation_rate": ("FX A2 Param 7", "A2", 7),
-    "fx_a2_modulation_depth": ("FX A2 Param 8", "A2", 8),
-    "fx_a2_input_channel": ("FX A2 Param 9", "A2", 9),
-    "fx_a2_output_mix": ("FX A2 Param 11", "A2", 11),
-    "fx_a2_output_width": ("FX A2 Param 12", "A2", 12),
-    "fx_a3_pre_delay_pre_delay": ("FX A3 Param 1", "A3", 1),
-    "fx_a3_reverb_room_size": ("FX A3 Param 2", "A3", 2),
-    "fx_a3_reverb_decay_time": ("FX A3 Param 3", "A3", 3),
-    "fx_a3_reverb_diffusion": ("FX A3 Param 4", "A3", 4),
-    "fx_a3_reverb_buildup": ("FX A3 Param 5", "A3", 5),
-    "fx_a3_reverb_modulation": ("FX A3 Param 6", "A3", 6),
-    "fx_a3_eq_lf_damping": ("FX A3 Param 7", "A3", 7),
-    "fx_a3_eq_hf_damping": ("FX A3 Param 8", "A3", 8),
-    "fx_a3_output_width": ("FX A3 Param 9", "A3", 9),
-    "fx_a3_output_mix": ("FX A3 Param 10", "A3", 10),
+_SURGE_FX_NAMES = {
+    "fx_a1_delay_time": "FX A1 Param 1",
+    "fx_a1_modulation_rate": "FX A1 Param 2",
+    "fx_a1_modulation_depth": "FX A1 Param 3",
+    "fx_a1_delay_feedback": "FX A1 Param 4",
+    "fx_a1_eq_low_cut": "FX A1 Param 5",
+    "fx_a1_eq_high_cut": "FX A1 Param 6",
+    "fx_a1_output_mix": "FX A1 Param 7",
+    "fx_a1_output_width": "FX A1 Param 8",
+    "fx_a2_delay_time_left": "FX A2 Param 1",
+    "fx_a2_delay_time_right": "FX A2 Param 2",
+    "fx_a2_feedback_eq_feedback": "FX A2 Param 3",
+    "fx_a2_feedback_eq_crossfeed": "FX A2 Param 4",
+    "fx_a2_feedback_eq_low_cut": "FX A2 Param 5",
+    "fx_a2_feedback_eq_high_cut": "FX A2 Param 6",
+    "fx_a2_modulation_rate": "FX A2 Param 7",
+    "fx_a2_modulation_depth": "FX A2 Param 8",
+    "fx_a2_input_channel": "FX A2 Param 9",
+    "fx_a2_output_mix": "FX A2 Param 11",
+    "fx_a2_output_width": "FX A2 Param 12",
+    "fx_a3_pre_delay_pre_delay": "FX A3 Param 1",
+    "fx_a3_reverb_room_size": "FX A3 Param 2",
+    "fx_a3_reverb_decay_time": "FX A3 Param 3",
+    "fx_a3_reverb_diffusion": "FX A3 Param 4",
+    "fx_a3_reverb_buildup": "FX A3 Param 5",
+    "fx_a3_reverb_modulation": "FX A3 Param 6",
+    "fx_a3_eq_lf_damping": "FX A3 Param 7",
+    "fx_a3_eq_hf_damping": "FX A3 Param 8",
+    "fx_a3_output_width": "FX A3 Param 9",
+    "fx_a3_output_mix": "FX A3 Param 10",
 }
-_SURGE_FX_SLOT_COUNT = 12
 
 
 class HostParam(BaseModel):  # noqa: DOC601, DOC603
@@ -167,9 +166,8 @@ def _expected_clap_name(semantic_key: str) -> str:
     :param semantic_key: Repository-owned parameter identity.
     :returns: Surge's stable CLAP label.
     """
-    if semantic_key in _SURGE_FX_IDENTITIES:
-        clap_name, _, _ = _SURGE_FX_IDENTITIES[semantic_key]
-        return clap_name
+    if semantic_key in _SURGE_FX_NAMES:
+        return _SURGE_FX_NAMES[semantic_key]
     return _SURGE_CLAP_OSCILLATOR_NAMES.get(semantic_key, semantic_key)
 
 
@@ -177,8 +175,10 @@ def _expected_dawdreamer_name(semantic_key: str) -> str:
     """Return the DawDreamer label declared for one repository semantic key.
 
     :param semantic_key: Repository-owned parameter identity.
-    :returns: Surge's stable non-FX DawDreamer label.
+    :returns: Surge's stable DawDreamer label.
     """
+    if semantic_key in _SURGE_FX_NAMES:
+        return _SURGE_FX_NAMES[semantic_key]
     return _SURGE_DAWDREAMER_OSCILLATOR_NAMES.get(semantic_key, semantic_key)
 
 
@@ -239,25 +239,23 @@ def _index_clap(clap: ClapPluginInfo, errors: list[str]) -> dict[str, list[ClapP
     return by_name
 
 
-def _index_dawdreamer(
-    params: list[HostParam], errors: list[str]
-) -> tuple[dict[str, list[HostParam]], dict[int, HostParam]]:
-    """Index DawDreamer's own names and indices.
+def _index_dawdreamer(params: list[HostParam], errors: list[str]) -> dict[str, list[HostParam]]:
+    """Index DawDreamer's own names and validate indices.
 
     :param params: DawDreamer parameter enumeration.
     :param errors: Aggregated diagnostics destination.
-    :returns: Normalized-name and numeric-index lookups.
+    :returns: Normalized-name lookup.
     """
     by_name: dict[str, list[HostParam]] = {}
-    by_index: dict[int, HostParam] = {}
+    indices: set[int] = set()
     for param in params:
         by_name.setdefault(_normalized_identity(param.name), []).append(param)
-        if param.index in by_index:
+        if param.index in indices:
             errors.append(f"duplicate DawDreamer index {param.index}")
         if param.index < 0:
             errors.append(f"negative DawDreamer index {param.index}")
-        by_index[param.index] = param
-    return by_name, by_index
+        indices.add(param.index)
+    return by_name
 
 
 def _resolve_clap_param(
@@ -300,36 +298,6 @@ def _resolve_dawdreamer_param(
     return candidates[0]
 
 
-def _resolve_dawdreamer_fx_bank(
-    bank: str,
-    indexes: tuple[dict[str, list[HostParam]], dict[int, HostParam]],
-    errors: list[str],
-) -> dict[int, HostParam] | None:
-    """Validate one complete host-local DawDreamer FX bank.
-
-    :param bank: Surge FX bank identifier.
-    :param indexes: DawDreamer normalized-name and numeric-index lookups.
-    :param errors: Aggregated diagnostics destination.
-    :returns: Slot number to DawDreamer identity when the bank is valid.
-    """
-    by_name, by_index = indexes
-    anchor_name = f"FX {bank} FX Type"
-    anchors = by_name.get(_normalized_identity(anchor_name), [])
-    if len(anchors) != 1:
-        errors.append(f"DawDreamer FX {bank} anchor is missing or ambiguous")
-        return None
-    anchor_index = anchors[0].index
-    slots: dict[int, HostParam] = {}
-    for slot in range(1, _SURGE_FX_SLOT_COUNT + 1):
-        parameter = by_index.get(anchor_index + slot)
-        expected_name = f"FX {bank} -"
-        if parameter is None or parameter.name.casefold() != expected_name.casefold():
-            errors.append(f"DawDreamer FX {bank} slot {slot} is missing or invalid")
-            continue
-        slots[slot] = parameter
-    return slots if len(slots) == _SURGE_FX_SLOT_COUNT else None
-
-
 def _clap_reference(parameter: ClapParamInfo) -> ClapParamRef:
     """Convert one validated CLAP record into the committed map schema.
 
@@ -359,39 +327,11 @@ def _categorical_grid_matches(spec_param: Parameter, clap_ref: ClapParamRef) -> 
     return all(round(raw * span) == index for index, raw in enumerate(spec_param.raw_values))
 
 
-_DawDreamerIndexes = tuple[dict[str, list[HostParam]], dict[int, HostParam]]
-_DawDreamerFxBanks = dict[str, dict[int, HostParam] | None]
 _JoinIndexes = tuple[
     dict[str, HostParam],
     dict[str, list[ClapParamInfo]],
-    _DawDreamerIndexes,
-    _DawDreamerFxBanks,
+    dict[str, list[HostParam]],
 ]
-
-
-def _resolve_dawdreamer_identity(
-    semantic_key: str,
-    indexes: _DawDreamerIndexes,
-    fx_banks: _DawDreamerFxBanks,
-    *,
-    errors: list[str],
-) -> HostParam | None:
-    """Resolve one DawDreamer identity from its backend-specific declaration.
-
-    :param semantic_key: Repository-owned parameter identity.
-    :param indexes: DawDreamer normalized-name and numeric-index lookups.
-    :param fx_banks: Previously validated DawDreamer FX banks.
-    :param errors: Aggregated diagnostics destination.
-    :returns: Resolved DawDreamer parameter, or ``None`` after a diagnostic.
-    """
-    if semantic_key not in _SURGE_FX_IDENTITIES:
-        by_name, _ = indexes
-        return _resolve_dawdreamer_param(semantic_key, by_name, errors)
-    _, bank, slot = _SURGE_FX_IDENTITIES[semantic_key]
-    if bank not in fx_banks:
-        fx_banks[bank] = _resolve_dawdreamer_fx_bank(bank, indexes, errors)
-    bank_params = fx_banks[bank]
-    return bank_params.get(slot) if bank_params is not None else None
 
 
 def _resolve_param_identity(
@@ -403,11 +343,11 @@ def _resolve_param_identity(
     """Resolve one semantic parameter independently in all three backends.
 
     :param spec_param: Repository parameter specification to resolve.
-    :param indexes: Backend-native identity lookups and validated FX-bank cache.
+    :param indexes: Backend-native identity lookups.
     :param errors: Aggregated diagnostics destination.
     :returns: Joint identity, or ``None`` after recording all reachable diagnostics.
     """
-    pedalboard_by_key, clap_by_name, dawdreamer_indexes, dawdreamer_fx_banks = indexes
+    pedalboard_by_key, clap_by_name, dawdreamer_by_name = indexes
     semantic_key = spec_param.name
     pedalboard_param = pedalboard_by_key.get(semantic_key)
     if pedalboard_param is None:
@@ -416,9 +356,7 @@ def _resolve_param_identity(
     clap_param = _resolve_clap_param(semantic_key, clap_by_name, errors)
     if clap_param is None:
         return None
-    dawdreamer_param = _resolve_dawdreamer_identity(
-        semantic_key, dawdreamer_indexes, dawdreamer_fx_banks, errors=errors
-    )
+    dawdreamer_param = _resolve_dawdreamer_param(semantic_key, dawdreamer_by_name, errors)
     if dawdreamer_param is None:
         return None
     clap_ref = _clap_reference(clap_param)
@@ -450,8 +388,8 @@ def join_param_map(
     errors = _validate_provenance(pedalboard, clap, dawdreamer)
     pedalboard_by_key = _index_pedalboard(pedalboard.params, errors)
     clap_by_name = _index_clap(clap, errors)
-    dawdreamer_indexes = _index_dawdreamer(dawdreamer.params, errors)
-    indexes: _JoinIndexes = (pedalboard_by_key, clap_by_name, dawdreamer_indexes, {})
+    dawdreamer_by_name = _index_dawdreamer(dawdreamer.params, errors)
+    indexes: _JoinIndexes = (pedalboard_by_key, clap_by_name, dawdreamer_by_name)
     identities: dict[str, ParamIdentity] = {}
     for spec_param in param_specs[param_spec_name].synth_params:
         identity = _resolve_param_identity(spec_param, indexes, errors=errors)
