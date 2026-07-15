@@ -156,6 +156,37 @@ def test_dataset_artifact_ref_remote_failure_falls_back_to_local_spec(
     )
 
 
+def test_dataset_artifact_ref_credential_failure_falls_back_to_local_spec(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unavailable R2 credentials retain lineage from a readable local root.
+
+    :param tmp_path: Local root containing a frozen spec.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    :param monkeypatch: Makes R2 credential initialization fail.
+    """
+    local_spec = dataset_spec_factory(
+        task_name="local-lineage",
+        run_id="local-lineage-20260713T170000000Z",
+        train_val_test_sizes=[4, 4, 0],
+        r2={"bucket": "intermediate-data"},
+        render={"samples_per_shard": 4},
+    )
+    write_spec_to_path(local_spec, tmp_path / "input_spec.json")
+    monkeypatch.setattr(
+        r2_io,
+        "ensure_r2_env_loaded",
+        MagicMock(side_effect=RuntimeError("R2 credentials unavailable")),
+    )
+
+    assert dataset_artifact_ref(tmp_path, "r2://intermediate-data/missing") == (
+        "data-local-lineage",
+        "local-lineage-20260713T170000000Z",
+    )
+
+
 def test_dataset_artifact_ref_missing_spec_returns_none(tmp_path: Path) -> None:
     """A local dataset without generation provenance remains usable without a link.
 

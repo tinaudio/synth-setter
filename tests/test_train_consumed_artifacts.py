@@ -148,12 +148,12 @@ def test_train_remote_provenance_precedes_local_dataset_spec(
 ) -> None:
     """A training run records the configured remote dataset rather than stale local bytes.
 
-    :param tmp_path: Local rclone root and train output directory.
+    :param tmp_path: Local roots for both frozen specs and train output.
     :param dataset_spec_factory: Factory producing valid frozen dataset specs.
-    :param monkeypatch: Configures a local rclone backend and bypasses credential setup.
+    :param monkeypatch: Bypasses credential setup so the real filesystem specs drive the test.
     """
     local_root = tmp_path / "local-dataset"
-    remote_root = tmp_path / "intermediate-data" / "remote-dataset"
+    remote_root = tmp_path / "remote-dataset"
     write_spec_to_path(
         dataset_spec_factory(
             task_name="local-lineage",
@@ -174,14 +174,12 @@ def test_train_remote_provenance_precedes_local_dataset_spec(
         ),
         remote_root / "input_spec.json",
     )
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
     logger_sentinel = MagicMock(name="loggers")
     cfg = _seam_cfg(
         tmp_path,
         dataset_root=local_root,
-        download_dataset_root_uri="r2://intermediate-data/remote-dataset",
+        download_dataset_root_uri=str(remote_root),
         train_flag=True,
         test_flag=False,
     )
