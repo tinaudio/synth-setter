@@ -1,6 +1,303 @@
 # CHANGELOG
 
 
+## v8.52.0 (2026-07-15)
+
+### Features
+
+- **data**: Lance fragment staging with manifest-only finalize
+  ([#1784](https://github.com/tinaudio/synth-setter/pull/1784),
+  [`af0b349`](https://github.com/tinaudio/synth-setter/commit/af0b349da752dffd67853a897b66e0a83d6a3530))
+
+* feat(data): stage lance shard attempts as uncommitted split fragments
+
+Workers now stage each rendered lance shard as one uncommitted fragment written straight into the
+  assigned split's dataset directory, plus a staging contract under
+  metadata/workers/shards/shard-{id}/: a strict {schema_version, fragment_json} sidecar, a Welford
+  (count, mean, m2) shard-stats.npz, and a .valid marker uploaded strictly last as the
+  staged-attempt commit point. New r2_io primitives back the flow: lance_target (r2:// to s3:// or
+  local-path resolution, making the local compute mode a pure backend swap), list_entries
+  (LastModified-carrying rclone lsjson listings), and object_size normalizing the local backend's
+  missing-directory error to absent. lance_fragment now accepts a batch iterator so a whole shard
+  streams into a single fragment, and the Welford merge (Chan et al.) joins stats.py for the
+  finalize reduction.
+
+Refs #1776
+
+* feat(data): commit staged lance winners into split manifests in finalize
+
+finalize_lance no longer streams and rewrites shard rows: it discovers complete staged attempts in
+  one recursive listing, selects one winner per shard (earliest .valid LastModified, tie-broken by
+  full marker key — server-assigned, so a later straggler can never displace a winner),
+  structural-checks each winner (sidecar round-trip through Lance's FragmentMetadata, row count vs
+  spec and stats count, fragment data-file existence under the spec-assigned split), commits each
+  split as one atomic replace-semantics Overwrite over the full winner set, reduces the winners'
+  Welford sidecars into stats.npz, and records the selected attempts and their winning .valid keys
+  in a dataset.json audit card. Zero rows are decoded; re-runs rebuild identical manifests instead
+  of appending, and dataset.complete still lands strictly last.
+
+* feat(data): wire lance staging into the worker and shard validation
+
+The generate worker's lance branch writes a .rendering marker at attempt start, renders locally as
+  before, runs the full local shard validation, then stages the attempt (fragment into the split
+  dataset, sidecar + stats + .valid) instead of uploading a per-shard dataset; the resume skip-probe
+  now asks for a complete staged attempt set rather than probing the old per-shard _versions
+  manifest, so orphaned fragment data from a crash never skips a re-render. validate_shard's
+  lance-from-R2 path validates each shard's would-be winner attempt the same way finalize will — the
+  per-shard datasets it used to open no longer exist. The R2 integration test stages through the
+  production worker path and asserts the committed split reads back row-for-row.
+
+* docs(data): mark lance fragment staging and finalize implemented
+
+* refactor(data): share the welford sidecar key contract and split finalize steps
+
+Single-source the shard-stats.npz array names in pipeline constants so the staging writer and
+  finalize's structural check cannot drift, and extract winner selection, stats reduction, and
+  dataset-card writing out of finalize_lance_fragments so each step reads at one level.
+
+* refactor(data): apply simplify pass to the lance fragment pipeline
+
+Drop the now-orphaned OutputFormat.is_directory (both production call sites moved to explicit LANCE
+  staging checks), inline writers' pure pass-through _shard_metadata_from_render onto
+  RenderConfig.shard_metadata, deduplicate the empty-train-split guard across the three finalize
+  branches, serialize fragment metadata once per structural check, and refresh the
+  validate_all_shards_from_r2 docstring to the staged-winner behavior.
+
+* style(data): document lance finalize dataclass attributes and raise propagation
+
+* test(data): cover lance structural-check failure paths and probe contracts
+
+Address the pre-PR multi-skill review: every load_checked_winner structural rejection (invalid
+  sidecar, missing Welford arrays, stats count vs fragment rows, absent fragment data file) now has
+  a test driven through the public finalize entrypoint, the staged-attempt
+  validate_all_shards_from_r2 path is pinned for pass / missing-attempt / broken-winner, and
+  select_winner, merge_welford, _worker_id, the worker-side validation gate (a corrupt render never
+  earns a .valid), the lance empty-train guard, and the lance_attempt trust-boundary models get
+  direct unit tests. Production fixes from the same review: np.load handles closed via context
+  manager, typed FragmentMetadata attributes instead of a to_json round-trip, staged-discovery
+  tolerance for non-shard staging entries, shared rclone probe helper with retry flags for
+  list_entries/object_size, the pipeline/CLAUDE.md worker-write-boundary carve-out for uncommitted
+  lance fragments, the stale validate_shard docstrings, and removal of the now-unconsumed
+  stream_stats_lance in favor of the production fold + finalize pair.
+
+* fix(data): bound fragment size at staging and guard sidecar deserialization
+
+Two review blockers: LanceFragment.create exposes no max_bytes_per_file, so the fragment write path
+  had no #1775 protection — staging now rejects a shard whose bytes exceed LANCE_MAX_BYTES_PER_FILE
+  with an actionable error before any upload, and the multipart regression test's docstring stops
+  claiming write_lance_dataset is the production finalization. FragmentMetadata.from_json raises
+  KeyError (not ValueError) on a parseable-but-invalid payload, which crashed finalize and the CI
+  validator instead of surfacing one shard's structural error — the deserialize is now guarded and
+  re-raised as the documented ValueError. Also from the review: warn on stray top-level staging
+  objects, type the checked winner's Welford arrays, note the LastModified tie granularity, reuse
+  the staging-dir helper across test files, close test-side npz handles, pin list_entries'
+  reliability flags and failure propagation, cover the empty-split commit skip, and tighten doc-map
+  descriptions.
+
+* refactor(data): apply third review pass polish to lance pipeline
+
+Treat a zero-size fragment data file as absent in finalize's structural check (a truncated upload is
+  not data), differentiate the lance skip log (staged, not finalized), document the full
+  finalize_lance raises contract and the microsecond tie-break precision floor, refresh the
+  lance-dataset-api-migration R2-layout section to the staging model, tighten the two over-cap
+  staging comments and the doc-map field enumeration, hoist test-local datetime imports, and pin
+  lance_target's explicit-s3 branch, split_for_shard's out-of-range error, and the
+  truncated-fragment rejection with tests.
+
+* docs(data): tighten lance doc-map entries and pin remaining review warns
+
+Apply the fourth review round: one-clause doc-map descriptions, the lance_attempt module docstring
+  covering both contract families, the routine-tie expectation in select_winner's docstring,
+  Sequence typing on the listing-probe helper, and tests pinning the lance mask_degenerate_bins
+  forwarding and chained three-way Welford merges.
+
+* internal-fix(data): normalize missing-prefix probes across all rclone listing helpers
+
+Route r2_directory_exists through the shared listing probe so all three listing helpers read a
+  missing prefix identically on the S3 and local backends (the third instance of the bug the probe
+  helper fixed), and document that the staged-shard CI validator aggregates structural failures per
+  shard while environmental rclone failures abort per r2_io's fail-fast contract.
+
+* docs(data): pin flat marker placement as current state and drop stale import
+
+Copilot re-review: the metadata/dataset.{json,complete} placements in the design docs are the #385
+  future state while finalize writes both at the run prefix root today — say so at each mention
+  instead of implying the relocation shipped; also refresh the storage-provenance immutability
+  bullet whose finalize-does-not-exist qualifier went stale with this PR, and drop a leftover
+  ShardMetadata import in the staging tests.
+
+* docs(data): note current flat placement in the artifact taxonomy table
+
+* internal-fix(data): ignore nested shard-staging entries in attempt discovery
+
+A future quarantine/ dir nested under a shard's staging directory would otherwise be misread as a
+  staged attempt (its slash-bearing key ends in the attempt suffixes); only a shard dir's direct
+  children count, pinned by a regression test staging a full quarantined triple.
+
+* test(data): assert one shared attempt base across staged suffixes in the e2e
+
+Per-suffix globs could pass on a mismatched set drawn from different attempt names; the worker e2e
+  now requires a single {worker}-{attempt} base to carry sidecar, stats, .valid, and .rendering
+  together.
+
+* internal-fix(data): reject non-r2 URIs in lance_target on both backends
+
+The local-backend branch happily resolved a bare path to a nonsense cwd-relative target where the S3
+  branch would raise via to_s3_uri — validate the scheme up front so misuse fails fast identically.
+
+* test(data): drop iterdir-order dependence in the fragment-landing assert
+
+* refactor(data): compute lance attempt identity only on the lance path
+
+worker_id (hostname regex) and attempt_uuid were computed for every shard render but consumed only
+  by the lance staging path; hoist both into the lance guard so hdf5/wds renders skip the work. The
+  same identity still threads the start marker and the staged attempt.
+
+* internal-fix(data): address lance fragment review findings
+
+* test(data): update lance fixture for plugin state rename
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+* internal-fix(data): harden Lance attempt reconciliation
+
+* internal-fix(data): pin Welford sidecar dtype
+
+* style(data): clarify Welford types and imports
+
+* internal-fix(data): reject unreadable Lance fragments
+
+* internal-fix(data): align Lance validation reconciliation
+
+* internal-refactor(data): use Lance distributed fragment writer
+
+* internal-fix(data): verify Lance physical row counts
+
+* test(data): pin Lance fragment writer contract
+
+* test(data): isolate R2 environment mutations
+
+* test(data): isolate DawDreamer cadence contract
+
+* fix(data): address Lance staging review feedback
+
+Reject non-finite and out-of-range Lance shard values before staging, and cover the complete
+  real-VST Lance render and resume path. Document Lance's native request retries and tighten
+  review-facing comments and docstrings.
+
+### Internal-Feat
+
+- **training**: Mirror checkpoints to R2 during training
+  ([#1902](https://github.com/tinaudio/synth-setter/pull/1902),
+  [`097959a`](https://github.com/tinaudio/synth-setter/commit/097959ad16c45822ea7aee1986f58cc502758249))
+
+* internal-feat(training): mirror checkpoints to R2 mid-run
+
+Add an opt-in CheckpointUploader callback that mirrors ModelCheckpoint's last.ckpt to R2 as it is
+  (re)written, so a host crash before train-end no longer strands the newest checkpoint on local
+  disk — the failure mode behind run ffn_simple-20260714T015543049Z, whose train-end upload never
+  fired.
+
+Gated behind training.upload_checkpoints_during_training (default off). Change-detection keys on the
+  file mtime, not the path, because save_last overwrites last.ckpt in place so its path never
+  changes. Best-effort and rank-0-only: an unreachable R2 or a failed upload warns and is swallowed
+  so persistence never aborts a run.
+
+Refs #1886
+
+* internal-fix(training): harden mid-run checkpoint uploader per review
+
+Address the pre-PR multi-skill review of the CheckpointUploader callback:
+
+- Cover every ModelCheckpoint write point (train-batch/epoch/validation end) plus an on_train_end
+  flush. Lightning runs ModelCheckpoint after this callback, so the previous batch-only hook could
+  strand the final write. - Bound retries at _MAX_UPLOAD_ATTEMPTS per checkpoint, then back off
+  until the file changes, so a persistently unreachable R2 no longer re-pings on every batch for the
+  rest of the run. - Key change-detection on (path, mtime, size) so a same-tick in-place overwrite
+  still uploads; log the pruned/rotated-file stat failure. - Warn at train-end when enabled but no
+  checkpoint was ever written. - Add an end-to-end test driving a real Trainer.fit with the flag on
+  against a fake R2 remote, plus unit tests for the flush, bounded retry, size-tie, and missing-file
+  paths (12 -> 21 tests).
+
+* internal-fix(training): address second review round on checkpoint uploader
+
+- Document the synchronous rank-0 upload cost loudly (class docstring + config comment) and emit a
+  one-time warning under DDP, where each copy stalls other ranks at the next collective; the feature
+  stays opt-in and default-off. - Move the end-to-end coverage into tests/test_train.py (the
+  entrypoint e2e file) and strengthen it: a two-epoch fit asserts >=2 uploads, proving a periodic
+  mirror fires before the on_train_end flush, plus byte-equality of the mirrored checkpoint. Drop
+  the weaker happy-path e2e from the unit file. - Add unit tests for retry-recovery after exhausted
+  attempts and the failed upload's warning log; guard a malformed upload_checkpoints_uri override
+  (no key segment) with a ValueError. - Extract the last.ckpt basename constant, add
+  super().__init__(), and refresh the training-pipeline doc + doc-map entry (intermediate
+  checkpoints now sync).
+
+* internal-fix(training): run checkpoint uploader after ModelCheckpoint
+
+Third review round found the mirror was one write stale: Lightning's _reorder_callbacks groups
+  ModelCheckpoint at the end of the dispatch list, so a plain-Callback uploader always ran before
+  the save and mirrored the previous checkpoint — breaking the "can't strand the newest checkpoint"
+  guarantee.
+
+Subclass lightning Checkpoint (verified: no abstract methods) so the uploader joins the checkpoint
+  group and, appended after ModelCheckpoint, runs after each save and mirrors the fresh bytes.
+  trainer.checkpoint_callback still resolves to the real ModelCheckpoint (first in the group).
+
+Also close the review's test gaps: pin the reorder guarantee, add on_train_epoch_end and DDP-warning
+  unit tests (world_size on the trainer double), and drop two comment-hygiene nits. 25 unit tests +
+  the real-Trainer.fit e2e pass.
+
+* internal-fix(training): mirror the checkpoint saved on a mid-fit exception
+
+Fourth review round: the uploader covered the cadence hooks but not on_exception. On an in-process
+  crash (e.g. CUDA OOM) Lightning calls ModelCheckpoint.on_exception, which writes a fresh
+  last.ckpt, then re-raises past the CLI's train-end upload — stranding exactly the crash-time
+  checkpoint this feature exists to save. Add on_exception delegating to _maybe_upload (it runs
+  after ModelCheckpoint via the Checkpoint reorder group) plus a unit test.
+
+Also tighten the _maybe_upload change-key wording and the doc-map covers entry. 26 unit tests + the
+  e2e pass.
+
+* internal-fix(training): require a ModelCheckpoint and enable save_on_exception
+
+Fifth review round found two verified Lightning-interaction bugs in the Checkpoint-subclass
+  uploader:
+
+- Appending the uploader (a Checkpoint) to a callback list with no explicit ModelCheckpoint
+  suppresses Lightning's auto-created default one, so the run writes zero checkpoints (reachable via
+  debug configs with `callbacks: null`). Now the uploader is only attached when a real
+  ModelCheckpoint is present, else it is skipped with a warning. - on_exception could not deliver
+  its crash guarantee: ModelCheckpoint.on_exception is gated by save_on_exception, which defaults
+  False. _append_checkpoint_uploader now flips it True on each ModelCheckpoint so a mid-fit crash
+  writes last.ckpt for the uploader to mirror.
+
+Add tests for the no-ModelCheckpoint skip and save_on_exception enablement; correct the
+  on_exception/doc-map wording. 29 tests + e2e pass.
+
+* internal-feat(training): verify crash-time checkpoint mirroring
+
+* internal-fix(training): detect equal-size checkpoint rewrites
+
+* internal-fix(training): require one durable checkpoint callback
+
+* internal-fix(training): isolate recovery checkpoints by run
+
+* internal-fix(training): harden checkpoint recovery paths
+
+* internal-fix(training): preflight checkpoint recovery storage
+
+* docs(training): clarify crash recovery opt in
+
+* chore(deps): refresh uv lock after main merge
+
+* internal-fix(training): address checkpoint durability review
+
+### Refactoring
+
+- Modernize benchmark type aliases ([#1905](https://github.com/tinaudio/synth-setter/pull/1905),
+  [`881d93e`](https://github.com/tinaudio/synth-setter/commit/881d93e8cacf18a05312b048899be82fabb5d918))
+
+
 ## v8.51.0 (2026-07-15)
 
 ### Features
