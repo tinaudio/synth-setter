@@ -80,9 +80,9 @@ def _make_columns(num_rows: int, *, params_seed: int = 0) -> dict[str, np.ndarra
     rng = np.random.default_rng(params_seed)
     return {
         # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-        "audio": rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
-            np.float16
-        ),
+        "audio": rng.uniform(
+            -1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+        ).astype(np.float16),
         "mel_spec": rng.standard_normal(
             (num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
         ).astype(np.float32),
@@ -624,6 +624,7 @@ class TestLanceVSTDataModule:
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert module.predict_file == dataset_root / "test.lance"
+            assert isinstance(module.predict_dataset, LanceVSTDataset)
             assert module.predict_dataset.read_audio is True
 
     def test_setup_val_and_test_force_ot_false(self, dataset_root: Path) -> None:
@@ -632,6 +633,9 @@ class TestLanceVSTDataModule:
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=True) as module:
+            assert isinstance(module.train_dataset, LanceVSTDataset)
+            assert isinstance(module.val_dataset, LanceVSTDataset)
+            assert isinstance(module.test_dataset, LanceVSTDataset)
             assert module.train_dataset.ot is True
             assert module.val_dataset.ot is False
             assert module.test_dataset.ot is False
@@ -645,6 +649,7 @@ class TestLanceVSTDataModule:
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
         ) as module:
             for split in (module.train_dataset, module.val_dataset, module.test_dataset):
+                assert isinstance(split, LanceVSTDataset)
                 assert split.read_mel is False
                 assert split.read_m2l is True
 
@@ -719,6 +724,10 @@ class TestLanceVSTDataModule:
             param_spec_name=ParamSpecName("surge_xt"),
         )
         module.setup()
+        assert isinstance(module.train_dataset, LanceVSTDataset)
+        assert isinstance(module.val_dataset, LanceVSTDataset)
+        assert isinstance(module.test_dataset, LanceVSTDataset)
+        assert isinstance(module.predict_dataset, LanceVSTDataset)
         module.teardown()
         assert not module.train_dataset.dataset_file
         assert not module.val_dataset.dataset_file
@@ -737,6 +746,7 @@ class TestLanceVSTDataModule:
             fake=True,
             use_saved_mean_and_variance=False,
         ) as module:
+            assert isinstance(module.train_dataset, LanceVSTDataset)
             assert module.train_dataset.fake is True
             item = next(iter(module.val_dataloader()))
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))

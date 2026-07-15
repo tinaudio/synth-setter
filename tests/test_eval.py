@@ -172,6 +172,10 @@ _FAKE_ORACLE_DATASETS = [
         _FakeOracleDataset("lance", "fake_surge_smoke_lance_datasets", "surge_lance"),
         id="lance",
     ),
+    pytest.param(
+        _FakeOracleDataset("lance_map", "fake_surge_smoke_lance_datasets", "surge_lance_map"),
+        id="lance_map",
+    ),
 ]
 
 
