@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,9 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.pipeline import r2_io
+from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
@@ -64,6 +68,26 @@ def _smoke_eval_postprocessing_fake() -> Callable[[list[str]], None]:
     )
 
 
+def _record_successful_r2_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[Path, str, bytes]]:
+    """Record uploads only after the real rclone-backed copy succeeds.
+
+    :param monkeypatch: Stubs the R2 auth probe and wraps the upload transport.
+    :returns: Successful ``(local_path, uri, source_bytes_at_upload)`` copies.
+    """
+    real_upload = r2_io.upload_to_uri
+    uploads: list[tuple[Path, str, bytes]] = []
+
+    def _record(local_path: Path, uri: str) -> None:
+        real_upload(local_path, uri)
+        uploads.append((Path(local_path), uri, Path(local_path).read_bytes()))
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _record)
+    return uploads
+
+
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     """Run 1 train, val, and test step on CPU with `fast_dev_run`.
 
@@ -90,11 +114,14 @@ def test_train_torchsynth_experiment_renders_audio_online(
     metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
     audio, params, *_ = batch
     assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
+    assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
+    assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
 
 
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
@@ -770,3 +797,91 @@ def _prediction_file_names() -> list[str]:
         for prefix in _PREDICTION_PT_PREFIXES
         for sample_idx in range(NUM_FIXTURE_SAMPLES)
     )
+
+
+@pytest.mark.slow
+def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
+    cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prove a periodic upload precedes the final flush and preserves checkpoint bytes.
+
+    :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
+    """
+    uploads = _record_successful_r2_uploads(monkeypatch)
+    run_id = "train-fixed-run-id"
+    recovery_uuids = iter((UUID(int=1), UUID(int=2)))
+    monkeypatch.setattr("synth_setter.cli.train.make_wandb_run_id", lambda _config_id: run_id)
+    monkeypatch.setattr("synth_setter.cli.train.uuid4", lambda: next(recovery_uuids))
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.max_epochs = 2
+        cfg_train.training.upload_checkpoints_during_training = True
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    first_uploads = list(uploads)
+    assert len(first_uploads) >= 2
+    config_id = resolve_run_config_id(cfg_train)
+    first_uri = (
+        f"r2://{cfg_train.r2.bucket}/checkpoints/{config_id}/{run_id}-{'0' * 31}1/last.ckpt"
+    )
+    assert {uri for _, uri, _ in first_uploads} == {first_uri}
+    assert any(snapshot != first_uploads[-1][2] for _, _, snapshot in first_uploads[:-1])
+    assert (fake_r2_remote / first_uri.removeprefix("r2://")).read_bytes() == first_uploads[-1][2]
+
+    train(cfg_train)
+
+    second_uploads = uploads[len(first_uploads) :]
+    assert len(second_uploads) >= 2
+    second_uri = (
+        f"r2://{cfg_train.r2.bucket}/checkpoints/{config_id}/{run_id}-{'0' * 31}2/last.ckpt"
+    )
+    assert {uri for _, uri, _ in second_uploads} == {second_uri}
+    assert second_uri != first_uri
+    assert (fake_r2_remote / second_uri.removeprefix("r2://")).read_bytes() == second_uploads[-1][
+        2
+    ]
+
+
+@pytest.mark.slow
+def test_train_recovers_r2_checkpoint_after_fit_raises(
+    cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash-time ``last.ckpt`` reaches R2 before ``train()`` re-raises.
+
+    :param cfg_train: Tiny CPU training cfg with a real ``ModelCheckpoint``.
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Stubs the R2 auth-ping and wraps uploads to record their URIs.
+    """
+    uploads = _record_successful_r2_uploads(monkeypatch)
+    with open_dict(cfg_train):
+        cfg_train.callbacks.crash_callback = {
+            "_target_": "tests.helpers.crash_callback._RaiseOnTrainBatchEnd"
+        }
+        cfg_train.test = False
+        cfg_train.training.upload_checkpoints_during_training = True
+    HydraConfig().set_config(cfg_train)
+
+    with pytest.raises(RuntimeError, match="simulated mid-fit crash"):
+        train(cfg_train)
+
+    assert uploads
+    last_local, last_uri, uploaded_bytes = uploads[-1]
+    assert last_local.name == "last.ckpt"
+    mirrored = fake_r2_remote / last_uri.removeprefix("r2://")
+    assert mirrored.read_bytes() == uploaded_bytes == last_local.read_bytes()
+    recovered = last_local.with_name("recovered-last.ckpt")
+    r2_io.download_to_path(last_uri, recovered)
+    assert recovered.read_bytes() == last_local.read_bytes()
+    saved_step = int(torch.load(recovered, map_location="cpu", weights_only=False)["global_step"])
+
+    with open_dict(cfg_train):
+        del cfg_train.callbacks.crash_callback
+        cfg_train.ckpt_path = str(recovered)
+        cfg_train.trainer.max_epochs = 2
+        cfg_train.training.upload_checkpoints_during_training = False
+    HydraConfig().set_config(cfg_train)
+    _, resumed_objects = train(cfg_train)
+    assert resumed_objects["trainer"].global_step > saved_step

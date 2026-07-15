@@ -1,12 +1,22 @@
-"""Lightning callbacks for plotting losses, similarities, projections, and prediction dumps."""
+"""Lightning callbacks for plots, prediction dumps, and checkpoint mirroring.
 
+Typical usage::
+
+    checkpoint = ModelCheckpoint(save_last=True, save_on_exception=True)
+    uploader = CheckpointUploader("r2://bucket/checkpoints/run", checkpoint)
+    trainer = Trainer(callbacks=[checkpoint, uploader])
+"""
+
+import logging
 import os
+import subprocess
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import BasePredictionWriter, Callback
+from lightning.pytorch import LightningModule, Trainer
+from lightning.pytorch.callbacks import BasePredictionWriter, Callback, Checkpoint, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
@@ -17,6 +27,205 @@ from synth_setter.models.components.transformer import (
 )
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.pipeline import r2_io
+
+log = logging.getLogger(__name__)
+
+# Bound on consecutive failed uploads of one unchanged checkpoint before backing
+# off until the file next changes — caps R2 retries when R2 is down.
+_MAX_UPLOAD_ATTEMPTS = 3
+
+# The single mirrored object name; the whole class contract hinges on this basename.
+_LAST_CKPT_NAME = "last.ckpt"
+_CheckpointRevision = tuple[str, float, int, int | None]
+
+
+def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
+    """Return Lightning's completed-save token when available.
+
+    :param checkpoint_callback: Checkpoint writer exposing Lightning's compatibility field.
+    :returns: Completed global step, or ``None`` when Lightning no longer exposes the field.
+    """
+    token = getattr(checkpoint_callback, "_last_global_step_saved", None)
+    return token if isinstance(token, int) else None
+
+
+class CheckpointUploader(Checkpoint):
+    """Best-effort rank-0 R2 mirror ordered after ModelCheckpoint saves.
+
+    Uploads are synchronous; prefer single-device or coarse-cadence DDP runs.
+    """
+
+    def __init__(
+        self, prefix_uri: str, checkpoint_callback: ModelCheckpoint | None = None
+    ) -> None:
+        """Bind the upload target.
+
+        :param prefix_uri: ``r2://`` directory the run's ``last.ckpt`` uploads under.
+        :param checkpoint_callback: Configured writer whose final Lightning topology is verified.
+        """
+        super().__init__()
+        self._dest_uri = f"{prefix_uri.rstrip('/')}/{_LAST_CKPT_NAME}"
+        self._checkpoint_callback = checkpoint_callback
+        self._uploaded_revision: _CheckpointRevision | None = None
+        self._pending_revision: _CheckpointRevision | None = None
+        self._attempts = 0
+        self._saw_checkpoint = False
+        self._warned_ddp = False
+
+    def setup(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
+        """Reject a replaced or reordered checkpoint writer.
+
+        :param trainer: Trainer containing the final callback topology.
+        :param pl_module: Lightning module, unused by this topology check.
+        :param stage: Lightning stage, unused by this topology check.
+        :raises ValueError: If the bound writer is not the sole preceding ModelCheckpoint.
+        """
+        if self._checkpoint_callback is None:
+            return
+        model_checkpoints = [
+            callback for callback in trainer.callbacks if isinstance(callback, ModelCheckpoint)
+        ]
+        if model_checkpoints != [self._checkpoint_callback] or trainer.callbacks.index(
+            self._checkpoint_callback
+        ) > trainer.callbacks.index(self):
+            raise ValueError(
+                "Checkpoint durability writer was replaced or reordered by model callbacks"
+            )
+
+    def _checkpoint_revision(self, trainer: Trainer) -> tuple[Path, _CheckpointRevision] | None:
+        """Return the completed checkpoint path and revision.
+
+        :param trainer: Trainer exposing the active checkpoint writer.
+        :returns: Path and revision, or ``None`` when no readable checkpoint exists.
+        """
+        checkpoint_callback = self._checkpoint_callback or trainer.checkpoint_callback
+        source = getattr(checkpoint_callback, "last_model_path", "") or ""
+        if not source:
+            return None
+        self._saw_checkpoint = True
+        try:
+            stat = Path(source).stat()
+        except OSError as exc:  # checkpoint pruned/rotated between save and this hook
+            log.debug("Checkpoint %s vanished before upload: %s", source, exc)
+            return None
+        revision = (
+            source,
+            stat.st_mtime,
+            stat.st_size,
+            _checkpoint_save_token(checkpoint_callback),
+        )
+        return Path(source), revision
+
+    def _try_upload(self, source: Path) -> bool:
+        """Upload one revision while containing expected R2 failures.
+
+        :param source: Local checkpoint to upload.
+        :returns: Whether the upload succeeded.
+        """
+        try:
+            r2_io.ensure_r2_env_loaded()
+        except (RuntimeError, OSError) as exc:
+            log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
+            return False
+        try:
+            r2_io.upload_to_uri(source, self._dest_uri)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
+            return False
+        return True
+
+    def _maybe_upload(self, trainer: Trainer) -> None:
+        """Upload each newly completed rank-0 checkpoint save with bounded retries.
+
+        :param trainer: The active trainer; supplies the rank flag and the
+            ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
+        """
+        if not trainer.is_global_zero:
+            return
+        if not self._warned_ddp and getattr(trainer, "world_size", 1) > 1:
+            self._warned_ddp = True
+            log.warning(
+                "Mid-run checkpoint upload runs synchronously on rank 0 and stalls "
+                "other DDP ranks at the next collective while each %s is copied to R2; "
+                "prefer a coarse checkpoint cadence.",
+                _LAST_CKPT_NAME,
+            )
+        checkpoint = self._checkpoint_revision(trainer)
+        if checkpoint is None:
+            return
+        source, revision = checkpoint
+        if revision == self._uploaded_revision:
+            return
+        if revision != self._pending_revision:
+            self._pending_revision = revision
+            self._attempts = 0
+        if self._attempts >= _MAX_UPLOAD_ATTEMPTS:
+            return
+        self._attempts += 1
+        if not self._try_upload(source):
+            return
+        self._uploaded_revision = revision
+        log.info("Mid-run checkpoint uploaded to %s", self._dest_uri)
+
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule | None,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+    ) -> None:
+        """Mirror a training-step checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        :param outputs: Unused training-step output.
+        :param batch: Unused training batch.
+        :param batch_idx: Unused batch index.
+        """
+        self._maybe_upload(trainer)
+
+    def on_validation_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Mirror a validation-end checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Mirror a training-epoch checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Flush the final checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+        if trainer.is_global_zero and not self._saw_checkpoint:
+            log.warning(
+                "Mid-run checkpoint upload enabled but ModelCheckpoint wrote no "
+                "last_model_path to mirror to %s; set save_last on the ModelCheckpoint.",
+                self._dest_uri,
+            )
+
+    def on_exception(
+        self, trainer: Trainer, pl_module: LightningModule | None, exception: BaseException
+    ) -> None:
+        """Mirror the crash checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        :param exception: Exception that interrupted training.
+        """
+        self._maybe_upload(trainer)
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

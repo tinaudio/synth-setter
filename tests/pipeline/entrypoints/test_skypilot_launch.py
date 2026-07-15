@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
@@ -1635,6 +1636,16 @@ class TestCheckedInLaunchConfigs:
         """The workflows' default ``launch_config`` inputs must exist in the package."""
         assert (self._LAUNCH_DIR / "train-runpod.yaml").is_file()
         assert (self._LAUNCH_DIR / "eval-runpod.yaml").is_file()
+
+    @pytest.mark.parametrize("name", ["train-runpod.yaml", "train-runpod-smoke.yaml"])
+    def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
+        """Single-GPU RunPod training opts into crash-recovery checkpoints.
+
+        :param name: Shipped training launch config under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+        assert cfg.cmd is not None
+        assert "training.upload_checkpoints_during_training=true" in shlex.split(cfg.cmd)
 
     @pytest.mark.parametrize(
         "name", ["train-runpod.yaml", "eval-runpod.yaml"], ids=["train", "eval"]

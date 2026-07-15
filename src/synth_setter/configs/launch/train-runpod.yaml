@@ -20,4 +20,5 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
   experiment=surge/ffn_simple
+  training.upload_checkpoints_during_training=true
   hydra.run.dir=/home/build/synth-setter/train-run
