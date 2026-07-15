@@ -594,9 +594,10 @@ journalctl --since "1 hour ago" | grep -E "earlyoom.*(SIGTERM|SIGKILL)"
 The usual cause is dataloader workers. `num_workers` applies to *each*
 dataloader, so enabling validation doubles the live worker count — a run that
 fits with `limit_val_batches: 0` can be killed once validation is on. Lance
-workers cost ~1.3 GB each, so the count matters more than it looks: at 11
-workers a train pool plus a validation pool is ~28 GB, which no 32 GB host
-survives. If a run is killed, lower it below the default:
+workers are heavy, so the count matters more than it looks: a measured
+`surge_lance` train pool alone is ~6 GB at 2 workers and ~19 GB at 11, and a
+concurrent validation pool roughly doubles the worker share. At 11 workers that
+exceeds a 32 GB host. If a run is killed, lower it below the default:
 
 ```bash
 python -m synth_setter.cli.train experiment=surge/ffn_simple datamodule=surge_lance \

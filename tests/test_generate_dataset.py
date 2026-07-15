@@ -1068,3 +1068,19 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                 )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")
+
+
+def test_cfg_dataset_vst_datamodule_num_workers_stays_ram_bounded(
+    cfg_dataset: DictConfig,
+) -> None:
+    """Generate composes the VST datamodule's RAM-bounded worker default.
+
+    ``generate_dataset`` forwards ``datamodule.num_workers`` verbatim to the
+    oracle-eval subprocess's predict dataloader, so this default reaches the
+    entrypoint even though the shard render pool sizes itself from
+    ``available_cpus() // 2`` instead. Lance workers are ~1.3 GB each and the
+    previous default of 11 exhausted a 32 GB host (#1916).
+
+    :param cfg_dataset: Composed config; read only for ``datamodule.num_workers``.
+    """
+    assert cfg_dataset.datamodule.num_workers == 4

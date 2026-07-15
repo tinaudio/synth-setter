@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
@@ -321,6 +322,24 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
+
+
+def test_cfg_train_vst_datamodule_num_workers_stays_ram_bounded() -> None:
+    """Train composes the VST datamodule's RAM-bounded worker default.
+
+    ``num_workers`` is applied per dataloader, so enabling validation doubles the
+    live worker count. Lance workers are ~1.3 GB each, and the previous default
+    of 11 put train+val pools past a 32 GB host, where the OOM killer reaped the
+    run before its first checkpoint (#1916). Composed explicitly rather than via
+    ``cfg_train``: those fixtures pin ``num_workers`` themselves, so no other
+    train test would notice the default drifting back up.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["datamodule=surge_simple", "model=ffn", "trainer=cpu"],
+        )
+    assert cfg.datamodule.num_workers == 4
 
 
 @pytest.mark.slow
