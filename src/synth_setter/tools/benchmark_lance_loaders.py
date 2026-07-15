@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
-from typing import Literal, TypeAlias
+from typing import Literal
 
 import lance
 import numpy as np
@@ -26,8 +26,8 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import _get_git_sha
 
-LoaderName: TypeAlias = Literal["legacy", "map"]
-BenchmarkKey: TypeAlias = tuple[LoaderName, ConditioningMode, int]
+type LoaderName = Literal["legacy", "map"]
+type BenchmarkKey = tuple[LoaderName, ConditioningMode, int]
 
 
 @dataclass(frozen=True)

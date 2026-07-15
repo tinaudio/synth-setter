@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v8.51.0 (2026-07-15)
+
+### Features
+
+- **training**: Add log-mel TorchSynth FFN frontend
+  ([#1868](https://github.com/tinaudio/synth-setter/pull/1868),
+  [`2da33d9`](https://github.com/tinaudio/synth-setter/commit/2da33d9f065b3973e78a5f0af43fe1bcad64aa79))
+
+* feat(training): add log-mel TorchSynth FFN frontend
+
+* fix(training): validate log-mel frontend contract
+
+* fix(training): guard log-mel numeric bounds
+
+* fix(training): align log-mel boundary semantics
+
+* test(training): aggregate held-out baseline loss
+
+* test(training): cover temporal frontend behavior
+
+* test(training): require held-out improvement margin
+
+* fix(training): scale magnitude frontend decibels
+
+* refactor(training): split log-mel CNN residual model
+
+* fix(training): derive log-mel geometry from sample rate
+
+* fix(training): enforce log-mel parameter contracts
+
+
 ## v8.50.0 (2026-07-15)
 
 ### Features
