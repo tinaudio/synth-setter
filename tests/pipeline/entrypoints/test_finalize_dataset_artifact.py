@@ -27,13 +27,11 @@ _PREFIX = f"data/finalize-art/{_RUN_ID}/"
 
 def _spec(
     factory: Callable[..., DatasetSpec],
-    output_format: str = "hdf5",
     train_val_test_sizes: tuple[int, int, int] = (8, 4, 0),
 ) -> DatasetSpec:
-    """Build a finalize-artifact spec with a fixed run id, bucket, and prefix.
+    """Build a finalize-artifact Lance spec with a fixed run id, bucket, and prefix.
 
     :param factory: Shared ``conftest`` ``dataset_spec_factory``.
-    :param output_format: ``hdf5`` or ``wds``; selects the reference shape.
     :param train_val_test_sizes: Split sample counts (multiples of 4); the
         default leaves ``test`` empty so the empty-split omission is testable.
     :returns: A frozen ``DatasetSpec`` whose ``num_shards`` and ``r2`` are
@@ -42,7 +40,6 @@ def _spec(
     return factory(
         task_name="finalize-art",
         run_id=_RUN_ID,
-        output_format=output_format,
         train_val_test_sizes=list(train_val_test_sizes),
         r2={"bucket": _BUCKET, "prefix": _PREFIX},
         render={"samples_per_render_batch": 4, "samples_per_shard": 4},
@@ -112,23 +109,23 @@ def test_build_dataset_artifact_metadata_carries_shard_count_n_samples_git_sha(
     assert artifact.metadata == {"shard_count": 3, "n_samples": 12, "git_sha": "0" * 40}
 
 
-def test_build_dataset_artifact_hdf5_references_nonempty_splits_and_stats(
+def test_build_dataset_artifact_references_nonempty_lance_splits_and_stats(
     dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """hdf5 references each non-empty split ``.h5`` plus ``stats.npz`` as ``s3://`` URIs.
+    """Lance references each non-empty split ``.lance`` plus ``stats.npz`` as ``s3://`` URIs.
 
     :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
     artifact = build_dataset_artifact(_spec(dataset_spec_factory))
     refs = {entry.ref for entry in artifact.manifest.entries.values()}
     assert refs == {
-        f"s3://{_BUCKET}/{_PREFIX}train.h5",
-        f"s3://{_BUCKET}/{_PREFIX}val.h5",
+        f"s3://{_BUCKET}/{_PREFIX}train.lance",
+        f"s3://{_BUCKET}/{_PREFIX}val.lance",
         f"s3://{_BUCKET}/{_PREFIX}stats.npz",
     }
 
 
-def test_build_dataset_artifact_hdf5_omits_empty_split_reference(
+def test_build_dataset_artifact_omits_empty_lance_split_reference(
     dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """An empty split (``test`` size 0) contributes no reference — nothing was finalized there.
@@ -137,22 +134,4 @@ def test_build_dataset_artifact_hdf5_omits_empty_split_reference(
     """
     artifact = build_dataset_artifact(_spec(dataset_spec_factory))
     refs = {entry.ref for entry in artifact.manifest.entries.values()}
-    assert f"s3://{_BUCKET}/{_PREFIX}test.h5" not in refs
-
-
-def test_build_dataset_artifact_wds_references_run_prefix_and_stats(
-    dataset_spec_factory: Callable[..., DatasetSpec],
-) -> None:
-    """Wds references the run prefix dir (carrying the shard tars) plus ``stats.npz``.
-
-    wds keeps shards in place rather than resharding into split ``.h5`` files,
-    so the dataset footprint is the prefix dir plus the derived ``stats.npz``.
-
-    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
-    """
-    artifact = build_dataset_artifact(_spec(dataset_spec_factory, output_format="wds"))
-    refs = {entry.ref for entry in artifact.manifest.entries.values()}
-    assert refs == {
-        f"s3://{_BUCKET}/{_PREFIX}",
-        f"s3://{_BUCKET}/{_PREFIX}stats.npz",
-    }
+    assert f"s3://{_BUCKET}/{_PREFIX}test.lance" not in refs

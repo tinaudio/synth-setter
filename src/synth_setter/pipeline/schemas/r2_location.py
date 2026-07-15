@@ -225,49 +225,17 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(DATASET_COMPLETE_FILENAME)
 
-    def split_h5_uri(self, split: Split) -> str:
-        """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
+    def split_lance_uri(self, split: Split) -> str:
+        """R2 URI of a finalized split Lance dataset directory.
 
-        Reshard produces these locally today; the URI is where they land once
-        finalize uploads them (#408). Paired with :meth:`split_wds_brace_uri`
-        for the wds variant; callers branch on ``DatasetSpec.output_format``.
+        Finalize writes these directly to R2 (#408); the URI is where each
+        ``<split>.lance`` dataset lands.
 
         :param split: Split name; ``Literal["train","val","test"]`` (see
             ``synth_setter.pipeline.schemas.spec.Split``).
-        :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
-        """
-        return self._under_prefix(f"{split}.h5")
-
-    def split_lance_uri(self, split: Split) -> str:
-        """R2 URI of a finalized split Lance file.
-
-        :param split: Split name; ``Literal["train","val","test"]``.
-        :returns: ``r2://<bucket>/<prefix><split>.lance``.
+        :returns: ``r2://<bucket>/<prefix><split>.lance`` URI string.
         """
         return self._under_prefix(f"{split}.lance")
-
-    def split_wds_brace_uri(self, shard_range: tuple[int, int]) -> str:
-        """R2 URI carrying the webdataset brace pattern for ``[lo, hi)`` shards.
-
-        WebDataset readers expand the ``{LO..HI}`` form natively; ``HI`` here
-        is inclusive (``shard_range[1] - 1``) per the
-        ``webdataset.WebDataset`` contract.
-
-        :param shard_range: Half-open shard-index range, typically from
-            ``DatasetSpec.split_shard_ranges[split]``.
-        :returns: ``r2://<bucket>/<prefix>shard-{LO..HI}.tar`` with zero-padded
-            six-digit indices matching ``ShardSpec.filename``'s format.
-        :raises ValueError: ``shard_range`` is empty (``lo >= hi``) — would
-            emit a malformed brace like ``{000003..000002}`` that wds reads
-            as an empty set instead of raising.
-        """
-        lo, hi = shard_range
-        if lo >= hi:
-            raise ValueError(
-                f"split_wds_brace_uri requires lo < hi (got {shard_range!r}); "
-                f"an empty shard range has no brace pattern."
-            )
-        return self._under_prefix(f"shard-{{{lo:06d}..{hi - 1:06d}}}.tar")
 
     def stats_uri(self) -> str:
         """R2 URI of ``stats.npz`` (normalization statistics).
@@ -312,7 +280,7 @@ class R2Location(BaseModel):
         :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
         :param worker_id: Worker identifier issued by the launcher.
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
-        :param ext: Filename suffix with leading dot (``".fragment.json"``, ``".h5"``, …).
+        :param ext: Filename suffix with leading dot (``".fragment.json"``, ``".lance"``, …).
         :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt><ext>``.
         """
         return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"

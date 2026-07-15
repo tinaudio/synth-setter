@@ -1,8 +1,8 @@
 # @package _global_
 
-# Lance-format sibling of `smoke-shard-wds`. Same compact 12-sample render volume
-# but writes single `.lance` files so PR-time generation can exercise the Lance
-# writer, upload, validation, and finalize branches.
+# Compact single-split Lance generation config. 12-sample render volume
+# ([12,0,0]) so PR-time generation can exercise the Lance writer, upload,
+# validation, and finalize branches.
 
 defaults:
   - override /datamodule: surge_simple

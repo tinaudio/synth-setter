@@ -26,7 +26,7 @@ def _spec_kwargs() -> dict[str, object]:
         "created_at": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [10000, 0, 0],
         "base_seed": 42,
         "r2": {
@@ -410,7 +410,7 @@ class TestLocalizedUri:
 
         :param tmp_path: Pytest tmp dir.
         """
-        target = tmp_path / "shard.h5"
+        target = tmp_path / "shard.lance"
         target.write_text("payload")
 
         with spec_io.localized_uri(str(target)) as local:
@@ -422,7 +422,7 @@ class TestLocalizedUri:
 
         :param tmp_path: Pytest tmp dir.
         """
-        target = tmp_path / "shard.h5"
+        target = tmp_path / "shard.lance"
         target.write_text("payload")
 
         with spec_io.localized_uri(target.as_uri()) as local:
@@ -437,7 +437,7 @@ class TestLocalizedUri:
         with patch(
             "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
         ):
-            with spec_io.localized_uri("r2://bucket/shard.h5") as local:
+            with spec_io.localized_uri("r2://bucket/shard.lance") as local:
                 assert local.read_text() == "from-r2"
                 fetched = local
         assert not fetched.exists()
@@ -447,7 +447,7 @@ class TestLocalizedUri:
 
         :param tmp_path: Pytest tmp dir; the target is intentionally never created.
         """
-        missing = tmp_path / "absent.h5"
+        missing = tmp_path / "absent.lance"
 
         with pytest.raises(FileNotFoundError, match=re.escape(f"no file at '{missing}'")):
             with spec_io.localized_uri(str(missing)):
@@ -458,7 +458,7 @@ class TestLocalizedUri:
 
         :param tmp_path: Pytest tmp dir; the target is intentionally never created.
         """
-        missing = tmp_path / "absent.h5"
+        missing = tmp_path / "absent.lance"
 
         with pytest.raises(FileNotFoundError, match=re.escape(missing.as_uri())):
             with spec_io.localized_uri(missing.as_uri()):
@@ -473,7 +473,7 @@ class TestLocalizedUri:
         with patch(
             "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
         ):
-            with spec_io.localized_uri("s3://bucket/shard.h5") as local:
+            with spec_io.localized_uri("s3://bucket/shard.lance") as local:
                 assert local.read_text() == "from-s3"
                 fetched = local
         assert not fetched.exists()
@@ -481,13 +481,13 @@ class TestLocalizedUri:
     def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
         """An unsupported scheme (e.g. ``gs://``) raises a clear ``ValueError``."""
         with pytest.raises(ValueError, match="unsupported URI scheme 'gs'"):
-            with spec_io.localized_uri("gs://bucket/shard.h5"):
+            with spec_io.localized_uri("gs://bucket/shard.lance"):
                 pass
 
     def test_malformed_file_uri_is_rejected_with_value_error(self) -> None:
         """A ``file://`` URI with a host component is rejected, not silently localized."""
         with pytest.raises(ValueError, match="host must be empty or 'localhost'"):
-            with spec_io.localized_uri("file://host/shard.h5"):
+            with spec_io.localized_uri("file://host/shard.lance"):
                 pass
 
     def test_r2_tempfile_is_removed_when_body_raises(self) -> None:
@@ -507,7 +507,7 @@ class TestLocalizedUri:
             "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
         ):
             with pytest.raises(RuntimeError, match="boom"):
-                with spec_io.localized_uri("r2://bucket/shard.h5") as local:
+                with spec_io.localized_uri("r2://bucket/shard.lance") as local:
                     fetched = local
                     explode()
         assert not fetched.exists()

@@ -1,7 +1,7 @@
 """Native ``lance.torch`` dataloaders over Lance shard/split datasets.
 
 Thin factories over Lance's own PyTorch integration (``LanceDataset``,
-``SafeLanceDataset``, ``ShardedBatchSampler``) rather than the h5py-shaped
+``SafeLanceDataset``, ``ShardedBatchSampler``) rather than the batch-indexed
 adapter in :mod:`synth_setter.data.lance_datamodule`. Both loaders stream
 object storage natively: pass ``storage_options`` (see
 :func:`synth_setter.pipeline.r2_io.r2_storage_options`) with an ``s3://`` URI.

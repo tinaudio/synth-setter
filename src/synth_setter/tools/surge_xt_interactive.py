@@ -2,7 +2,6 @@
 
 import logging
 import math
-import os
 import queue
 import shutil
 import subprocess
@@ -17,8 +16,6 @@ from pathlib import Path
 from typing import Protocol
 
 import click
-import h5py
-import hdf5plugin  # noqa: F401  side-effect: registers HDF5_PLUGIN_PATH for Blosc2 filters
 import mido
 import numpy as np
 import pandas as pd
@@ -38,7 +35,8 @@ from synth_setter.data.vst.core import (
 )
 from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
-from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
@@ -293,7 +291,9 @@ class DatasetRefType(click.ParamType):
             return value
         path_str, sep, idx_str = value.rpartition(":")
         if not sep or not path_str or not idx_str:
-            self.fail(f"expected PATH:DATASET_IDX (e.g. 'test.h5:0'), got {value!r}", param, ctx)
+            self.fail(
+                f"expected PATH:DATASET_IDX (e.g. 'test.lance:0'), got {value!r}", param, ctx
+            )
         try:
             batch_idx = int(idx_str)
         except ValueError:
@@ -346,25 +346,32 @@ def load_dataset_synth_params(
     ref: DatasetRef,
     param_spec_name: str,
 ) -> dict[str, float]:
-    """Load a single row from an h5 dataset's ``param_array`` and decode it into synth params.
+    """Load a single row from a Lance dataset's ``param_array`` and decode it into synth params.
 
-    Unlike prediction tensors, h5 dataset rows are already in encoded form
+    Unlike prediction tensors, dataset rows are already in encoded form
     (output of :meth:`ParamSpec.encode`, values in ``[0, 1]``), so they decode
     directly without the model-output inverse scale.
 
-    :param ref: Reference identifying the h5 file path and row to decode.
+    :param ref: Reference identifying the ``.lance`` dataset path and row to decode.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
         to decode the row into raw VST parameter values.
     :returns: Dict mapping VST parameter name to its raw (decoded) value.
+    :raises IndexError: when ``ref.batch_idx`` is out of range for the dataset.
     """
+    # Function-local so importing this module (e.g. from the test suite) never
+    # pays the ``lance`` import cost.
+    import lance
+
     spec = param_specs[param_spec_name]
-    with h5py.File(ref.path, "r") as f:
-        param_array = f["param_array"]
-        if not isinstance(param_array, h5py.Dataset):
-            raise TypeError(
-                f"expected h5py.Dataset for 'param_array', got {type(param_array).__name__}"
-            )
-        row = np.asarray(param_array[ref.batch_idx], dtype=np.float32)
+    dataset = lance.dataset(str(ref.path))
+    # Random-access read of the one requested row; ``.take`` clamps silently on
+    # over-range, so guard against the row count to preserve the IndexError.
+    if ref.batch_idx >= dataset.count_rows():
+        raise IndexError(f"dataset row {ref.batch_idx} out of range for {ref.path}")
+    table = dataset.take([ref.batch_idx], columns=[PARAM_ARRAY_FIELD])
+    row = np.asarray(
+        table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0], dtype=np.float32
+    )
 
     synth_params, _ = spec.decode(row)
     return synth_params
@@ -943,9 +950,9 @@ def eval_patches(
     Re-runs against the same ``dataset_root_dir`` clear the previous prediction/audio/metrics
     output directories so stale files don't leak into validation.
 
-    :param num_samples: Number of patches predicted/rendered (matches ``predict.h5``'s row count).
-    :param dataset_root_dir: Directory containing ``predict.h5``; receives ``prediction_outputs/``,
-        ``audio/``, and ``metrics/`` subdirectories.
+    :param num_samples: Number of patches predicted/rendered (``predict.lance``'s row count).
+    :param dataset_root_dir: Directory containing ``predict.lance``; receives
+        ``prediction_outputs/``, ``audio/``, and ``metrics/`` subdirectories.
     :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used to set the model's
         ``d_out`` and the decoder used to render predicted audio. Must match the spec used when
@@ -957,7 +964,7 @@ def eval_patches(
         preserves production behavior by letting each helper bind its own
         ``subprocess.run``/``subprocess.check_call`` default.
     :raises FileNotFoundError: if ``checkpoint_path`` is missing, ``dataset_root_dir`` is not a
-        directory, ``predict.h5`` is missing, or any expected pipeline output is absent.
+        directory, ``predict.lance`` is missing, or any expected pipeline output is absent.
     :raises ValueError: if predictions contain NaN/Inf, a rendered WAV is silent, or a metrics CSV
         has the wrong shape/columns or contains NaN/Inf.
     """
@@ -965,9 +972,9 @@ def eval_patches(
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
     if not dataset_root_dir.is_dir():
         raise NotADirectoryError(f"dataset root directory not found: {dataset_root_dir}")
-    predict_file = dataset_root_dir / "predict.h5"
-    if not predict_file.is_file():
-        raise FileNotFoundError(f"predict.h5 not found: {predict_file}")
+    predict_file = dataset_root_dir / "predict.lance"
+    if not predict_file.is_dir():
+        raise FileNotFoundError(f"predict.lance not found: {predict_file}")
 
     predictions_output_dir = dataset_root_dir / "prediction_outputs"
     audio_dir = dataset_root_dir / "audio"
@@ -1024,7 +1031,7 @@ def eval_patches(
     type=DatasetRefType(),
     default=None,
     help=(
-        "Dataset reference as PATH:DATASET_IDX (e.g. 'outputs/test.h5:0'). "
+        "Dataset reference as PATH:DATASET_IDX (e.g. 'outputs/test.lance:0'). "
         "When set, the dataset row is decoded and applied to the plugin "
         "before the editor opens."
     ),
@@ -1046,12 +1053,12 @@ def eval_patches(
     default=None,
     help=(
         "Directory to create for the recorded patches. Must not already exist — "
-        "``make_hdf5_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
-        "append to existing files. After the editor is closed, patches captured via the "
+        "``make_lance_dataset`` overwrites any dataset already at its destination. "
+        "After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
-        "and written to ``train.h5`` inside this directory via "
-        "``synth_setter.data.vst.writers.make_hdf5_dataset`` (plus ``val.h5``/``test.h5``/"
-        "``predict.h5`` siblings when ``--checkpoint-path`` is set)."
+        "and written to ``train.lance`` inside this directory via "
+        "``synth_setter.data.vst.writers.make_lance_dataset`` (plus ``val.lance``/``test.lance``/"
+        "``predict.lance`` siblings when ``--checkpoint-path`` is set)."
     ),
 )
 @click.option(
@@ -1095,7 +1102,7 @@ def main(
     checkpoint_path: Path | None,
     session_recording_path: Path | None,
 ) -> None:
-    """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
+    """Open Surge XT GUI with real-time audio streaming and record patches to a Lance dataset.
 
     The base preset is selected by ``plugin_state_paths[param_spec_name]`` so a spec/preset
     mismatch is unrepresentable.
@@ -1109,10 +1116,10 @@ def main(
        and run a keyboard loop (press ``p`` to snapshot the current synth params as a patch,
        ``q`` to quit).
     4. After the editor is closed, render every recorded patch through the plugin and write
-       the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
-       ``make_hdf5_dataset``.
-    5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
-       ``predict.h5`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
+       the resulting samples to ``train.lance`` inside ``--output-dataset-dir-path`` via
+       ``make_lance_dataset``.
+    5. If ``--checkpoint-path`` is also set, copy ``train.lance`` to ``val.lance``/``test.lance``/
+       ``predict.lance`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
        run ``src/synth_setter/cli/eval.py mode=predict`` followed by audio rendering
        (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
        the captured patches.
@@ -1131,15 +1138,11 @@ def main(
             "the live audio thread doesn't run during deterministic clip rendering."
         )
 
-    # Fail fast — ``make_hdf5_dataset`` writes fixed-size HDF5 datasets without
-    # ``maxshape`` and cannot append, so a pre-existing path would either
-    # silently overwrite (when re-creating datasets) or fail mid-render after
-    # patches have been captured. Better to reject up front.
+    # Fail fast — a pre-existing path could clobber captured patches; reject before rendering.
     if output_dataset_dir_path is not None and output_dataset_dir_path.exists():
         raise click.UsageError(
             f"--output-dataset-dir-path {output_dataset_dir_path} already exists; "
-            f"this script creates a new directory (fixed-size HDF5 datasets cannot be "
-            f"appended to). Choose a path that does not exist yet."
+            f"this script creates a new directory. Choose a path that does not exist yet."
         )
 
     plugin = load_plugin(plugin_path)
@@ -1242,7 +1245,7 @@ def main(
         logger.info("No patches recorded, skipping dataset creation.")
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
-    patch_file_path = output_dataset_dir_path / "train.h5"
+    patch_file_path = output_dataset_dir_path / "train.lance"
     render_cfg = RenderConfig(
         plugin_path=plugin_path,
         plugin_state_path=plugin_state_path,
@@ -1256,8 +1259,8 @@ def main(
         samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
         samples_per_shard=len(synth_patches),
     )
-    make_hdf5_dataset(
-        hdf5_file=patch_file_path,
+    make_lance_dataset(
+        lance_dir=patch_file_path,
         render_cfg=render_cfg,
         fixed_synth_params_list=synth_patches,
     )
@@ -1309,17 +1312,18 @@ def _maybe_eval_captured_patches(
         return
     runner = eval_runner if eval_runner is not None else eval_patches
     sibling_paths = [
-        output_dataset_dir_path / name for name in ("test.h5", "val.h5", "predict.h5")
+        output_dataset_dir_path / name for name in ("test.lance", "val.lance", "predict.lance")
     ]
     copied: list[Path] = []
     try:
         for sibling_path in sibling_paths:
-            shutil.copyfile(patch_file_path, sibling_path)
+            # Lance datasets are directories, so copy the whole tree.
+            shutil.copytree(patch_file_path, sibling_path)
             copied.append(sibling_path)
     except OSError:
         for created in copied:
             try:
-                os.remove(created)
+                shutil.rmtree(created)
             except OSError:
                 logger.exception("failed to roll back partial sibling copy at %s", created)
         raise

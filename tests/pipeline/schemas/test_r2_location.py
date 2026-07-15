@@ -9,7 +9,7 @@ from synth_setter.pipeline.schemas.r2_location import R2Location
 from synth_setter.pipeline.schemas.spec import ShardSpec, Split
 
 
-def _shard(filename: str = "shard-000042.h5") -> ShardSpec:
+def _shard(filename: str = "shard-000042.lance") -> ShardSpec:
     """Return a minimal ``ShardSpec`` for URI-construction tests.
 
     :param filename: Shard filename to embed in the spec.
@@ -136,14 +136,14 @@ class TestR2LocationURIMethods:
         """``shard_uri(shard)`` is ``r2://<bucket>/<prefix><shard.filename>``."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run-x/")
         assert (
-            loc.shard_uri(_shard("shard-000007.h5"))
-            == "r2://intermediate-data/data/run-x/shard-000007.h5"
+            loc.shard_uri(_shard("shard-000007.lance"))
+            == "r2://intermediate-data/data/run-x/shard-000007.lance"
         )
 
     def test_shard_uri_preserves_nested_prefix(self) -> None:
         """Multi-segment prefixes are joined verbatim; caller controls trailing slash."""
         loc = R2Location(bucket="b", prefix="a/b/c/")
-        assert loc.shard_uri(_shard("shard-000000.h5")) == "r2://b/a/b/c/shard-000000.h5"
+        assert loc.shard_uri(_shard("shard-000000.lance")) == "r2://b/a/b/c/shard-000000.lance"
 
 
 class TestR2LocationLayoutHelpers:
@@ -172,15 +172,6 @@ class TestR2LocationLayoutHelpers:
         )
 
     @pytest.mark.parametrize("split", ["train", "val", "test"])
-    def test_split_h5_uri(self, split: Split) -> None:
-        """``split_h5_uri(<split>)`` returns ``<prefix><split>.h5`` for each split.
-
-        :param split: Parametrized split name (``train``/``val``/``test``).
-        """
-        loc = R2Location(bucket="intermediate-data", prefix="data/run/")
-        assert loc.split_h5_uri(split) == f"r2://intermediate-data/data/run/{split}.h5"
-
-    @pytest.mark.parametrize("split", ["train", "val", "test"])
     def test_split_lance_uri(self, split: Split) -> None:
         """``split_lance_uri(<split>)`` returns ``<prefix><split>.lance`` for each split.
 
@@ -189,24 +180,6 @@ class TestR2LocationLayoutHelpers:
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
 
         assert loc.split_lance_uri(split) == f"r2://intermediate-data/data/run/{split}.lance"
-
-    def test_split_wds_brace_uri_zero_pads_six_digits_and_inclusive_hi(self) -> None:
-        """``split_wds_brace_uri`` returns the wds brace pattern for the half-open range."""
-        loc = R2Location(bucket="intermediate-data", prefix="data/run/")
-        assert loc.split_wds_brace_uri((0, 3)) == (
-            "r2://intermediate-data/data/run/shard-{000000..000002}.tar"
-        )
-
-    def test_split_wds_brace_uri_single_shard_range(self) -> None:
-        """A single-shard range collapses to a degenerate ``{NNNNNN..NNNNNN}`` brace."""
-        loc = R2Location(bucket="b", prefix="p/")
-        assert loc.split_wds_brace_uri((4, 5)) == "r2://b/p/shard-{000004..000004}.tar"
-
-    def test_split_wds_brace_uri_rejects_empty_range(self) -> None:
-        """An empty range (lo == hi) raises rather than silently emitting a malformed brace."""
-        loc = R2Location(bucket="b", prefix="p/")
-        with pytest.raises(ValueError, match=r"requires lo < hi"):
-            loc.split_wds_brace_uri((3, 3))
 
     def test_stats_uri(self) -> None:
         """``stats_uri()`` returns ``<prefix>stats.npz``."""
@@ -217,17 +190,10 @@ class TestR2LocationLayoutHelpers:
         """Joins shard_id, worker_id, attempt_uuid, ext under metadata/workers/shards/."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
         assert loc.worker_staged_shard_uri(
-            shard_id=7, worker_id="rank0", attempt_uuid="abc123", ext=".h5"
+            shard_id=7, worker_id="rank0", attempt_uuid="abc123", ext=".lance"
         ) == (
-            "r2://intermediate-data/data/run/metadata/workers/shards/shard-000007/rank0-abc123.h5"
-        )
-
-    def test_worker_staged_shard_uri_tar_extension(self) -> None:
-        """Tar shards round-trip through the same helper with ``ext=".tar"``."""
-        loc = R2Location(bucket="b", prefix="p/")
-        assert (
-            loc.worker_staged_shard_uri(shard_id=0, worker_id="w", attempt_uuid="u", ext=".tar")
-            == "r2://b/p/metadata/workers/shards/shard-000000/w-u.tar"
+            "r2://intermediate-data/data/run/metadata/workers/shards/"
+            "shard-000007/rank0-abc123.lance"
         )
 
     def test_worker_attempt_report_uri(self) -> None:
@@ -250,11 +216,10 @@ class TestR2LocationLayoutHelpers:
         assert loc.config_yaml_uri().startswith(expected_root)
         assert loc.dataset_card_uri().startswith(expected_root)
         assert loc.dataset_complete_marker_uri().startswith(expected_root)
-        assert loc.split_h5_uri("train").startswith(expected_root)
-        assert loc.split_wds_brace_uri((0, 1)).startswith(expected_root)
+        assert loc.split_lance_uri("train").startswith(expected_root)
         assert loc.stats_uri().startswith(expected_root)
         assert loc.worker_staged_shard_uri(
-            shard_id=0, worker_id="w", attempt_uuid="u", ext=".h5"
+            shard_id=0, worker_id="w", attempt_uuid="u", ext=".lance"
         ).startswith(expected_root)
         assert loc.worker_attempt_report_uri(worker_id="w", attempt_uuid="u").startswith(
             expected_root

@@ -41,7 +41,7 @@ def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, An
 
 
 def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any) -> dict[str, Any]:
-    """Return DatasetSpec kwargs that build a 3-shard hdf5 spec by default.
+    """Return DatasetSpec kwargs that build a 3-shard lance spec by default.
 
     Uses the nested ``r2`` shape (post-R2Location-migration). The back-compat
     shim that promotes legacy flat ``r2_bucket`` / ``r2_prefix_root`` /
@@ -49,7 +49,7 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     """
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [300, 0, 0],
         "base_seed": 42,
         "r2": {"bucket": "intermediate-data"},
@@ -77,14 +77,14 @@ class TestShardSpec:
 
     def test_shard_spec_is_frozen(self) -> None:
         """Mutating a ShardSpec field after construction raises ValidationError."""
-        shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
+        shard = ShardSpec(shard_id=0, filename="shard-000000.lance", seed=42)
         with pytest.raises(ValidationError):
             shard.shard_id = 99  # type: ignore[misc]
 
     def test_shard_spec_rejects_extra_fields(self) -> None:
         """ShardSpec rejects unknown keyword args under ``extra='forbid'``."""
         with pytest.raises(ValidationError):
-            ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42, extra="oops")  # type: ignore[call-arg]
+            ShardSpec(shard_id=0, filename="shard-000000.lance", seed=42, extra="oops")  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -538,38 +538,45 @@ class TestDatasetSpecValidators:
     def test_invalid_output_format_token_raises(self, patch_runtime_io: None) -> None:
         """An output_format outside the ``OutputFormat`` enum is rejected.
 
-        ``parquet`` stays outside the enum even as new formats (wds) join — pinning
-        the rejection here prevents a typo (``parquet`` vs. ``wds``) from sneaking in.
+        ``parquet`` stays outside the lance-only enum — pinning the rejection
+        here prevents a typo (``parquet`` vs. ``lance``) from sneaking in.
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
 
-    def test_wds_output_format_constructs(self, patch_runtime_io: None) -> None:
-        """``output_format='wds'`` is accepted (unblocks the wds writer landing in PR-13)."""
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert spec.output_format == "wds"
+    @pytest.mark.parametrize("legacy_token", ["hdf5", "wds"])
+    def test_legacy_output_format_token_raises(
+        self, patch_runtime_io: None, legacy_token: str
+    ) -> None:
+        """The retired ``hdf5`` / ``wds`` tokens are rejected after the lance-only cutover.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param legacy_token: A removed output-format token that must no longer parse.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(output_format=legacy_token))
 
     def test_string_token_coerces_into_output_format_enum(self, patch_runtime_io: None) -> None:
-        """The raw ``hdf5`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
+        """The raw ``lance`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
 
         Pins that callers can reach ``.extension`` on a constructed spec rather than
         re-deriving the suffix from a bare string.
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        assert spec.output_format is OutputFormat.HDF5
-        assert spec.output_format.extension == ".h5"
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert spec.output_format is OutputFormat.LANCE
+        assert spec.output_format.extension == ".lance"
 
     def test_output_format_serializes_as_plain_token(self, patch_runtime_io: None) -> None:
         """JSON serialization emits the bare token, not the enum repr (R2 / Hydra contract).
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert '"output_format":"wds"' in spec.model_dump_json()
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert '"output_format":"lance"' in spec.model_dump_json()
 
     def test_non_string_output_format_rejected_despite_non_strict_field(
         self, patch_runtime_io: None
@@ -721,15 +728,13 @@ class TestDatasetSpecComputedFields:
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
         """Shard filenames use the ``shard-NNNNNN`` six-digit zero-padded form."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
-        assert spec.shards[0].filename == "shard-000000.h5"
-        assert spec.shards[-1].filename == "shard-000002.h5"
+        assert spec.shards[0].filename == "shard-000000.lance"
+        assert spec.shards[-1].filename == "shard-000002.lance"
 
     def test_shard_filename_extension_matches_output_format(self, patch_runtime_io: None) -> None:
-        """Shard filenames carry the extension implied by ``output_format``."""
-        hdf5_spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        assert all(s.filename.endswith(".h5") for s in hdf5_spec.shards)
-        wds_spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert all(s.filename.endswith(".tar") for s in wds_spec.shards)
+        """Shard filenames carry the ``.lance`` extension implied by ``output_format``."""
+        lance_spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert all(s.filename.endswith(".lance") for s in lance_spec.shards)
 
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
         """``num_params`` matches the registry's length for the spec's ``param_spec_name``."""
@@ -1005,7 +1010,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "import sys\n"
             "from synth_setter.pipeline.schemas.spec import DatasetSpec\n"
             "spec = DatasetSpec(\n"
-            "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
+            "    task_name='ci', output_format='lance', train_val_test_sizes=[1, 0, 0],\n"
             "    base_seed=0, r2={'bucket': 'b'},\n"
             "    render={\n"
             "        'plugin_path': '/tmp/x.vst3', 'plugin_state_path': '/tmp/x.vstpreset',\n"
@@ -1052,7 +1057,7 @@ class TestLegacyFlatR2Compat:
         """
         kwargs: dict[str, Any] = {
             "task_name": "ci-smoke-test",
-            "output_format": "hdf5",
+            "output_format": "lance",
             "train_val_test_sizes": [300, 0, 0],
             "base_seed": 42,
             "r2_bucket": "intermediate-data",
@@ -1181,308 +1186,3 @@ class TestFromHydraCfg:
 
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
-
-    def test_stale_datasetsrc_key_is_rejected_with_migration_pointer(self) -> None:
-        """A composed cfg carrying ``datasetsrc`` raises instead of silently dropping it.
-
-        The mask keeps only model fields, so the back-compat shim never sees a
-        Hydra-side ``datasetsrc`` override; ``from_hydra_cfg`` rejects it up front
-        with a pointer to ``copy_dataset_root_uri``.
-        """
-        from omegaconf import OmegaConf
-
-        cfg = OmegaConf.create(_valid_spec_kwargs())
-        cfg.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
-
-        with pytest.raises(ValueError, match="no longer a config key"):
-            DatasetSpec.from_hydra_cfg(cfg)
-
-    def test_stale_copy_dataset_root_key_is_rejected_with_migration_pointer(self) -> None:
-        """A composed cfg carrying the renamed ``copy_dataset_root`` raises up front.
-
-        ``copy_dataset_root`` is no longer a model field, so the mask would drop a
-        Hydra-side override silently and disable copy; ``from_hydra_cfg`` rejects
-        it with a pointer to ``copy_dataset_root_uri``.
-        """
-        from omegaconf import OmegaConf
-
-        cfg = OmegaConf.create(_valid_spec_kwargs())
-        cfg.copy_dataset_root = "/data/source-dataset"
-
-        with pytest.raises(ValueError, match="no longer a config key"):
-            DatasetSpec.from_hydra_cfg(cfg)
-
-
-class TestCopyDatasetRootUri:
-    """``DatasetSpec.copy_dataset_root_uri`` — optional dataset-copy source root URI."""
-
-    def test_copy_dataset_root_uri_defaults_to_none(self) -> None:
-        """A spec built without ``copy_dataset_root_uri`` leaves the copy path disabled."""
-        spec = DatasetSpec(**_valid_spec_kwargs())
-
-        assert spec.copy_dataset_root_uri is None
-
-    def test_copy_dataset_root_uri_bare_path_is_stored_as_is(self) -> None:
-        """A bare-path ``copy_dataset_root_uri`` is kept verbatim on the spec."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="/data/source-dataset"))
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_copy_dataset_root_uri_r2_uri_is_stored_as_is(self) -> None:
-        """An ``r2://`` ``copy_dataset_root_uri`` is kept verbatim (resolved at copy time)."""
-        spec = DatasetSpec(
-            **_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/prefix/task/run")
-        )
-
-        assert spec.copy_dataset_root_uri == "r2://bucket/prefix/task/run"
-
-    def test_copy_dataset_root_uri_blank_is_rejected(self) -> None:
-        """A blank ``copy_dataset_root_uri`` raises so the per-shard source URI is never empty."""
-        with pytest.raises(ValidationError, match="copy_dataset_root_uri must not be blank"):
-            DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="   "))
-
-    def test_copy_dataset_root_uri_with_wds_output_is_rejected(self) -> None:
-        """Copy requires hdf5 output — pairing it with wds fails at spec build.
-
-        A ``.tar`` output has no same-named HDF5 source to read params from, so the
-        misconfig should surface at launch (spec construction), not per-shard.
-        """
-        with pytest.raises(ValidationError, match="supports output_format='hdf5' only"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    output_format="wds",
-                    copy_dataset_root_uri="/data/source-dataset",
-                )
-            )
-
-    def test_copy_dataset_root_uri_survives_json_round_trip(self) -> None:
-        """A worker reconstructing the spec from JSON sees the same copy source."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/source"))
-
-        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
-
-        assert restored.copy_dataset_root_uri == spec.copy_dataset_root_uri
-
-    def test_legacy_flat_copy_dataset_root_is_promoted(self) -> None:
-        """A pre-rename flat ``copy_dataset_root`` promotes to ``copy_dataset_root_uri``."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_legacy_flat_copy_dataset_root_json_loads_via_model_validate_json(self) -> None:
-        """A serialized pre-rename spec (flat ``copy_dataset_root``) loads through the shim.
-
-        Exercises back-compat for ``input_spec.json`` files materialized before the
-        URI rename, reloaded from JSON rather than constructed in-memory.
-        """
-        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
-        data.pop("copy_dataset_root_uri")
-        data["copy_dataset_root"] = "/data/source-dataset"
-
-        restored = DatasetSpec.model_validate_json(json.dumps(data))
-
-        assert restored.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_both_flat_legacy_and_uri_keys_are_rejected(self) -> None:
-        """Carrying both ``copy_dataset_root`` and ``copy_dataset_root_uri`` is ambiguous."""
-        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    copy_dataset_root="/data/a",
-                    copy_dataset_root_uri="/data/b",
-                )
-            )
-
-    def test_legacy_datasetsrc_mapping_is_promoted(self) -> None:
-        """A legacy ``datasetsrc`` mapping from an old spec promotes to the URI field."""
-        spec = DatasetSpec(
-            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
-        )
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_legacy_datasetsrc_null_is_dropped(self) -> None:
-        """A legacy ``datasetsrc: null`` from an old spec loads as no copy source."""
-        spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc=None))
-
-        assert spec.copy_dataset_root_uri is None
-
-    def test_both_legacy_datasetsrc_and_uri_keys_are_rejected(self) -> None:
-        """Carrying both ``datasetsrc`` and ``copy_dataset_root_uri`` is ambiguous and raises."""
-        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    datasetsrc={"copy_dataset_root": "/data/a"},
-                    copy_dataset_root_uri="/data/b",
-                )
-            )
-
-    def test_legacy_datasetsrc_non_mapping_is_rejected(self) -> None:
-        """A legacy ``datasetsrc`` that is neither a mapping nor null is rejected."""
-        with pytest.raises(ValidationError, match="must be a mapping or null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc="/data/source-dataset"))
-
-    def test_legacy_datasetsrc_empty_mapping_is_rejected(self) -> None:
-        """A legacy ``datasetsrc: {}`` raises rather than silently disabling copy.
-
-        The removed ``DatasetSrcConfig`` required ``copy_dataset_root``; ``datasetsrc:
-        null`` is the way to disable copy, so an empty mapping is a misconfig.
-        """
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
-
-    def test_legacy_datasetsrc_null_inner_is_rejected(self) -> None:
-        """A legacy ``datasetsrc: {copy_dataset_root: null}`` raises, matching the old contract."""
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc={"copy_dataset_root": None}))
-
-    def test_legacy_datasetsrc_mapping_with_unexpected_key_is_rejected(self) -> None:
-        """A legacy ``datasetsrc`` mapping keeps the old single-key strictness."""
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(
-                **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/src", "stray": 1})
-            )
-
-    def test_legacy_datasetsrc_json_loads_via_model_validate_json(self) -> None:
-        """A serialized legacy-shaped spec (nested ``datasetsrc``) loads through the shim.
-
-        Exercises the shim's stated purpose: ``input_spec.json`` files materialized
-        before the flatten are reloaded from JSON, not just constructed in-memory.
-        """
-        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
-        data.pop("copy_dataset_root_uri")
-        data["datasetsrc"] = {"copy_dataset_root": "/data/source-dataset"}
-
-        restored = DatasetSpec.model_validate_json(json.dumps(data))
-
-        assert restored.copy_dataset_root_uri == "/data/source-dataset"
-
-
-class TestValidateCopySource:
-    """``DatasetSpec.validate_copy_source`` — preflight a copy source against the target.
-
-    Rejects a source that disagrees on any value the filename-matched per-shard copy depends on
-    (param spec, per-shard rows, split sizes, shard filenames).
-    """
-
-    def test_matching_source_does_not_raise(self) -> None:
-        """A source matching the four copy-relevant fields validates clean.
-
-        The source carries a different ``task_name`` (hence a different run_id /
-        r2 prefix) to pin that only the copy-relevant fields gate the copy —
-        identity fields that legitimately differ between datasets do not.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(task_name="target-dataset"))
-        source = DatasetSpec(**_valid_spec_kwargs(task_name="source-dataset"))
-
-        target.validate_copy_source(source)  # no raise
-
-    def test_param_spec_name_mismatch_raises(self) -> None:
-        """A differing ``param_spec_name`` (encoding width) is rejected, naming both values."""
-        target = DatasetSpec(**_valid_spec_kwargs())
-        source = DatasetSpec(
-            **_valid_spec_kwargs(render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"})
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "param_spec_name" in message
-        assert "surge_xt" in message  # source value
-        assert "surge_simple" in message  # target value
-
-    def test_samples_per_shard_mismatch_raises(self) -> None:
-        """A differing ``samples_per_shard`` (per-shard row count) is rejected.
-
-        The assertion checks the rendered ``source=50 != target=100`` value pair,
-        not just the field name, so the samples_per_shard branch is pinned even
-        though the differing shard count co-triggers the filename mismatch.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs())  # sps=100 -> 3 shards
-        source = DatasetSpec(
-            **_valid_spec_kwargs(
-                render={**_valid_render_kwargs(), "samples_per_shard": 50}
-            )  # sps=50, same [300,0,0] -> 6 shards
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "samples_per_shard: source=50 != target=100" in message
-
-    def test_train_val_test_sizes_mismatch_raises(self) -> None:
-        """A differing split layout is rejected even when total/count/filenames match.
-
-        The copy would otherwise partition identical shards into different train/val/test splits
-        than the source.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
-        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[100, 100, 100]))
-
-        with pytest.raises(ValueError, match="train_val_test_sizes"):
-            target.validate_copy_source(source)
-
-    def test_shard_filename_set_mismatch_raises(self) -> None:
-        """A source whose shard filenames differ (``.tar`` vs ``.h5``) is rejected.
-
-        A different ``output_format`` yields a non-matching shard-filename set,
-        so no same-named source shard exists for the target's ``.h5`` shards.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-
-        with pytest.raises(ValueError, match="shard"):
-            target.validate_copy_source(source)
-
-    def test_output_format_mismatch_is_named_directly(self) -> None:
-        """A differing ``output_format`` surfaces a direct, legible cause.
-
-        A ``wds`` source is caught indirectly by the ``.tar`` vs ``.h5`` filename
-        diff, but the message must also name ``output_format`` so the operator
-        sees the real cause rather than only the derived filename symptom.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        assert "output_format: source='wds' != target='hdf5'" in str(excinfo.value)
-
-    def test_shard_filename_partial_overlap_names_the_extra_shard(self) -> None:
-        """A source with extra shards is rejected, naming a shard absent from the target.
-
-        Pins the set-difference + sampled-filename rendering: a source covering
-        ``shard-000000..3`` against a 3-shard target must surface the extra
-        ``shard-000003.h5`` rather than a bare count.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))  # 3 shards
-        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 0, 0]))  # 4 shards
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        assert "shard-000003.h5" in str(excinfo.value)
-
-    def test_multiple_mismatches_are_all_reported(self) -> None:
-        """Every mismatch surfaces as its own bullet in one error, not one launch at a time."""
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(
-            **_valid_spec_kwargs(
-                output_format="wds",
-                render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"},
-            )
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "param_spec_name" in message
-        assert "output_format" in message
-        assert "shard filenames" in message
-        # Three distinct mismatches (param_spec_name + output_format + shard
-        # filenames), each its own bullet.
-        assert message.count("\n  - ") == 3

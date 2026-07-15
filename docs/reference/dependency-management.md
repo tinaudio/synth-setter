@@ -86,7 +86,7 @@ made under `--extra cpu` will pin the CPU torch as the default-resolution
 branch and the next bare `uv sync` from a GPU box will fight it.
 
 **Review the lockfile diff in PRs** — especially torch, CUDA, and native
-wheels (`pedalboard`, `librosa`/`soundfile`, `h5py`/`hdf5plugin`). A
+wheels (`pedalboard`, `librosa`/`soundfile`, `pylance`). A
 lockfile change can move a result. The `uv-lock-check.yml` matrix can only
 prove the lock is consistent with `pyproject.toml`, not that the new pins
 are the ones you wanted.

@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
+from pydantic import ValidationError
 
-from synth_setter.pipeline.schemas.spec import OutputFormat
-
-
-def test_output_format_extension_hdf5_is_h5() -> None:
-    """``HDF5`` shards carry the ``.h5`` suffix."""
-    assert OutputFormat.HDF5.extension == ".h5"
-
-
-def test_output_format_extension_wds_is_tar() -> None:
-    """``WDS`` shards carry the WebDataset ``.tar`` suffix."""
-    assert OutputFormat.WDS.extension == ".tar"
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 
 
 def test_output_format_extension_lance_is_lance() -> None:
@@ -22,32 +15,27 @@ def test_output_format_extension_lance_is_lance() -> None:
     assert OutputFormat.LANCE.extension == ".lance"
 
 
-def test_from_extension_h5_returns_hdf5() -> None:
-    """``.h5`` reverse-maps to the HDF5 format."""
-    assert OutputFormat.from_extension(".h5") is OutputFormat.HDF5
-
-
-def test_from_extension_tar_returns_wds() -> None:
-    """``.tar`` reverse-maps to the WDS format."""
-    assert OutputFormat.from_extension(".tar") is OutputFormat.WDS
-
-
 def test_from_extension_lance_returns_lance() -> None:
     """``.lance`` reverse-maps to the Lance format."""
     assert OutputFormat.from_extension(".lance") is OutputFormat.LANCE
 
 
-def test_from_extension_unknown_suffix_returns_none() -> None:
-    """An unregistered suffix reverse-maps to ``None`` so callers raise their own error."""
-    assert OutputFormat.from_extension(".parquet") is None
+@pytest.mark.parametrize("suffix", [".parquet", ".h5", ".tar"])
+def test_from_extension_unknown_suffix_returns_none(suffix: str) -> None:
+    """An unregistered suffix reverse-maps to ``None`` so callers raise their own error.
+
+    Covers the retired HDF5 (``.h5``) and WebDataset (``.tar``) suffixes: now
+    that Lance is the only format, they must dispatch to ``None`` like any other
+    unknown suffix rather than a live format.
+
+    :param suffix: Filename suffix that must no longer map to a format.
+    """
+    assert OutputFormat.from_extension(suffix) is None
 
 
 @pytest.mark.parametrize("fmt", list(OutputFormat))
 def test_extension_round_trips_through_from_extension(fmt: OutputFormat) -> None:
     """Every format's ``.extension`` reverse-maps back to that same format.
-
-    Pins the no-collision invariant the import-time guard in ``spec.py``
-    enforces: if two formats shared a suffix, one would fail to round-trip.
 
     :param fmt: The output format under test (swept over every enum member).
     """
@@ -56,8 +44,6 @@ def test_extension_round_trips_through_from_extension(fmt: OutputFormat) -> None
 
 def test_value_is_the_lowercase_token() -> None:
     """Enum values are the on-disk / JSON tokens used at the Hydra / R2 boundary."""
-    assert OutputFormat.HDF5 == "hdf5"
-    assert OutputFormat.WDS == "wds"
     assert OutputFormat.LANCE == "lance"
 
 
@@ -68,3 +54,20 @@ def test_member_str_coercion_returns_its_value(member: OutputFormat) -> None:
     :param member: The output format under test (swept over every enum member).
     """
     assert str(member) == member.value
+
+
+@pytest.mark.parametrize("legacy_token", ["hdf5", "wds"])
+def test_dataset_spec_legacy_output_format_token_rejected(
+    legacy_token: str,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """Retired ``output_format`` tokens no longer parse into a ``DatasetSpec``.
+
+    ``hdf5`` and ``wds`` were valid enum values before the format collapse to
+    Lance; a spec (from R2 JSON or Hydra) still carrying them must fail loudly.
+
+    :param legacy_token: A retired ``output_format`` string that must be rejected.
+    :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
+    """
+    with pytest.raises(ValidationError):
+        dataset_spec_factory(output_format=legacy_token)

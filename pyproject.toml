@@ -158,10 +158,6 @@ compute = [
   "kubernetes==35.0.0",
 ]
 data = [
-  "dask[distributed]",
-  "h5py",
-  "hdf5plugin",
-  "webdataset",
   "pandas",
   "numpy",
   "pylance>=7.0.0",

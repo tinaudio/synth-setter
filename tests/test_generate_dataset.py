@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
-import h5py
+import lance
 import numpy as np
 import pytest
 from omegaconf import DictConfig, open_dict
@@ -98,52 +98,6 @@ def test_cfg_dataset_dawdreamer_error_precedes_darwin_guard(
         spec_from_cfg(cfg_dataset)
 
 
-def test_cfg_dataset_without_copy_dataset_root_uri_composes_with_no_copy_source(
-    cfg_dataset: DictConfig,
-) -> None:
-    """A default compose leaves ``spec.copy_dataset_root_uri`` unset (``dataset.yaml`` sets ``null``).
-
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
-    """
-    spec = spec_from_cfg(cfg_dataset)
-    assert spec.copy_dataset_root_uri is None
-
-
-def test_cfg_dataset_with_copy_dataset_root_uri_composes_copy_source_into_spec(
-    cfg_dataset: DictConfig,
-) -> None:
-    """A ``copy_dataset_root_uri`` override flows through ``spec_from_cfg`` into ``DatasetSpec``.
-
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
-    """
-    with open_dict(cfg_dataset):
-        cfg_dataset.copy_dataset_root_uri = "r2://bucket/prefix/task/run"
-
-    spec = spec_from_cfg(cfg_dataset)
-    assert spec.copy_dataset_root_uri == "r2://bucket/prefix/task/run"
-
-
-def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
-    cfg_dataset: DictConfig,
-) -> None:
-    """``spec_from_cfg`` rejects a ``copy_dataset_root_uri`` paired with ``output_format='wds'``.
-
-    The copy path reads each source shard as an HDF5 ``param_array``, so the
-    ``DatasetSpec`` validator fails the spec at construction when output is not hdf5.
-
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
-    """
-    with open_dict(cfg_dataset):
-        cfg_dataset.copy_dataset_root_uri = "/data/source-dataset"
-        cfg_dataset.output_format = "wds"
-
-    with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
-        spec_from_cfg(cfg_dataset)
-
-
 def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     cfg_dataset_obxf: DictConfig,
 ) -> None:
@@ -162,13 +116,7 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
 
 
 @pytest.mark.fake_vst
-@pytest.mark.parametrize(
-    ("output_format", "shard_suffix"),
-    [("hdf5", ".h5"), ("wds", ".tar"), ("lance", ".lance")],
-)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
-    output_format: str,
-    shard_suffix: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -177,19 +125,14 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     Drives the real worker entrypoint end-to-end on the CPU-fast loop: the Surge
     VST3 subprocess is replaced by ``stub_renderer`` (writes a deterministic
-    validation-shaped shard) and ``r2:`` is a local-filesystem rclone remote via
-    ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
-    skip-existing probe loop (#750) runs with no real plugin and no real R2.
-    Parametrized over ``output_format`` so every format's config surface
-    runs the same loop with its own shard suffix (#1600). Asserts
-    (1) ``smoke-shard`` partitions into one shard per split, (2) every hdf5/wds
-    shard lands under its spec-derived R2 URI while every Lance shard stages a
-    complete attempt (sidecar + stats + ``.valid``) with its fragment data
-    under the assigned split dataset (#1776), and (3) a second ``from_hydra``
-    pass renders nothing because the probe finds all shards already present.
+    validation-shaped Lance shard) and ``r2:`` is a local-filesystem rclone remote
+    via ``fake_r2_remote``, so the partition → render → stage → skip-existing probe
+    loop (#750) runs with no real plugin and no real R2. Asserts (1) ``smoke-shard``
+    partitions into one shard per split, (2) every ``.lance`` shard stages a
+    complete attempt (sidecar + stats + ``.valid``) with its fragment data under
+    the assigned split dataset (#1776), and (3) a second ``from_hydra`` pass
+    renders nothing because the probe finds all shards already staged.
 
-    :param output_format: Dataset output format the run is pinned to.
-    :param shard_suffix: File suffix the format's shards must carry.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -200,7 +143,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
-        cfg_dataset.output_format = output_format
+        cfg_dataset.output_format = "lance"
         cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         # Pin r2.prefix so the spec built here for assertions and the one
@@ -229,27 +172,23 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         for shard_id in range(lo, hi)
     }
     for shard in spec.shards:
-        assert shard.filename.endswith(shard_suffix)
-        if output_format == "lance":
-            # Require one shared attempt identity; independent suffix matches can combine partial attempts — see #1776.
-            staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
-            staged_names = [p.name for p in staging.iterdir()]
-            bases_by_suffix = {
-                suffix: {n.removesuffix(suffix) for n in staged_names if n.endswith(suffix)}
-                for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering")
-            }
-            shared_bases = set.intersection(*bases_by_suffix.values())
-            assert len(shared_bases) == 1, (
-                f"expected one complete staged attempt for {shard.filename}, "
-                f"got files: {sorted(staged_names)}"
-            )
-            split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
-            assert list(split_data.glob("*.lance")), (
-                f"no fragment data under {split_data} for {shard.filename}"
-            )
-        else:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
+        assert shard.filename.endswith(".lance")
+        # Require one shared attempt identity; independent suffix matches can combine partial attempts — see #1776.
+        staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
+        staged_names = [p.name for p in staging.iterdir()]
+        bases_by_suffix = {
+            suffix: {n.removesuffix(suffix) for n in staged_names if n.endswith(suffix)}
+            for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering")
+        }
+        shared_bases = set.intersection(*bases_by_suffix.values())
+        assert len(shared_bases) == 1, (
+            f"expected one complete staged attempt for {shard.filename}, "
+            f"got files: {sorted(staged_names)}"
+        )
+        split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
+        assert list(split_data.glob("*.lance")), (
+            f"no fragment data under {split_data} for {shard.filename}"
+        )
 
     renderer_invocations = 0
 
@@ -401,29 +340,17 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
 
     :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the single-worker env, the moduleinfo-only plugin, and
-        the local-vs-real R2 skip-probe bridge.
+    :param monkeypatch: Pins the single-worker env and the moduleinfo-only plugin
+        so the renderer-version guard passes.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
-        cfg_dataset.output_format = "hdf5"
+        cfg_dataset.output_format = "lance"
         cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/seed-run/"
         cfg_dataset.logger = None
-
-    # Local rclone errors on a missing object where real R2 returns None; bridge it
-    # so the skip-existing probe sees every shard as absent and renders all of them.
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
 
     spec = spec_from_cfg(cfg_dataset)
     render_shard = stub_renderer(spec)
@@ -454,25 +381,16 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
 
     :param cfg_dataset_dawdreamer: Hydra cfg composed from the DawDreamer smoke experiment.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the worker contract, plugin metadata, and local R2 probe semantics.
+    :param monkeypatch: Pins the worker contract and plugin metadata.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
         cfg_dataset_dawdreamer.render.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset_dawdreamer.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-run/"
         cfg_dataset_dawdreamer.logger = None
-
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
 
     spec = spec_from_cfg(cfg_dataset_dawdreamer)
     captured_renderer_argv: list[str] = []
@@ -493,8 +411,17 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     backend_index = captured_renderer_argv.index("--renderer_backend")
     assert captured_renderer_argv[backend_index + 1] == "dawdreamer"
     shard = spec.shards[0]
-    landed = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / shard.filename
-    assert landed.is_file()
+    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
@@ -765,8 +692,9 @@ def test_generate_dataset_renders_shards_to_r2(
     try:
         from_hydra(cfg_dataset)
         for shard in spec.shards:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
+                f"shard missing in R2: {shard.filename}"
+            )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
@@ -811,8 +739,9 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     try:
         from_hydra(cfg_dataset_obxf)
         for shard in spec.shards:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
+                f"shard missing in R2: {shard.filename}"
+            )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
@@ -845,14 +774,17 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
 
     spec = spec_from_cfg(cfg_dataset)
     assert spec.render.param_sample_cadence == "shard"
+    storage_options = r2_io.r2_storage_options()
     try:
         from_hydra(cfg_dataset)
         for shard in spec.shards:
-            with r2_io.downloaded_to_tempfile(spec.r2.shard_uri(shard)) as local:
-                with h5py.File(local, "r") as f:
-                    param_dataset = f["param_array"]
-                    assert isinstance(param_dataset, h5py.Dataset)
-                    params = param_dataset[:]
+            s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
+            params = np.stack(
+                lance.dataset(s3_uri, storage_options=storage_options)
+                .to_table(columns=["param_array"])
+                .column("param_array")
+                .to_numpy(zero_copy_only=False)
+            )
             assert params.shape[0] == spec.render.samples_per_shard
             assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
                 f"shard {shard.filename} has non-identical param rows under shard cadence"

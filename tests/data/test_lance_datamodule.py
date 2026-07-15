@@ -3,7 +3,7 @@
 
 Covers the public symbols exposed by the module:
 
-* :class:`LanceShardFile` — the read-only, h5py-``File``-like adapter over a
+* :class:`LanceShardFile` — the read-only, mapping-like column adapter over a
   ``.lance`` shard file (column access, slice / fancy-index reads,
   ``shape``, ``close`` semantics).
 * :class:`LanceVSTDataset` — the Lance-backed sibling of ``VSTDataset``:
@@ -51,9 +51,7 @@ _NUM_PARAMS = 11
 
 if TYPE_CHECKING:
 
-    def _lance_datamodule_param_spec_name_contract(
-        plain: str, typed: ParamSpecName
-    ) -> None:
+    def _lance_datamodule_param_spec_name_contract(plain: str, typed: ParamSpecName) -> None:
         """Pin nominal typing at the Lance datamodule constructor.
 
         :param plain: Arbitrary string rejected by the constructor contract.
@@ -64,6 +62,7 @@ if TYPE_CHECKING:
             dataset_root=".",
             param_spec_name=plain,  # pyright: ignore[reportArgumentType]
         )
+
 
 _ALL_TENSOR_KEYS = ("audio", "mel_spec", "m2l", "params", "noise")
 
@@ -80,9 +79,9 @@ def _make_columns(num_rows: int, *, params_seed: int = 0) -> dict[str, np.ndarra
     rng = np.random.default_rng(params_seed)
     return {
         # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-        "audio": rng.uniform(
-            -1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
-        ).astype(np.float16),
+        "audio": rng.uniform(-1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
+            np.float16
+        ),
         "mel_spec": rng.standard_normal(
             (num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
         ).astype(np.float32),
@@ -201,7 +200,7 @@ def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
 
 
 class TestLanceShardFile:
-    """H5py-``File``-like adapter: column access, slicing, shape, close."""
+    """Column adapter surface: column access, slicing, shape, close."""
 
     def test_column_slice_read_matches_source_rows(self, tmp_path: Path) -> None:
         """``file[name][a:b]`` returns the same rows as the written numpy array.
@@ -258,7 +257,7 @@ class TestLanceShardFile:
         np.testing.assert_array_equal(shard["param_array"][idx], columns["param_array"][idx])
 
     def test_column_shape_reports_rows_and_tensor_dims(self, tmp_path: Path) -> None:
-        """``file[name].shape`` mirrors h5py: ``(num_rows, *tensor_shape)``.
+        """``file[name].shape`` is ``(num_rows, *tensor_shape)``.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
@@ -302,7 +301,7 @@ class TestLanceShardFile:
             _ = column[0:2]
 
     def test_missing_column_raises_key_error_at_lookup(self, tmp_path: Path) -> None:
-        """``file[name]`` for an absent column raises ``KeyError`` like h5py, not on first read.
+        """``file[name]`` for an absent column raises ``KeyError`` at lookup, not on first read.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
@@ -339,7 +338,7 @@ class TestLanceShardFile:
         np.testing.assert_array_equal(shard["param_array"][1:8:3], columns["param_array"][1:8:3])
 
     def test_column_negative_step_slice_raises_value_error(self, tmp_path: Path) -> None:
-        """A negative-step slice is rejected — the same contract h5py enforces.
+        """A negative-step slice is rejected — the adapter's slicing contract.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
@@ -753,7 +752,12 @@ class TestLanceVSTDataModule:
 
     @pytest.mark.parametrize(
         ("loader_name", "expected_batches"),
-        (("train_dataloader", 3), ("val_dataloader", 4), ("test_dataloader", 4), ("predict_dataloader", 4)),
+        (
+            ("train_dataloader", 3),
+            ("val_dataloader", 4),
+            ("test_dataloader", 4),
+            ("predict_dataloader", 4),
+        ),
     )
     def test_dataloader_multi_worker_matches_single_worker(
         self, dataset_root: Path, loader_name: str, expected_batches: int

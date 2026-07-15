@@ -29,14 +29,14 @@ name: Test Dataset Generation
 # artifact upload remains for debugging, but it's no longer load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
-#   * schedule (hourly `0 * * * *`)    → skypilot-local × {hdf5, wds}.
+#   * schedule (hourly `0 * * * *`)    → skypilot-local × {lance}.
 #                                        PR presubmit coverage moves to
 #                                        `test-local-launcher-roundtrip.yml`
 #                                        in #1170 (open at time of writing);
 #                                        this workflow is now schedule +
 #                                        dispatch only.
 #   * schedule (weekly `0 7 * * 0`)    → all providers (skypilot-local +
-#                                        runpod + oci) × {hdf5, wds} —
+#                                        runpod + oci) × {lance} —
 #                                        the only paid-capacity coverage
 #                                        outside manual dispatch.
 #   * workflow_dispatch                → respect `inputs.provider`
@@ -61,12 +61,12 @@ name: Test Dataset Generation
 
 on:
   # Two cron axes (#1164, #1170):
-  #   * `0 * * * *` (top of every hour) — skypilot-local × {hdf5, wds}. Keeps
+  #   * `0 * * * *` (top of every hour) — skypilot-local × {lance}. Keeps
   #     the launcher / kind / R2 path under near-continuous coverage; PR-presubmit
   #     duty for that round-trip lives in test-local-launcher-roundtrip.yml
   #     (lands via #1170).
   #   * `0 7 * * 0` (Sunday 07:00 UTC = ~midnight Pacific Sat→Sun) — full
-  #     provider matrix (skypilot-local + runpod + oci) × {hdf5, wds}.
+  #     provider matrix (skypilot-local + runpod + oci) × {lance}.
   #     Only paid-capacity touch outside manual dispatch; gives us weekly
   #     RunPod / OCI signal so credential rot or backend regressions surface
   #     before someone needs to dispatch a real cloud run.
@@ -121,22 +121,22 @@ jobs:
   # Compute the provider list at runtime, plus the R2 bucket the validate
   # job will pull specs and shards from. Outputs:
   #   * `providers`           — provider matrix (drives generate + validate).
-  #   * `output_formats`      — shard-format axis. On the hourly schedule and
-  #                             the weekly schedule both `hdf5` and `wds` run;
-  #                             on workflow_dispatch the matrix collapses to
-  #                             the single format the dispatched config
-  #                             resolves to — a single config hardcodes one
-  #                             `output_format`, and the spec-format cross-check
-  #                             would otherwise fail the non-matching cell.
+  #   * `output_formats`      — shard-format axis. On the hourly and weekly
+  #                             schedules `lance` runs; on workflow_dispatch the
+  #                             matrix collapses to the single format the
+  #                             dispatched config resolves to — a single config
+  #                             hardcodes one `output_format`, and the
+  #                             spec-format cross-check would otherwise fail the
+  #                             non-matching cell.
   #   * `r2_bucket`           — Cloudflare R2 bucket name (from
   #                             src/synth_setter/configs/image/dev-snapshot.yaml). Used to
   #                             construct the spec_uri the validate job pulls.
   #
   # Policy:
-  #   * schedule, cron `0 * * * *` (hourly)  → skypilot-local × {hdf5, wds}.
+  #   * schedule, cron `0 * * * *` (hourly)  → skypilot-local × {lance}.
   #     Free coverage of the unified launcher / kind / R2 path.
   #   * schedule, cron `0 7 * * 0` (weekly)  → all providers (skypilot-local +
-  #     runpod + oci) × {hdf5, wds}. Only paid-capacity touch outside dispatch;
+  #     runpod + oci) × {lance}. Only paid-capacity touch outside dispatch;
   #     surfaces credential rot or backend regressions on the cloud providers.
   #   * workflow_dispatch                    → respect `inputs.provider`. `all`
   #     expands to skypilot-local + runpod + oci. Format is whatever the
@@ -173,8 +173,9 @@ jobs:
       #   workflow_dispatch                   → respect inputs.provider
       #   anything else                       → empty array → downstream skips
       #
-      # Output-format axis:
-      #   schedule (either cron) → both hdf5 and wds
+      # Output-format axis (intentionally single-valued — `lance` is the only
+      # format today; the axis is kept so re-adding a format is a one-value change):
+      #   schedule (either cron) → lance
       #   workflow_dispatch      → single format derived by Hydra-composing the
       #     dispatched experiment config; the cell whose `matrix.output_format`
       #     doesn't match would deterministically fail the spec-format
@@ -220,7 +221,7 @@ jobs:
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
           elif [[ "${EVENT_NAME}" == "schedule" ]]; then
-            output_formats='["hdf5","wds"]'
+            output_formats='["lance"]'
           else
             DISPATCH_STDERR=$(mktemp)
             if ! DISPATCH_FORMAT=$(python3 -c "
@@ -305,11 +306,7 @@ jobs:
           while read -r prov; do
             while read -r fmt; do
               if [[ "$EVENT_NAME" == "schedule" ]]; then
-                if [[ "$fmt" == "wds" ]]; then
-                  exp="generate_dataset/smoke-shard-wds"
-                else
-                  exp="generate_dataset/smoke-shard"
-                fi
+                exp="generate_dataset/smoke-shard-lance"
               else
                 exp="$DISPATCH_DATASET_CONFIG"
               fi
@@ -355,9 +352,7 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'schedule'
-            && (matrix.output_format == 'wds'
-                && 'generate_dataset/smoke-shard-wds'
-                || 'generate_dataset/smoke-shard')
+            && 'generate_dataset/smoke-shard-lance'
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -377,8 +372,7 @@ jobs:
   # matrix-outputs scalar collapse documented at #1154; per-cell pairing is
   # restored because each generate cell wrote under the same per-cell run_id
   # formula. `if: !cancelled()` decouples each cell from the OTHER cells'
-  # generate outcomes — RunPod transients won't skip OCI validation, and an
-  # hdf5 failure won't skip wds.
+  # generate outcomes — RunPod transients won't skip OCI validation.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-launcher]

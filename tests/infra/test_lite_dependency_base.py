@@ -43,10 +43,6 @@ HEAVY_DEPS = {
     "kubernetes",
     "librosa",
     "pedalboard",
-    "h5py",
-    "hdf5plugin",
-    "dask",
-    "webdataset",
     "pandas",
     "numpy",
     "scipy",
@@ -61,7 +57,7 @@ HEAVY_DEPS = {
 def _requirement_name(spec: str) -> str:
     """Return the PEP 503-normalized distribution name from a PEP 508 requirement.
 
-    :param spec: A requirement string, e.g. ``"pydantic>=2"`` or ``"dask[distributed]"``.
+    :param spec: A requirement string, e.g. ``"pydantic>=2"`` or ``"pylance>=7.0.0"``.
     :returns: Name lowercased with runs of ``-``/``_``/``.`` collapsed to a single
         ``-``, so equivalent spellings compare equal against ``LITE_CLOSURE`` /
         ``HEAVY_DEPS``.

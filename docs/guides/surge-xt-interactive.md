@@ -12,7 +12,7 @@ ______________________________________________________________________
 ML-predicted (or dataset-derived) parameters preloaded, streams real-time
 audio so you can audition and tweak the patch by ear, lets you snapshot
 patches by pressing `p`, and after the session writes a directory
-containing `train.h5` (plus optional `val.h5`/`test.h5`/`predict.h5`
+containing `train.lance` (plus optional `val.lance`/`test.lance`/`predict.lance`
 siblings when `--checkpoint-path` is set).
 
 It's a human-in-the-loop tool for producing high-quality (audio, params)
@@ -42,7 +42,7 @@ training pairs that random sampling can't reach.
   stream via `pedalboard.io.AudioStream`; headless environments without
   ALSA/PulseAudio cannot run it.
 - *Optional*: a prediction tensor (`pred-*.pt` from `src/synth_setter/cli/eval.py`) or
-  an existing dataset (`*.h5`) to load parameters from.
+  an existing dataset (`*.lance`) to load parameters from.
 
 ## Quick start
 
@@ -65,12 +65,12 @@ python -m synth_setter.tools.surge_xt_interactive \
     --pred outputs/pred-0.pt:0
 ```
 
-Audition a row from an existing HDF5 dataset:
+Audition a row from an existing Lance dataset:
 
 ```bash
 python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
-    --dataset-ref outputs/test.h5:0
+    --dataset-ref outputs/test.lance:0
 ```
 
 Record patches and render them into a fresh dataset directory:
@@ -109,15 +109,15 @@ raises `click.UsageError`.
 
 ## CLI reference
 
-| Flag                        | Type               | Default                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| --------------------------- | ------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--plugin-path` / `-p`      | path               | `$SYNTH_SETTER_PLUGIN_PATH`, else `plugins/Surge XT.vst3` | Path to VST3 plugin. Defaults to `$SYNTH_SETTER_PLUGIN_PATH` or the in-repo bundle.                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--pred`                    | `PATH:BATCH_IDX`   | unset                                                     | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                                                                                                 |
-| `--dataset-ref`             | `PATH:DATASET_IDX` | unset                                                     | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                                                                                        |
-| `--param-spec-name`         | choice             | required                                                  | Parameter spec name — one of the keys registered in `src/synth_setter/data/vst/__init__.py` (`param_specs`). Selects which synth params are decoded from prediction/dataset rows, captured into recorded patches, and which base preset is loaded (the script indexes `plugin_state_paths` with this value). There is no `--plugin-state-path` flag — spec and preset travel together.                                                                                                                          |
-| `--output-dataset-dir-path` | path               | unset                                                     | Directory to create for the recorded patches. Must not already exist — `make_hdf5_dataset` writes fixed-size HDF5 datasets without `maxshape` and cannot append to existing files. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to `train.h5` inside this directory via `synth_setter.data.vst.writers.make_hdf5_dataset` (plus `val.h5`/`test.h5`/`predict.h5` siblings when `--checkpoint-path` is set). |
-| `--checkpoint-path`         | path               | unset                                                     | Optional checkpoint path to run standalone eval on after rendering captured patches. When set, triggers the `eval_patches` pipeline (`src/synth_setter/cli/eval.py mode=predict` → `predict_vst_audio.py` → `compute_audio_metrics.py`); see [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) for the full pipeline and `_METRIC_COLUMNS` in the script for the metric series produced.                                                                                                             |
-| `--session-recording-path`  | path               | unset                                                     | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                                                     |
+| Flag                        | Type               | Default                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------- | ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--plugin-path` / `-p`      | path               | `$SYNTH_SETTER_PLUGIN_PATH`, else `plugins/Surge XT.vst3` | Path to VST3 plugin. Defaults to `$SYNTH_SETTER_PLUGIN_PATH` or the in-repo bundle.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--pred`                    | `PATH:BATCH_IDX`   | unset                                                     | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                                                                          |
+| `--dataset-ref`             | `PATH:DATASET_IDX` | unset                                                     | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.lance:0`.                                                                                                                                                                                                                                                                                                                                              |
+| `--param-spec-name`         | choice             | required                                                  | Parameter spec name — one of the keys registered in `src/synth_setter/data/vst/__init__.py` (`param_specs`). Selects which synth params are decoded from prediction/dataset rows, captured into recorded patches, and which base preset is loaded (the script indexes `plugin_state_paths` with this value). There is no `--plugin-state-path` flag — spec and preset travel together.                                                                                                   |
+| `--output-dataset-dir-path` | path               | unset                                                     | Directory to create for the recorded patches. Must not already exist — `make_lance_dataset` overwrites any dataset already at its destination. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to `train.lance` inside this directory via `synth_setter.data.vst.writers.make_lance_dataset` (plus `val.lance`/`test.lance`/`predict.lance` siblings when `--checkpoint-path` is set). |
+| `--checkpoint-path`         | path               | unset                                                     | Optional checkpoint path to run standalone eval on after rendering captured patches. When set, triggers the `eval_patches` pipeline (`src/synth_setter/cli/eval.py mode=predict` → `predict_vst_audio.py` → `compute_audio_metrics.py`); see [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) for the full pipeline and `_METRIC_COLUMNS` in the script for the metric series produced.                                                                                      |
+| `--session-recording-path`  | path               | unset                                                     | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                              |
 
 Tip — the help strings above are quoted verbatim from the Click
 decorators in `src/synth_setter/tools/surge_xt_interactive.py`. Run
@@ -159,49 +159,48 @@ the editor closes.
 
 When `--output-dataset-dir-path` is set, the recorded patches are
 rendered through the plugin via
-[`make_hdf5_dataset`](../../src/synth_setter/data/vst/writers.py) and
-written to `train.h5` inside that directory. With `--checkpoint-path`
-also set, identical-content `val.h5`/`test.h5`/`predict.h5` siblings
-are created next to `train.h5` so the eval pipeline has a `predict.h5`
-to consume. Each file has these datasets:
+[`make_lance_dataset`](../../src/synth_setter/data/vst/writers.py) and
+written to `train.lance` inside that directory. With `--checkpoint-path`
+also set, identical-content `val.lance`/`test.lance`/`predict.lance` siblings
+are created next to `train.lance` so the eval pipeline has a `predict.lance`
+to consume. Each Lance dataset has these columns:
 
-| Dataset       | Shape                                           | Dtype     | Notes                                                                          |
-| ------------- | ----------------------------------------------- | --------- | ------------------------------------------------------------------------------ |
-| `audio`       | `(N, 2, sample_rate * signal_duration_seconds)` | `float16` | Stereo waveform. Compressed with Blosc2.                                       |
-| `mel_spec`    | `(N, 2, 128, 401)`                              | `float32` | Mel spectrogram per channel. Compressed with Blosc2.                           |
-| `param_array` | `(N, P)`                                        | `float32` | Encoded params (`ParamSpec.encode` output) in `[0, 1]`. `P = len(param_spec)`. |
+| Column        | Per-row shape                                | Dtype     | Notes                                                                          |
+| ------------- | -------------------------------------------- | --------- | ------------------------------------------------------------------------------ |
+| `audio`       | `(2, sample_rate * signal_duration_seconds)` | `float16` | Stereo waveform. Fixed-shape tensor column.                                    |
+| `mel_spec`    | `(2, 128, 401)`                              | `float32` | Mel spectrogram per channel. Fixed-shape tensor column.                        |
+| `param_array` | `(P,)`                                       | `float32` | Encoded params (`ParamSpec.encode` output) in `[0, 1]`. `P = len(param_spec)`. |
 
-Where `N = len(synth_patches)`, `sample_rate = 44100`, and
+The dataset has `N = len(synth_patches)` rows, `sample_rate = 44100`, and
 `signal_duration_seconds = 4.0` (constants at the top of
 `src/synth_setter/tools/surge_xt_interactive.py`).
 
-The audio attached attrs on the `audio` dataset record the rendering
-config: `velocity`, `signal_duration_seconds`, `sample_rate`,
-`channels`, `min_loudness`.
+The rendering config is embedded in the Arrow schema metadata as a
+`ShardMetadata` payload: `velocity`, `signal_duration_seconds`,
+`sample_rate`, `channels`, `min_loudness`, `base_seed`,
+`attempts_per_sample`.
 
-When `--checkpoint-path` is set, the `val.h5`/`test.h5`/`predict.h5`
-siblings are byte-identical copies of `train.h5`; `predict.h5` is then
+When `--checkpoint-path` is set, the `val.lance`/`test.lance`/`predict.lance`
+siblings are byte-identical copies of `train.lance`; `predict.lance` is then
 fed into the `eval_patches` pipeline.
 
 > **Use a fresh `--output-dataset-dir-path` per session.** The script
-> refuses an existing **directory**: `make_hdf5_dataset` creates fixed-size
-> datasets (no `maxshape`), so re-running into an existing directory
-> would either fail with a `ValueError` from the fixed-params length
-> check or fail on write with an out-of-bounds index. If you need to
-> combine multiple sessions, write each one to its own directory and
-> concat downstream.
+> refuses an existing **directory** up front, creating the output
+> directory fresh, so re-running into an existing directory is rejected
+> before any patches are rendered. If you need to combine multiple
+> sessions, write each one to its own directory and concat downstream.
 
 > **Note params are still randomized.** Only `fixed_synth_params_list`
-> is passed to `make_hdf5_dataset`; MIDI note, velocity, and timing remain
+> is passed to `make_lance_dataset`; MIDI note, velocity, and timing remain
 > sampled from `param_spec`. The same captured patch produces multiple
 > rows with different note conditions if you record `p` more than once
 > (the synth params are identical; the note params will differ).
 
 ## End-to-end workflow
 
-A `pred-*.pt` (from `src/synth_setter/cli/eval.py`) or an existing `*.h5` row supplies
+A `pred-*.pt` (from `src/synth_setter/cli/eval.py`) or an existing `*.lance` row supplies
 the starting parameters; the live editor session captures user-curated
-patches; on close, `make_hdf5_dataset` writes them to `train.h5` inside
+patches; on close, `make_lance_dataset` writes them to `train.lance` inside
 `--output-dataset-dir-path` for downstream training. When
 `--checkpoint-path` is set, the `eval_patches` function in
 `src/synth_setter/tools/surge_xt_interactive.py` then runs the eval pipeline against
@@ -233,9 +232,9 @@ python -m synth_setter.tools.surge_xt_interactive \
     --output-dataset-dir-path outputs/curated-patches/ \
     --checkpoint-path outputs/checkpoints/last.ckpt
 
-# 5. Confirm the file:
-python -c "import h5py; f = h5py.File('outputs/curated-patches/train.h5'); \
-    print({k: f[k].shape for k in f})"
+# 5. Confirm the dataset:
+python -c "import lance; ds = lance.dataset('outputs/curated-patches/train.lance'); \
+    print(ds.count_rows(), ds.schema)"
 ```
 
 ## Known limitations
@@ -253,7 +252,7 @@ your teammates so they aren't blindsided.
   the `#714` SIGTRAP comment in `core.py`); the post-load `process(...)`
   flush in `render_params` is what commits Surge XT's preset state on
   that platform.
-- **Plugin reloaded on every render in `make_hdf5_dataset`** — `render_params`
+- **Plugin reloaded on every render in `make_lance_dataset`** — `render_params`
   calls `load_plugin(plugin_path)` per sample
   ([`src/synth_setter/data/vst/core.py`](../../src/synth_setter/data/vst/core.py)). This is an
   intentional workaround for a silent / repeated-render bug surfaced
@@ -268,7 +267,7 @@ your teammates so they aren't blindsided.
   ([`src/synth_setter/tools/surge_xt_interactive.py`](../../src/synth_setter/tools/surge_xt_interactive.py)).
   The synth patch dominates loudness, so re-sampling note params alone
   can't lift a silent patch above threshold; rather than loop, the
-  whole `make_hdf5_dataset` call aborts and points at the offending patch.
+  whole `make_lance_dataset` call aborts and points at the offending patch.
   Workaround: only press `p` while you can hear the patch — once a
   silent patch is captured, the session's dataset render will fail.
 - **Blocking keyboard input** — `keyboard_loop` uses
@@ -329,6 +328,6 @@ see the warning in *Output dataset format*.
 - [`docs/glossary.md`](../glossary.md) — `param_spec`, VST, mel
   spectrogram.
 - [`docs/design/data-pipeline.md`](../design/data-pipeline.md) —
-  downstream consumer of the produced HDF5.
+  downstream consumer of the produced Lance dataset.
 - [`docs/getting-started.md`](../getting-started.md) — env setup and
   Surge XT install.

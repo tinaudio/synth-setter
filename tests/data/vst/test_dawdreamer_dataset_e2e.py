@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
-import h5py
+import lance
 import numpy as np
 import pytest
 from hydra import compose, initialize_config_module
@@ -13,7 +12,8 @@ from omegaconf import OmegaConf
 
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
-from synth_setter.data.vst.writers import make_hdf5_dataset
+from synth_setter.data.vst.shapes import AUDIO_FIELD, PARAM_ARRAY_FIELD
+from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
     compute_rms,
@@ -32,6 +32,17 @@ from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
 )
+
+
+def _read_lance_column(path: Path, field: str) -> np.ndarray:
+    """Materialize one fixed-shape tensor column from a Lance shard.
+
+    :param path: Rendered ``.lance`` shard directory.
+    :param field: Column name to read.
+    :returns: The column stacked into a ``(num_rows, *shape)`` array.
+    """
+    chunk = lance.dataset(str(path)).to_table(columns=[field]).column(field).combine_chunks()
+    return chunk.to_numpy_ndarray()
 
 
 def _dawdreamer_experiment_config() -> RenderConfig:
@@ -79,17 +90,15 @@ def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
 def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> None:
     """Both hosts generate a real dataset row with perceptually similar audio.
 
-    :param tmp_path: Temporary directory for generated HDF5 shards.
+    :param tmp_path: Temporary directory for generated Lance shards.
     """
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer comparison fixture uses the Surge XT parameter map")
 
-    dawdreamer_config = _dawdreamer_experiment_config().model_copy(
-        update={"samples_per_shard": 2}
-    )
+    dawdreamer_config = _dawdreamer_experiment_config().model_copy(update={"samples_per_shard": 2})
     pedalboard_config = dawdreamer_config.model_copy(update={"renderer_backend": "pedalboard"})
-    pedalboard_path = tmp_path / "pedalboard.h5"
-    dawdreamer_path = tmp_path / "dawdreamer.h5"
+    pedalboard_path = tmp_path / "pedalboard.lance"
+    dawdreamer_path = tmp_path / "dawdreamer.lance"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS, _HARDCODED_SYNTH_PARAMS]
     fixed_note = [_HARDCODED_NOTE_PARAMS, _HARDCODED_NOTE_PARAMS]
     dawdreamer_renderer = DawDreamerRenderer(
@@ -98,35 +107,29 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
         channels=dawdreamer_config.channels,
         signal_duration_seconds=dawdreamer_config.signal_duration_seconds,
         plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
     missing_keys = _HARDCODED_SYNTH_PARAMS.keys() - dawdreamer_renderer._parameter_indices.keys()
     assert not missing_keys
     host_indices = [dawdreamer_renderer._parameter_indices[key] for key in _HARDCODED_SYNTH_PARAMS]
     assert len(host_indices) == len(set(host_indices))
-    make_hdf5_dataset(
+    make_lance_dataset(
         pedalboard_path,
         pedalboard_config,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
-    make_hdf5_dataset(
+    make_lance_dataset(
         dawdreamer_path,
         dawdreamer_config,
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )
 
-    with (
-        h5py.File(pedalboard_path, "r") as pedalboard_file,
-        h5py.File(dawdreamer_path, "r") as dawdreamer_file,
-    ):
-        pedalboard_rows = cast(h5py.Dataset, pedalboard_file["audio"])[:].astype(np.float32)
-        dawdreamer_rows = cast(h5py.Dataset, dawdreamer_file["audio"])[:].astype(np.float32)
-        pedalboard_params = cast(h5py.Dataset, pedalboard_file["param_array"])[0]
-        dawdreamer_params = cast(h5py.Dataset, dawdreamer_file["param_array"])[0]
+    pedalboard_rows = _read_lance_column(pedalboard_path, AUDIO_FIELD).astype(np.float32)
+    dawdreamer_rows = _read_lance_column(dawdreamer_path, AUDIO_FIELD).astype(np.float32)
+    pedalboard_params = _read_lance_column(pedalboard_path, PARAM_ARRAY_FIELD)[0]
+    dawdreamer_params = _read_lance_column(dawdreamer_path, PARAM_ARRAY_FIELD)[0]
 
     assert np.array_equal(pedalboard_params, dawdreamer_params)
     assert np.isfinite(pedalboard_rows).all()

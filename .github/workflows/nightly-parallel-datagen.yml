@@ -213,7 +213,7 @@ jobs:
 
       # Validate the spec + every shard against R2 using the same CI helpers
       # invoked by ``validate-dataset-shards.yaml``. Runs inside the same
-      # ``dev-snapshot`` image so ``h5py`` is available without a host install.
+      # ``dev-snapshot`` image so the shard-read stack is available without a host install.
       - name: Validate spec + every shard via R2
         env:
           SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}

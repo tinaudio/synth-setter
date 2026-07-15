@@ -19,11 +19,11 @@ ______________________________________________________________________
 
 ## 1. Artifact Catalog
 
-| Type           | Name pattern               | Built by                                         | R2 reference                             |
-| -------------- | -------------------------- | ------------------------------------------------ | ---------------------------------------- |
-| `dataset`      | `data-{dataset_config_id}` | `build_dataset_artifact` (`finalize_dataset.py`) | split `.h5` / shard prefix + `stats.npz` |
-| `model`        | `model-{train_config_id}`  | `build_model_artifact` (`train.py`)              | best-checkpoint `model.ckpt` (see §3)    |
-| `eval-results` | `eval-{eval_config_id}`    | `build_eval_results_artifact` (`eval.py`)        | output-dir prefix                        |
+| Type           | Name pattern               | Built by                                         | R2 reference                                |
+| -------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| `dataset`      | `data-{dataset_config_id}` | `build_dataset_artifact` (`finalize_dataset.py`) | split `.lance` / shard prefix + `stats.npz` |
+| `model`        | `model-{train_config_id}`  | `build_model_artifact` (`train.py`)              | best-checkpoint `model.ckpt` (see §3)       |
+| `eval-results` | `eval-{eval_config_id}`    | `build_eval_results_artifact` (`eval.py`)        | output-dir prefix                           |
 
 The `{*_config_id}` is the config filename stem, resolved via `resolve_run_config_id(cfg)` for train/eval and `spec.task_name` for datasets. The artifact name carries the config id, not the `{*_wandb_run_id}`; W&B auto-versions (`:v0`, `:v1`, …) so re-running the same config yields the next version, and the producing run — whose id is pinned via `pin_wandb_run_id` — is what W&B links the artifact to for lineage. (The builders below do **not** copy the run id into `artifact.metadata`; spec §4 reserves that, but it is not yet wired.)
 

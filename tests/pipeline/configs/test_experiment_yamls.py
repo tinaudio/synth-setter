@@ -22,7 +22,7 @@ import pytest
 from hydra import compose, initialize_config_module
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 
 # Local checkout root — the test pins ``cfg.paths.*`` to this anchor so the
 # composed ``${oc.env:PROJECT_ROOT}`` / ``${hydra:runtime.output_dir}``
@@ -34,11 +34,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
-    "generate_dataset/ci-materialize-test-wds": "ci-materialize-test-wds",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
-    "generate_dataset/smoke-shard-wds": "smoke-shard-wds",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
     "generate_dataset/surge-simple-lance-440k-20k-20k": "surge-simple-lance-440k-20k-20k",
     "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
@@ -76,6 +74,7 @@ def test_experiment_yaml_validates_as_dataset_spec(
     """
     spec = _compose_dataset_spec(experiment)
     assert spec.task_name == expected_task_name
+    assert spec.output_format == OutputFormat.LANCE
     assert spec.num_shards >= 1
     assert spec.num_params > 0
 

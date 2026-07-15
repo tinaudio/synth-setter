@@ -47,7 +47,7 @@ def _compose_offline_wandb_eval_cfg(
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         offline run's ``wandb/`` dir lands beneath it via the logger's save_dir.
-    :param dataset_root: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param dataset_root: Holds ``{train,val,test}.lance`` + ``stats.npz``.
     :param upload_uri: ``r2://`` prefix the output dir is mirrored to and the
         artifact references as ``s3://``.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
@@ -71,7 +71,7 @@ def _compose_offline_wandb_eval_cfg(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.predict_file = str(dataset_root / "test.h5")
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
@@ -116,7 +116,7 @@ def test_evaluate_logs_eval_results_artifact_to_offline_wandb_run(
     leaves no artifact record in the binary and trips here.
 
     :param tmp_path: Hydra ``output_dir`` and the offline run's save_dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
     :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, dummy R2 secrets,
         and the local rclone backend + cwd for the ``r2://`` upload.
     """

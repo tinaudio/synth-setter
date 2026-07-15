@@ -65,7 +65,7 @@ jobs:
         run: python -m zipfile -l dist/synth_setter-*.whl
 
       # `--no-deps` keeps this a packaging check, not a dep-resolution check;
-      # the heavy runtime stack (skypilot, torch, h5py) is exercised in Tests.
+      # the heavy runtime stack (skypilot, torch, pylance) is exercised in Tests.
       - name: Install wheel into clean venv
         run: |
           python -m venv "$RUNNER_TEMP/clean"

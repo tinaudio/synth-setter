@@ -4,9 +4,10 @@ Exercises ``generate(spec, work_dir, loggers)`` with ``render.parallel=True`` th
 ``subprocess.check_call`` boundary on every OS / CI host — no Linux Xvfb
 wrapper, no Surge VST3 bundle, no R2 credentials. A fake renderer script
 (written into ``tmp_path``) replaces ``generate_vst_dataset.py``: it just
-writes the expected output file and exits 0, so the test crosses the real
-``ThreadPoolExecutor`` → ``subprocess.check_call`` → fresh Python interpreter
-hop that the unit-tier tests (which patch ``subprocess.check_call``) cannot.
+writes the expected Lance shard directory and exits 0, so the test crosses the
+real ``ThreadPoolExecutor`` → ``subprocess.check_call`` → fresh Python
+interpreter hop that the unit-tier tests (which patch ``subprocess.check_call``)
+cannot.
 
 Companion to ``test_parallel_shard_render_linux.py``: that one stress-tests
 the X11 wrapper against the real plugin (gated Linux+VST); this one keeps
@@ -30,26 +31,29 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 _NUM_SHARDS = 4
 _SAMPLES_PER_SHARD = 8
 
+# Minimal Lance directory tree: data/ payload + _versions/ manifest.
 _FAKE_RENDERER_SOURCE = textwrap.dedent(
     """
     import sys
     from pathlib import Path
 
     out = Path(sys.argv[1])
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(b"")
+    (out / "data").mkdir(parents=True, exist_ok=True)
+    (out / "data" / "shard.bin").write_bytes(b"\\x00")
+    (out / "_versions").mkdir(parents=True, exist_ok=True)
+    (out / "_versions" / "1.manifest").write_bytes(b"\\x00")
     """
 ).strip()
 
 
 def _write_fake_renderer(tmp_path: Path) -> Path:
-    """Write a no-op renderer script that materializes the requested output path.
+    """Write a no-op renderer script that materializes the requested Lance shard directory.
 
     The script takes the same first positional arg as the real renderer (the
-    output shard path), writes an empty file there, and exits 0 — enough to
-    satisfy ``_render_and_upload_shard``'s post-render ``is_file()`` check.
-    Subsequent ``--<key> <value>`` flags from ``build_generate_args`` are
-    accepted and ignored.
+    output shard path), writes a minimal ``.lance`` directory tree there, and
+    exits 0 — enough to satisfy ``_render_and_upload_shard``'s post-render
+    ``is_dir()`` check and give ``upload_dir`` real files to copy. Subsequent
+    ``--<key> <value>`` flags from ``build_generate_args`` are accepted and ignored.
 
     :param tmp_path: Per-test tmp dir; the script is dropped here.
     :returns: Path to the fake renderer ``.py`` file.
@@ -115,7 +119,9 @@ def _wire_generate_into_fake_renderer(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
         lambda _path: spec.render.renderer_version,
     )
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+    # Stub the directory skip-probe absent so every shard renders (local rclone
+    # raises on a missing dir, unlike S3).
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_directory_exists", lambda *_a, **_k: False)
     monkeypatch.setattr("synth_setter.cli.generate_dataset.sys.platform", "darwin")
 
     fake_renderer = _write_fake_renderer(tmp_path)
@@ -153,7 +159,9 @@ def test_parallel_dispatch_crosses_real_subprocess_boundary(
 
     bucket_prefix = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     for shard in spec.shards:
-        assert (bucket_prefix / shard.filename).is_file(), (
+        # The ``_versions`` manifest is uploaded last, so its presence marks a
+        # fully-landed Lance shard directory.
+        assert (bucket_prefix / shard.filename / "_versions").is_dir(), (
             f"shard {shard.shard_id} did not land in fake R2: {shard.filename}"
         )
 
@@ -188,7 +196,9 @@ def test_two_ranks_render_disjoint_complete_shard_partition(
 
     def _landed_filenames() -> set[str]:
         return {
-            shard.filename for shard in spec.shards if (bucket_prefix / shard.filename).is_file()
+            shard.filename
+            for shard in spec.shards
+            if (bucket_prefix / shard.filename / "_versions").is_dir()
         }
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")

@@ -314,8 +314,8 @@ def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
 ) -> None:
     """``spec.mask_degenerate_bins`` reaches the Welford finalize verbatim.
 
-    Pins the wire on both polarities, mirroring the hdf5/wds forwarding tests,
-    so a regression that hard-wires the kwarg fails here.
+    Pins the wire on both polarities so a regression that hard-wires the kwarg
+    fails here.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
     :param tmp_path: Scratch dir for the local shard datasets.
@@ -617,7 +617,7 @@ def test_staged_discovery_skips_non_shard_entries_in_staging_root(
     )
     stray_dir = staging_root / "quarantine"
     stray_dir.mkdir()
-    (stray_dir / "pod-x-dead.h5").write_bytes(b"x")
+    (stray_dir / "pod-x-dead.bin").write_bytes(b"x")
     (staging_root / "stray-top-level.txt").write_bytes(b"x")
     # A full quarantined triple nested under a shard dir is not a staged attempt.
     shard_quarantine = staging_dir(fake_r2_remote, spec, 0) / "quarantine"
@@ -782,7 +782,9 @@ def test_finalize_rejects_fragment_file_with_fewer_rows_than_sidecar(
     short_file = next((short_dataset / "data").iterdir())
     shutil.copyfile(short_file, target_file)
 
-    with pytest.raises(ValueError, match="physical row count 1 does not match sidecar row count 2"):
+    with pytest.raises(
+        ValueError, match="physical row count 1 does not match sidecar row count 2"
+    ):
         finalize_from_spec(spec, tmp_path / "work")
 
 
@@ -911,12 +913,12 @@ def test_finalize_rerun_preserves_recorded_winner_across_tied_straggler(
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     (run_root / "dataset.complete").unlink()
     local = write_local_shard(spec, 0, tmp_path / "tied", value_offset=7000)
-    stage_lance_shard_attempt(
-        spec, spec.shards[0], local, worker_id="pod-0", attempt_uuid="early"
-    )
+    stage_lance_shard_attempt(spec, spec.shards[0], local, worker_id="pod-0", attempt_uuid="early")
     set_valid_marker_mtime(fake_r2_remote, spec, 0, "pod-0-early", 1_000_000_000.0)
 
     finalize_from_spec(spec, tmp_path / "work2")
 
     decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
-    np.testing.assert_array_equal(decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0)[MEL_SPEC_FIELD])
+    np.testing.assert_array_equal(
+        decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0)[MEL_SPEC_FIELD]
+    )

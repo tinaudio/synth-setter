@@ -1,9 +1,8 @@
 """CPU-only tests for ``synth_setter.data.vst.writers``.
 
 Covers the writer module's pure helpers and the CLI dispatcher in
-``generate_vst_dataset.main`` — the VST-dependent end-to-end writer tests
-live alongside the legacy HDF5 tests in ``test_generate_vst_dataset.py`` and
-the new wds e2e tests in ``test_writers_wds_e2e.py``.
+``generate_vst_dataset.main`` — the VST-dependent end-to-end Lance writer tests
+live in ``test_generate_vst_dataset.py`` and ``test_fake_plugin_e2e.py``.
 """
 
 from __future__ import annotations
@@ -78,8 +77,8 @@ def test_render_config_shard_metadata_projects_render_provenance_fields() -> Non
 def test_render_config_shard_metadata_round_trips_through_json() -> None:
     """The projected metadata serializes and re-validates as a strict ``ShardMetadata``.
 
-    Pinning JSON round-trip is what the wds tar's ``metadata.json`` member
-    relies on: a writer-side projection that can't be re-read isn't useful.
+    Pinning JSON round-trip is what the Lance schema-metadata payload relies on:
+    a writer-side projection that can't be re-read isn't useful.
     """
     render_cfg = _smoke_render_cfg()
 
@@ -147,45 +146,6 @@ def _cli_argv(data_file: str) -> list[str]:
     ]
 
 
-def test_main_dispatches_h5_suffix_to_make_hdf5_dataset(tmp_path: Path) -> None:
-    """``data_file=foo.h5`` routes to ``make_hdf5_dataset`` (not the wds writer).
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    data_file = tmp_path / "shard-000000.h5"
-
-    with (
-        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
-        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
-    ):
-        _run_main_with_argv(_cli_argv(str(data_file)))
-
-    mock_h5.assert_called_once()
-    mock_wds.assert_not_called()
-    # First positional arg is the data_file path.
-    h5_args, _h5_kwargs = mock_h5.call_args
-    assert h5_args[0] == str(data_file)
-
-
-def test_main_dispatches_tar_suffix_to_make_wds_dataset(tmp_path: Path) -> None:
-    """``data_file=foo.tar`` routes to ``make_wds_dataset`` (not the h5 writer).
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    data_file = tmp_path / "shard-000000.tar"
-
-    with (
-        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
-        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
-    ):
-        _run_main_with_argv(_cli_argv(str(data_file)))
-
-    mock_wds.assert_called_once()
-    mock_h5.assert_not_called()
-    wds_args, _wds_kwargs = mock_wds.call_args
-    assert wds_args[0] == str(data_file)
-
-
 def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> None:
     """``data_file=foo.lance`` routes to ``make_lance_dataset``.
 
@@ -193,16 +153,11 @@ def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> N
     """
     data_file = tmp_path / "shard-000000.lance"
 
-    with (
-        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
-        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
-        patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
-    ):
+    with patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance:
         _run_main_with_argv(_cli_argv(str(data_file)))
 
     mock_lance.assert_called_once()
-    mock_h5.assert_not_called()
-    mock_wds.assert_not_called()
+    # First positional arg is the data_file path.
     lance_args, _lance_kwargs = mock_lance.call_args
     assert lance_args[0] == str(data_file)
 
@@ -215,14 +170,12 @@ def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
     data_file = tmp_path / "shard-000000.bin"
 
     with (
-        patch("synth_setter.data.vst.writers.make_hdf5_dataset") as mock_h5,
-        patch("synth_setter.data.vst.writers.make_wds_dataset") as mock_wds,
+        patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance,
         pytest.raises(SystemExit, match=r"data_file must end in one of"),
     ):
         _run_main_with_argv(_cli_argv(str(data_file)))
 
-    mock_h5.assert_not_called()
-    mock_wds.assert_not_called()
+    mock_lance.assert_not_called()
 
 
 class _FakePlugin:
@@ -412,64 +365,6 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
     for call_kwargs in captured:
         assert call_kwargs["fixed_synth_params"] == synth_rows[0]
         assert call_kwargs["fixed_note_params"] == note_rows[0]
-
-
-def test_make_hdf5_dataset_shard_cadence_rerenders_partial_shard_from_row_zero(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A partial HDF5 shard under shard cadence re-renders from row 0, not the resume tail.
-
-    A mid-shard resume can't preserve the one-patch-per-shard invariant (the
-    partial rows hold an earlier patch), so ``make_hdf5_dataset`` resets the
-    resume ``start_idx`` to 0 before rendering. Stubs the dataset/resume seam to
-    report a partial shard (``start_idx=2``) and captures the index the render
-    loop actually receives.
-
-    :param monkeypatch: Pytest fixture used to patch module-level callables.
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    render_cfg = _smoke_render_cfg(samples_per_shard=4, param_sample_cadence="shard")
-    monkeypatch.setattr(
-        writers,
-        "create_datasets_and_get_start_idx",
-        lambda **_kw: (MagicMock(name="audio"), MagicMock(name="mel"), MagicMock(name="param"), 2),
-    )
-    captured_start_idx: list[int] = []
-    monkeypatch.setattr(
-        writers,
-        "_render_in_batches",
-        lambda **kw: captured_start_idx.append(kw["start_idx"]),
-    )
-
-    writers.make_hdf5_dataset(tmp_path / "shard-000000.h5", render_cfg)
-
-    assert captured_start_idx == [0]
-
-
-def test_make_hdf5_dataset_sample_cadence_resumes_from_partial_start_idx(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Default cadence keeps the resume ``start_idx`` — only shard cadence re-renders.
-
-    :param monkeypatch: Pytest fixture used to patch module-level callables.
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    render_cfg = _smoke_render_cfg(samples_per_shard=4, param_sample_cadence="sample")
-    monkeypatch.setattr(
-        writers,
-        "create_datasets_and_get_start_idx",
-        lambda **_kw: (MagicMock(name="audio"), MagicMock(name="mel"), MagicMock(name="param"), 2),
-    )
-    captured_start_idx: list[int] = []
-    monkeypatch.setattr(
-        writers,
-        "_render_in_batches",
-        lambda **kw: captured_start_idx.append(kw["start_idx"]),
-    )
-
-    writers.make_hdf5_dataset(tmp_path / "shard-000000.h5", render_cfg)
-
-    assert captured_start_idx == [2]
 
 
 def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
@@ -954,7 +849,7 @@ def _install_writer_level_fakes(
 
     Returns a ``(warmup_mock, fake_spec)`` pair — the spec is meant to be
     handed directly to ``_render_in_batches`` so the test doesn't depend on
-    the registry lookup that ``make_hdf5_dataset`` would normally perform.
+    the registry lookup that ``make_lance_dataset`` would normally perform.
 
     :param monkeypatch: Active monkeypatch fixture from the calling test.
     :param retry_on_first_sample: Number of silent renders before the first

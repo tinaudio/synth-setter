@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-import h5py
 import hydra
 import wandb
 from hydra.core.hydra_config import HydraConfig
@@ -38,7 +37,6 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
@@ -46,7 +44,6 @@ from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
-    INPUT_SPEC_FILENAME,
     STATS_NPZ_FILENAME,
     WORKER_SPEC_URI_ENV,
 )
@@ -61,9 +58,8 @@ from synth_setter.pipeline.partitioning import (
     read_rank_world_from_env,
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig, ShardSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
 from synth_setter.pipeline.spec_io import (
-    load_spec_from_root,
     upload_spec,
     write_spec_locally,
 )
@@ -96,7 +92,7 @@ _ORACLE_EVAL_TIMEOUT_OVERHEAD_SECONDS = 600.0
 _ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS = 120.0
 
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
-_ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.h5", "val.h5", "test.h5", STATS_NPZ_FILENAME)
+_ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.lance", "val.lance", "test.lance", STATS_NPZ_FILENAME)
 
 
 def _run_oracle_eval_subprocess(
@@ -114,10 +110,8 @@ def _run_oracle_eval_subprocess(
     ``_check_call_streamed`` raises on a non-zero eval exit or wall-clock
     timeout, so either propagates to the caller.
 
-    :param dataset_root: Dir holding the finalized HDF5 splits, their source
-        shards, and ``stats.npz``. The splits are virtual datasets that
-        reference the shards by basename, so they resolve only when read in
-        place beside those shards.
+    :param dataset_root: Dir holding the finalized Lance split datasets and
+        ``stats.npz``.
     :param run_dir: Hydra per-run dir for the eval's own outputs (predictions,
         ``metrics/metrics.json``), kept separate from ``dataset_root`` so eval
         artifacts don't mix with the dataset files.
@@ -131,10 +125,9 @@ def _run_oracle_eval_subprocess(
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
-        workers pickle the dataset, but ``VSTDataset`` holds an open h5py
-        handle that cannot be pickled.
-    :param predict_file: HDF5 split file for the datamodule's predict dataloader
-        (e.g. ``dataset_root / "train.h5"``).
+        workers pickle the dataset, but the Lance shard handle is not fork-safe.
+    :param predict_file: Lance split dataset directory for the datamodule's
+        predict dataloader (e.g. ``dataset_root / "train.lance"``).
     :param metric_prefix: Prepended to every audio metric key the eval logs
         (both ``audio/*`` and ``shuffled_audio/*``). All splits resume one wandb
         run, so a bare key is overwritten by the last split; pass ``"<split>/"``
@@ -142,21 +135,21 @@ def _run_oracle_eval_subprocess(
         canonical ``test`` split.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
-        short-circuited on an existing R2 marker without repopulating it.
-        Also raised when ``predict_file`` itself does not exist.
+        short-circuited on an existing R2 marker without staging ``stats.npz``
+        locally. Also raised when ``predict_file`` itself does not exist.
     """
-    missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).is_file()]
+    missing = [n for n in _ORACLE_EVAL_REQUIRED_ARTIFACTS if not (dataset_root / n).exists()]
     if missing:
         raise FileNotFoundError(
             f"inline oracle-eval expects the finalized splits + stats in {dataset_root}, "
             f"but {missing} are absent. finalize_from_spec short-circuits when R2 already "
-            f"holds the dataset.complete marker, leaving output_dir unpopulated on a resume; "
-            f"rerun with a fresh paths.output_dir."
+            f"holds the dataset.complete marker, so stats.npz is never staged locally on "
+            f"a resume; rerun with a fresh paths.output_dir."
         )
-    if not predict_file.is_file():
+    if not predict_file.exists():
         raise FileNotFoundError(
             f"predict_file {predict_file} not found; "
-            f"ensure the split HDF5 exists in {dataset_root} before shelling out."
+            f"ensure the Lance split exists in {dataset_root} before shelling out."
         )
     argv = [
         sys.executable,
@@ -188,9 +181,9 @@ def _run_oracle_eval_subprocess(
         # so predict_step never runs and no audio/* metric is logged — see #1331.
         "datamodule.batch_size=1",
         # Forwarded from the generate run so the eval honours the same worker
-        # count; pass 0 on Darwin where the open-h5py dataset can't be pickled.
+        # count; pass 0 on Darwin where the Lance shard handle isn't fork-safe.
         f"datamodule.num_workers={num_workers}",
-        # Override the datamodule's default predict_file (test.h5) so the caller
+        # Override the datamodule's default predict_file (test.lance) so the caller
         # can route each invocation to a specific split independently.
         f"datamodule.predict_file={predict_file}",
         "mode=predict",
@@ -199,11 +192,13 @@ def _run_oracle_eval_subprocess(
     # (test split) leaves keys bare so existing sweeps/dashboards keep resolving.
     if metric_prefix:
         argv.append(f"+evaluation.metric_prefix={metric_prefix}")
+    # Function-local so the heavy ``lance`` import is only paid when this
+    # oracle-eval CLI path actually runs.
+    import lance
+
     # Budget scales with the split's sample count (predict + re-render + metrics
-    # all run over it); the finalized split exposes it as the audio row count.
-    # cast narrows h5py's Group|Dataset|Datatype union — "audio" is always a Dataset.
-    with h5py.File(predict_file, "r") as split_h5:
-        num_samples = int(cast(h5py.Dataset, split_h5["audio"]).shape[0])
+    # all run over it); the finalized Lance split exposes it as its row count.
+    num_samples = int(lance.dataset(str(predict_file)).count_rows())
     logger.info(f"oracle_eval_inline subprocess: {argv}")
     _check_call_streamed(
         argv,
@@ -239,36 +234,12 @@ def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
     return None
 
 
-def _rclone_copy(src: str, dest: str) -> None:
-    """Upload a file to R2 via ``rclone copy`` with the shared reliability flags.
-
-    Connect/IO timeouts and retries come from :func:`r2_io._rclone_argv`, so a
-    transient blip retries instead of leaving a partial upload behind a Python
-    wall-clock. A non-zero rclone exit raises ``CalledProcessError`` and the run
-    fails.
-
-    :param src: Local source path passed to rclone verbatim.
-    :param dest: R2 destination passed to rclone verbatim.
-    """
-    args = r2_io._rclone_argv("copy", src, dest)
-    _check_call_streamed(args)
-    # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
-    # at a glance whether the rclone subprocess actually exited (vs. hanging
-    # post-upload — see #735). If the upload itself failed, _check_call_streamed
-    # already raised before we got here.
-    logger.info(f"rclone returned cleanly: {src} -> {dest}")
-
-
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
 
     The flag set is derived from ``RenderConfig.model_fields`` so every renderer
     config field surfaces as a ``--<field>`` option automatically; adding a
-    field on the model auto-extends the CLI invocation. The writer is dispatched
-    on ``shard.filename``'s suffix inside the subprocess via
-    ``OutputFormat.from_extension``. When ``spec.copy_dataset_root_uri`` is set,
-    it is forwarded as ``--copy_dataset_root_uri`` so the subprocess re-renders
-    the same-named source shard's params instead of sampling fresh ones.
+    field on the model auto-extends the CLI invocation.
     """
     output_path = output_dir / shard.filename
     args = [
@@ -281,59 +252,8 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     render_args = spec.render.model_copy(update={"base_seed": shard.seed}).model_dump()
     for key, value in render_args.items():
         args.extend([f"--{key}", str(value)])
-    if spec.copy_dataset_root_uri is not None:
-        args.extend(["--copy_dataset_root_uri", spec.copy_dataset_root_uri])
 
     return args
-
-
-def _validate_copy_source(spec: DatasetSpec) -> None:
-    """Preflight a dataset-copy run against the source's persisted spec.
-
-    No-op unless ``spec.copy_dataset_root_uri`` is set. Otherwise loads the
-    source's ``input_spec.json`` from under the root URI (the spec sits beside
-    the shards at the dataset prefix root) and delegates to
-    :meth:`DatasetSpec.validate_copy_source`, so a source that disagrees on any
-    copy-relevant value fails once at launch rather than per-shard mid-render.
-    The root URI may be a bare path, ``file://`` URI, or ``r2://`` URI.
-
-    A genuinely absent spec (``FileNotFoundError``) and an object-store access
-    failure (``CalledProcessError`` from the ``r2://`` rclone fetch — auth,
-    network, config) get distinct messages: conflating them would point the
-    operator at "sync the spec" when the real fault is credentials or
-    connectivity.
-
-    :param spec: The target dataset spec about to be rendered.
-    :raises ValueError: the copy root URI holds no ``input_spec.json``; the
-        source spec could not be fetched from the object store; the source spec
-        JSON is malformed or stale; or the source spec mismatches ``spec`` on a
-        copy-relevant value.
-    """
-    if spec.copy_dataset_root_uri is None:
-        return
-    try:
-        source = load_spec_from_root(spec.copy_dataset_root_uri)
-    except FileNotFoundError as exc:
-        raise ValueError(
-            f"dataset-copy source has no {INPUT_SPEC_FILENAME} under "
-            f"{spec.copy_dataset_root_uri!r}; sync the source dataset's spec alongside its "
-            "shards (it lives beside the shards at the dataset prefix root) so the copy "
-            "can be validated."
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        raise ValueError(
-            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} could not be "
-            f"fetched: rclone command {exc.cmd!r} exited {exc.returncode}. This is an "
-            "object-store access failure (auth/network/config), not a missing spec — check "
-            "R2 credentials and connectivity."
-        ) from exc
-    except ValidationError as exc:
-        raise ValueError(
-            f"dataset-copy source spec under {spec.copy_dataset_root_uri!r} is malformed or "
-            "stale; re-materialize it from the source dataset's current spec."
-        ) from exc
-    spec.validate_copy_source(source)
-    logger.info(f"dataset-copy source OK: {spec.copy_dataset_root_uri} matches the target spec")
 
 
 def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None:  # noqa: DOC503
@@ -382,8 +302,6 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         if any(isinstance(lg, WandbLogger) for lg in loggers):
             log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
-        # Fail a misconfigured dataset-copy at launch, before the first render.
-        _validate_copy_source(spec)
         render = spec.render
         actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
         if actual_renderer_version != render.renderer_version:
@@ -405,20 +323,15 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             f"({len(my_range)} of {spec.num_shards} shards)"
         )
 
-        r2_dest_prefix = spec.r2.rclone_prefix()
         work_dir.mkdir(parents=True, exist_ok=True)
 
         # ``start`` brackets only the dispatch call so the rate still includes the
         # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
         start = time.perf_counter()
         if spec.render.parallel and len(my_range) > 0:
-            rendered, skipped = _dispatch_shards_parallel(
-                spec, my_range, work_dir, r2_dest_prefix, loggers
-            )
+            rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, loggers)
         else:
-            rendered, skipped = _dispatch_shards_serial(
-                spec, my_range, work_dir, r2_dest_prefix, loggers
-            )
+            rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, loggers)
         elapsed_s = time.perf_counter() - start
         samples = rendered * spec.render.samples_per_shard
         rate = samples / elapsed_s if elapsed_s > 0 else 0.0
@@ -549,7 +462,6 @@ def _dispatch_shards_serial(
     spec: DatasetSpec,
     my_range: range,
     work_dir: Path,
-    r2_dest_prefix: str,
     loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards in order; fail-fast on first error.
@@ -557,7 +469,6 @@ def _dispatch_shards_serial(
     :param spec: Validated dataset spec.
     :param my_range: Contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; shards land here before upload.
-    :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
         byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
@@ -565,7 +476,7 @@ def _dispatch_shards_serial(
     rendered = 0
     skipped = 0
     for shard_id in my_range:
-        r, s = _render_one_owned_shard(spec, shard_id, work_dir, r2_dest_prefix, loggers)
+        r, s = _render_one_owned_shard(spec, shard_id, work_dir, loggers)
         rendered += int(r)
         skipped += int(s)
     return rendered, skipped
@@ -575,7 +486,6 @@ def _dispatch_shards_parallel(
     spec: DatasetSpec,
     my_range: range,
     work_dir: Path,
-    r2_dest_prefix: str,
     loggers: list[Logger],
 ) -> tuple[int, int]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
@@ -599,7 +509,6 @@ def _dispatch_shards_parallel(
     :param spec: Validated dataset spec.
     :param my_range: Non-empty contiguous range of shard IDs owned by this rank.
     :param work_dir: Hydra per-run output dir; every owned shard lands here.
-    :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
     :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
         byte size + render duration land in wandb history.
     :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
@@ -616,9 +525,7 @@ def _dispatch_shards_parallel(
             sid = next(pending, None)
             if sid is None:
                 break
-            in_flight.add(
-                pool.submit(_render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers)
-            )
+            in_flight.add(pool.submit(_render_one_owned_shard, spec, sid, work_dir, loggers))
         while in_flight:
             done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
             for fut in done:
@@ -629,11 +536,7 @@ def _dispatch_shards_parallel(
                 sid = next(pending, None)
                 if sid is None:
                     break
-                in_flight.add(
-                    pool.submit(
-                        _render_one_owned_shard, spec, sid, work_dir, r2_dest_prefix, loggers
-                    )
-                )
+                in_flight.add(pool.submit(_render_one_owned_shard, spec, sid, work_dir, loggers))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
     return rendered, skipped
@@ -643,12 +546,11 @@ def _render_one_owned_shard(
     spec: DatasetSpec,
     shard_id: int,
     work_dir: Path,
-    r2_dest_prefix: str,
     loggers: list[Logger],
 ) -> tuple[bool, bool]:
-    """Render+upload one owned shard, or skip if R2 already has it.
+    """Render+stage one owned shard, or skip if it is already staged.
 
-    Encapsulates the R2 skip-probe + ``_render_and_upload_shard`` invocation
+    Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
@@ -656,29 +558,21 @@ def _render_one_owned_shard(
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
     :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
-    :param work_dir: Hydra per-run output dir; shards land here before upload.
-    :param r2_dest_prefix: ``spec.r2.rclone_prefix()``.
+    :param work_dir: Hydra per-run output dir; shards land here before staging.
     :param loggers: Forwarded to ``_log_shard_metrics``.
     :returns: ``(rendered, skipped)`` — exactly one is ``True``.
     """
     shard = spec.shards[shard_id]
-    if spec.output_format is OutputFormat.LANCE:
-        # A Lance shard is staged iff a complete attempt set (sidecar + stats +
-        # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
-        already_present = shard_has_complete_attempt(spec, shard.shard_id)
+    # A Lance shard is staged iff a complete attempt set (sidecar + stats +
+    # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
+    if shard_has_complete_attempt(spec, shard.shard_id):
+        logger.info("skipping shard {} — already staged: {}", shard.shard_id, shard.filename)
         # Staged fragment size isn't probed on the skip path; the metrics row
         # deliberately logs 0 bytes for an already-staged lance shard.
-        existing_size = 0
-    else:
-        existing_size = r2_io.object_size(spec.r2.shard_uri(shard)) or 0
-        already_present = existing_size > 0
-    if already_present:
-        state = "already staged" if spec.output_format is OutputFormat.LANCE else "already in R2"
-        logger.info("skipping shard {} — {}: {}", shard.shard_id, state, shard.filename)
-        _log_shard_metrics(loggers, shard_id, byte_size=existing_size, render_seconds=0.0)
+        _log_shard_metrics(loggers, shard_id, byte_size=0, render_seconds=0.0)
         return False, True
     t0 = time.monotonic()
-    byte_size = _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+    byte_size = _render_and_upload_shard(spec, shard, work_dir)
     _log_shard_metrics(
         loggers, shard_id, byte_size=byte_size, render_seconds=time.monotonic() - t0
     )
@@ -701,34 +595,32 @@ def _render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
-    r2_dest_prefix: str,
 ) -> int:
-    """Render a single shard and upload it to R2; shards are retained at ``work_dir``.
+    """Render a single shard and stage it to R2; shards are retained at ``work_dir``.
 
     Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
     (``finalize_dataset`` re-downloads from R2 — launcher and worker pods do not
     share a filesystem). Peak local disk per rank scales with the number of owned
     shards. The renderer subprocess is wrapped in a retry loop bounded by
-    ``spec.render.max_retries`` (default 0 = strict fail-fast); rclone is outside
-    the loop because it already retries via ``--retries=3``.
+    ``spec.render.max_retries`` (default 0 = strict fail-fast); staging is outside
+    the loop because its rclone transport already retries via ``--retries=3``.
 
-    :returns: Local shard file size in bytes; stable for the caller because
-        shards are retained at ``work_dir``.
+    :param spec: Validated dataset spec; provides the render config and R2 URIs.
+    :param shard: Shard to render; names the output dataset and seeds the renderer.
+    :param work_dir: Hydra per-run output dir the shard is written under.
+    :returns: Local shard byte size, summed over its Lance directory tree; stable
+        for the caller because shards are retained at ``work_dir``.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
     :raises RuntimeError: Renderer exited 0 without writing the expected shard
-        file, or a rendered Lance shard failed local validation.
+        dataset, or a rendered Lance shard failed local validation.
     """
-    if spec.output_format is OutputFormat.LANCE:
-        # One identity threads the start marker and the staged attempt below;
-        # compute once here (HDF5/WDS never stage, so they skip this work).
-        worker_id = _worker_id()
-        attempt_uuid = uuid4().hex
-        # Attempt start marker — append-only; orphaned without a .valid it is
-        # the observable evidence of a crashed attempt (#1776).
-        write_rendering_marker(
-            spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid
-        )
+    # One identity threads the start marker and the staged attempt below.
+    worker_id = _worker_id()
+    attempt_uuid = uuid4().hex
+    # Attempt start marker — append-only; orphaned without a .valid it is
+    # the observable evidence of a crashed attempt (#1776).
+    write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -757,39 +649,28 @@ def _render_and_upload_shard(
     shard_path = work_dir / shard.filename
     # Surface a generator that exited 0 without writing output here, not as a
     # downstream rclone "source not found". Lance shards are directories.
-    if spec.output_format is OutputFormat.LANCE:
-        if not shard_path.is_dir():
-            raise RuntimeError(
-                "generate_vst_dataset.py exited 0 but did not write expected shard "
-                f"dataset: {shard_path}"
-            )
-        byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
-        logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
-        # Worker-side validation gates staging — corrupt renders never earn a
-        # .valid marker (design §7.3 shard write protocol).
-        shard_errors = validate_shard(shard_path, spec)
-        if shard_errors:
-            raise RuntimeError(
-                f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
-            )
-        stage_lance_shard_attempt(
-            spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
+    if not shard_path.is_dir():
+        raise RuntimeError(
+            "generate_vst_dataset.py exited 0 but did not write expected shard "
+            f"dataset: {shard_path}"
         )
-        logger.info(
-            "shard staged: {} -> {}",
-            shard.filename,
-            spec.r2.shard_staging_dir_uri(shard.shard_id),
+    byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
+    logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
+    # Worker-side validation gates staging — corrupt renders never earn a
+    # .valid marker (design §7.3 shard write protocol).
+    shard_errors = validate_shard(shard_path, spec)
+    if shard_errors:
+        raise RuntimeError(
+            f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
         )
-    else:
-        if not shard_path.is_file():
-            raise RuntimeError(
-                "generate_vst_dataset.py exited 0 but did not write expected shard "
-                f"file: {shard_path}"
-            )
-        byte_size = shard_path.stat().st_size
-        logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
-        _rclone_copy(str(shard_path), r2_dest_prefix)
-        logger.info("shard uploaded: {} -> {}", shard.filename, r2_dest_prefix)
+    stage_lance_shard_attempt(
+        spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
+    )
+    logger.info(
+        "shard staged: {} -> {}",
+        shard.filename,
+        spec.r2.shard_staging_dir_uri(shard.shard_id),
+    )
     return byte_size
 
 
@@ -962,9 +843,8 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, with ``output_format!=hdf5``, or with
-        a zero-size train / val / test split (the eval datamodule opens
-        all three split files unconditionally).
+        ``finalize_inline=true``, or with a zero-size train / val / test split
+        (the eval datamodule opens all three split files unconditionally).
     """
     extras(cfg)
     render_cfg = cfg.get("render")
@@ -988,19 +868,14 @@ def main(cfg: DictConfig) -> None:
         if not cfg.finalize_inline:
             raise ValueError(
                 "oracle_eval_inline=true requires finalize_inline=true; "
-                "the inline oracle eval reads the {train,val,test}.h5 files "
-                "finalize uploads to R2."
-            )
-        if cfg.output_format != "hdf5":
-            raise ValueError(
-                "oracle_eval_inline=true only supports output_format=hdf5; "
-                f"got {cfg.output_format!r}."
+                "the inline oracle eval reads the {train,val,test}.lance datasets "
+                "finalize produces."
             )
         if any(size == 0 for size in spec.train_val_test_sizes):
             raise ValueError(
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
-                "VSTDataModule opens train.h5 / val.h5 / test.h5 unconditionally."
+                "VSTDataModule opens train.lance / val.lance / test.lance unconditionally."
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
@@ -1022,11 +897,15 @@ def main(cfg: DictConfig) -> None:
         if cfg.finalize_inline:
             finalize_from_spec(spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
-            # generate + finalize already wrote the shards, VDS splits, and
-            # stats.npz into output_dir; the splits reference the shards by
-            # basename, so read them in place — no R2 round-trip.
             output_dir = Path(cfg.paths.output_dir)
-            for split in ("train", "val", "test"):
+            splits: tuple[Split, ...] = ("train", "val", "test")
+            # finalize writes each split dataset straight to R2 and stages only
+            # stats.npz locally; materialize the splits for the local eval.
+            for split in splits:
+                r2_io.download_dir_no_overwrite(
+                    spec.r2.split_lance_uri(split), output_dir / f"{split}.lance"
+                )
+            for split in splits:
                 # test stays bare; train/val are namespaced so the shared run
                 # keeps one summary key per split (see _run_oracle_eval_subprocess).
                 metric_prefix = "" if split == "test" else f"{split}/"
@@ -1036,7 +915,7 @@ def main(cfg: DictConfig) -> None:
                     spec.run_id,
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
-                    predict_file=output_dir / f"{split}.h5",
+                    predict_file=output_dir / f"{split}.lance",
                     metric_prefix=metric_prefix,
                 )
         return

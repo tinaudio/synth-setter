@@ -2,9 +2,11 @@
 
 Archived W&B run configs and external job scripts resolve the old ``_target_``
 paths, so each ``surge_*`` module must stay importable (a re-export shim) and each
-``Surge*`` alias must stay bound to the renamed ``VST*`` class. The Flow-VAE module
-pulls the optional ``nflows`` dependency at import — undeclared in this project —
-so its shim and alias are pinned at the AST level instead. See #1664.
+``Surge*`` alias must stay bound to a concrete runnable class — the renamed
+``VST*`` model classes, and the Lance-backed data classes now that Lance is the
+only storage format. The Flow-VAE module pulls the optional ``nflows`` dependency
+at import — undeclared in this project — so its shim and alias are pinned at the
+AST level instead. See #1664.
 """
 
 from __future__ import annotations
@@ -19,9 +21,9 @@ import pytest
 import synth_setter.models
 
 # ``Surge*`` symbols are imported from the deprecated ``surge_*`` shim paths so a
-# broken shim fails collection; the ``VST*`` symbols come from the renamed modules.
+# broken shim fails collection; the concrete symbols come from the renamed modules.
+from synth_setter.data.lance_datamodule import LanceVSTDataModule, LanceVSTDataset
 from synth_setter.data.surge_datamodule import SurgeDataModule, SurgeXTDataset
-from synth_setter.data.vst_datamodule import VSTDataModule, VSTDataset
 from synth_setter.models.surge_fake_oracle_module import SurgeFakeOracleModule
 from synth_setter.models.surge_ff_module import SurgeFeedForwardModule
 from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModule
@@ -52,16 +54,16 @@ def test_vst_flow_matching_import_does_not_initialize_data_vst_package() -> None
         (SurgeFeedForwardModule, VSTFeedForwardModule),
         (SurgeFlowMatchingModule, VSTFlowMatchingModule),
         (SurgeFakeOracleModule, VSTFakeOracleModule),
-        (SurgeDataModule, VSTDataModule),
-        (SurgeXTDataset, VSTDataset),
+        (SurgeDataModule, LanceVSTDataModule),
+        (SurgeXTDataset, LanceVSTDataset),
     ],
 )
 def test_deprecated_alias_is_renamed_class(alias: type, renamed: type) -> None:
-    """Each ``Surge*`` alias resolves to its renamed ``VST*`` class by identity.
+    """Each ``Surge*`` alias resolves to its concrete renamed class by identity.
 
     :param alias: Deprecated ``Surge*`` symbol an old ``_target_`` resolves, imported
         through the ``surge_*`` shim module.
-    :param renamed: The ``VST*`` class the alias must be bound to.
+    :param renamed: The concrete class the alias must be bound to.
     """
     assert alias is renamed
 

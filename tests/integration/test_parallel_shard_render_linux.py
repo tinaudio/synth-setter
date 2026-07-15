@@ -9,7 +9,7 @@ calls race the X server and the renderer raises ``CalledProcessError``.
 
 This test drives the configured parallel-dispatch path through the real
 wrapper against the Surge XT VST3, with R2 I/O stubbed local, and asserts
-every shard's HDF5 file lands with the configured sample count. A failure
+every shard's Lance dataset lands with the configured sample count. A failure
 here gates whether per-thread ``DISPLAY`` provisioning (or wrapper edits)
 is needed; a pass closes the open question from the design doc.
 
@@ -31,12 +31,11 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import h5py
+import lance
 import pytest
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.data.vst.core import extract_renderer_version
-from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests._vst import PLUGIN_PATH
 
@@ -76,8 +75,8 @@ def test_parallel_renders_under_xvfb_wrapper(
     """4 concurrent renders through the real wrapper + real plugin must all complete.
 
     Fails (with the wrapper's ``CalledProcessError``) if the Xvfb / dbus
-    bootstrap is not concurrency-safe; on pass, every shard's HDF5 file
-    contains exactly ``_SAMPLES_PER_SHARD`` rows in the audio dataset.
+    bootstrap is not concurrency-safe; on pass, every shard's Lance dataset
+    contains exactly ``_SAMPLES_PER_SHARD`` rows.
 
     :param monkeypatch: Pytest fixture used to stub R2 calls and partition env.
     :param tmp_path: Pytest tmp dir used as the launcher's repo root.
@@ -88,22 +87,23 @@ def test_parallel_renders_under_xvfb_wrapper(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
-    rclone_srcs: list[Path] = []
+    uploaded_shards: list[Path] = []
 
-    def _fake_rclone(src: str, _dest: str) -> None:
-        rclone_srcs.append(Path(src))
+    def _fake_upload_dir(local_dir: Path, _dest: str, exclude: str | None = None) -> None:
+        # The main data upload carries the ``_versions`` exclude; the trailing
+        # manifest upload does not — record only the former to get one dir/shard.
+        if exclude is not None:
+            uploaded_shards.append(Path(local_dir))
 
-    monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _fake_rclone)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload_dir", _fake_upload_dir)
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_directory_exists", lambda *_a, **_k: False)
 
     generate(spec, tmp_path, [])
 
-    assert len(rclone_srcs) == _NUM_SHARDS
-    for path in rclone_srcs:
-        assert path.exists(), f"rclone source missing: {path}"
-        with h5py.File(path, "r") as h5:
-            dataset = h5[AUDIO_FIELD]
-            assert dataset.shape[0] == _SAMPLES_PER_SHARD  # type: ignore[attr-defined]
+    assert len(uploaded_shards) == _NUM_SHARDS
+    for path in uploaded_shards:
+        assert path.is_dir(), f"shard dataset missing: {path}"
+        assert lance.dataset(str(path)).count_rows() == _SAMPLES_PER_SHARD
 
 
 def _build_real_surge_spec(
@@ -133,7 +133,7 @@ def _build_real_surge_spec(
         "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [_SAMPLES_PER_SHARD * _NUM_SHARDS, 0, 0],
         "base_seed": 42,
         "r2": {
