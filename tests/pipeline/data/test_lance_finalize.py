@@ -128,7 +128,6 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
 
     finalize_lance_fragments(spec, work_dir, events.append)
 
-    # tiny_lance_spec: 4 shards over 3 non-empty splits (train=[0,1], val=[2], test=[3]).
     assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
 
 
@@ -151,7 +150,7 @@ def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
 
     finalize_from_spec(spec, tmp_path / "work", events.append)
 
-    # 4 winners, then 3 split commits + stats + card + the dataset.complete marker.
+    # One more artifact than finalize_lance_fragments: the dataset.complete marker.
     assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
 
 
