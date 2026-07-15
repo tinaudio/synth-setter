@@ -1,6 +1,15 @@
 # CHANGELOG
 
 
+## v9.1.0 (2026-07-15)
+
+### Features
+
+- **data-pipeline**: Distribute shards via jqueue
+  ([#1811](https://github.com/tinaudio/synth-setter/pull/1811),
+  [`8afb69b`](https://github.com/tinaudio/synth-setter/commit/8afb69b2ab068a242805f52473c3df71d9376e43))
+
+
 ## v9.0.1 (2026-07-15)
 
 ### Automation
