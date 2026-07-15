@@ -95,7 +95,8 @@ sub-agents; you never launch those directly.
 > - `mergeable`, `mergeStateStatus`, `statusCheckRollup`: **not available** —
 >   Step 2 handles this.
 >
-> If there are zero changed files between `base_sha` and `head_sha`, skip Steps
+> If there are zero changed files between `base_sha` and `head_sha`, set
+> `is_zero_diff=true`, skip Steps
 > 2–6 and go straight to Step 7's **PASS short form**: write the sentinel file
 > and return the rendered PASS report ending in `Sentinel: <path>` (note
 > `PASS — no diff vs ${base_ref}` in the report body). Do not early-return a
@@ -170,7 +171,15 @@ sub-agents; you never launch those directly.
 > reviews visible without making ordinary investigation a failure:
 >
 > ```bash
-> # `finding_count` and `pr_health_flag_count` are the Step 6 aggregate counts.
+> is_zero_diff="${is_zero_diff:-false}"
+> finding_count=0
+> pr_health_flag_count=0
+> # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
+> # Otherwise derive them from the Step 6 findings JSON.
+> if [[ "$is_zero_diff" == false && -f /tmp/repo-review-full-no-comments-findings.json ]]; then
+>   finding_count=$(jq '.findings | length' /tmp/repo-review-full-no-comments-findings.json)
+>   pr_health_flag_count=$(jq -r '.review_body' /tmp/repo-review-full-no-comments-findings.json | grep -c '\[pr-health\]' || true)
+> fi
 > is_non_pass=false
 > if ((finding_count > 0 || pr_health_flag_count > 0)); then
 >   is_non_pass=true
