@@ -320,6 +320,22 @@ def test_opencode_launcher_dry_run_emits_pinned_command() -> None:
         assert resolved["prompt"].endswith("routing probe")
 
 
+def test_opencode_launcher_prompt_file_read_into_prompt(tmp_path: Path) -> None:
+    """Read the worker prompt from a file when ``--prompt-file`` is selected.
+
+    :param tmp_path: Temporary directory for the prompt file.
+    """
+    prompt_file = tmp_path / "worker-prompt.txt"
+    prompt_file.write_text("prompt-file routing probe")
+
+    code, output = _run_opencode_launcher_py(
+        ["pr-review-worker-fast", "--prompt-file", str(prompt_file), "--dry-run"]
+    )
+
+    assert code == 0
+    assert json.loads(output)["prompt"].endswith("prompt-file routing probe")
+
+
 def test_opencode_launcher_orchestrator_role_rejected() -> None:
     """Refuse roles that have no opencode execution policy."""
     code, _ = _run_opencode_launcher_py(
