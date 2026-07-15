@@ -70,10 +70,11 @@ class CheckpointUploader(Checkpoint):
     def _maybe_upload(self, trainer: Trainer) -> None:
         """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
 
-        Rank-0-only and idempotent, so every save hook can call it safely: a
-        checkpoint unchanged since the last successful upload is skipped, and one
-        that keeps failing is retried at most :data:`_MAX_UPLOAD_ATTEMPTS` times
-        before backing off until its ``(mtime, size)`` changes again.
+        Rank-0-only and de-duplicated by the ``(path, mtime, size)`` change key, so
+        every save hook can call it safely: a checkpoint whose key is unchanged since
+        the last successful upload is skipped, and one that keeps failing is retried
+        at most :data:`_MAX_UPLOAD_ATTEMPTS` times before backing off until its key
+        changes again.
 
         :param trainer: The active trainer; supplies the rank flag and the
             ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
@@ -155,6 +156,20 @@ class CheckpointUploader(Checkpoint):
                 "last_model_path to mirror to %s; set save_last on the ModelCheckpoint.",
                 self._dest_uri,
             )
+
+    def on_exception(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Mirror the checkpoint ``ModelCheckpoint`` writes when a fit raises.
+
+        On an in-process crash (e.g. CUDA OOM) Lightning dispatches ``on_exception``
+        before re-raising past the CLI's train-end upload; ``ModelCheckpoint`` writes
+        a fresh ``last.ckpt`` here, and — running after it — this mirrors that write
+        so the crash-time checkpoint is not stranded on local disk.
+
+        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
+        :param \\*args: Unused Lightning positional payload (module, exception).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        self._maybe_upload(trainer)
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

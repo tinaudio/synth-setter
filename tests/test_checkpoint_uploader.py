@@ -414,6 +414,22 @@ def test_uploader_uploads_on_train_epoch_end(
     assert calls == [(ckpt, "r2://b/c/last.ckpt")]
 
 
+def test_uploader_mirrors_checkpoint_on_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``on_exception`` mirrors the ``last.ckpt`` ModelCheckpoint writes on a mid-fit crash.
+
+    :param monkeypatch: Swaps the R2 transport for a recorder.
+    :param tmp_path: Holds the crash-time checkpoint file the uploader reads.
+    """
+    calls = _stub_r2(monkeypatch)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"crash-weights")
+    uploader = CheckpointUploader("r2://b/c")
+    uploader.on_exception(_trainer(str(ckpt)), None, RuntimeError("cuda oom"))
+    assert calls == [(ckpt, "r2://b/c/last.ckpt")]
+
+
 def test_uploader_warns_once_under_ddp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
