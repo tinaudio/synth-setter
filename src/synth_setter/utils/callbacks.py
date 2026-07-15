@@ -24,23 +24,27 @@ from synth_setter.pipeline import r2_io
 log = logging.getLogger(__name__)
 
 # Bound on consecutive failed uploads of one unchanged checkpoint before backing
-# off until the file next changes — caps per-batch R2 retries when R2 is down.
+# off until the file next changes — caps R2 retries when R2 is down.
 _MAX_UPLOAD_ATTEMPTS = 3
+
+# The single mirrored object name; the whole class contract hinges on this basename.
+_LAST_CKPT_NAME = "last.ckpt"
 
 
 class CheckpointUploader(Callback):
     """Mirror ``ModelCheckpoint``'s ``last_model_path`` to R2 as it is (re)written.
 
     Guards against a run killed mid-training (host OOM/hang) stranding the newest
-    checkpoint on local disk — the CLI's checkpoint upload only fires at
-    train-end. ``save_last`` overwrites one path in place, so change detection
-    keys on the file's ``(mtime, size)``, not its name. Runs on every hook
-    ``ModelCheckpoint`` can save from, plus an ``on_train_end`` flush so the final
-    write is never missed (this callback runs *before* ``ModelCheckpoint`` within
-    a hook, so each save is mirrored on the next hook). Best-effort and
-    rank-0-only: an upload failure warns and is swallowed so persistence never
-    aborts training, retried up to :data:`_MAX_UPLOAD_ATTEMPTS` times per
-    checkpoint before backing off until the file next changes.
+    checkpoint on local disk — the CLI's upload otherwise only fires at train-end.
+    Best-effort and rank-0-only; the change key, retry bound, and hook coverage are
+    documented on :meth:`_maybe_upload` and the module constants.
+
+    **Cost — read before enabling under DDP.** The upload runs *synchronously* on
+    the rank-0 training thread, so each ``save_last`` rewrite blocks rank 0 for the
+    copy's duration while other ranks stall at the next collective (grad
+    all-reduce). Intended for single-device or coarse-cadence runs; a one-time
+    warning fires under DDP. Off by default
+    (``training.upload_checkpoints_during_training``).
     """
 
     def __init__(self, prefix_uri: str) -> None:
@@ -48,11 +52,13 @@ class CheckpointUploader(Callback):
 
         :param prefix_uri: ``r2://`` directory the run's ``last.ckpt`` uploads under.
         """
-        self._dest_uri = f"{prefix_uri.rstrip('/')}/last.ckpt"
+        super().__init__()
+        self._dest_uri = f"{prefix_uri.rstrip('/')}/{_LAST_CKPT_NAME}"
         self._uploaded_key: tuple[str, float, int] | None = None
         self._pending_key: tuple[str, float, int] | None = None
         self._attempts = 0
         self._saw_checkpoint = False
+        self._warned_ddp = False
 
     def _maybe_upload(self, trainer: Trainer) -> None:
         """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
@@ -71,6 +77,14 @@ class CheckpointUploader(Callback):
         if not source:
             return
         self._saw_checkpoint = True
+        if not self._warned_ddp and getattr(trainer, "world_size", 1) > 1:
+            self._warned_ddp = True
+            log.warning(
+                "Mid-run checkpoint upload runs synchronously on rank 0 and stalls "
+                "other DDP ranks at the next collective while each %s is copied to R2; "
+                "prefer a coarse checkpoint cadence.",
+                _LAST_CKPT_NAME,
+            )
         try:
             stat = Path(source).stat()
         except OSError as exc:  # checkpoint pruned/rotated between save and this hook

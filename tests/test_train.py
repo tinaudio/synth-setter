@@ -22,6 +22,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.pipeline import r2_io
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
@@ -763,3 +764,43 @@ def _prediction_file_names() -> list[str]:
         for prefix in _PREDICTION_PT_PREFIXES
         for sample_idx in range(NUM_FIXTURE_SAMPLES)
     )
+
+
+@pytest.mark.slow
+def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
+    cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``train()`` with the durability flag mirrors checkpoints to R2 during the run.
+
+    Runs a real two-epoch CPU fit with ``save_last`` and ``fake_r2_remote`` backing
+    ``r2:`` via rclone. Because ``on_train_end`` unconditionally flushes the final
+    checkpoint, asserting more than one upload proves a periodic hook mirrored an
+    earlier checkpoint *before* the run finished — the crash-durability guarantee a
+    single end-of-run flush can't. The final mirrored bytes must equal the local
+    checkpoint, catching a truncated/empty upload.
+
+    :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
+    """
+    real_upload = r2_io.upload_to_uri
+    uploads: list[tuple[Path, str]] = []
+
+    def _spy(local_path: Path, uri: str) -> None:
+        uploads.append((Path(local_path), uri))
+        real_upload(local_path, uri)
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _spy)
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.max_epochs = 2
+        cfg_train.training.upload_checkpoints_during_training = True
+    train(cfg_train)
+
+    assert len(uploads) >= 2  # >=2 => a periodic mirror fired before the on_train_end flush
+    final_local, final_uri = uploads[-1]
+    assert final_uri.endswith("/last.ckpt")
+    mirrored = fake_r2_remote / final_uri.removeprefix("r2://")
+    assert mirrored.read_bytes() == final_local.read_bytes()

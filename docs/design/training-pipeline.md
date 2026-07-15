@@ -310,7 +310,7 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via R2
 
-`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). Intermediate checkpoints are not synced.
+`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). Intermediate checkpoints are synced only when `training.upload_checkpoints_during_training` is set (default off): a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write to `r2://…/checkpoints/{config_id}/last.ckpt`, so a host crash before train-end can't strand the newest checkpoint. The upload is synchronous on the training thread, so it targets single-device or coarse-cadence runs.
 
 ```yaml
 # src/synth_setter/configs/logger/wandb.yaml

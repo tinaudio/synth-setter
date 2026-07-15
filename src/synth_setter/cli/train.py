@@ -89,16 +89,22 @@ def _checkpoint_prefix_uri(cfg: DictConfig) -> str:
 
     :param cfg: Hydra-composed train cfg forwarded to :func:`_derive_checkpoint_uri`.
     :returns: The ``r2://`` prefix (no trailing slash) for this run's checkpoints.
+    :raises ValueError: If a ``training.upload_checkpoints_uri`` override has no
+        key segment (e.g. ``r2://bucket``), which would collapse to a bad prefix.
     """
-    return _derive_checkpoint_uri(cfg).rsplit("/", 1)[0]
+    uri = _derive_checkpoint_uri(cfg)
+    prefix = uri.rsplit("/", 1)[0]
+    if not prefix.startswith("r2://") or prefix == "r2://":
+        raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
+    return prefix
 
 
 def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> None:
     """Attach a :class:`CheckpointUploader` when mid-run upload is enabled.
 
     Gated on ``training.upload_checkpoints_during_training`` (default off) so the
-    R2 write path is opt-in; a run that never sets it keeps the original
-    train-end-only upload behaviour. Mutates ``callbacks`` in place.
+    R2 write path is opt-in; a config that never sets it uploads only at
+    train-end. Mutates ``callbacks`` in place.
 
     :param cfg: Hydra-composed train cfg; reads the durability flag and the
         checkpoint-prefix inputs.

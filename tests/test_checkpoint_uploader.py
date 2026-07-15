@@ -13,12 +13,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.cli.train import _append_checkpoint_uploader, _checkpoint_prefix_uri, train
+from synth_setter.cli.train import _append_checkpoint_uploader, _checkpoint_prefix_uri
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import _MAX_UPLOAD_ATTEMPTS, CheckpointUploader
 
@@ -181,12 +180,13 @@ def test_uploader_noop_before_first_checkpoint(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_uploader_swallows_upload_error_without_raising(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A failed upload is logged and swallowed, never propagating out of the hook.
 
     :param monkeypatch: Swaps the R2 transport for a raising stub.
     :param tmp_path: Holds the fake checkpoint file the uploader reads.
+    :param caplog: Captures the warning the swallowed failure must still emit.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
 
@@ -197,7 +197,9 @@ def test_uploader_swallows_upload_error_without_raising(
     ckpt = tmp_path / "last.ckpt"
     ckpt.write_bytes(b"weights")
     uploader = CheckpointUploader("r2://b/c")
-    uploader.on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)  # must not raise
+    with caplog.at_level(logging.WARNING):
+        uploader.on_train_batch_end(_trainer(str(ckpt)), None, None, None, 0)  # must not raise
+    assert "upload to r2://b/c/last.ckpt failed" in caplog.text
 
 
 def test_uploader_retries_after_transient_failure(
@@ -252,6 +254,50 @@ def test_uploader_stops_retrying_after_max_attempts(
     for batch_idx in range(10):
         uploader.on_train_batch_end(trainer, None, None, None, batch_idx)
     assert attempts == _MAX_UPLOAD_ATTEMPTS
+
+
+def test_uploader_resumes_after_new_checkpoint_follows_exhausted_retries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A newer checkpoint uploads even after retries were exhausted on the prior one.
+
+    Guards the pending-key reset: without it, one bad R2 stretch would permanently
+    stop mirroring every later checkpoint — the exact durability regression this
+    feature prevents.
+
+    :param monkeypatch: Swaps the R2 transport (failing, then recovering).
+    :param tmp_path: Holds the ``last.ckpt`` rewritten between the two versions.
+    """
+    failing = True
+    recorded: list[str] = []
+
+    def _upload(_local_path: Path, uri: str) -> None:
+        if failing:
+            raise RuntimeError("r2 down")
+        recorded.append(uri)
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
+    ckpt = tmp_path / "last.ckpt"
+    ckpt.write_bytes(b"v1")
+    os.utime(ckpt, (1000, 1000))
+    uploader = CheckpointUploader("r2://b/c")
+    trainer = _trainer(str(ckpt))
+    for batch_idx in range(_MAX_UPLOAD_ATTEMPTS + 2):  # exhaust retries on v1
+        uploader.on_train_batch_end(trainer, None, None, None, batch_idx)
+    assert recorded == []
+
+    failing = False  # R2 recovers as a newer checkpoint version arrives
+    ckpt.write_bytes(b"v2-longer")
+    os.utime(ckpt, (2000, 2000))
+    uploader.on_train_batch_end(trainer, None, None, None, 99)
+    assert recorded == ["r2://b/c/last.ckpt"]
+
+
+def test_checkpoint_prefix_uri_rejects_override_without_key() -> None:
+    """A bucket-root override (no key segment) raises rather than yielding a bad prefix."""
+    with pytest.raises(ValueError, match="r2://bucket/key"):
+        _checkpoint_prefix_uri(_cfg(upload_checkpoints_uri="r2://mybucket"))
 
 
 def test_uploader_reuploads_when_size_changes_at_same_mtime(
@@ -397,31 +443,3 @@ def test_append_uploader_appends_after_existing_model_checkpoint() -> None:
     _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
     assert callbacks[0] is existing
     assert isinstance(callbacks[-1], CheckpointUploader)
-
-
-@pytest.mark.slow
-def test_uploader_end_to_end_mirrors_last_ckpt_to_r2(
-    cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A real single-epoch fit with the flag on lands ``last.ckpt`` in R2.
-
-    Drives the in-process ``train()`` over the tiny ksin/ffn model with a real
-    ``ModelCheckpoint`` (``save_last``) and ``fake_r2_remote`` backing ``r2:`` as
-    the local filesystem via the real rclone binary, then asserts the callback
-    mirrored ``last.ckpt`` under the derived prefix. Exercises the hook wiring the
-    ``_FakeTrainer`` doubles cannot: ModelCheckpoint writes at epoch end, after
-    ``on_train_batch_end``, and Lightning runs it after this callback, so only the
-    ``on_train_end`` flush — in real callback order — catches the final write.
-
-    :param cfg_train: Tiny CPU training cfg (ksin/ffn, one epoch, ``save_last``).
-    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
-    :param monkeypatch: Stubs the R2 auth-ping so only the upload copy runs.
-    """
-    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    HydraConfig().set_config(cfg_train)
-    with open_dict(cfg_train):
-        cfg_train.test = False
-        cfg_train.training.upload_checkpoints_during_training = True
-    train(cfg_train)
-    rel = _checkpoint_prefix_uri(cfg_train).removeprefix("r2://") + "/last.ckpt"
-    assert (fake_r2_remote / rel).is_file()
