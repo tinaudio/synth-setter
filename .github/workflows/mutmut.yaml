@@ -27,12 +27,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Requires 3.11+: mutmut parses pyproject.toml, and 3.10's legacy `toml`
-      # fallback crashes on the PEP 735 `dev` group's inline-table arrays — #1414.
-      - name: Set up Python 3.11
+      # tomllib avoids mutmut's legacy TOML parser failure on PEP 735 groups — see #1414.
+      - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6

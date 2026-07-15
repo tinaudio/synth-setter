@@ -15,7 +15,7 @@ clean-logs: ## Clean logs
 	rm -rf logs/**
 
 format: ## Run pre-commit hooks
-	pre-commit run -a
+	./.venv/bin/pre-commit run -a
 
 GATE ?=
 count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
@@ -33,7 +33,7 @@ UNAME_S := $(shell uname -s)
 HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
 
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	./.venv/bin/pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # test-full-* split per hardware. test-full-cpu can parallelize; test-full-gpu and
 # test-full-mps run serially because GPU/MPS tests need exclusive device access.
@@ -101,17 +101,17 @@ deflake: ## Rerun TEST COUNT times; retain failed tmp_paths under deflake-artifa
 	  --junitxml deflake-artifacts/junit.xml \
 	  -- "$(TEST)" 2>&1 | tee deflake-artifacts/pytest.log
 
-install: ## End-to-end: install uv, create .venv (Python 3.11), install deps, set up pre-commit
+install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, set up pre-commit
 	@command -v uv >/dev/null 2>&1 || [ -x "$$HOME/.local/bin/uv" ] || \
 		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 	@set -e; \
 	UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
 	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
 	if [ -d .venv ]; then \
-		PY_VER=$$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null); \
-		[ "$$PY_VER" = "3.11" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.11 (rm -rf .venv to recreate)"; exit 1; }; \
+		PY_VER=$$(.venv/bin/python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null); \
+		[ "$$PY_VER" = "3.12.13" ] || { echo "ERROR: existing .venv has Python $$PY_VER, need 3.12.13 (rm -rf .venv to recreate)"; exit 1; }; \
 	else \
-		"$$UV" venv --python 3.11 --prompt synth-setter .venv; \
+		"$$UV" venv --python 3.12.13 --prompt synth-setter .venv; \
 	fi; \
 	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
 	if [ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]; then \

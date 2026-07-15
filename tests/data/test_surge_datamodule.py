@@ -29,6 +29,7 @@ import random
 import shutil
 import sys
 from collections.abc import Iterator
+from itertools import combinations, product
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -157,9 +158,9 @@ def _write_h5_shard(
     with h5py.File(path, "w") as f:
         f.create_dataset(
             "audio",
-            data=rng.standard_normal((num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)).astype(
-                np.float32
-            ),
+            data=rng.uniform(
+                -1.0, 1.0, (num_rows, _AUDIO_CHANNELS, _AUDIO_SAMPLES)
+            ).astype(np.float32),
         )
         if mel_fill is None:
             mel_data = rng.standard_normal((num_rows, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES))
@@ -559,6 +560,36 @@ class TestVSTDatasetH5Mode:
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             VSTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
 
+    @pytest.mark.parametrize(
+        ("mean", "std", "message"),
+        [
+            (np.nan, 1.0, "mean must contain only finite values"),
+            (np.inf, 1.0, "mean must contain only finite values"),
+            (-np.inf, 1.0, "mean must contain only finite values"),
+            (0.0, np.nan, "std must contain only finite values"),
+            (0.0, np.inf, "std must contain only finite values"),
+            (0.0, -np.inf, "std must contain only finite values"),
+            (0.0, 0.0, "std values must be positive"),
+            (0.0, -1.0, "std values must be positive"),
+        ],
+    )
+    def test_invalid_stats_raise_value_error(
+        self, tmp_path: Path, mean: float, std: float, message: str
+    ) -> None:
+        """Corrupt normalization statistics fail before any loader exposes a batch.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mean: Mean written to the statistics fixture.
+        :param std: Standard deviation written to the statistics fixture.
+        :param message: Expected validation error text.
+        """
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=4)
+        _write_stats(tmp_path, mean=mean, std=std)
+
+        with pytest.raises(ValueError, match=message):
+            VSTDataset(h5_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
+
     def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:
         """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout.
 
@@ -680,7 +711,9 @@ def _reference_getitem(
     param_array = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if dataset.ot:
-        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
+            noise, param_array, mel_spec, m2l, audio
+        )
 
     return dict(
         mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
@@ -829,7 +862,7 @@ class TestNoiseGeneratorSeeding:
         """
         dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
         dataset[0]  # parent read: get_worker_info() is genuinely None here
-        worker_info = SimpleNamespace(seed=777)
+        worker_info = SimpleNamespace(seed=777, num_workers=1)
         monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
         noise = dataset[0]["noise"]
         assert noise is not None
@@ -850,7 +883,7 @@ class TestNoiseGeneratorSeeding:
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         dataset = VSTDataset(single_h5, batch_size=4, ot=False, use_saved_mean_and_variance=False)
-        worker_info = SimpleNamespace(seed=777)
+        worker_info = SimpleNamespace(seed=777, num_workers=1)
         monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: worker_info)
         first = dataset[0]["noise"]
         second = dataset[1]["noise"]
@@ -861,6 +894,82 @@ class TestNoiseGeneratorSeeding:
         )
         torch.testing.assert_close(
             second, torch.randn(second.shape, generator=expected_stream), atol=0.0, rtol=0.0
+        )
+
+    def test_ddp_ranks_receive_distinct_reproducible_noise(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy in-process DDP ranks receive separate noise streams.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: None)
+
+        def noise_for_rank(rank: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            torch.manual_seed(1234)
+            dataset = VSTDataset(
+                single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+            )
+            try:
+                noise = dataset[0]["noise"]
+                assert noise is not None
+                return noise.clone()
+            finally:
+                assert dataset.dataset_file is not None
+                dataset.dataset_file.close()
+
+        rank_zero = noise_for_rank(0)
+        rank_one = noise_for_rank(1)
+        assert not torch.equal(rank_zero, rank_one)
+        assert torch.equal(rank_zero, noise_for_rank(0))
+        assert torch.equal(rank_one, noise_for_rank(1))
+
+    def test_ddp_worker_grid_receives_distinct_reproducible_noise(
+        self, single_h5: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy distributed rank-worker pairs receive separate noise streams.
+
+        :param single_h5: Fixture-provided single-shard HDF5 path.
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
+        """
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        base_seed = 777
+        num_workers = 2
+
+        def noise_for(rank: int, worker_id: int) -> torch.Tensor:
+            monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+            monkeypatch.setattr(
+                torch.utils.data,
+                "get_worker_info",
+                lambda: SimpleNamespace(
+                    seed=base_seed + worker_id, num_workers=num_workers
+                ),
+            )
+            dataset = VSTDataset(
+                single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
+            )
+            try:
+                noise = dataset[0]["noise"]
+                assert noise is not None
+                return noise.clone()
+            finally:
+                assert dataset.dataset_file is not None
+                dataset.dataset_file.close()
+
+        rank_worker_pairs = list(product(range(2), range(num_workers)))
+        first_pass = [noise_for(*pair) for pair in rank_worker_pairs]
+        second_pass = [noise_for(*pair) for pair in rank_worker_pairs]
+
+        assert all(
+            torch.equal(first, second)
+            for first, second in zip(first_pass, second_pass, strict=True)
+        )
+        assert all(
+            not torch.equal(left, right)
+            for left, right in combinations(first_pass, 2)
         )
 
 

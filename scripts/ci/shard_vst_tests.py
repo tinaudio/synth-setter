@@ -19,10 +19,9 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from typing import TypeAlias
 
 #: A GitHub Actions matrix object: ``{"include": [{"shard": n, "files": str}]}``.
-Matrix: TypeAlias = dict[str, list[dict[str, object]]]
+type Matrix = dict[str, list[dict[str, object]]]
 
 
 def collect_test_files(collected: str) -> list[str]:

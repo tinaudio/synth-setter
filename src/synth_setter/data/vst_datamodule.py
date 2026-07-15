@@ -1,4 +1,14 @@
-import random
+"""VST shard dataloading and shared batch preparation.
+
+Example::
+
+    module = VSTDataModule(
+        dataset_root="data", param_spec_name=ParamSpecName("surge_xt")
+    )
+    module.setup("fit")
+    batch = next(iter(module.train_dataloader()))
+"""
+
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import ClassVar, NotRequired, Protocol, TypedDict
@@ -16,6 +26,8 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 
+# Exclusive ``torch.randint`` bound keeping drawn seeds in signed-int64 range.
+_SEED_BOUND = torch.iinfo(torch.int64).max
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
 # are documented in the docstring body instead.
@@ -33,6 +45,30 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     mel_spec: NotRequired[np.ndarray | None]
     music2latent: NotRequired[np.ndarray | None]
     audio: NotRequired[np.ndarray | None]
+
+
+def _raw_batch_validation_error(raw: RawBatch) -> str | None:
+    """Return the first stored-value contract violation, if any.
+
+    :param raw: Read shard columns to validate.
+    :returns: Validation message, or ``None`` when every stored value is valid.
+    """
+    arrays = {
+        "param_array": raw["param_array"],
+        "mel_spec": raw.get("mel_spec"),
+        "music2latent": raw.get("music2latent"),
+        "audio": raw.get("audio"),
+    }
+    for column, array in arrays.items():
+        if array is not None and not np.isfinite(array).all():
+            return f"{column} contains non-finite values"
+    params = raw["param_array"]
+    if np.any((params < 0) | (params > 1)):
+        return "param_array values must be within [0, 1]"
+    audio = raw.get("audio")
+    if audio is not None and np.any((audio < -1) | (audio > 1)):
+        return "audio values must be within [-1, 1]"
+    return None
 
 
 def prepare_batch(
@@ -66,15 +102,26 @@ def prepare_batch(
     :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` with
         ``float32`` contiguous tensors, ``None`` for unread modalities; ``params``
         and ``noise`` are ``(batch, num_params)``.
+    :raises ValueError: If stored or transformed values are non-finite,
+        parameters are outside ``[0, 1]``, or audio samples are outside
+        ``[-1, 1]``.
     """
+    validation_error = _raw_batch_validation_error(raw)
+    if validation_error is not None:
+        raise ValueError(validation_error)
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
 
     mel_raw = raw.get("mel_spec")
     if mel_raw is not None:
         if mean is not None and std is not None:
-            mel_raw = (mel_raw - mean) / std
+            with np.errstate(over="ignore", invalid="ignore"):
+                mel_raw = (mel_raw - mean) / std
+            if not np.isfinite(mel_raw).all():
+                raise ValueError("mel_spec normalization produced non-finite values")
         mel_spec = torch.from_numpy(mel_raw).to(dtype=torch.float32)
+        if not torch.isfinite(mel_spec).all():
+            raise ValueError("mel_spec float32 conversion produced non-finite values")
     else:
         mel_spec = None
 
@@ -89,7 +136,9 @@ def prepare_batch(
     # the generator (randn_like does not), so noise can't land on a foreign device.
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, audio = _hungarian_match(noise, params, mel_spec, audio)
+        noise, params, mel_spec, m2l, audio = _hungarian_match(
+            noise, params, mel_spec, m2l, audio
+        )
 
     return {
         "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
@@ -98,6 +147,56 @@ def prepare_batch(
         "noise": noise.contiguous(),
         "audio": audio.contiguous() if audio is not None else None,
     }
+
+
+def draw_generator_seed() -> int:
+    """Draw a noise-generator seed from the global RNG, so ``seed_everything`` governs it.
+
+    A bare ``torch.Generator()`` would repeat a fixed default seed; drawing
+    from the global stream keeps operator seeding in charge.
+
+    :returns: Seed for ``torch.Generator.manual_seed``.
+    """
+    return int(torch.randint(_SEED_BOUND, (1,)).item())
+
+
+def ranked_generator_seed(base_seed: int, rank: int, num_workers: int = 1) -> int:
+    """Namespace a PyTorch generator seed by distributed rank.
+
+    :param base_seed: Process or worker seed before rank namespacing.
+    :param rank: Distributed process rank.
+    :param num_workers: Worker streams reserved per rank.
+    :returns: Rank-specific seed in the range accepted by ``manual_seed``.
+    """
+    return (base_seed + rank * num_workers) % (2**64)
+
+
+def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load the mel mean and std saved beside the shard.
+
+    :param dataset_file: Shard path whose parent directory holds ``stats.npz``.
+    :returns: ``(mean, std)`` arrays broadcasting against ``mel_spec`` rows.
+    :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
+    :raises ValueError: If the stored statistics are non-finite or ``std`` is
+        not strictly positive.
+    """
+    stats_file = VSTDataset.get_stats_file_path(dataset_file)
+    if not stats_file.exists():
+        raise FileNotFoundError(
+            f"Could not find statistics file {stats_file}. \n"
+            "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
+        )
+
+    with np.load(stats_file) as stats:
+        mean = stats["mean"]
+        std = stats["std"]
+    if not np.isfinite(mean).all():
+        raise ValueError("mean must contain only finite values")
+    if not np.isfinite(std).all():
+        raise ValueError("std must contain only finite values")
+    if np.any(std <= 0):
+        raise ValueError("std values must be positive")
+    return mean, std
 
 
 class ShardColumn(Protocol):
@@ -129,7 +228,7 @@ class ShardFile(Protocol):
         ...
 
     def __bool__(self) -> bool:
-        """True while open, False after ``close`` — the teardown tests' contract.
+        """Report True while open, False after ``close`` — the teardown tests' contract.
 
         :return: Whether the shard is still open.
         """
@@ -196,13 +295,16 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         self.batch_size = batch_size
         self.ot = ot
 
-        # Seeded from a global-RNG draw so seed_everything governs noise (a bare
-        # Generator() repeats a fixed default seed); workers re-seed on first read.
-        # Fake mode never uses it, so it skips the draw to leave the global stream
-        # untouched.
+        # Workers re-seed on first read. Fake mode never uses the generator,
+        # so it skips the draw to leave the global stream untouched.
+        self._rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_available() and torch.distributed.is_initialized()
+            else 0
+        )
         self.generator = torch.Generator()
         if not fake:
-            self.generator.manual_seed(int(torch.randint(2**63 - 1, (1,)).item()))
+            self.generator.manual_seed(ranked_generator_seed(draw_generator_seed(), self._rank))
         self._worker_reseed_done = False
 
         self.read_audio = read_audio
@@ -238,18 +340,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         """Load the mel mean and std saved alongside the shard.
 
         :param dataset_file: Shard path used to locate the sibling ``stats.npz``.
-        :raises FileNotFoundError: If the expected ``stats.npz`` is missing.
         """
-        stats_file = VSTDataset.get_stats_file_path(dataset_file)
-        if not stats_file.exists():
-            raise FileNotFoundError(
-                f"Could not find statistics file {stats_file}. \n"
-                "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
-            )
-
-        with np.load(stats_file) as stats:
-            self.mean = stats["mean"]
-            self.std = stats["std"]
+        self.mean, self.std = load_dataset_statistics(dataset_file)
 
     @staticmethod
     def get_stats_file_path(dataset_file: str | Path) -> Path:
@@ -329,10 +421,10 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
 
         Workers fork after ``__init__``, so every fork inherits identical
         generator state and would draw correlated noise; the DataLoader-assigned
-        worker seed (``base_seed + worker_id``) is distinct per worker yet still
-        derived from the global RNG, keeping ``seed_everything`` in charge. Done
-        lazily instead of via ``worker_init_fn`` so Lightning's auto-added
-        ``pl_worker_init_function`` (gated on ``worker_init_fn is None``) stays.
+        worker seed (``base_seed + worker_id``) is namespaced by distributed
+        rank and remains derived from the global RNG, keeping ``seed_everything``
+        in charge. Done lazily instead of via ``worker_init_fn`` so Lightning's
+        auto-added ``pl_worker_init_function`` stays enabled.
         """
         if self._worker_reseed_done:
             return
@@ -342,7 +434,8 @@ class VSTDataset(torch.utils.data.Dataset):  # noqa: DOC601, DOC603
         if worker_info is None:
             return
         self._worker_reseed_done = True
-        self.generator.manual_seed(worker_info.seed)
+        seed = ranked_generator_seed(worker_info.seed, self._rank, worker_info.num_workers)
+        self.generator.manual_seed(seed)
 
     def __getitem__(
         self, idx: int | tuple[int, int] | Sequence[int] | np.ndarray
@@ -499,7 +592,9 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
         :yield: A ``(start, stop)`` index pair for one batch.
         :ytype: tuple[int, int]
         """
-        offset = random.randint(0, self.batch_size - 1)
+        # np.random (not the random module): consistent with the permutation
+        # below, and seed_everything seeds NumPy the same way.
+        offset = int(np.random.randint(0, self.batch_size))
         perm = np.random.permutation(self.num_batches - 1)
         for i in perm:
             yield (i * self.batch_size + offset, (i + 1) * self.batch_size + offset)
