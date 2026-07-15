@@ -201,6 +201,17 @@ class TestRenderConfig:
                 }
             )
 
+    def test_dawdreamer_gui_toggle_never_is_accepted(self) -> None:
+        """DawDreamer accepts ``gui_toggle_cadence="never"`` without editor warm-up."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "renderer_backend": "dawdreamer",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.gui_toggle_cadence == "never"
+
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
 
