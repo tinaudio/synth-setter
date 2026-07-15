@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
-# pr_readiness_probe.sh — one-shot readiness report for a PR, the single gate
-# source shared by the /pr-readiness polling loop and
-# agent/hooks/pr-readiness-stop.sh (docs/pr-readiness-loop.md is canonical).
-#
-# Usage: pr_readiness_probe.sh [--gates-only] <pr-number>
-#
-# Prints one line per gate: Gate 1 (CI), Gate 2 (mergeable), Gate 3 (review
-# threads awaiting a reply) are enforced; Gate 4 (Copilot re-review) is
-# advisory-only and printed when gates 1-3 hold. --gates-only skips the
-# gate-4 lookup (two paginated REST calls) for callers that only consume the
-# exit code, like the Stop hook. Merged/closed PRs short-circuit to READY.
-# Exit: 0 = gates 1-3 hold, 1 = a gate failed, 2 = usage/environment error
-# (never a silent pass).
+# pr_readiness_probe.sh — four-gate PR readiness probe shared by the Stop hook
+# and the /pr-readiness loop; semantics + exit contract: docs/pr-readiness-loop.md § The probe.
 set -euo pipefail
 
 usage() {
@@ -76,9 +65,8 @@ else
   gates_hold=0
 fi
 
-# A thread "awaits a reply" when it is unresolved and either has a single
-# comment (nobody replied — including self-authored sentinel findings, where
-# author == PR author) or its most recent comment is not the PR author's.
+# Awaiting = unresolved && (single comment || last comment not the PR
+# author's) — so a finding self-posted by the author still counts until replied.
 # shellcheck disable=SC2016  # $-names in the query are GraphQL variables, not shell
 threads=$(gh api graphql --paginate \
   -f owner="$owner" -f name="$name" -F pr="$PR" \

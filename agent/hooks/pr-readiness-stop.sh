@@ -9,11 +9,8 @@
 #   warn   loud stderr, exit 0 (never blocks)
 #   off    no-op
 #
-# Gate evaluation is delegated to agent/_shared/pr_readiness_probe.sh, which
-# decides gates 1-3 (CI green, mergeable=MERGEABLE, every unresolved review
-# thread replied) deterministically and reports gate 4 (fresh Copilot
-# findings) as advisory. A missing probe or a probe environment error (exit
-# ≥2) fails open — only a definitive gate failure (exit 1) blocks.
+# Gates 1-3 are decided by agent/_shared/pr_readiness_probe.sh (gate 4 stays
+# advisory); a missing probe or probe error (exit ≥2) fails open — only exit 1 blocks.
 set -euo pipefail
 
 # shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}

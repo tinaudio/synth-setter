@@ -51,8 +51,10 @@ The probe prints one line per gate (gate-3 failures list each unresolved
 thread awaiting a reply; gate 4 is an advisory Copilot status) and exits 0
 only when gates 1-3 hold. Act on whichever gate it reports as failing:
 
-1. **Watch CI** — `gh pr checks "$PR" --watch`. On any failure, diagnose, fix,
-   commit, push, and return to step 1. Never move on with red CI.
+1. **Watch CI** — poll the probe as above, or `gh pr checks "$PR" --watch`
+   for a single blocking wait when you'll re-probe right after. On any
+   failure, diagnose, fix, commit, push, and return to step 1. Never move on
+   with red CI.
 
 2. **Check mergeability** — `gh pr view "$PR" --json mergeable -q .mergeable`:
 
