@@ -35,12 +35,15 @@ def _release_tool_env(tmp_path: Path) -> tuple[dict[str, str], str, str]:
     assert uv is not None
     assert git is not None
     assert semantic_release is not None
+    uv_version = subprocess.run(  # noqa: S603 — resolved uv binary and fixed version argv
+        [uv, "--version"], check=True, capture_output=True, text=True
+    ).stdout.split()[1]
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     pip_shim = bin_dir / "pip"
     pip_shim.write_text(
-        f'#!/bin/sh\ncase "$*" in "install uv=="*) ln -s "{uv}" "{bin_dir}/uv";; *) exit 1;; esac\n'
+        f'#!/bin/sh\ntest "$*" = "install uv=={uv_version}" && ln -s "{uv}" "{bin_dir}/uv"\n'
     )
     pip_shim.chmod(0o755)
 
