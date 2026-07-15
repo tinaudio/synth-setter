@@ -24,11 +24,14 @@ runs:
   steps:
     # Pinned, not apt: Ubuntu ships rclone 1.60.1, whose S3 backend fails every
     # first write to R2 with `NotImplemented`. Keep in step with local dev.
+    # amd64-only, matching every caller's `runs-on`. Bump the SHA256 alongside
+    # the version — it comes from https://downloads.rclone.org/v<version>/SHA256SUMS.
     - name: Install rclone
       if: inputs.install-rclone == 'true'
       shell: bash
       env:
         PINNED_RCLONE_VERSION: "1.68.2"
+        PINNED_RCLONE_SHA256: "0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c"
       run: |
         set -euo pipefail
         tmp="$(mktemp -d)"
@@ -36,9 +39,12 @@ runs:
         release="rclone-v${PINNED_RCLONE_VERSION}-linux-amd64"
         curl -fsSL --retry 3 -o "${tmp}/rclone.zip" \
           "https://downloads.rclone.org/v${PINNED_RCLONE_VERSION}/${release}.zip"
+        echo "${PINNED_RCLONE_SHA256}  ${tmp}/rclone.zip" | sha256sum -c -
         unzip -q "${tmp}/rclone.zip" -d "${tmp}"
         sudo install -m 0755 "${tmp}/${release}/rclone" /usr/local/bin/rclone
-        rclone version | head -1
+        installed="$(rclone version | head -1)"
+        echo "${installed}"
+        test "${installed}" = "rclone v${PINNED_RCLONE_VERSION}"
 
     # Secrets pass through step env so they are masked in logs while the action
     # writes both the public storage contract and today's rclone backend env.
