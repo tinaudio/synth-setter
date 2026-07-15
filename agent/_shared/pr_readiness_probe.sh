@@ -23,6 +23,9 @@ fail_env() {
   exit 2
 }
 
+# Gate-3 listing truncates each finding body to one locator-sized line.
+readonly BODY_PREVIEW_CHARS=100
+
 gates_only=0
 if [[ "${1:-}" == "--gates-only" ]]; then
   gates_only=1
@@ -97,14 +100,14 @@ threads=$(gh api graphql --paginate \
     }
   }' 2>&1) || fail_env "reviewThreads query failed: ${threads}"
 
-awaiting=$(jq -r --arg author "$pr_author" '
+awaiting=$(jq -r --arg author "$pr_author" --argjson chars "$BODY_PREVIEW_CHARS" '
   .data.repository.pullRequest.reviewThreads.nodes[]
   | select(.isResolved | not)
   | select((.first.totalCount == 1)
            or ((.last.nodes[0].author.login // "") != $author))
   | .first.nodes[0]
   | "  - \(.path):\(.line // .originalLine // "?") @\(.author.login // "?"): "
-    + (.body | split("\n")[0] | .[0:100])
+    + (.body | split("\n")[0] | .[0:$chars])
 ' <<<"$threads") || fail_env "reviewThreads parse failed"
 
 if [[ -z "$awaiting" ]]; then
