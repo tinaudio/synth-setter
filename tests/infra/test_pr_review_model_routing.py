@@ -94,6 +94,29 @@ def test_review_fanout_promotes_only_correctness() -> None:
     assert "do not fall back" in text.lower()
 
 
+def test_headless_hook_review_defaults_match_pinned_tier() -> None:
+    """Pin the headless hook launcher's review model to the #1906 tier.
+
+    The doc-drift PostToolUse hook launches ``run_agent_prompt`` in
+    ``agent/hooks/_lib.sh``; its default model must match the non-correctness
+    review tier pinned in the ``pr-review-worker-fast`` agent files so a
+    headless advisory never silently falls back to the session default.
+    """
+    lib = (REPO_ROOT / "agent" / "hooks" / "_lib.sh").read_text()
+    claude_default = re.search(r"CLAUDE_REVIEW_MODEL:-([^}]+)", lib)
+    codex_default = re.search(r"CODEX_REVIEW_MODEL:-([^}]+)", lib)
+    assert claude_default is not None, "run_agent_prompt must default CLAUDE_REVIEW_MODEL"
+    assert codex_default is not None, "run_agent_prompt must default CODEX_REVIEW_MODEL"
+
+    _, claude_frontmatter, _ = (
+        (REPO_ROOT / ".claude" / "agents" / "pr-review-worker-fast.md").read_text().split("---", 2)
+    )
+    assert yaml.safe_load(claude_frontmatter)["model"] == claude_default.group(1)
+
+    with (REPO_ROOT / ".codex" / "agents" / "pr-review-worker-fast.toml").open("rb") as file:
+        assert tomllib.load(file)["model"] == codex_default.group(1)
+
+
 def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
     """Exercise the Codex launcher entry point without spending inference tokens."""
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"

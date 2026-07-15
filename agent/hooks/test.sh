@@ -105,7 +105,21 @@ if [[ "$1" == "pr" && "$2" == "view" ]]; then
 fi
 exit 0
 EOF
-chmod +x "$STUBS/claude" "$STUBS/gh"
+# `codex` stub: mirrors the claude stub's argv capture so run_agent_prompt's
+# model-pin tests can assert the resolved `codex exec --model <tier>` flag.
+cat > "$STUBS/codex" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${CODEX_STUB_SLEEP_SECS:-}" ]]; then
+  sleep "$CODEX_STUB_SLEEP_SECS"
+fi
+if [[ "${CODEX_STUB_FAIL:-0}" == "1" ]]; then
+  echo "simulated headless codex agent failure" >&2
+  exit 3
+fi
+echo "# STUB headless codex output"
+echo "# args were: $*"
+EOF
+chmod +x "$STUBS/claude" "$STUBS/gh" "$STUBS/codex"
 export PATH="$STUBS:$PATH"
 
 # ---------------------------------------------------------------------------
@@ -348,6 +362,44 @@ T_doc_drift_gh_pr_view_uses_explicit_branch() {
   }
 }
 it "doc-drift: gh pr view is called with the captured branch as an explicit arg" T_doc_drift_gh_pr_view_uses_explicit_branch
+
+# ===========================================================================
+# run_agent_prompt — headless review model pin (see #1919)
+# Headless hook reviews must run on the pinned non-correctness review tier
+# from #1906 (haiku / gpt-5.6-terra), not the session default. Each case sources
+# _lib.sh and invokes run_agent_prompt directly so the stubs record the exact
+# argv handed to the headless CLI.
+# ===========================================================================
+
+T_run_agent_prompt_claude_pins_review_model() {
+  local out
+  out=$(AGENT_HEADLESS=claude bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model haiku"* ]] || { echo "claude headless cmd must pin --model haiku: $out"; return 1; }
+}
+it "run_agent_prompt: claude headless review pins --model haiku (the #1906 non-correctness tier)" T_run_agent_prompt_claude_pins_review_model
+
+T_run_agent_prompt_claude_env_override() {
+  local out
+  out=$(AGENT_HEADLESS=claude CLAUDE_REVIEW_MODEL=sonnet bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model sonnet"* ]] || { echo "CLAUDE_REVIEW_MODEL override must win: $out"; return 1; }
+  [[ "$out" != *"--model haiku"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
+}
+it "run_agent_prompt: CLAUDE_REVIEW_MODEL overrides the pinned claude tier" T_run_agent_prompt_claude_env_override
+
+T_run_agent_prompt_codex_pins_review_model() {
+  local out
+  out=$(AGENT_HEADLESS=codex bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model gpt-5.6-terra"* ]] || { echo "codex headless cmd must pin --model gpt-5.6-terra: $out"; return 1; }
+}
+it "run_agent_prompt: codex headless review pins --model gpt-5.6-terra (the #1906 non-correctness tier)" T_run_agent_prompt_codex_pins_review_model
+
+T_run_agent_prompt_codex_env_override() {
+  local out
+  out=$(AGENT_HEADLESS=codex CODEX_REVIEW_MODEL=gpt-5.6-sol bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model gpt-5.6-sol"* ]] || { echo "CODEX_REVIEW_MODEL override must win: $out"; return 1; }
+  [[ "$out" != *"--model gpt-5.6-terra"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
+}
+it "run_agent_prompt: CODEX_REVIEW_MODEL overrides the pinned codex tier" T_run_agent_prompt_codex_env_override
 
 # ===========================================================================
 # pre-pr-review-gate.sh

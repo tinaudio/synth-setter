@@ -149,11 +149,16 @@ run_agent_prompt() {
   fi
   # The prompt precedes --allowedTools: the option is variadic, so anything
   # after it is swallowed into the tool list instead of read as the prompt.
+  # Pin headless reviews to the #1906 non-correctness tier (haiku /
+  # gpt-5.6-terra) so they never inherit the session default; CLAUDE_REVIEW_MODEL
+  # / CODEX_REVIEW_MODEL override it.
+  local claude_model="${CLAUDE_REVIEW_MODEL:-haiku}"
+  local codex_model="${CODEX_REVIEW_MODEL:-gpt-5.6-terra}"
   local -a cmd
   case "$cli" in
-    claude) cmd=(claude -p "$prompt" --allowedTools "${allowed[@]}") ;;
+    claude) cmd=(claude -p "$prompt" --model "$claude_model" --allowedTools "${allowed[@]}") ;;
     # codex uses its own approval/sandbox model; it has no --allowedTools.
-    codex)  cmd=(codex exec "$prompt") ;;
+    codex)  cmd=(codex exec --model "$codex_model" "$prompt") ;;
     *)
       printf 'No supported headless agent CLI found; install claude or codex (AGENT_HEADLESS=%s).\n' \
         "${AGENT_HEADLESS:-}" >&2
