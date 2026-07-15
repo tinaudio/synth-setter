@@ -112,11 +112,7 @@ jobs:
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
 
-      # Per-matrix-cell run metadata. `needs.smoke-pipeline.outputs.run_id`
-      # flattens to one cell's value when the upstream is a matrix job (GHA
-      # limitation), so a verify cell would otherwise resolve under another
-      # cell's run_id. Download this matrix entry's own run-metadata artifact
-      # instead and read run_id from its ``input_spec.json``.
+      # Download this cell's metadata because matrix outputs collapse to one value.
       - name: Download smoke-pipeline run metadata for this matrix cell
         uses: actions/download-artifact@v4
         with:

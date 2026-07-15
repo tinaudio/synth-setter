@@ -225,6 +225,7 @@ def augment_shards(shards: list[Path], m2l_encode: M2LEncodeFn, batch_size: int 
 @click.option("--shard", type=int, default=None, help="Single shard id to process.")
 def main(
     data_dir: str,
+    *,
     batch_size: int | None,
     encode_batch_size: int,
     shard_range: tuple[int, int] | None,

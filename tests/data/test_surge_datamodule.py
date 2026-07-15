@@ -1375,12 +1375,12 @@ class TestVSTDataModule:
 
 
 class TestBackCompatAliases:
-    """The old Surge-prefixed names bind to the concrete Lance-backed classes."""
+    """Surge-prefixed aliases resolve to the Lance-backed classes."""
 
     def test_surge_data_module_alias_is_lance_vst_data_module(self) -> None:
-        """``SurgeDataModule`` resolves to ``LanceVSTDataModule`` so old ``_target_``s run."""
+        """``SurgeDataModule`` resolves to ``LanceVSTDataModule``."""
         assert surge_datamodule.SurgeDataModule is LanceVSTDataModule
 
     def test_surge_xt_dataset_alias_is_lance_vst_dataset(self) -> None:
-        """``SurgeXTDataset`` resolves to ``LanceVSTDataset`` so old ``_target_``s run."""
+        """``SurgeXTDataset`` resolves to ``LanceVSTDataset``."""
         assert surge_datamodule.SurgeXTDataset is LanceVSTDataset

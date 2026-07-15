@@ -15,10 +15,8 @@ is needed; a pass closes the open question from the design doc.
 
 It is parametrized over representative ``gui_toggle_cadence`` /
 ``plugin_reload_cadence`` pairs so a real render exercises each structurally
-distinct toggle/reload loop — representative cells of the coverage the retired
-``test-dataset-generation-render-matrix.yml`` docker fan-out provided (it ran
-all valid pairs; the dispatch branches are also covered fast in
-``tests/data/vst/test_writers.py``). The cadence cross-field *validation* (which
+distinct toggle/reload loop. The dispatch branches are covered fast in
+``tests/data/vst/test_writers.py``. The cadence cross-field *validation* (which
 pairs are accepted / rejected, e.g. ``always_on`` requires
 ``plugin_reload_cadence="once"``) is unit-tested in
 ``tests/pipeline/schemas/test_dataset_spec.py`` (#1354).
@@ -118,10 +116,7 @@ def _build_real_surge_spec(
     :returns: ``DatasetSpec`` with ``render.parallel=True``, ``_NUM_SHARDS``
         shards, and ``_SAMPLES_PER_SHARD`` samples per shard.
     """
-    # Derive the version here, not at import — `extract_renderer_version` falls
-    # back to loading the plugin (needs X11) when the bundle has no
-    # moduleinfo.json (Surge XT does not), and this runs inside the Xvfb wrapper
-    # at execution time, never during collection. Operators can still pin it.
+    # Resolve the version at runtime because fallback plugin loading requires Xvfb.
     renderer_version = os.environ.get("SYNTH_SETTER_RENDERER_VERSION") or (
         extract_renderer_version(Path(PLUGIN_PATH))
     )

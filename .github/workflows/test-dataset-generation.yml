@@ -104,15 +104,7 @@ on:
 permissions:
   contents: read
 
-# Per-trigger concurrency keys. With hourly + weekly schedules on the same
-# `refs/heads/main`, a single workflow-level group would let an hourly tick
-# cancel an in-flight weekly all-providers (runpod + oci) run mid-flight,
-# burning paid capacity without producing a result. Mixing
-# `github.event.schedule` (the cron string, only set on schedule events) into
-# the group separates the hourly and weekly axes; falling back to
-# `github.event_name` keeps `workflow_dispatch` in its own group too.
-# `cancel-in-progress: true` is still desirable per-group so a re-scheduled
-# tick of the same cron supersedes a stuck prior run.
+# Include the schedule in the group so hourly and weekly runs do not cancel each other.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event_name }}
   cancel-in-progress: true
@@ -143,18 +135,7 @@ jobs:
           pip install --no-deps -e .
           pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0" "pydantic>=2,<3" python-dotenv
 
-      # Keep the format axis so future formats can be added without restructuring the matrix.
-      #
-      # The Hydra compose in the workflow_dispatch branch captures stderr to a
-      # temp file so a missing-experiment / config-typing / missing-key failure
-      # surfaces in the action log instead of leaving operators with only
-      # "Process completed with exit code 1".
-      #
-      # An unknown `SCHEDULE_CRON` (someone adding a third cron without
-      # updating this dispatch) falls through to the empty-array branch so
-      # the matrix renders as a no-op rather than silently running the wrong
-      # axes; the explicit echo to stderr makes the misconfig visible in the
-      # action log.
+      # Keep the format axis so future formats do not require restructuring the matrix.
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -212,11 +193,7 @@ jobs:
           echo "providers: ${providers}"
           echo "output_formats: ${output_formats}"
 
-      # Bucket comes from the composed dataset config (the source of truth the
-      # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
-      # destination). Post-Hydra migration, the experiment id is composed
-      # against `src/synth_setter/configs/dataset.yaml` rather than read from a YAML path —
-      # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
+      # Compose the dataset config so this uses the launcher's R2 bucket.
       - id: bucket
         env:
           DATASET_CONFIG: >-

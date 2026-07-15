@@ -106,9 +106,7 @@ jobs:
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
 
-      # Finalize's Lance path (`pipeline.data.lance_shard`, `data.vst.writers`)
-      # transitively touches the torch-gated `data/` package — CPU torch is the
-      # minimum that resolves all imports.
+      # CPU torch is required because finalize imports the torch-gated data package.
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 

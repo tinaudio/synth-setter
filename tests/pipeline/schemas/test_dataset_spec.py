@@ -550,7 +550,7 @@ class TestDatasetSpecValidators:
     def test_legacy_output_format_token_raises(
         self, patch_runtime_io: None, legacy_token: str
     ) -> None:
-        """The retired ``hdf5`` / ``wds`` tokens are rejected after the lance-only cutover.
+        """Reject unsupported output-format tokens.
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         :param legacy_token: A removed output-format token that must no longer parse.

@@ -29,10 +29,7 @@ from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
-# Per-clip dimensions for the smoke fixture's Lance output. ``RenderConfig`` in
-# ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
-# explicit values for every flag below, so these constants must match the values
-# the subprocess is invoked with.
+# These values must match the explicit RenderConfig fixture arguments.
 _SURGE_FIXTURE_SAMPLE_RATE = 44100
 _SURGE_FIXTURE_CHANNELS = 2
 _SURGE_FIXTURE_DURATION_SECONDS = 4.0
