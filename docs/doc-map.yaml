@@ -597,8 +597,8 @@ docs:
   - doc: docs/reference/github-actions.md
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
-      - pattern: ".github/workflows/claude-code-review.yml"
-        covers: "Catalog row (Claude /code-review on every PR incl. drafts, posts findings), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+      - pattern: ".github/workflows/claude-repo-review-full.yml"
+        covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
@@ -606,7 +606,7 @@ docs:
   - doc: docs/operations/credential-rotation-guide.md
     description: Credential inventory + rotation/verification procedures
     sources:
-      - pattern: ".github/workflows/claude-code-review.yml"
+      - pattern: ".github/workflows/claude-repo-review-full.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row and Anthropic rotation/verification procedure (review run posting findings)"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"
