@@ -495,11 +495,10 @@ def test_checkpoint_prefix_uri_honors_override() -> None:
 
 
 def test_append_uploader_attaches_callback_when_enabled() -> None:
-    """The flag enabled appends exactly one ``CheckpointUploader``."""
-    callbacks: list[Callback] = []
+    """The flag enabled (with a ModelCheckpoint present) appends one ``CheckpointUploader``."""
+    callbacks: list[Callback] = [ModelCheckpoint()]
     _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
-    assert len(callbacks) == 1
-    assert isinstance(callbacks[0], CheckpointUploader)
+    assert sum(isinstance(cb, CheckpointUploader) for cb in callbacks) == 1
 
 
 def test_append_uploader_noop_when_disabled() -> None:
@@ -523,3 +522,25 @@ def test_append_uploader_appends_after_existing_model_checkpoint() -> None:
     _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
     assert callbacks[0] is existing
     assert isinstance(callbacks[-1], CheckpointUploader)
+
+
+def test_append_uploader_skips_and_warns_without_model_checkpoint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With no ModelCheckpoint present the uploader is skipped (it would suppress the default).
+
+    :param caplog: Captures the skip warning.
+    """
+    callbacks: list[Callback] = []
+    with caplog.at_level(logging.WARNING):
+        _append_checkpoint_uploader(_cfg(during_training=True), callbacks)
+    assert callbacks == []
+    assert "no ModelCheckpoint" in caplog.text
+
+
+def test_append_uploader_enables_save_on_exception() -> None:
+    """Appending the uploader flips ``save_on_exception`` on the ModelCheckpoint (default off)."""
+    model_checkpoint = ModelCheckpoint()
+    assert model_checkpoint.save_on_exception is False
+    _append_checkpoint_uploader(_cfg(during_training=True), [model_checkpoint])
+    assert model_checkpoint.save_on_exception is True

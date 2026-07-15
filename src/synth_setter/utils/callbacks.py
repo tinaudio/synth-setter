@@ -161,9 +161,11 @@ class CheckpointUploader(Checkpoint):
         """Mirror the checkpoint ``ModelCheckpoint`` writes when a fit raises.
 
         On an in-process crash (e.g. CUDA OOM) Lightning dispatches ``on_exception``
-        before re-raising past the CLI's train-end upload; ``ModelCheckpoint`` writes
-        a fresh ``last.ckpt`` here, and — running after it — this mirrors that write
-        so the crash-time checkpoint is not stranded on local disk.
+        before re-raising past the CLI's train-end upload. ``ModelCheckpoint`` writes a
+        fresh ``last.ckpt`` here only when ``save_on_exception`` is set — off by default,
+        so :func:`~synth_setter.cli.train._append_checkpoint_uploader` enables it — and,
+        running after it, this mirrors that write so the crash-time checkpoint is not
+        stranded on local disk.
 
         :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
         :param \\*args: Unused Lightning positional payload (module, exception).

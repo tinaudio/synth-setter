@@ -8,6 +8,7 @@ import lightning as L
 import torch
 import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
@@ -103,19 +104,31 @@ def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> N
     """Attach a :class:`CheckpointUploader` when mid-run upload is enabled.
 
     Gated on ``training.upload_checkpoints_during_training`` (default off) so the
-    R2 write path is opt-in; a config that never sets it uploads only at
-    train-end. Mutates ``callbacks`` in place.
+    R2 write path is opt-in. Requires an explicit ``ModelCheckpoint``: the uploader
+    is itself a ``Checkpoint``, so appending it to a callback list without one would
+    make Lightning skip auto-adding its default ``ModelCheckpoint`` and write no
+    checkpoints at all — so with none present the uploader is skipped with a warning.
+    Also flips ``save_on_exception`` on each ``ModelCheckpoint`` (off by default) so a
+    mid-fit crash writes a ``last.ckpt`` for :meth:`CheckpointUploader.on_exception`
+    to mirror. Mutates ``callbacks`` in place; see :class:`CheckpointUploader` for the
+    after-``ModelCheckpoint`` dispatch ordering.
 
-    :param cfg: Hydra-composed train cfg; reads the durability flag and the
-        checkpoint-prefix inputs.
-    :param callbacks: Instantiated callback list. The uploader is appended after
-        the existing ``ModelCheckpoint``; both are ``Checkpoint`` callbacks, and
-        Lightning's ``_reorder_callbacks`` preserves that order at the end of the
-        dispatch list, so the uploader runs *after* each save and mirrors the
-        fresh bytes.
+    :param cfg: Hydra-composed train cfg; reads the durability flag and prefix inputs.
+    :param callbacks: Instantiated callback list mutated in place.
     """
-    if OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
-        callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
+    if not OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
+        return
+    model_checkpoints = [cb for cb in callbacks if isinstance(cb, ModelCheckpoint)]
+    if not model_checkpoints:
+        log.warning(
+            "training.upload_checkpoints_during_training is set but no ModelCheckpoint "
+            "callback is configured; skipping the uploader (it would suppress Lightning's "
+            "default ModelCheckpoint and write no checkpoints)."
+        )
+        return
+    for model_checkpoint in model_checkpoints:
+        model_checkpoint.save_on_exception = True
+    callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
