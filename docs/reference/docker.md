@@ -110,7 +110,7 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/Antigravity, zellij, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Antigravity (agy), Hermes, zellij, dev user
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
   GIT_REF="$(git rev-parse HEAD)" \
@@ -121,14 +121,19 @@ The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js installed system-wide, the `@anthropic-ai/claude-code` and
-`@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
-(`~/.npm-global`, on PATH) — so later `npm install -g` runs, including
-claude-code's in-app self-update, avoid EACCES on the root-owned tree and aren't
-shadowed by a system-wide copy. It also adds the Google Antigravity (`agy`) CLI
-installed by its upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
-terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
-`/usr/local/bin`), a non-root
+Node.js installed system-wide, the `@anthropic-ai/claude-code`,
+`@openai/codex`, and `@earendil-works/pi-coding-agent` (`pi`) CLIs installed
+for the `dev` user via a per-user npm prefix (`~/.npm-global`, on PATH) — so
+later `npm install -g` runs, including claude-code's in-app self-update, avoid
+EACCES on the root-owned tree and aren't shadowed by a system-wide copy. It
+also adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
+SHA256-pinned upstream `install.sh` installs into a dedicated per-user venv —
+run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
+doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the
+#1923 bug class); the Google Antigravity (`agy`) CLI installed by its upstream
+`install.sh` into `~/.local/bin` (also on PATH), the zellij terminal
+multiplexer (pinned upstream musl binary, SHA256-verified, in `/usr/local/bin`),
+a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that
