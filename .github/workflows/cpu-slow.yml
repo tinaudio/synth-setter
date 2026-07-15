@@ -55,6 +55,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
+      # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
         with:
