@@ -579,6 +579,39 @@ Or switch to CPU for debugging:
 python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 ```
 
+### Training dies with no traceback (host RAM, not GPU)
+
+A run that vanishes mid-epoch leaving no Python traceback was almost certainly
+killed from outside. Suspect host RAM before the GPU: `earlyoom` runs on some
+dev boxes and SIGKILLs the largest process once RAM and swap are both low. It is
+a userspace daemon, so it never emits a kernel `oom-kill` and `dmesg` shows
+nothing:
+
+```bash
+journalctl --since "1 hour ago" | grep -E "earlyoom.*(SIGTERM|SIGKILL)"
+```
+
+The usual cause is dataloader workers. `num_workers` applies to *each*
+dataloader, so enabling validation doubles the live worker count — a run that
+fits with `limit_val_batches: 0` can be killed once validation is on. Lance
+workers cost ~1.3 GB each, so the count matters more than it looks: at 11
+workers a train pool plus a validation pool is ~28 GB, which no 32 GB host
+survives. If a run is killed, lower it below the default:
+
+```bash
+python -m synth_setter.cli.train experiment=surge/ffn_simple datamodule=surge_lance \
+  datamodule.num_workers=2
+```
+
+Raising it rarely helps. On a GPU-bound run, throughput is flat from 2 to 11
+workers while memory grows linearly, so extra workers only prefetch batches the
+GPU cannot consume. Size up only if the GPU is starved (low utilisation).
+
+Pair a long run with a checkpoint interval shorter than the run's survival time
+(`callbacks.model_checkpoint.every_n_train_steps`) — a run killed inside its own
+checkpoint interval banks nothing and replays from the previous checkpoint on
+every restart.
+
 ### W&B login issues
 
 If `wandb login` does not persist, set the API key as an environment variable:

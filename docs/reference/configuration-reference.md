@@ -86,6 +86,9 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
+- `datamodule.num_workers` applies to *each* dataloader, so enabling validation
+  doubles the live worker count — size it against host RAM, not core count
+  (Lance workers are ~1.3 GB each; see `getting-started.md` §8)
 
 Reference: `training-pipeline.md` §4–5
 

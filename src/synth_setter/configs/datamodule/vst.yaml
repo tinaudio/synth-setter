@@ -4,7 +4,10 @@ download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
-num_workers: 11
+# Applies per dataloader, so validation doubles the live worker count. Training
+# here is GPU-bound: throughput is flat from 2 to 11 workers while memory scales
+# linearly (~1.3 GB per Lance worker).
+num_workers: 4
 predict_file: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.

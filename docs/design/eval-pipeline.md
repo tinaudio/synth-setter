@@ -320,7 +320,7 @@ _target_: synth_setter.data.vst_datamodule.VSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
-num_workers: 11
+num_workers: 4  # per dataloader — validation doubles the live worker count
 ```
 
 `surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
