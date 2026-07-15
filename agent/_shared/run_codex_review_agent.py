@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Callers run this outside the project environment, so it declares its own deps.
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pydantic>=2"]
+# ///
 """Launch a Codex PR-review role with its project-pinned runtime policy."""
 
 from __future__ import annotations
