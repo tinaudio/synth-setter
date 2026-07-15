@@ -86,6 +86,9 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
+- `datamodule.num_workers` applies to *each* dataloader, so enabling validation
+  doubles the live worker count — size it against host RAM, not core count
+  (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
 - `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement
 
