@@ -183,7 +183,8 @@ Each agent returns a Markdown block:
 Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
 
 Each finding's description ends with its `(flagged by: …)` provenance from the
-cross-model pass; a degraded pass instead appends the single
+cross-model pass; a degraded pass still tags every finding
+`(flagged by: native)` and additionally appends the single
 `_opencode pass skipped/failed: …_` line after `### What looks good`.
 
 ## Step 5: Aggregate findings
