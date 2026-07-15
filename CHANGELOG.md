@@ -1,6 +1,218 @@
 # CHANGELOG
 
 
+## v8.50.0 (2026-07-15)
+
+### Features
+
+- **data**: Wire lance.torch map dataloaders into the Lance datamodule
+  ([#1834](https://github.com/tinaudio/synth-setter/pull/1834),
+  [`4a7f941`](https://github.com/tinaudio/synth-setter/commit/4a7f941794fbef2e6b9594536bbcf8757575d143))
+
+* feat(data): wire lance.torch map dataloaders into LanceVSTDataModule behind loader switch
+
+Add loader={legacy,map} to LanceVSTDataModule (#1740 Task 2.2-2.4): PrepareBatchCollate bridges
+  LanceMapDataset's pre-collated batches into prepare_batch with lazy per-process noise RNG
+  (spawn-picklable); repeat_first_batch re-expressed as sample-index folding; fake mode stays on the
+  legacy in-memory path. Validated across all registered param specs via Trainer
+  fit/validate/test/predict flows and the real train(cfg) entrypoint on both loader paths.
+
+* refactor(data): apply simplify-pass cleanups to map-loader wiring
+
+Replace the _RepeatFirstRows dataset wrapper (and its shuffle coupling + dead __getitem__) with a
+  self-contained _RepeatFirstBatchSampler; load stats.npz once per setup instead of per split; lift
+  the shard-column test fixtures into tests/helpers/lance_fixtures.py.
+
+* fix(data): address pre-PR review findings on map-loader wiring
+
+_RepeatFirstBatchSampler floors its index count to full batches (legacy floor-divide parity; no
+  truncated repeat on non-divisible row counts); map setup fails fast on an unregistered
+  param_spec_name; loader is validated before base construction. Fix pre-existing ruff findings in
+  vst_datamodule.py now that CI lints it as a changed file (module docstring, imperative __bool__
+  summary, np.random epoch offset), and lint-clean the new test module. Adds coverage: ragged
+  repeat, val/predict repeat routing, external predict_file stats, teardown/setup cycle.
+
+Note: pre-commit's ruff hook is a no-op in nested .worktrees/ (gitignore exclusion via
+  --force-exclude); ruff was run directly on changed files.
+
+* fix(data): type LanceVSTDataModule init explicitly and harden repeat sampler
+
+Mirror the base datamodule signature instead of *args/**kwargs Any pass-through (project no-Any
+  standard), drop the Any-typed sampling dict, freeze _MapSplit, and fail fast when
+  repeat_first_batch has less than one full batch. Adds stats-off map coverage and tightens the
+  seed-test docstring to present-tense contract wording.
+
+* fix(data): train drop_last parity and review-round-3 cleanups for map loader
+
+Map-mode train drops the ragged tail like legacy floor-divide (a size-1 trailing batch breaks
+  batch-statistics layers); eval loaders keep it. Document _MapSplit fields with attribute blocks
+  instead of a noqa, promote DEFAULT_PARAM_SPEC_NAME to public for the mirrored signature, share the
+  global-RNG seed draw via draw_generator_seed(), and log when fake mode bypasses loader='map'. Adds
+  noise-advance and train-tail tests.
+
+* style(data): unquote cast target for file-consistent cast style
+
+* refactor(data): name the generator seed bound instead of inlining it
+
+* chore(deps): sync uv.lock with the 8.46.0 release version
+
+* feat(data): add lance-map experiments with e2e smoke and parity tests
+
+Answers the round-4 review ask: surge/ffn_4_lance_map and surge/eval_ffn_4_lance_map compose the
+  existing ffn_4 contracts onto datamodule=surge_lance_map (pinned in test_configs), the
+  surge_lance_map smoke variant joins the real- and fake-VST matrices consumed by test_train.py and
+  test_eval.py, and TestLegacyMapParity compares legacy vs map eval epochs batch-for-batch (noise on
+  shape only — the streams are seeded independently per path by design).
+
+* refactor(data): type param spec registry names
+
+* fix(data): reject conflicting spec registration
+
+* test(data): expect typed registered param spec key
+
+* test(data): add Lance map acceptance benchmarks
+
+* refactor(data): reuse Lance conditioning mode
+
+* test(data): pin Lance map read and sampler contracts
+
+* refactor(data): type Lance parameter spec selection
+
+* fix(code-health): synchronize package lock version
+
+* refactor(data): type Lance loader options
+
+* refactor(data): clarify benchmark read model
+
+* fix(data): preserve M2L alignment under matching
+
+* fix(data): exclude teardown from loader timing
+
+* fix(data): reopen Lance handles after fork
+
+* test(data): run benchmark CLI end to end
+
+* refactor(data): tighten loader documentation
+
+* fix(data): preserve one-batch benchmark trials
+
+* fix(data): preserve map loader integration contracts
+
+* fix(data): validate persistent loader configuration
+
+* fix(data): harden map loader contracts
+
+* fix(data): validate normalization statistics
+
+* fix(data): isolate distributed loader noise
+
+* fix(data): seed loader workers by rank
+
+* fix(data): namespace distributed worker seeds
+
+* test(data): cover distributed worker seed grid
+
+* fix(data): namespace legacy loader noise
+
+* refactor(data): share ranked generator seeding
+
+* fix(ci): extend MPS test timeout
+
+* fix(data): preserve map loader batch invariants
+
+Reject non-finite mel values created by normalization or float32 conversion. Fold repeat-first-batch
+  indices at the dataset boundary so Lightning can install its standard distributed sampler.
+
+### Testing
+
+- (fix) use worktree virtualenv in make targets
+  ([#1898](https://github.com/tinaudio/synth-setter/pull/1898),
+  [`2782fbc`](https://github.com/tinaudio/synth-setter/commit/2782fbc8ed9824c0129eb39c76a49d4043b6ecce))
+
+
+## v8.49.0 (2026-07-15)
+
+### Continuous Integration
+
+- Make pre-PR remediation progress durable
+  ([#1889](https://github.com/tinaudio/synth-setter/pull/1889),
+  [`11d2cc7`](https://github.com/tinaudio/synth-setter/commit/11d2cc77447d8625bca6347ab4e62558dc903d66))
+
+* ci: make pre-PR remediation progress durable
+
+* ci: clarify pre-PR remediation guidance
+
+* ci: record pre-PR review progress
+
+* ci: refine review loop progress tracking
+
+* ci: count repeated non-PASS reviews
+
+* ci: derive review progress state counts
+
+### Features
+
+- **ci-automation**: Bump python floor to 3.12
+  ([#1797](https://github.com/tinaudio/synth-setter/pull/1797),
+  [`2bf03c3`](https://github.com/tinaudio/synth-setter/commit/2bf03c36d649889112b8cbfecc3ba6f402d98d53))
+
+* feat(ci-automation): bump python floor to 3.12
+
+* fix(ci-automation): repair stale worker python venv
+
+* fix(ci-automation): pin Python 3.12.13 runtime safely
+
+* fix(ci-automation): align launcher cache with Python pin
+
+* fix(ci-automation): install macOS deps into managed venv
+
+* internal-fix(ci-automation): validate Python patch version
+
+Exercise the existing-venv make branch with the canonical interpreter and pin the remote worker
+  command chain end to end. Align the worker helper with the project shell contract.
+
+* chore(cli): route Hydra __main__ calls through a typed cast
+
+pyright keeps the undecorated one-arg signature for functions whose decorator returns Any, so the
+  bare `main()` in the three Hydra entrypoints reports a missing `cfg` argument whenever the file is
+  touched (train.py was frozen into the pyright exclude list for the same reason). Cast the wrapper
+  to its real no-arg call shape at the call site; no runtime change.
+
+* chore(deps): synchronize lockfile package version
+
+* internal-fix(ci-automation): bootstrap stale workers safely
+
+* internal-fix(ci-automation): keep source overlay parseable
+
+### Refactoring
+
+- **data**: Type param spec registry names
+  ([#1879](https://github.com/tinaudio/synth-setter/pull/1879),
+  [`170dbcd`](https://github.com/tinaudio/synth-setter/commit/170dbcd625f298d04f2d79e138d6f49fea601339))
+
+* refactor(data): type param spec registry names
+
+* fix(data): reject conflicting spec registration
+
+* test(data): expect typed registered param spec key
+
+### Testing
+
+- (fix) prioritize DawDreamer gui validation
+  ([#1877](https://github.com/tinaudio/synth-setter/pull/1877),
+  [`4f2ea74`](https://github.com/tinaudio/synth-setter/commit/4f2ea74c252835ca70d8438507db7e09bd59251a))
+
+* fix(schema): prioritize DawDreamer gui validation
+
+* test(schema): cover DawDreamer GUI-disabled config
+
+---------
+
+- (fix) use local workflow fixture import
+  ([#1896](https://github.com/tinaudio/synth-setter/pull/1896),
+  [`cd86245`](https://github.com/tinaudio/synth-setter/commit/cd862454ebad447f2ec28d0e5d72656f2745c114))
+
+
 ## v8.48.1 (2026-07-14)
 
 ### Bug Fixes

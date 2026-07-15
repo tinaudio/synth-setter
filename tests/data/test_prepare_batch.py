@@ -98,7 +98,9 @@ def _reference_prepare_batch(
     param_array = torch.from_numpy(param_raw).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if ot:
-        noise, param_array, mel_spec, audio = _hungarian_match(noise, param_array, mel_spec, audio)
+        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
+            noise, param_array, mel_spec, m2l, audio
+        )
 
     return dict(
         mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
@@ -133,8 +135,164 @@ def _make_raw(
     if read_m2l:
         raw["music2latent"] = rng.standard_normal(_M2L_SHAPE).astype(np.float32)
     if read_audio:
-        raw["audio"] = rng.standard_normal(_AUDIO_SHAPE).astype(np.float32)
+        raw["audio"] = rng.uniform(-1.0, 1.0, _AUDIO_SHAPE).astype(np.float32)
     return raw
+
+
+@pytest.mark.parametrize("column", ["param_array", "mel_spec", "music2latent", "audio"])
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_prepare_batch_nonfinite_column_raises_value_error(
+    column: str, value: float
+) -> None:
+    """Non-finite stored values fail before model-facing transformation.
+
+    :param column: Raw column corrupted with a non-finite value.
+    :param value: Non-finite value injected into the raw column.
+    """
+    raw = _make_raw(read_mel=True, read_m2l=True, read_audio=True)
+    arrays = {
+        "param_array": raw["param_array"],
+        "mel_spec": raw.get("mel_spec"),
+        "music2latent": raw.get("music2latent"),
+        "audio": raw.get("audio"),
+    }
+    array = arrays[column]
+    assert array is not None
+    array.flat[0] = value
+
+    with pytest.raises(ValueError, match=rf"{column} contains non-finite values"):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+def test_prepare_batch_normalization_overflow_raises_value_error() -> None:
+    """Finite normalization operands may not produce non-finite model input."""
+    raw = _make_raw()
+    mel = _unwrap_array(raw.get("mel_spec"))
+    mean = np.zeros(mel.shape[1:], dtype=np.float32)
+    std = np.ones(mel.shape[1:], dtype=np.float32)
+    mel.flat[0] = np.finfo(np.float32).max
+    mean.flat[0] = -np.finfo(np.float32).max
+
+    with pytest.raises(ValueError, match="normalization produced non-finite values"):
+        prepare_batch(
+            raw,
+            mean=mean,
+            std=std,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+def test_prepare_batch_float32_cast_overflow_raises_value_error() -> None:
+    """Finite normalized values must remain finite at the model-facing dtype."""
+    raw = _make_raw()
+    mel = _unwrap_array(raw.get("mel_spec")).astype(np.float64)
+    mel.flat[0] = float(np.finfo(np.float32).max) * 2
+    raw["mel_spec"] = mel
+
+    with pytest.raises(ValueError, match="float32 conversion produced non-finite values"):
+        prepare_batch(
+            raw,
+            mean=np.zeros(mel.shape[1:], dtype=np.float64),
+            std=np.ones(mel.shape[1:], dtype=np.float64),
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_prepare_batch_parameter_out_of_range_raises_value_error(value: float) -> None:
+    """Stored parameters outside their normalized range fail before rescaling.
+
+    :param value: Invalid parameter value injected into the raw batch.
+    """
+    raw = _make_raw()
+    raw["param_array"][0, 0] = value
+
+    with pytest.raises(ValueError, match="param_array values must be within \\[0, 1\\]"):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+@pytest.mark.parametrize("value", [0.0, 1.0])
+def test_prepare_batch_parameter_range_endpoints_are_valid(value: float) -> None:
+    """The normalized parameter interval includes both endpoints.
+
+    :param value: Inclusive endpoint placed in the raw parameter batch.
+    """
+    raw = _make_raw()
+    raw["param_array"][0, 0] = value
+
+    batch = prepare_batch(
+        raw,
+        mean=None,
+        std=None,
+        rescale_params=False,
+        ot=False,
+        generator=torch.Generator(),
+    )
+
+    assert _unwrap(batch["params"])[0, 0].item() == value
+
+
+@pytest.mark.parametrize("value", [-1.01, 1.01])
+def test_prepare_batch_audio_out_of_range_raises_value_error(value: float) -> None:
+    """Stored audio outside full scale fails before tensor conversion.
+
+    :param value: Invalid audio sample injected into the raw batch.
+    """
+    raw = _make_raw(read_audio=True)
+    audio = raw.get("audio")
+    assert audio is not None
+    audio.flat[0] = value
+
+    with pytest.raises(ValueError, match="audio values must be within \\[-1, 1\\]"):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+@pytest.mark.parametrize("value", [-1.0, 1.0])
+def test_prepare_batch_audio_range_endpoints_are_valid(value: float) -> None:
+    """The full-scale audio interval includes both endpoints.
+
+    :param value: Inclusive endpoint placed in the raw audio batch.
+    """
+    raw = _make_raw(read_audio=True)
+    audio = raw.get("audio")
+    assert audio is not None
+    audio.flat[0] = value
+
+    batch = prepare_batch(
+        raw,
+        mean=None,
+        std=None,
+        rescale_params=False,
+        ot=False,
+        generator=torch.Generator(),
+    )
+
+    assert _unwrap(batch["audio"]).flatten()[0].item() == value
 
 
 def test_prepare_batch_is_pure_and_pinned() -> None:
@@ -245,6 +403,30 @@ def test_prepare_batch_modality_slots_match_read_flags(
     assert (out["audio"] is not None) == read_audio
     assert _unwrap(out["params"]).shape == (_BATCH, _NUM_PARAMS)
     assert _unwrap(out["noise"]).shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_prepare_batch_ot_keeps_m2l_aligned_with_params() -> None:
+    """Hungarian matching applies the parameter-row permutation to M2L conditioning."""
+    row_ids = np.linspace(0.0, 1.0, _BATCH, dtype=np.float32)
+    raw = _make_raw(read_mel=False, read_m2l=True)
+    raw["param_array"] = np.repeat(row_ids[:, None], _NUM_PARAMS, axis=1)
+    raw["music2latent"] = np.broadcast_to(
+        row_ids[:, None, None], _M2L_SHAPE
+    ).copy()
+
+    out = prepare_batch(
+        raw,
+        mean=None,
+        std=None,
+        rescale_params=False,
+        ot=True,
+        generator=torch.Generator().manual_seed(17),
+    )
+
+    params = _unwrap(out["params"])
+    m2l = _unwrap(out["m2l"])
+    assert torch.equal(m2l[:, 0, 0], params[:, 0])
+    assert not torch.equal(params[:, 0], torch.from_numpy(row_ids))
 
 
 @pytest.mark.parametrize(

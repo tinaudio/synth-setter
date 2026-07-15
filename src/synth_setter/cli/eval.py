@@ -3,9 +3,10 @@
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import hydra
 import pandas as pd
@@ -618,4 +619,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()

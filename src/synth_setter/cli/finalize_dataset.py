@@ -15,8 +15,9 @@ sidecars into ``stats.npz`` — no shard row is decoded (#1776).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import hydra
 import numpy as np
@@ -368,4 +369,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()

@@ -85,6 +85,12 @@ class TestSurgeDatamoduleOverlays:
         assert subtree["param_spec_name"] == "surge_xt"
         assert subtree["_target_"].endswith("VSTDataModule")
 
+    def test_surge_lance_map_overlays_map_loader(self) -> None:
+        """``surge_lance_map`` opts into the sample-indexed loader over the Lance base."""
+        subtree = compose_subtree("datamodule", "surge_lance_map")
+        assert subtree["loader"] == "map"
+        assert subtree["_target_"].endswith("LanceVSTDataModule")
+
 
 class TestParamSpecNameIsExplicit:
     """``param_spec_name`` must be chosen deliberately, never inherited from a base default."""

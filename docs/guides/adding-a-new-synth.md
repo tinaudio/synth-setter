@@ -63,10 +63,9 @@ audio = renderer.render(
 ```
 
 `PedalboardRenderer` has the same constructor and `render` contract. DawDreamer
-0.8.3 requires a CPython 3.11 or 3.12 render worker. Its published wheels cover
+0.8.3 requires a CPython 3.12 render worker. Its published wheels cover
 Linux x86_64, macOS x86_64/arm64, and Windows x86_64; Linux arm64 is not
-supported. This requirement applies to the worker that renders audio—a newer
-Python launcher can still dispatch to a compatible worker.
+supported. This requirement applies to the worker that renders audio.
 
 ## Step 1 — Scaffold a draft spec
 

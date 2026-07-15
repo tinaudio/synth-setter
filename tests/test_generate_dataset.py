@@ -26,10 +26,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import h5py
@@ -40,6 +44,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests._vst import PLUGIN_PATH
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
@@ -564,6 +569,168 @@ def test_main_skips_schema_invalid_cadence_cell_without_failing(
     )
     assert result.returncode == 0, result.stderr
     assert "skipping run" in (result.stdout + result.stderr)
+
+
+def _write_executable(path: Path, body: str) -> None:
+    """Write a small executable used by the worker-command integration test.
+
+    :param path: Executable path to create.
+    :param body: Complete shell-script contents.
+    """
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def _make_stale_worker_checkout(tmp_path: Path) -> Path:
+    """Create the pre-helper checkout shape found in an old worker image.
+
+    :param tmp_path: Scratch root for the worker checkout.
+    :returns: Worker checkout containing only the legacy sync script.
+    """
+    worker_root = tmp_path / "worker"
+    scripts_dir = worker_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "sync_worker_checkout.sh").write_text(
+        '#!/bin/bash\nset -euo pipefail\n[[ -z "${WORKER_GIT_REF:-}" ]] && exit 0\n'
+    )
+    return worker_root
+
+
+def _make_fake_worker_runtime(tmp_path: Path, trace: Path) -> Path:
+    """Create a worker runtime that delegates venv creation to the real ``uv``.
+
+    :param tmp_path: Scratch root for the fake executable directory.
+    :param trace: File receiving install and entrypoint invocations.
+    :returns: Directory to prepend to ``PATH``.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    _write_executable(
+        fake_bin / "uv",
+        "#!/bin/bash\n"
+        f'if [[ "$1" == "venv" ]]; then exec {shlex.quote(real_uv)} "$@"; fi\n'
+        f'printf "install:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
+    )
+    _write_executable(
+        fake_bin / "synth-setter-generate-dataset-from-hydra",
+        f'#!/bin/bash\nprintf "exec:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
+    )
+    return fake_bin
+
+
+@pytest.fixture()
+def remote_worker_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Path, Path, Path], tuple[subprocess.CompletedProcess[str], Path]]:
+    """Build a launcher that executes its generated worker command locally.
+
+    :param tmp_path: Scratch paths for the compute template and generated command.
+    :param monkeypatch: Redirects storage and SkyPilot boundaries.
+    :returns: Callable accepting worker root, worker venv, and fake runtime directory.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    def _dispatch(
+        worker_root: Path, worker_venv: Path, fake_bin: Path
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
+        compute_template = tmp_path / "compute.yaml"
+        compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("VIRTUAL_ENV", str(worker_venv))
+        monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+        monkeypatch.setattr(generate_dataset_cli, "_WORKER_REPO_ROOT", str(worker_root))
+        monkeypatch.setattr(generate_dataset_cli, "_WORKER_VENV", str(worker_venv))
+        monkeypatch.setattr(
+            generate_dataset_cli,
+            "write_spec_locally",
+            lambda _spec, output_dir: Path(output_dir) / "input_spec.json",
+        )
+        monkeypatch.setattr(
+            generate_dataset_cli,
+            "upload_spec",
+            lambda _spec: "r2://test/input_spec.json",
+        )
+        monkeypatch.setattr(
+            generate_dataset_cli.r2_io,
+            "ensure_r2_env_loaded",
+            lambda _env_file: None,
+        )
+
+        completed: list[subprocess.CompletedProcess[str]] = []
+
+        def _execute_worker(sky_cfg: SkypilotLaunchConfig) -> None:
+            assert sky_cfg.cmd is not None
+            command_path = tmp_path / "worker-command.sh"
+            command_path.write_text(sky_cfg.cmd)
+            completed.append(
+                subprocess.run(
+                    ["/bin/bash", "worker-command.sh"],
+                    cwd=tmp_path,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            )
+
+        monkeypatch.setattr(skypilot_launch, "dispatch_via_skypilot", _execute_worker)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/smoke-shard",
+                f"render.plugin_path={_TEST_PLUGIN_VST3}",
+                f"skypilot_launch.compute_template={compute_template}",
+            ],
+        )
+
+        cast("Callable[[], None]", generate_dataset_cli.main)()
+
+        assert len(completed) == 1
+        return completed[0], compute_template
+
+    return _dispatch
+
+
+def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_executes(
+    tmp_path: Path,
+    remote_worker_dispatch: Callable[
+        [Path, Path, Path], tuple[subprocess.CompletedProcess[str], Path]
+    ],
+) -> None:
+    """An unpinned stale worker repairs Python before executing the entrypoint.
+
+    :param tmp_path: Scratch worker checkout and safe worker-venv target.
+    :param remote_worker_dispatch: Locally executes the generated worker command.
+    """
+    worker_root = _make_stale_worker_checkout(tmp_path)
+    worker_venv = tmp_path / "worker-venv"
+    stale_python = worker_venv / "bin/python"
+    stale_python.parent.mkdir(parents=True)
+    _write_executable(stale_python, "#!/bin/bash\nexit 1\n")
+    trace = tmp_path / "worker-trace.log"
+    fake_bin = _make_fake_worker_runtime(tmp_path, trace)
+    result, compute_template = remote_worker_dispatch(worker_root, worker_venv, fake_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    repaired_version = subprocess.run(  # noqa: S603 -- controlled executable in tmp_path
+        [worker_venv / "bin/python", "-c", "import sys; print(sys.version_info[:3])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert repaired_version == "(3, 12, 13)"
+    install, invocation = trace.read_text().splitlines()
+    assert install == "install:pip install --group runtime -e ."
+    assert invocation.startswith("exec:experiment=generate_dataset/smoke-shard ")
+    assert f"render.plugin_path={_TEST_PLUGIN_VST3}" in invocation
+    assert f"skypilot_launch.compute_template={compute_template}" in invocation
+    assert "+created_at=" in invocation
 
 
 @pytest.mark.integration_r2

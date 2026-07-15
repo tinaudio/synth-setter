@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -87,6 +88,7 @@ register_resolvers()
 # Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
+_WORKER_VENV = "/venv/main"
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -851,6 +853,39 @@ def _smoke_job_name(spec: DatasetSpec) -> str:
     return stem
 
 
+def _worker_python_bootstrap_cmd() -> str:
+    """Build a worker-Python repair command that survives a stale checkout.
+
+    :return: Bash command that sources the helper when present and otherwise performs the same
+        guarded repair inline.
+    """
+    worker_venv = shlex.quote(_WORKER_VENV)
+    return (
+        f"{{ worker_venv={worker_venv}; "
+        "if [[ -f scripts/ensure_worker_python.sh ]]; then "
+        'source scripts/ensure_worker_python.sh "$worker_venv"; '
+        "else "
+        'worker_python="$worker_venv/bin/python"; '
+        "export SYNTH_SETTER_WORKER_PYTHON_RECREATED=0; "
+        'if [[ -n "${VIRTUAL_ENV:-}" && "$VIRTUAL_ENV" != "$worker_venv" ]]; then '
+        'echo "ERROR: worker VIRTUAL_ENV must be $worker_venv (got $VIRTUAL_ENV)" >&2; '
+        "false; "
+        "else "
+        'if [[ ! -x "$worker_python" ]] || ! '
+        '"$worker_python" -c \'import sys; '
+        "raise SystemExit(sys.version_info[:3] != (3, 12, 13))'; then "
+        'echo "Recreating $worker_venv with Python 3.12.13"; '
+        'rm -rf -- "$worker_venv"; '
+        'uv venv --python 3.12.13 "$worker_venv"; '
+        "export SYNTH_SETTER_WORKER_PYTHON_RECREATED=1; "
+        "fi; "
+        'export VIRTUAL_ENV="$worker_venv"; '
+        'export PATH="$worker_venv/bin:$PATH"; '
+        "fi; "
+        "fi; }"
+    )
+
+
 def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
@@ -874,7 +909,10 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     all_overrides = list(overrides) + pinned_overrides
     parts = [
         f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
-        "bash scripts/sync_worker_checkout.sh",
+        _worker_python_bootstrap_cmd(),
+        "bash scripts/sync_worker_checkout.sh --python-ready",
+        'if [[ "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" && '
+        '-z "${WORKER_GIT_REF:-}" ]]; then uv pip install --group runtime -e .; fi',
         "exec synth-setter-generate-dataset-from-hydra "
         + " ".join(shlex.quote(o) for o in all_overrides),
     ]
@@ -1026,4 +1064,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()
