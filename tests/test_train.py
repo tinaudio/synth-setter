@@ -804,3 +804,40 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
     assert final_uri.endswith("/last.ckpt")
     mirrored = fake_r2_remote / final_uri.removeprefix("r2://")
     assert mirrored.read_bytes() == final_local.read_bytes()
+
+
+@pytest.mark.slow
+def test_train_mirrors_checkpoint_to_r2_when_fit_raises(
+    cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash-time ``last.ckpt`` reaches R2 before ``train()`` re-raises.
+
+    :param cfg_train: Tiny CPU training cfg with a real ``ModelCheckpoint``.
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Stubs the R2 auth-ping and wraps uploads to record their URIs.
+    """
+    real_upload = r2_io.upload_to_uri
+    uploads: list[tuple[Path, str]] = []
+
+    def _spy(local_path: Path, uri: str) -> None:
+        uploads.append((Path(local_path), uri))
+        real_upload(local_path, uri)
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(r2_io, "upload_to_uri", _spy)
+    with open_dict(cfg_train):
+        cfg_train.callbacks.crash_callback = {
+            "_target_": "tests.helpers.crash_callback.RaiseOnTrainBatchEnd"
+        }
+        cfg_train.test = False
+        cfg_train.training.upload_checkpoints_during_training = True
+    HydraConfig().set_config(cfg_train)
+
+    with pytest.raises(RuntimeError, match="simulated mid-fit crash"):
+        train(cfg_train)
+
+    assert uploads
+    last_local, last_uri = uploads[-1]
+    assert last_local.name == "last.ckpt"
+    mirrored = fake_r2_remote / last_uri.removeprefix("r2://")
+    assert mirrored.read_bytes() == last_local.read_bytes()
