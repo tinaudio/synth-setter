@@ -95,7 +95,8 @@ sub-agents; you never launch those directly.
 > - `mergeable`, `mergeStateStatus`, `statusCheckRollup`: **not available** —
 >   Step 2 handles this.
 >
-> If there are zero changed files between `base_sha` and `head_sha`, skip Steps
+> If there are zero changed files between `base_sha` and `head_sha`, set
+> `is_zero_diff=true`, skip Steps
 > 2–6 and go straight to Step 7's **PASS short form**: write the sentinel file
 > and return the rendered PASS report ending in `Sentinel: <path>` (note
 > `PASS — no diff vs ${base_ref}` in the report body). Do not early-return a
@@ -165,6 +166,48 @@ sub-agents; you never launch those directly.
 > `.agent-reviews/repo-review-full-no-comments.<40-char-sha>.md`. **Do not
 > hand-write the filename** — always go through the helper.
 >
+> **Record review progress.** Before writing the report, record a compact
+> per-branch state file under `.agent-reviews/`. It makes repeated no-progress
+> reviews visible without making ordinary investigation a failure:
+>
+> ```bash
+> is_zero_diff="${is_zero_diff:-false}"
+> finding_count=0
+> pr_health_flag_count=0
+> # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
+> # Otherwise derive them from the Step 6 findings JSON.
+> if [[ "$is_zero_diff" == false && -f /tmp/repo-review-full-no-comments-findings.json ]]; then
+>   finding_count=$(jq '.findings | length' /tmp/repo-review-full-no-comments-findings.json)
+>   pr_health_flag_count=$(jq -r '.review_body' /tmp/repo-review-full-no-comments-findings.json | grep -c '\[pr-health\]' || true)
+> fi
+> is_non_pass=false
+> if ((finding_count > 0 || pr_health_flag_count > 0)); then
+>   is_non_pass=true
+> fi
+> progress_key=$(git branch --show-current | sha256sum | awk '{print $1}')
+> progress_path=".agent-reviews/repo-review-full-no-comments-progress.${progress_key}.txt"
+> current_head=$(git rev-parse HEAD)
+> current_upstream=$(git rev-parse '@{upstream}' 2>/dev/null || echo none)
+> status_porcelain=$(git status --porcelain)
+> worktree_state=clean
+> [[ -n "$status_porcelain" ]] && worktree_state=dirty
+> current_status=$(printf '%s' "$status_porcelain" | sha256sum | awk '{print $1}')
+> current_state="${current_head}|${current_upstream}|${current_status}"
+> previous_state=""
+> previous_count=0
+> if [[ -f "$progress_path" ]]; then
+>   read -r previous_count previous_state <"$progress_path" || true
+> fi
+> unchanged_count=0
+> if "$is_non_pass" && [[ "$current_state" == "$previous_state" ]]; then
+>   unchanged_count=$((previous_count + 1))
+> fi
+> printf '%s %s\n' "$unchanged_count" "$current_state" >"$progress_path"
+> ```
+>
+> Include this line in every report Summary: `Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count <unchanged_count>.` If `unchanged_count` is greater
+> than zero, append: `Possible review loop: make coherent remediation durable or report the blocker before retrying.`
+>
 > **Write the report to `$REVIEW_PATH`** using this layout:
 >
 > ```markdown
@@ -198,6 +241,7 @@ sub-agents; you never launch those directly.
 >
 > - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
 > - Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
+> - If there are any findings or PR-health flags, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
 >
 > Rules for the rendering:
 >
@@ -223,6 +267,7 @@ sub-agents; you never launch those directly.
 >
 >   - 0 BLOCK, 0 WARN
 >   - Reviewed at: <sha>
+>   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```
 >
 > - The sentinel file is the gate's contract; your returned report is the human
@@ -239,6 +284,10 @@ sub-agents; you never launch those directly.
   wants the comments posted after all, they can rerun with `/repo-review-full`
   — the analysis is deterministic enough that re-running is cheap relative to
   the value of an explicit "no, don't post" mode.
+- A non-PASS report starts a remediation loop, not a license to retry the same
+  review. Follow the non-PASS Summary instruction before another review or a
+  handoff. This is advisory so investigation and deliberately uncommitted
+  experiments remain possible.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.
