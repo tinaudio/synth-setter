@@ -1521,9 +1521,7 @@ T_readiness_missing_probe_fails_open() {
 }
 it "pr-readiness-stop: probe script missing → exit 0 (fail-open, never a hard error)" T_readiness_missing_probe_fails_open
 
-# ===========================================================================
 # pr_readiness_probe.sh — four-gate probe (exit 0/1/2; gate 4 advisory-only)
-# ===========================================================================
 
 run_probe() {
   # Usage: run_probe [args...] — captures stdout+stderr and appends EXIT:N.
