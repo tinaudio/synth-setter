@@ -1,4 +1,4 @@
-"""Lightning callbacks for plotting losses, similarities, projections, and prediction dumps."""
+"""Lightning callbacks for plots, prediction dumps, and mid-run checkpoint upload."""
 
 import logging
 import os
@@ -23,22 +23,24 @@ from synth_setter.pipeline import r2_io
 
 log = logging.getLogger(__name__)
 
+# Bound on consecutive failed uploads of one unchanged checkpoint before backing
+# off until the file next changes — caps per-batch R2 retries when R2 is down.
+_MAX_UPLOAD_ATTEMPTS = 3
+
 
 class CheckpointUploader(Callback):
-    """Upload each checkpoint ``ModelCheckpoint`` writes to R2 as it lands.
+    """Mirror ``ModelCheckpoint``'s ``last_model_path`` to R2 as it is (re)written.
 
-    The CLI's train-end checkpoint upload never fires when a run is killed
-    mid-training (host OOM/hang), stranding the newest checkpoint on local disk.
-    This mirrors ``ModelCheckpoint``'s ``last_model_path`` to a stable
-    ``{prefix_uri}/last.ckpt`` object whenever it is (re)written, so a crash
-    before train-end still leaves an off-host copy to resume from. ``save_last``
-    overwrites ``last.ckpt`` in place — its path never changes — so a fresh save
-    is detected by the file's mtime, not its name. The upload is synchronous and
-    fires only when ModelCheckpoint writes (its ``every_n_train_steps`` cadence,
-    not per batch), so the training-loop stall is rare. Best-effort and
-    rank-0-only: an unreachable R2 or a failed upload warns and is swallowed so
-    checkpoint persistence never aborts a training run, and the key is advanced
-    only on success so a transient failure re-uploads next batch.
+    Guards against a run killed mid-training (host OOM/hang) stranding the newest
+    checkpoint on local disk — the CLI's checkpoint upload only fires at
+    train-end. ``save_last`` overwrites one path in place, so change detection
+    keys on the file's ``(mtime, size)``, not its name. Runs on every hook
+    ``ModelCheckpoint`` can save from, plus an ``on_train_end`` flush so the final
+    write is never missed (this callback runs *before* ``ModelCheckpoint`` within
+    a hook, so each save is mirrored on the next hook). Best-effort and
+    rank-0-only: an upload failure warns and is swallowed so persistence never
+    aborts training, retried up to :data:`_MAX_UPLOAD_ATTEMPTS` times per
+    checkpoint before backing off until the file next changes.
     """
 
     def __init__(self, prefix_uri: str) -> None:
@@ -47,27 +49,42 @@ class CheckpointUploader(Callback):
         :param prefix_uri: ``r2://`` directory the run's ``last.ckpt`` uploads under.
         """
         self._dest_uri = f"{prefix_uri.rstrip('/')}/last.ckpt"
-        self._uploaded_key: tuple[str, float] | None = None
+        self._uploaded_key: tuple[str, float, int] | None = None
+        self._pending_key: tuple[str, float, int] | None = None
+        self._attempts = 0
+        self._saw_checkpoint = False
 
-    def on_train_batch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+    def _maybe_upload(self, trainer: Trainer) -> None:
         """Upload ``last.ckpt`` when ModelCheckpoint has (re)written it since the last upload.
+
+        Rank-0-only and idempotent, so every save hook can call it safely: a
+        checkpoint unchanged since the last successful upload is skipped, and one
+        that keeps failing is retried at most :data:`_MAX_UPLOAD_ATTEMPTS` times
+        before backing off until its ``(mtime, size)`` changes again.
 
         :param trainer: The active trainer; supplies the rank flag and the
             ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
-        :param \\*args: Unused Lightning positional payload (module, outputs, batch, ...).
-        :param \\*\\*kwargs: Unused Lightning keyword payload.
         """
         if not trainer.is_global_zero:
             return
         source = getattr(trainer.checkpoint_callback, "last_model_path", "") or ""
         if not source:
             return
+        self._saw_checkpoint = True
         try:
-            key = (source, os.path.getmtime(source))
-        except OSError:  # checkpoint pruned/rotated between save and this batch
+            stat = Path(source).stat()
+        except OSError as exc:  # checkpoint pruned/rotated between save and this hook
+            log.debug("Checkpoint %s vanished before upload: %s", source, exc)
             return
+        key = (source, stat.st_mtime, stat.st_size)
         if key == self._uploaded_key:
             return
+        if key != self._pending_key:
+            self._pending_key = key
+            self._attempts = 0
+        if self._attempts >= _MAX_UPLOAD_ATTEMPTS:
+            return
+        self._attempts += 1
         try:
             r2_io.ensure_r2_env_loaded()
             r2_io.upload_to_uri(Path(source), self._dest_uri)
@@ -75,6 +92,48 @@ class CheckpointUploader(Callback):
             log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
             return
         self._uploaded_key = key
+
+    def on_train_batch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Mirror a checkpoint written on the ``every_n_train_steps`` cadence.
+
+        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
+        :param \\*args: Unused Lightning positional payload (module, outputs, batch, ...).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        self._maybe_upload(trainer)
+
+    def on_validation_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Mirror a checkpoint written on the validation cadence.
+
+        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
+        :param \\*args: Unused Lightning positional payload (module, ...).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_epoch_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Mirror a checkpoint written on the per-epoch cadence.
+
+        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
+        :param \\*args: Unused Lightning positional payload (module, ...).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_end(self, trainer: Trainer, *args: object, **kwargs: object) -> None:
+        """Flush the final checkpoint, warning if the run produced none to mirror.
+
+        :param trainer: The active trainer forwarded to :meth:`_maybe_upload`.
+        :param \\*args: Unused Lightning positional payload (module, ...).
+        :param \\*\\*kwargs: Unused Lightning keyword payload.
+        """
+        self._maybe_upload(trainer)
+        if trainer.is_global_zero and not self._saw_checkpoint:
+            log.warning(
+                "Mid-run checkpoint upload enabled but ModelCheckpoint wrote no "
+                "last_model_path to mirror to %s; set save_last on the ModelCheckpoint.",
+                self._dest_uri,
+            )
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

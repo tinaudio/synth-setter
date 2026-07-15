@@ -60,7 +60,6 @@ training:
   # W&B artifact references; null auto-derives
   # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
   upload_checkpoints_uri: null
-  # When true, mirror each checkpoint ModelCheckpoint writes to R2 mid-run
-  # (`{prefix}/last.ckpt`) so a host crash before train-end can't strand the
-  # latest checkpoint on local disk. Off by default; opt in for long/remote runs.
+  # Mirror each ModelCheckpoint write to R2 mid-run (`{prefix}/last.ckpt`) so a
+  # host crash before train-end can't strand the latest checkpoint on local disk.
   upload_checkpoints_during_training: false

@@ -102,7 +102,8 @@ def _append_checkpoint_uploader(cfg: DictConfig, callbacks: list[Callback]) -> N
 
     :param cfg: Hydra-composed train cfg; reads the durability flag and the
         checkpoint-prefix inputs.
-    :param callbacks: The instantiated callback list the uploader is appended to.
+    :param callbacks: Instantiated callback list; the uploader is appended after
+        the existing callbacks, so it observes each ModelCheckpoint save.
     """
     if OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
         callbacks.append(CheckpointUploader(_checkpoint_prefix_uri(cfg)))
