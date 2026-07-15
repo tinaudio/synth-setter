@@ -33,6 +33,13 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      # build_command runs `uv lock`; the PSR action does not provision uv.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.12.13"
+
       - uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ steps.app-token.outputs.token }}
