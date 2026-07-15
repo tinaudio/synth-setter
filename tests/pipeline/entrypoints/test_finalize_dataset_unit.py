@@ -23,12 +23,14 @@ live in ``tests/helpers/finalize_shards.py``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn
 from unittest.mock import MagicMock
 
 import pytest
+from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers.wandb import WandbLogger
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
@@ -53,6 +55,110 @@ def stub_finalize_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None
         an ``int`` short-circuits).
     """
     return install_finalize_setup_stubs(monkeypatch)
+
+
+def test_finalize_progress_accumulates_events_and_emits_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live rows carry running counts and the terminal row carries all totals.
+
+    :param monkeypatch: Replaces the W&B boundary with a payload recorder.
+    """
+    rows: list[dict[str, float]] = []
+
+    def record_metrics(loggers: Sequence[Logger], metrics: Mapping[str, float]) -> None:
+        del loggers
+        rows.append(dict(metrics))
+
+    monkeypatch.setattr(finalize_dataset, "_log_finalize_metrics", record_metrics)
+    report, log_summary = finalize_dataset._make_finalize_progress_logger([], total_shards=2)
+
+    report("shard_processed")
+    report("artifact_uploaded")
+    report("artifact_uploaded")
+    log_summary(3.5)
+
+    assert rows == [
+        {"finalize/shards_processed": 1.0, "finalize/shards_total": 2.0},
+        {"finalize/artifacts_uploaded": 1.0},
+        {"finalize/artifacts_uploaded": 2.0},
+        {
+            "finalize/elapsed_seconds": 3.5,
+            "finalize/shards_processed": 1.0,
+            "finalize/shards_total": 2.0,
+            "finalize/artifacts_uploaded": 2.0,
+        },
+    ]
+
+
+def test_finalize_progress_omits_summary_when_finalize_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker-idempotent run does not create a zero-progress history row.
+
+    :param monkeypatch: Replaces the W&B boundary with a payload recorder.
+    """
+    rows: list[dict[str, float]] = []
+
+    def record_metrics(loggers: Sequence[Logger], metrics: Mapping[str, float]) -> None:
+        del loggers
+        rows.append(dict(metrics))
+
+    monkeypatch.setattr(finalize_dataset, "_log_finalize_metrics", record_metrics)
+    _, log_summary = finalize_dataset._make_finalize_progress_logger([], total_shards=2)
+
+    log_summary(0.5)
+
+    assert rows == []
+
+
+def test_log_finalize_metrics_logs_without_an_explicit_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """W&B auto-advances history, so finalize does not force a step value.
+
+    :param monkeypatch: Silences the loguru warning boundary.
+    """
+    wandb_logger = MagicMock(spec=WandbLogger)
+    monkeypatch.setattr(finalize_dataset, "logger", MagicMock())
+
+    finalize_dataset._log_finalize_metrics([wandb_logger], {"finalize/shards_processed": 1.0})
+
+    wandb_logger.log_metrics.assert_called_once_with({"finalize/shards_processed": 1.0})
+
+
+def test_log_finalize_metrics_skips_non_wandb_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ``WandbLogger`` entries receive progress metrics.
+
+    :param monkeypatch: Silences the loguru warning boundary.
+    """
+    plain_logger = MagicMock(spec=Logger)
+    wandb_logger = MagicMock(spec=WandbLogger)
+    monkeypatch.setattr(finalize_dataset, "logger", MagicMock())
+
+    finalize_dataset._log_finalize_metrics(
+        [plain_logger, wandb_logger], {"finalize/shards_processed": 1.0}
+    )
+
+    plain_logger.log_metrics.assert_not_called()
+    wandb_logger.log_metrics.assert_called_once_with({"finalize/shards_processed": 1.0})
+
+
+def test_log_finalize_metrics_swallows_wandb_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A W&B failure warns and does not abort finalize.
+
+    :param monkeypatch: Replaces the loguru boundary with a recording mock.
+    """
+    wandb_logger = MagicMock(spec=WandbLogger)
+    wandb_logger.log_metrics.side_effect = RuntimeError("W&B down")
+    recording_logger = MagicMock()
+    monkeypatch.setattr(finalize_dataset, "logger", recording_logger)
+
+    finalize_dataset._log_finalize_metrics([wandb_logger], {"finalize/shards_processed": 1.0})
+
+    recording_logger.warning.assert_called_once()
 
 
 def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
@@ -84,6 +190,7 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
 
     real_upload = r2_io.upload
     upload_order: list[str] = []
+    progress_events: list[finalize_dataset.FinalizeProgressEvent] = []
 
     def spy_upload(src: str | Path, dst: str) -> None:
         upload_order.append(dst)
@@ -91,7 +198,7 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
 
     monkeypatch.setattr("synth_setter.pipeline.r2_io.upload", spy_upload)
 
-    finalize_dataset.finalize_from_spec(spec, work_dir)
+    finalize_dataset.finalize_from_spec(spec, work_dir, progress_events.append)
 
     stats_uri = spec.r2.stats_uri()
     marker_uri = spec.r2.dataset_complete_marker_uri()
@@ -101,6 +208,8 @@ def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(
     assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
+    assert progress_events.count("shard_processed") == spec.num_shards
+    assert progress_events[-1] == "artifact_uploaded"
 
 
 def test_finalize_from_spec_non_canonical_prefix_warns_and_proceeds(

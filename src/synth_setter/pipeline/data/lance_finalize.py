@@ -37,6 +37,10 @@ from synth_setter.pipeline.constants import (
     LANCE_SHARD_STATS_SUFFIX,
     STATS_NPZ_FILENAME,
 )
+from synth_setter.pipeline.data.finalize_progress import (
+    FinalizeProgressCallback,
+    report_finalize_progress,
+)
 from synth_setter.pipeline.data.lance_shard import commit_lance_dataset, lance_schema
 from synth_setter.pipeline.data.lance_staging import (
     complete_attempt_names,
@@ -415,10 +419,13 @@ def select_checked_winner(
     )
 
 
-def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
+def _select_checked_winners(
+    spec: DatasetSpec, progress_callback: FinalizeProgressCallback | None = None
+) -> dict[int, CheckedLanceWinner]:
     """Reconcile staging, pick one winner per shard, and structural-check each.
 
     :param spec: Validated dataset spec.
+    :param progress_callback: Optional sink notified after each shard's winner is checked.
     :returns: Checked winner keyed by shard id, covering every spec shard.
     :raises ValueError: Any spec shard has no staged-valid attempt, or a winner fails a structural
         check.
@@ -439,6 +446,7 @@ def _select_checked_winners(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
             attempts[shard.shard_id],
             preferred_name=recorded.get(shard.shard_id),
         )
+        report_finalize_progress(progress_callback, "shard_processed")
     return winners
 
 
@@ -491,7 +499,11 @@ def _write_dataset_card(
 
 
 # DOC502: the documented ValueErrors propagate from _select_checked_winners.
-def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC502
+def finalize_lance_fragments(  # noqa: DOC502
+    spec: DatasetSpec,
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
+) -> None:
     """Commit staged winner fragments into split datasets; reduce stats; write the card.
 
     Each split is one replace-semantics ``Overwrite`` commit over the full
@@ -501,12 +513,17 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa
     standard workflow enforces the generation barrier, and the entrypoint
     (``finalize_dataset.finalize_lance``) guards the split before delegating.
 
+    Progress events fire one ``shard_processed`` per checked winner, then one
+    ``artifact_uploaded`` per committed split plus the ``stats.npz`` and
+    ``dataset.json`` uploads.
+
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
+    :param progress_callback: Optional sink for completed shard and upload events.
     :raises ValueError: Any spec shard has no staged-valid attempt, or a
         winner fails a structural check.
     """
-    winners = _select_checked_winners(spec)
+    winners = _select_checked_winners(spec, progress_callback)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
@@ -518,7 +535,10 @@ def finalize_lance_fragments(spec: DatasetSpec, work_dir: Path) -> None:  # noqa
             [winners[shard_id].fragment for shard_id in range(lo, hi)],
             storage_options=storage_options,
         )
+        report_finalize_progress(progress_callback, "artifact_uploaded")
         logger.info("committed_winner_fragments", fragment_count=hi - lo, split=split)
 
     _reduce_and_upload_stats(spec, winners, work_dir)
+    report_finalize_progress(progress_callback, "artifact_uploaded")
     _write_dataset_card(spec, winners, work_dir)
+    report_finalize_progress(progress_callback, "artifact_uploaded")

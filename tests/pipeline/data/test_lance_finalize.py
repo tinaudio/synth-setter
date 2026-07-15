@@ -20,6 +20,7 @@ import pytest
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
+from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import (
     shard_has_complete_attempt,
@@ -104,6 +105,31 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
                 [shard_arrays(spec, sid)[field] for sid in shard_ids], axis=0
             )
             np.testing.assert_array_equal(decoded[field], expected)
+
+
+def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Progress fires one shard event per checked winner, then one per landed artifact.
+
+    The fragment finalize decodes no rows, so ``shard_processed`` marks a selected +
+    structural-checked winner; ``artifact_uploaded`` marks each committed split manifest
+    plus the ``stats.npz`` and ``dataset.json`` uploads.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    del fake_r2_remote
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    events: list[str] = []
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_lance_fragments(spec, work_dir, events.append)
+
+    # tiny_lance_spec: 4 shards over 3 non-empty splits (train=[0,1], val=[2], test=[3]).
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
 
 
 def test_finalize_split_commit_is_one_atomic_manifest_version(
