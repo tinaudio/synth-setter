@@ -18,7 +18,13 @@ runs:
         EXECUTION_FILE: ${{ inputs.execution-file }}
       run: |
         set -euo pipefail
-        jq '[.[] | select(.type == "result") | {type, subtype, is_error, result, errors, duration_ms, num_turns, total_cost_usd}]' \
+        jq '[.[] | select(.type == "result")
+          | ([.result, .errors] | flatten | map(select(type == "string")) | join(" ") | ascii_downcase) as $message
+          | {type, subtype, is_error,
+             error_category: (if ($message | test("resource.exhausted|quota|rate.limit")) then "resource_exhausted"
+                              elif ($message | test("auth|credential|oauth|token")) then "authentication"
+                              else "unknown" end),
+             duration_ms, num_turns, total_cost_usd}]' \
           "$EXECUTION_FILE" > "$RUNNER_TEMP/claude-failure.json"
 
     - name: Upload terminal result
