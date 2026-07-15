@@ -163,11 +163,11 @@
       },
       {
         "matcher": "Bash",
-        "description": "PR checkbox trigger: detects gh pr create commands and prompts the agent to invoke the /pr-checkbox skill for verification checkboxes. Goal: ensure every PR gets behavioral verification results before review.",
+        "description": "PR checkbox trigger: detects real gh pr create invocations (via agent/_shared/pr_command_classifier.py, so quoted prose mentioning the recipe — a gh issue create body, an echo, a commit message — does NOT trip it) and prompts the agent to invoke the /pr-checkbox skill for verification checkboxes. Goal: ensure every PR gets behavioral verification results before review.",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command // \"\"' | grep -q 'gh pr create' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"A PR was just created. You MUST now invoke the /pr-checkbox skill to add verification checkboxes to this PR.\"}}' || true",
+            "command": "bash agent/hooks/pr-checkbox-trigger.sh",
             "statusMessage": "Checking for PR creation..."
           }
         ]
