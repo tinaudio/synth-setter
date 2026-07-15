@@ -612,7 +612,9 @@ class ValAudioProbe(Callback):
 
         :param probe_root: Directory each ``step-<global_step>/`` probe is staged under.
         :param probe_fn: Called on a worker thread with the staged probe dir and the
-            originating ``global_step``; returns the metrics to log.
+            originating ``global_step``; returns the fully-namespaced metrics to log
+            verbatim (e.g. ``{"val_audio/mss_mean": ...}``). Exceptions it raises are
+            logged as warnings at the next harvest and never crash the fit loop.
         :param num_samples: Upper bound on samples taken from the first val batch.
         """
         super().__init__()
@@ -712,7 +714,7 @@ class ValAudioProbe(Callback):
         try:
             metrics = future.result()
         except Exception as exc:
-            log.warning(f"val audio probe at step {step} failed: {exc}; skipping its metrics.")
+            log.warning("val audio probe at step %s failed: %s; skipping its metrics.", step, exc)
             return
         if not metrics:
             return
@@ -731,8 +733,9 @@ class ValAudioProbe(Callback):
         self._staged = None
         if self._future is not None:
             log.info(
-                f"val audio probe from step {self._future_step} still running; "
-                f"skipping the step-{step} probe."
+                "val audio probe from step %s still running; skipping the step-%s probe.",
+                self._future_step,
+                step,
             )
             shutil.rmtree(probe_dir, ignore_errors=True)
             return

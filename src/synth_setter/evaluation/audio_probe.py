@@ -161,12 +161,14 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
     :returns: ``{"val_audio/<metric>_<stat>": value}`` for the rendered samples.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
     :raises subprocess.TimeoutExpired: propagated when a stage exceeds its budget.
+    :raises FileNotFoundError: when the metrics stage exits 0 without writing its CSV.
+    :raises ValueError: when the metrics CSV is missing a required stat column.
     """
     n_samples = _staged_sample_count(probe_dir)
 
     with ExitStack() as stack:
         argv = _render_argv(probe_dir, settings, stack)
-        log.info(f"val audio probe: rendering {n_samples} samples at step {step}")
+        log.info("val audio probe: rendering %s samples at step %s", n_samples, step)
         subprocess.run(  # noqa: S603
             argv,
             check=True,
@@ -200,7 +202,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
 
     if upload_uri is not None:
         destination = f"{upload_uri.rstrip('/')}/step-{step}"
-        log.info(f"val audio probe: uploading snapshot to {destination}")
+        log.info("val audio probe: uploading snapshot to %s", destination)
         r2_io.upload_dir(probe_dir, destination, exclude=_UPLOAD_EXCLUDE)
 
     return {

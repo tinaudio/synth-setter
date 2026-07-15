@@ -153,6 +153,9 @@ def test_validation_step_returns_preds_shaped_like_target_params(
 
     assert "preds" in outputs
     assert outputs["preds"].shape == batch["params"].shape
+    # Finiteness, not range: raw predictions are unbounded by design (linear/flow
+    # outputs); decode_model_output owns the mapping into parameter space.
+    assert torch.isfinite(outputs["preds"]).all()
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
