@@ -220,8 +220,8 @@ def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> N
     codex.write_text(
         "#!/bin/bash\n"
         "leaked=$(cat)\n"
-        'printf \'{"type":"item.completed","item":{"type":"agent_message",\'\n'
-        'printf \'"text":"stdin=[%s]"}}\\n\' "${leaked}"\n'
+        'jq -cn --arg text "stdin=[${leaked}]" \\\n'
+        '  \'{type: "item.completed", item: {type: "agent_message", text: $text}}\'\n'
     )
     codex.chmod(0o755)
 
