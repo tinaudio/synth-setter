@@ -132,6 +132,29 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
     assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
 
 
+def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """The entrypoint dispatch wires the callback into the Lance branch and the marker upload.
+
+    Drives the real ``finalize_from_spec`` → ``finalize_lance`` →
+    ``finalize_lance_fragments`` path so the entrypoint-to-branch wiring — not
+    just the branch in isolation — is exercised end to end.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    del fake_r2_remote
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    events: list[str] = []
+
+    finalize_from_spec(spec, tmp_path / "work", events.append)
+
+    # 4 winners, then 3 split commits + stats + card + the dataset.complete marker.
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
+
+
 def test_finalize_split_commit_is_one_atomic_manifest_version(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
