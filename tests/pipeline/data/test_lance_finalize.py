@@ -495,14 +495,37 @@ def test_finalize_skips_empty_split_and_still_completes(
         {**tiny_lance_spec().model_dump(mode="json"), "train_val_test_sizes": [4, 2, 0]}
     )
     stage_all_shards(spec, tmp_path)
+    events: list[str] = []
 
-    finalize_from_spec(spec, tmp_path / "work")
+    finalize_from_spec(spec, tmp_path / "work", events.append)
 
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     assert (run_root / "train.lance" / "_versions").exists()
     assert (run_root / "val.lance" / "_versions").exists()
     assert not (run_root / "test.lance").exists()
     assert (run_root / "dataset.complete").exists()
+    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 5
+
+
+def test_finalize_reports_checked_shards_before_later_winner_fails(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Checked-shard progress remains visible when a later winner is invalid.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    staging_file(fake_r2_remote, spec, 3, "pod-a-u0003.fragment.json").write_bytes(b"bad")
+    events: list[str] = []
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    with pytest.raises(ValueError, match="shard 3 has no healthy staged-valid attempt"):
+        finalize_lance_fragments(spec, work_dir, events.append)
+
+    assert events == ["shard_processed"] * 3
 
 
 def test_finalize_rejects_stats_sidecar_missing_welford_arrays(

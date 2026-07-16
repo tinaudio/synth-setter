@@ -34,6 +34,8 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.finalize_progress import FinalizeProgressCallback
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_lance_smoke_spec,
     install_finalize_setup_stubs,
@@ -297,16 +299,27 @@ def test_finalize_from_spec_propagates_winner_failure_before_marker_upload(
         "synth_setter.pipeline.r2_io.upload", lambda src, dst: uploaded.append(dst)
     )
 
-    def boom(*args: object, **kwargs: object) -> NoReturn:
-        del args, kwargs
+    def fail_on_second_winner(
+        spec: DatasetSpec,
+        progress_callback: FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        assert spec.num_shards == 2
+        assert progress_callback is not None
+        progress_callback("shard_processed")
         raise RuntimeError("no healthy staged-valid attempt")
 
-    monkeypatch.setattr("synth_setter.pipeline.data.lance_finalize._select_checked_winners", boom)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.lance_finalize._select_checked_winners",
+        fail_on_second_winner,
+    )
 
-    spec = build_lance_smoke_spec(task_name="winner-raises-lance")
+    spec = build_lance_smoke_spec(task_name="winner-raises-lance", train_val_test_sizes=(8, 0, 0))
+    progress_events: list[finalize_dataset.FinalizeProgressEvent] = []
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     with pytest.raises(RuntimeError, match="no healthy staged-valid attempt"):
-        finalize_dataset.finalize_from_spec(spec, work_dir)
+        finalize_dataset.finalize_from_spec(spec, work_dir, progress_events.append)
 
+    assert progress_events == ["shard_processed"]
     assert uploaded == []
+    assert not (work_dir / finalize_dataset.DATASET_COMPLETE_FILENAME).exists()

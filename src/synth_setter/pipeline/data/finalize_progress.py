@@ -3,6 +3,11 @@
 ``shard_processed`` marks a selected Lance winner that passed structural
 validation. ``artifact_uploaded`` marks a finalized object landed in R2. These
 are progress signals; ``dataset.complete`` remains the completion authority.
+
+Typical usage::
+
+    events: list[FinalizeProgressEvent] = []
+    report_finalize_progress(events.append, "shard_processed")
 """
 
 from __future__ import annotations

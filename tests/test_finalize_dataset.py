@@ -1,37 +1,8 @@
 """Tests for the ``synth-setter-finalize-dataset`` CLI entrypoint.
 
-Covers tests that drive the in-process entrypoint surface — ``finalize(cfg)``
-and ``main()`` — against the ``fake_r2_remote`` fixture (a local-typed rclone
-remote rooted at ``tmp_path``; see ``tests/pipeline/conftest.py``). The spec is
-written to disk as ``input_spec.json`` and the cfg carries a ``file://`` URI of
-its parent dir, mirroring how production callers pass the R2 dataset-root URI.
-
-Two helpers stay stubbed because the local rclone backend can't simulate them
-cleanly:
-
-- ``ensure_r2_env_loaded`` — would require real ``RCLONE_CONFIG_R2_*`` secrets
-  and a working ``rclone lsd r2:`` against real R2.
-- ``object_size`` — ``rclone lsf`` against an absent key on the local backend
-  exits 3 ("directory not found") instead of the empty-stdout semantics
-  S3-compatible backends return; the marker probe in ``finalize()`` needs the
-  "absent → None" branch, so the stub stays.
-
-``finalize_lance`` commits staged winner fragments and reads the staging prefix
-over ``s3://`` object storage, which the local remote can't serve;
-``stub_finalize_lance_io`` stubs winner selection + the fragment commit so
-``stats.npz`` + ``dataset.json`` + ``dataset.complete`` still route through the
-real ``r2_io.upload`` for the marker-last and artifact assertions.
-
-Keep this module to tests that drive ``finalize(cfg)`` / ``main()``. Branch-level
-``finalize_lance`` / ``finalize_from_spec`` tests — which legitimately reference
-module internals — live in
-``tests/pipeline/entrypoints/test_finalize_dataset_unit.py``; the
-``build_dataset_artifact`` construction tests live in
-``tests/pipeline/entrypoints/test_finalize_dataset_artifact.py``. Seeders and
-spec builders shared across those lanes live in
-``tests/helpers/finalize_shards.py``.
-``tests/_meta/test_entrypoint_test_modules.py`` enforces that no private
-``synth_setter.cli`` helper is imported here.
+The tests drive ``finalize(cfg)`` and ``main()`` against a local-typed rclone
+remote. Branch-level tests live under ``tests/pipeline/entrypoints``; shared
+seeders and spec builders live in ``tests/helpers/finalize_shards.py``.
 """
 
 from __future__ import annotations
@@ -43,6 +14,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NoReturn, cast
 
+import lance
 import pytest
 import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -50,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
@@ -57,6 +30,7 @@ from tests.helpers.finalize_shards import (
     install_finalize_setup_stubs,
     stub_finalize_lance_io,
     uri_to_local_path,
+    write_minimal_lance_shard,
     write_spec_to_root,
 )
 from tests.helpers.wandb_offline import read_history_rows, read_run_binary
@@ -268,24 +242,14 @@ def _build_finalize_cfg_with_offline_wandb(
 
 def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     tmp_path: Path,
-    fake_r2_remote: Path,  # noqa: ARG001 — env-rooted cfg; Lance I/O is stubbed
+    fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
-    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """``finalize(cfg)`` end-to-end logs a ``data-{id}`` ``dataset`` artifact with an R2 ref.
+    """Real fragment finalization persists artifacts and offline W&B progress.
 
-    Drives the real entrypoint against the local-typed remote (real rclone for
-    the stats + marker writes) and a real ``WandbLogger(offline=True)``, then
-    decodes the offline ``run-*.wandb`` binary to confirm the canonical dataset
-    artifact landed — the producer node of the lineage DAG (#1471). No wandb
-    internals are mocked; the artifact name, type, and ``s3://`` reference are
-    read back from the bytes the live client wrote.
-
-    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param fake_r2_remote: Local-typed rclone remote where stats + marker land.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and stubs the
-        Lance direct-R2 I/O.
-    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    :param tmp_path: Hosts staged data, the scratch work dir, and offline run dir.
+    :param fake_r2_remote: Local-typed rclone remote where final artifacts land.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` environment.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
         monkeypatch.delenv(key, raising=False)
@@ -294,7 +258,16 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     wandb.teardown()
 
     spec = build_lance_smoke_spec(task_name="finalize-artifact-e2e")
-    stub_finalize_lance_io(monkeypatch)
+    local_shard = tmp_path / "generated" / spec.shards[0].filename
+    write_minimal_lance_shard(local_shard, spec)
+    stage_lance_shard_attempt(
+        spec,
+        spec.shards[0],
+        local_shard,
+        worker_id="pod-a",
+        attempt_uuid="u0000",
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
     output_dir = tmp_path / "work"
     output_dir.mkdir()
     cfg = _build_finalize_cfg_with_offline_wandb(
@@ -350,11 +323,31 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
         range(1, spec.num_shards + 1)
     )
     assert all(json.loads(row["finalize/shards_total"]) == spec.num_shards for row in shard_rows)
+    artifact_rows = [
+        row
+        for row in rows
+        if "finalize/artifacts_uploaded" in row and "finalize/elapsed_seconds" not in row
+    ]
+    assert [json.loads(row["finalize/artifacts_uploaded"]) for row in artifact_rows] == [
+        1,
+        2,
+        3,
+        4,
+    ]
     summary_rows = [row for row in rows if "finalize/elapsed_seconds" in row]
     assert len(summary_rows) == 1
     summary = summary_rows[0]
     assert json.loads(summary["finalize/shards_processed"]) == spec.num_shards
     assert json.loads(summary["finalize/artifacts_uploaded"]) == 4
+    assert json.loads(summary["finalize/elapsed_seconds"]) >= 0
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert lance.dataset(str(run_root / "train.lance")).count_rows() == 4
+    assert (run_root / "stats.npz").is_file()
+    assert (run_root / "dataset.json").is_file()
+    assert (run_root / "dataset.complete").is_file()
+    assert not (run_root / "val.lance").exists()
+    assert not (run_root / "test.lance").exists()
 
 
 def test_finalize_keeps_r2_artifacts_when_live_metric_logging_fails(
