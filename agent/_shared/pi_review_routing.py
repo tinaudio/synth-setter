@@ -77,6 +77,7 @@ _REQUIRED_REPORT_HEADINGS = (
 )
 _REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
+_RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-\d+(\*\* — \S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -303,15 +304,51 @@ def _structured_report_markdown(text: str) -> str | None:
         return None
     report_lines = lines[start:]
     try:
-        good_index = report_lines.index("### What looks good")
+        indices = [report_lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
     except ValueError:
         return "\n".join(report_lines).strip()
-    end = len(report_lines)
-    for index, line in enumerate(report_lines[good_index + 1 :], start=good_index + 1):
-        if line.strip() and not line.startswith("- "):
-            end = index
-            break
-    return "\n".join(report_lines[:end]).strip()
+    if indices != sorted(indices):
+        return "\n".join(report_lines).strip()
+
+    block_lines = _normalized_finding_lines(report_lines[indices[0] + 1 : indices[1]])
+    warn_lines = _normalized_finding_lines(report_lines[indices[1] + 1 : indices[2]])
+    good_lines = [line for line in report_lines[indices[2] + 1 :] if line.startswith("- ")]
+    sections = (
+        ("### BLOCK findings", block_lines),
+        ("### WARN findings", warn_lines),
+        ("### What looks good", good_lines),
+    )
+    output = [report_lines[0]]
+    for heading, content in sections:
+        output.extend(("", heading, *content))
+    return "\n".join(output).strip()
+
+
+def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
+    """Keep contract findings and anchor ranges at their first changed line.
+
+    :param lines: Raw lines from a BLOCK or WARN section.
+    :returns: Canonical finding lines with surrounding narration removed.
+    """
+    normalized: list[str] = []
+    in_fence = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if stripped in {"None", "None.", "- None", "- None."}:
+            normalized.append("None.")
+            continue
+        if _FINDING.fullmatch(stripped):
+            normalized.append(stripped)
+            continue
+        ranged = _RANGED_FINDING.fullmatch(stripped)
+        if ranged is not None:
+            normalized.append("".join(ranged.groups()))
+    return normalized
 
 
 def extract_report(transcript: Path) -> str:

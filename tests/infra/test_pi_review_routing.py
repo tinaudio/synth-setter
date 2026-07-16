@@ -382,7 +382,9 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
     transcript.write_text(
         '{"message":{"role":"assistant","content":"analysis\\n\\n'
         "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear.\\n\\nclosing"}}\n'
+        "### WARN findings\\n1. **src/example.py:10-12** — Defect.\\n"
+        "```python\\n1. **src/fake.py:99-100** — Example.\\n```\\n\\n"
+        '### What looks good\\n- Clear.\\n\\nclosing"}}\n'
         '{"message":{"role":"assistant","content":"done"}}\n'
     )
 
@@ -391,7 +393,7 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
     assert report == (
         "## code-health review — smoke\n\n"
         "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\nNone.\n\n"
+        "### WARN findings\n1. **src/example.py:10** — Defect.\n\n"
         "### What looks good\n- Clear."
     )
 
