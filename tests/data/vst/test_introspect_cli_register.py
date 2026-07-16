@@ -256,6 +256,17 @@ def test_register_conflicting_spec_name_fails_before_plugin_load(checkout: Path)
     assert "surge_xt" in result.output
 
 
+def test_register_reserved_render_group_fails_before_plugin_load(checkout: Path) -> None:
+    """The generic ``vst`` render-group name cannot be registered as a synth.
+
+    :param checkout: Skeleton checkout fixture.
+    """
+    result = _register(checkout, spec_name="vst")
+
+    assert result.exit_code != 0
+    assert "reserved for the generic VST render config" in result.output
+
+
 def test_register_rejects_explicit_out_paths(checkout: Path) -> None:
     """``--register`` owns the destinations; combining it with ``--out-*`` is an error.
 
