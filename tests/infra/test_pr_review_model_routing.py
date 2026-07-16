@@ -10,7 +10,9 @@ import os
 import re
 import runpy
 import shutil
+import signal
 import sys
+import time
 import tomllib
 from pathlib import Path
 from unittest import mock
@@ -165,11 +167,99 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
         assert command[0:2] == ["codex", "exec"]
         assert command[command.index("--model") + 1] == providers["codex"][0]
         assert f'model_reasoning_effort="{providers["codex"][1]}"' in command
+        expected_timeout = 900 if role == "pr-review-orchestrator" else 720
+        assert resolved["timeout_s"] == expected_timeout
         if role == "pr-review-orchestrator":
             brief = resolved["prompt"].split("\n\n", 1)[1]
             assert brief.startswith("## Orchestrator agent brief\n")
             assert "PR #1234" in brief
             assert "<N>" not in brief
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
+    """Protect direct-entrypoint execution parity with the shell wrapper.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path) -> None:
+    """Preserve valid reports around blank NDJSON records.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "printf '\\n'\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+        "printf '  \\n'\n"
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_orchestrator_default_timeout_launches(tmp_path: Path) -> None:
+    """Protect the orchestrator's default-deadline execution path.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"orchestrator report"}}\'\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-orchestrator",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "orchestrator report"
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -273,6 +363,202 @@ def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> N
     )
 
     assert str(result) == "stdin=[]"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> None:
+    """Ensure timeout diagnostics include the active deadline.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    codex = tmp_path / "codex"
+    codex.write_text("#!/bin/bash\nexec sleep 5\n")
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_REVIEW_TIMEOUT": "1",
+            },
+        )
+
+    assert exc_info.value.exit_code != 0
+    assert b"codex exec timed out after 1s" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(
+    ("timeout", "expected_error"),
+    [
+        ("-1", b"must be a positive integer"),
+        ("9" * 400, b"must be between 1 and 86400"),
+    ],
+)
+def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
+    tmp_path: Path,
+    timeout: str,
+    expected_error: bytes,
+) -> None:
+    """Ensure invalid deadlines prevent subprocess startup.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    :param timeout: Invalid timeout override under test.
+    :param expected_error: Diagnostic fragment required on standard error.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    launched = tmp_path / "launched"
+    codex = tmp_path / "codex"
+    codex.write_text(f"#!/bin/bash\ntouch {launched}\n")
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_REVIEW_TIMEOUT": timeout,
+            },
+        )
+
+    assert expected_error in exc_info.value.stderr
+    assert not launched.exists()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_success_starts_no_watchdog_timer(tmp_path: Path) -> None:
+    """Guard against reintroducing an external watchdog process.
+
+    :param tmp_path: Directory for the fake Codex and sleep executables.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    sleep_pid_file = tmp_path / "sleep.pid"
+    sleep = tmp_path / "sleep"
+    sleep.write_text(
+        '#!/bin/bash\necho "$$" > "${WATCHDOG_SLEEP_PID_FILE}"\nexec /bin/sleep "$@"\n'
+    )
+    sleep.chmod(0o755)
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "/bin/sleep 0.2\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "WATCHDOG_SLEEP_PID_FILE": str(sleep_pid_file),
+        },
+    )
+
+    assert str(result) == "structured report"
+    assert not sleep_pid_file.exists()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize("parent_term_trap", ["trap '' TERM\n", ""])
+def test_codex_review_shell_launcher_timeout_force_kills_process_group(
+    tmp_path: Path,
+    parent_term_trap: str,
+) -> None:
+    """Ensure cleanup reaches descendants that ignore SIGTERM.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    :param parent_term_trap: Whether the process-group leader ignores SIGTERM.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    child_pid_file = tmp_path / "child.pid"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        f"{parent_term_trap}"
+        "bash -c \"trap '' TERM; exec /bin/sleep 5\" &\n"
+        'echo "$!" > "${CODEX_CHILD_PID_FILE}"\n'
+        "wait\n"
+    )
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_CHILD_PID_FILE": str(child_pid_file),
+                "CODEX_REVIEW_TIMEOUT": "1",
+            },
+        )
+
+    assert b"codex exec timed out after 1s" in exc_info.value.stderr
+    child_pid = int(child_pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_signal_terminates_process_group(tmp_path: Path) -> None:
+    """Ensure launcher termination reaps signal-resistant descendants.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    child_pid_file = tmp_path / "child.pid"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "trap '' TERM\n"
+        "bash -c \"trap '' TERM; exec /bin/sleep 30\" &\n"
+        'echo "$!" > "${CODEX_CHILD_PID_FILE}"\n'
+        "wait\n"
+    )
+    codex.chmod(0o755)
+
+    process = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _bg=True,
+        _cwd=REPO_ROOT,
+        _env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "CODEX_CHILD_PID_FILE": str(child_pid_file),
+        },
+    )
+    deadline = time.monotonic() + 5
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert child_pid_file.exists()
+
+    process.signal(signal.SIGTERM)
+    with pytest.raises(sh.ErrorReturnCode):
+        process.wait()
+
+    child_pid = int(child_pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
 
 
 _OPENCODE_LAUNCHER_PY = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.py"
