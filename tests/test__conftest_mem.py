@@ -350,7 +350,7 @@ class TestHookCombinesCpuAndMemory:
             assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 3
 
     def test_local_darwin_caps_workers_at_four(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Local Darwin runs retain CPU headroom when more than four CPUs are visible.
+        """Local Darwin runs retain CPU headroom above the configured worker cap.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """

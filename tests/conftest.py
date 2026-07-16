@@ -1472,8 +1472,8 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
     hook wins the ``firstresult`` race. A non-integer or empty pin is ignored,
-    not fatal. Otherwise returns ``min(cpu, memory)`` and caps local Darwin runs
-    at four workers so nested ML multiprocessing retains interactive headroom.
+    not fatal. Otherwise returns ``min(cpu, memory)`` and applies the local
+    Darwin worker cap so nested ML multiprocessing retains interactive headroom.
 
     :param config: The pytest config object (unused; required by the hook signature).
     :returns: Worker count clamped to the host's real CPU and memory allocation.
