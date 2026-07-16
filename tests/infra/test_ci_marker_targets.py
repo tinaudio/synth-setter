@@ -70,6 +70,19 @@ def test_make_target_carries_canonical_marker(
 
 
 @pytest.mark.infra
+def test_full_cpu_darwin_runs_vst_tests_serially(project_root: Path) -> None:
+    """Darwin separates parallel non-VST tests from the serial VST lane.
+
+    :param project_root: Locates the repository Makefile.
+    """
+    recipe = _recipe((project_root / "Makefile").read_text(), "test-full-cpu")
+
+    assert 'if [ "$(UNAME_S)" = "Darwin" ]' in recipe
+    assert 'pytest -n auto -m "not gpu and not mps and not requires_vst"' in recipe
+    assert 'pytest -m "requires_vst and not gpu and not mps"' in recipe
+
+
+@pytest.mark.infra
 @pytest.mark.parametrize(("workflow", "target"), sorted(WORKFLOW_TARGETS.items()))
 def test_workflow_invokes_make_target(project_root: Path, workflow: str, target: str) -> None:
     """The workflow calls `make <target>` rather than re-spelling pytest markers.

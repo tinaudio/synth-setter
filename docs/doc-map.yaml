@@ -413,7 +413,7 @@ docs:
         covers: "Marker registration ([tool.pytest.ini_options].markers) and default selector"
         scope: "pytest-config"
       - pattern: "Makefile"
-        covers: "test-fast / test-full-cpu / test-full-gpu / test-full-mps / test-vst-cpu targets, the test-ci-unit/slow/nightly CI marker source of truth (#1353), and the Linux HEADLESS_WRAPPER auto-prepend"
+        covers: "test-fast / test-full-cpu / test-full-gpu / test-full-mps / test-vst-cpu targets, Darwin's serial VST split, the test-ci-unit/slow/nightly CI marker source of truth (#1353), and the Linux HEADLESS_WRAPPER auto-prepend"
         scope: "testing"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11/Xvfb wrapper bootstrapped by test-full-* / test-vst-cpu on Linux"
