@@ -9,12 +9,13 @@ from typing import NoReturn
 import pytest
 
 _GROUP_PROBE_COUNT = 8
+_NESTED_PYTEST_TIMEOUT_SECONDS = 60
 
 
 def _run_pytest(args: list[str]) -> NoReturn:
     """Run a nested pytest session in an isolated interpreter.
 
-    :param args: Arguments passed to pytest.
+    :param args: Selects the nested session's config, workers, and probe.
     :raises SystemExit: Always, with pytest's session status.
     """
     raise SystemExit(pytest.main(args))
@@ -56,7 +57,7 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         ),
     )
     process.start()
-    process.join(timeout=60)
+    process.join(timeout=_NESTED_PYTEST_TIMEOUT_SECONDS)
     if process.is_alive():
         process.kill()
         process.join()
