@@ -303,6 +303,116 @@ def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> N
     assert b"codex exec timed out after 1s" in exc_info.value.stderr
 
 
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
+    tmp_path: Path,
+) -> None:
+    """Reject a disabled deadline without starting Codex.
+
+    :param tmp_path: Temporary directory containing the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    launched = tmp_path / "launched"
+    codex = tmp_path / "codex"
+    codex.write_text(f"#!/bin/bash\ntouch {launched}\n")
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_REVIEW_TIMEOUT": "-1",
+            },
+        )
+
+    assert b"CODEX_REVIEW_TIMEOUT must be a positive integer" in exc_info.value.stderr
+    assert not launched.exists()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_success_reaps_watchdog_timer(tmp_path: Path) -> None:
+    """A fast review leaves no deadline timer running.
+
+    :param tmp_path: Temporary directory containing fake Codex and sleep executables.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    sleep_pid_file = tmp_path / "sleep.pid"
+    sleep = tmp_path / "sleep"
+    sleep.write_text(
+        '#!/bin/bash\necho "$$" > "${WATCHDOG_SLEEP_PID_FILE}"\nexec /bin/sleep "$@"\n'
+    )
+    sleep.chmod(0o755)
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "/bin/sleep 0.2\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "WATCHDOG_SLEEP_PID_FILE": str(sleep_pid_file),
+        },
+    )
+
+    assert str(result) == "structured report"
+    sleep_pid = int(sleep_pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(sleep_pid, 0)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_timeout_force_kills_process_group(tmp_path: Path) -> None:
+    """Escalate a timed-out review and remove its signal-ignoring child.
+
+    :param tmp_path: Temporary directory containing the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    child_pid_file = tmp_path / "child.pid"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "trap '' TERM\n"
+        "/bin/sleep 5 &\n"
+        'echo "$!" > "${CODEX_CHILD_PID_FILE}"\n'
+        "wait\n"
+    )
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_CHILD_PID_FILE": str(child_pid_file),
+                "CODEX_REVIEW_TIMEOUT": "1",
+            },
+        )
+
+    assert b"codex exec timed out after 1s" in exc_info.value.stderr
+    child_pid = int(child_pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
 _OPENCODE_LAUNCHER_PY = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.py"
 _OPENCODE_LAUNCHER_SH = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.sh"
 
