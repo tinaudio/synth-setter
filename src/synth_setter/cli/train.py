@@ -368,10 +368,8 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     resume_decision = _apply_auto_resume(cfg)
-    if resume_decision is not None and resume_decision.wandb_run_id:
-        run_id = resume_decision.wandb_run_id
-    else:
-        run_id = make_wandb_run_id(resolve_run_config_id(cfg))
+    recovered_run_id = resume_decision.wandb_run_id if resume_decision else None
+    run_id = recovered_run_id or make_wandb_run_id(resolve_run_config_id(cfg))
     recovery_namespace = _make_recovery_namespace(run_id)
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
@@ -381,11 +379,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, run_id, "training")
     # A recovered id continues the original W&B run page instead of erroring on reuse.
-    if (
-        resume_decision is not None
-        and resume_decision.wandb_run_id
-        and OmegaConf.select(cfg, "logger.wandb") is not None
-    ):
+    if recovered_run_id and OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.resume", "allow")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
