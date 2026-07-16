@@ -2,6 +2,7 @@
 
 import io
 import os
+import sys
 from collections.abc import Callable
 from typing import cast
 from unittest.mock import patch
@@ -312,7 +313,7 @@ class TestMemoryAwareWorkerCount:
 
 
 class TestHookCombinesCpuAndMemory:
-    """The hook returns min(cpu, memory), with the env var as a hard override."""
+    """The hook combines resource clamps, with the worker env var as a hard override."""
 
     def test_memory_clamps_below_cpu(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Plenty of CPUs but tight memory → memory count wins the min.
@@ -347,6 +348,30 @@ class TestHookCombinesCpuAndMemory:
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
         with patch("builtins.open", side_effect=_make_open({})):
             assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 3
+
+    def test_local_darwin_caps_workers_at_four(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Local Darwin runs retain CPU headroom above the configured worker cap.
+
+        :param monkeypatch: Controls the simulated host allocation.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(18)), raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
+
+    def test_darwin_ci_uses_all_allocated_workers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dedicated Darwin CI keeps allocation-aware parallelism.
+
+        :param monkeypatch: Controls the simulated CI host allocation.
+        """
+        monkeypatch.setenv("CI", "1")
+        monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 8
 
     def test_env_override_wins_over_clamps(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Explicit PYTEST_XDIST_AUTO_NUM_WORKERS short-circuits both clamps.

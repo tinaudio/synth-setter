@@ -1385,6 +1385,7 @@ def _cgroup_aware_cpu_count() -> int:
 # Per-worker resident-memory budget for the -n auto clamp (override via
 # PYTEST_XDIST_WORKER_MEM_MB); 2 GiB = measured peak RSS per worker slot (#1646).
 _DEFAULT_WORKER_MEM_MB = 2048
+_LOCAL_DARWIN_XDIST_WORKERS = 4
 
 # A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
 _MEM_UNLIMITED_SENTINEL = 1 << 62
@@ -1496,8 +1497,8 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
     hook wins the ``firstresult`` race. A non-integer or empty pin is ignored,
-    not fatal. Otherwise returns ``min(cpu, memory)`` so neither resource is
-    over-subscribed.
+    not fatal. Otherwise returns ``min(cpu, memory)`` and applies the local
+    Darwin worker cap so nested ML multiprocessing retains interactive headroom.
 
     :param config: The pytest config object (unused; required by the hook signature).
     :returns: Worker count clamped to the host's real CPU and memory allocation.
@@ -1510,7 +1511,10 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
             pass  # non-integer pin -> ignore and fall through to the adaptive clamps
     cpu_workers = _cgroup_aware_cpu_count()
     mem_workers = _memory_aware_worker_count()
-    return cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
+    allocated_workers = cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
+    if sys.platform == "darwin" and not os.environ.get("CI"):
+        return min(allocated_workers, _LOCAL_DARWIN_XDIST_WORKERS)
+    return allocated_workers
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
