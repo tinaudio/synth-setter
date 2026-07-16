@@ -147,7 +147,7 @@ extract its final assistant text deterministically, then validate that file:
 python3 agent/_shared/pi_review_routing.py extract-report \
   <output-file> --output <report-path>
 python3 agent/_shared/pi_review_routing.py validate-report \
-  <report-path> --skill <skill-name>
+  <report-path> --skill <skill-name> --target <PR-or-branch-label>
 ```
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
@@ -165,9 +165,17 @@ produced it, including after cross-provider fallback:
 python3 agent/_shared/pi_review_routing.py provenance <effective-model>
 ```
 
-Merge duplicate findings using the set of effective provenance labels: emit
-`codex`, `openrouter`, or `both` only when both providers actually flagged the
-defect. Add every unavailable, failed, malformed, and successful attempt to
+Merge duplicate findings using effective provenance. Findings independently
+reported by Codex and OpenRouter are `both`; Codex-only findings are `codex`.
+OpenRouter-only findings never enter aggregation directly. For each skill that
+has any, launch one additional `pr-review-worker` with
+`openai-codex/gpt-5.6-sol` and `high` thinking, supplying the exact candidate
+findings and asking it to return only those it can reproduce from the diff.
+Extract and validate that verification report through the same helper commands.
+A confirmed candidate is tagged `openrouter; verified by: codex`; a rejected
+candidate is omitted and recorded in the audit. If verification fails or is
+malformed, stop rather than posting unverified free-model output. Add every
+unavailable, failed, malformed, verified, rejected, and successful attempt to
 the audit section.
 
 ### Claude Code, Codex, and OpenCode

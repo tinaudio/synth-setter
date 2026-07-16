@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
+import sh
 
 from agent._shared.pi_review_routing import (
     build_review_plan,
@@ -210,10 +214,13 @@ def test_report_is_parseable_requires_structured_contract(report: str, expected:
     :param report: Candidate worker report.
     :param expected: Whether the report satisfies the contract.
     """
-    assert report_is_parseable(report, expected_skill="code-health") is expected
+    assert (
+        report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
+        is expected
+    )
 
 
-def test_report_is_parseable_rejects_wrong_skill() -> None:
+def test_report_is_parseable_rejects_wrong_skill_or_target() -> None:
     """Prevent a valid report for another checklist from entering the merge."""
     report = (
         "## python-style review — PR #1\n\n"
@@ -222,7 +229,12 @@ def test_report_is_parseable_rejects_wrong_skill() -> None:
         "### What looks good\n- Clear."
     )
 
-    assert not report_is_parseable(report, expected_skill="code-health")
+    assert not report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
+    assert not report_is_parseable(
+        report.replace("python-style", "code-health"),
+        expected_skill="code-health",
+        expected_target="PR #2",
+    )
 
 
 def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
@@ -268,4 +280,40 @@ def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path
     report = tmp_path / "report.md"
     report.write_text("No output.")
 
-    assert main(["validate-report", str(report), "--skill", "code-health"]) == 1
+    assert (
+        main(
+            [
+                "validate-report",
+                str(report),
+                "--skill",
+                "code-health",
+                "--target",
+                "smoke",
+            ]
+        )
+        == 1
+    )
+
+
+def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
+    """Exercise the user-facing planner with a deterministic Pi executable.
+
+    :param tmp_path: Temporary location for the fake executable.
+    """
+    pi = tmp_path / "pi"
+    pi.write_text(f"#!/bin/sh\nprintf '%s' '{AVAILABLE_MODELS}'\n")
+    pi.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    result = sh.Command(sys.executable)(
+        script,
+        "plan",
+        "--skill",
+        "code-health",
+        "--changed-lines",
+        "20",
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    payload = json.loads(str(result))
+    assert payload[1]["candidates"][0] == "openrouter/cohere/north-mini-code:free"

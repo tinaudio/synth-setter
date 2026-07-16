@@ -66,7 +66,7 @@ _REQUIRED_REPORT_HEADINGS = (
     "### WARN findings",
     "### What looks good",
 )
-_REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — .+$")
+_REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
 
 
@@ -116,6 +116,42 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
     """
 
     message: _TranscriptMessage
+
+
+class _WorkerReport(BaseModel, strict=True, extra="forbid"):
+    """Validated worker-report fields consumed by aggregation.
+
+    .. attribute :: skill
+        :type: str
+
+        Checklist that produced the report.
+
+    .. attribute :: target
+        :type: str
+
+        Assigned PR or branch label.
+
+    .. attribute :: block_findings
+        :type: tuple[str, ...]
+
+        Validated blocking-finding rows.
+
+    .. attribute :: warn_findings
+        :type: tuple[str, ...]
+
+        Validated warning-finding rows.
+
+    .. attribute :: what_looks_good
+        :type: tuple[str, ...]
+
+        Evidence bullets from the worker.
+    """
+
+    skill: str
+    target: str
+    block_findings: tuple[str, ...]
+    warn_findings: tuple[str, ...]
+    what_looks_good: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,18 +252,23 @@ def provenance_for_model(model: str) -> str:
     raise ValueError(f"Unsupported Pi review provider: {provider}")
 
 
-def report_is_parseable(report: str, *, expected_skill: str) -> bool:
+def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
     """Return whether a worker report satisfies the merge contract.
 
     :param report: Worker Markdown output.
     :param expected_skill: Checklist the worker was assigned.
+    :param expected_target: PR or branch label the worker was assigned.
     :returns: Whether the title and ordered sections are structurally valid.
     """
     lines = report.strip().splitlines()
     if not lines:
         return False
     title = _REPORT_TITLE.fullmatch(lines[0])
-    if title is None or title.group("skill") != expected_skill:
+    if (
+        title is None
+        or title.group("skill") != expected_skill
+        or title.group("target") != expected_target
+    ):
         return False
     if any(lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
         return False
@@ -238,12 +279,22 @@ def report_is_parseable(report: str, *, expected_skill: str) -> bool:
     block_lines = lines[indices[0] + 1 : indices[1]]
     warn_lines = lines[indices[1] + 1 : indices[2]]
     good_lines = [line for line in lines[indices[2] + 1 :] if line.strip()]
-    return (
+    sections_are_valid = (
         _findings_section_is_valid(block_lines)
         and _findings_section_is_valid(warn_lines)
         and bool(good_lines)
         and all(line.startswith("- ") and len(line) > 2 for line in good_lines)
     )
+    if not sections_are_valid:
+        return False
+    _WorkerReport(
+        skill=title.group("skill"),
+        target=title.group("target"),
+        block_findings=tuple(line for line in block_lines if line.strip()),
+        warn_findings=tuple(line for line in warn_lines if line.strip()),
+        what_looks_good=tuple(good_lines),
+    )
+    return True
 
 
 def _findings_section_is_valid(lines: Sequence[str]) -> bool:
@@ -286,7 +337,6 @@ def build_review_plan(
             skill,
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
-            is_deep=is_deep,
         )
         for pass_name in ("codex", "openrouter"):
             configured = candidates_by_pass[pass_name]
@@ -319,9 +369,8 @@ def _thinking_for(
     *,
     changed_lines: int,
     risk_reasons: Sequence[str],
-    is_deep: bool,
 ) -> tuple[str, str]:
-    if is_deep:
+    if skill in DEEP_SKILLS:
         return "high", "deep checklist"
 
     thinking = "medium"
@@ -356,6 +405,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("path", type=Path)
     validate.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    validate.add_argument("--target", required=True)
     provenance = subparsers.add_parser(
         "provenance", help="print provenance for an effective model"
     )
@@ -376,7 +426,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         pi_executable = shutil.which("pi")
         if pi_executable is None:
             raise RuntimeError("pi executable not found on PATH")
-        model_output = str(sh.Command(pi_executable)("--list-models"))
+        try:
+            model_output = str(sh.Command(pi_executable)("--list-models"))
+        except sh.ErrorReturnCode as error:
+            raise RuntimeError(f"pi --list-models failed: {error.stderr.strip()}") from error
         plan = build_review_plan(
             args.skill,
             changed_lines=args.changed_lines,
@@ -389,7 +442,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output.write_text(f"{extract_report(args.transcript)}\n")
         return 0
     if args.command == "validate-report":
-        return 0 if report_is_parseable(args.path.read_text(), expected_skill=args.skill) else 1
+        return (
+            0
+            if report_is_parseable(
+                args.path.read_text(),
+                expected_skill=args.skill,
+                expected_target=args.target,
+            )
+            else 1
+        )
     if args.command == "provenance":
         sys.stdout.write(f"{provenance_for_model(args.model)}\n")
         return 0

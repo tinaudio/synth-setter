@@ -226,6 +226,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
+    assert "OpenRouter-only findings never enter aggregation directly" in text
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:
