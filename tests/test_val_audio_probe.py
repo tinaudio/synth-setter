@@ -19,7 +19,7 @@ import pytest
 import torch
 from lightning.pytorch import LightningModule, Trainer
 
-from synth_setter.utils.callbacks import ValAudioProbe
+from synth_setter.utils.callbacks import ValAudioProbe, _stderr_tail
 
 _DRAIN_TIMEOUT_SECONDS = 30
 
@@ -255,6 +255,34 @@ def test_val_audio_probe_warns_and_continues_when_probe_raises(
 
     assert module.logged == []
     assert "render exploded" in caplog.text
+    assert "stderr tail:" not in caplog.text  # nothing to show for a stderr-less error
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        (None, ""),
+        ("", ""),
+        ("str-boom", "str-boom"),
+        (b"bytes-boom", "bytes-boom"),
+        ("x" * 3000, "x" * 2000),
+    ],
+    ids=["none", "empty", "str", "bytes", "capped"],
+)
+def test_stderr_tail_normalizes_and_caps(stderr: str | bytes | None, expected: str) -> None:
+    """The tail helper handles absent, empty, str, bytes, and oversized stderr.
+
+    :param stderr: ``CalledProcessError.stderr`` payload variant.
+    :param expected: Text the warning suffix should carry.
+    """
+    exc = subprocess.CalledProcessError(1, ["render"], stderr=stderr)
+
+    assert _stderr_tail(exc) == expected
+
+
+def test_stderr_tail_returns_empty_for_error_without_stderr_attribute() -> None:
+    """Plain exceptions (no ``stderr`` attribute) yield an empty tail."""
+    assert _stderr_tail(RuntimeError("boom")) == ""
 
 
 def test_val_audio_probe_failure_warning_includes_subprocess_stderr(

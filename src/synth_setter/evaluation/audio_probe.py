@@ -169,11 +169,11 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
     with ExitStack() as stack:
         argv = _render_argv(probe_dir, settings, stack)
         log.info("val audio probe: rendering %s samples at step %s", n_samples, step)
-        subprocess.run(  # noqa: S603
+        render = subprocess.run(  # noqa: S603
             argv,
             check=True,
             # Captured so a failure's CalledProcessError carries the child traceback
-            # for the caller's warning (#1990) instead of discarding it.
+            # for the caller's warning (#1990); success-path chatter goes to debug below.
             stderr=subprocess.PIPE,
             text=True,
             # 2× samples: --rerender_target renders both pred and target per sample.
@@ -183,9 +183,11 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
                 per_sample_seconds=RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
             ),
         )
+    if render.stderr:
+        log.debug("val audio probe: render stderr\n%s", render.stderr)
 
     metrics_dir = probe_dir / METRICS_DIRNAME
-    subprocess.run(  # noqa: S603
+    scoring = subprocess.run(  # noqa: S603
         [
             sys.executable,
             "-m",
@@ -205,6 +207,8 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             per_sample_seconds=METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
         ),
     )
+    if scoring.stderr:
+        log.debug("val audio probe: metrics stderr\n%s", scoring.stderr)
 
     if upload_uri is not None:
         destination = f"{upload_uri.rstrip('/')}/step-{step}"

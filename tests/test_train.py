@@ -998,9 +998,8 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             "velocity": 100,
             "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
         }
-        # The smoke builder re-pins model.net.d_out to the fixture spec but leaves the
-        # datamodule group's default (surge_xt); re-pin it so the probe's configure-time
-        # render/datamodule spec-match guard (#1990) sees the true fixture spec.
+        # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
+        # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
         cfg_surge_real_train.training.val_audio_probe = True
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples

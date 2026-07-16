@@ -169,14 +169,14 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
             "training.val_audio_probe=true requires a render config group "
             "(e.g. `render=surge_xt`); cfg.render is unset."
         )
-    # A mismatched spec makes every probe cycle die decoding the model's output
-    # (e.g. 92-dim surge_simple predictions against the 164-param surge_xt spec),
-    # silently producing no audio metrics all run (#1990).
+    # A mismatched spec fails the probe's decode every cycle (e.g. 92-dim surge_simple
+    # predictions against the 164-param surge_xt spec) — see #1990.
+    render_spec = OmegaConf.select(cfg, "render.param_spec_name")
     datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
-    if datamodule_spec is not None and datamodule_spec != cfg.render.param_spec_name:
+    if datamodule_spec is not None and datamodule_spec != render_spec:
         raise ValueError(
             "training.val_audio_probe=true requires the probe to decode predictions "
-            f"with the model's spec, but render.param_spec_name={cfg.render.param_spec_name!r} "
+            f"with the model's spec, but render.param_spec_name={render_spec!r} "
             f"!= datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
             f"group (e.g. `render={datamodule_spec}`)."
         )
