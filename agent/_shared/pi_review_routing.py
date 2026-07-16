@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import sh
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
@@ -40,6 +40,8 @@ SUPPORTED_SKILLS = frozenset(
     }
 )
 PI_REVIEW_MAX_TURNS = 12
+_MECHANICAL_LOW_LINE_LIMIT = 200
+_HIGH_RISK_LINE_LIMIT = 800
 _REQUIRED_PROVIDER_SETUP = (
     ("openai-codex", "authenticate with `/login openai-codex`"),
     (
@@ -77,7 +79,7 @@ _REQUIRED_REPORT_HEADINGS = (
 _REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
 _RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-(\d+)(\*\* — \S.+)$")
-_BULLET_FINDING = re.compile(r"^- \*\*(.+:\d+(?:-\d+)?)\*\* — (\S.+)$")
+_BULLET_FINDING = re.compile(r"^- \*\*(.+:)(\d+)(?:-(\d+))?\*\* — (\S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -101,13 +103,13 @@ class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
 class _TranscriptUsage(BaseModel, strict=True, extra="ignore"):
     """Token accounting attached to one assistant turn.
 
-    .. attribute :: totalTokens
-        :type: int
+    .. attribute :: total_tokens
+        :type: int | None
 
         Provider-reported processed tokens for the turn.
     """
 
-    totalTokens: int | None = None
+    total_tokens: int | None = Field(default=None, alias="totalTokens")
 
 
 class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
@@ -376,7 +378,11 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
             continue
         bullet = _BULLET_FINDING.fullmatch(stripped)
         if bullet is not None:
-            normalized.append(f"{len(normalized) + 1}. **{bullet.group(1)}** — {bullet.group(2)}")
+            path, start, end, description = bullet.groups()
+            range_note = f"[reported range {start}-{end}] " if end is not None else ""
+            normalized.append(
+                f"{len(normalized) + 1}. **{path}{start}** — {range_note}{description}"
+            )
             continue
         if normalized and normalized[-1] != "None.":
             normalized[-1] = f"{normalized[-1]} {stripped}"
@@ -434,10 +440,10 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
             continue
         turns += 1
         usage = entry.message.usage
-        if usage is None or usage.totalTokens is None:
+        if usage is None or usage.total_tokens is None:
             usage_complete = False
         else:
-            cumulative_tokens += usage.totalTokens
+            cumulative_tokens += usage.total_tokens
     elapsed_seconds = None
     if len(timestamps) >= 2:
         elapsed_seconds = int((timestamps[-1] - timestamps[0]).total_seconds())
@@ -604,13 +610,13 @@ def _thinking_for(
         return "high", "deep checklist"
 
     if skill in MECHANICAL_SKILLS:
-        if changed_lines < 200:
-            return "low", "mechanical checklist on diff under 200 lines"
-        return "medium", "mechanical checklist on diff of 200+ lines"
+        if changed_lines < _MECHANICAL_LOW_LINE_LIMIT:
+            return "low", f"mechanical checklist on diff under {_MECHANICAL_LOW_LINE_LIMIT} lines"
+        return "medium", f"mechanical checklist on diff of {_MECHANICAL_LOW_LINE_LIMIT}+ lines"
 
     risks = list(risk_reasons)
-    if changed_lines > 800:
-        risks.insert(0, "diff over 800 lines")
+    if changed_lines > _HIGH_RISK_LINE_LIMIT:
+        risks.insert(0, f"diff over {_HIGH_RISK_LINE_LIMIT} lines")
     if risks:
         return "high", f"risk: {', '.join(risks)}"
     return "medium", "standard checklist"
