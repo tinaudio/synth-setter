@@ -243,9 +243,12 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     field on the model auto-extends the CLI invocation.
     """
     output_path = output_dir / shard.filename
+    # Import-anchored (not repo-root-relative) so dispatch works from any cwd;
+    # kept as a path (not ``-m``) to avoid importing the renderer's heavy deps here.
+    renderer_script = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
     args = [
         sys.executable,
-        "src/synth_setter/data/vst/generate_vst_dataset.py",
+        str(renderer_script),
         str(output_path),
     ]
     render_args = spec.render_for_shard(shard).model_dump()
