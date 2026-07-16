@@ -76,7 +76,8 @@ _REQUIRED_REPORT_HEADINGS = (
 )
 _REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
-_RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-\d+(\*\* — \S.+)$")
+_RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-(\d+)(\*\* — \S.+)$")
+_BULLET_FINDING = re.compile(r"^- \*\*(.+:\d+(?:-\d+)?)\*\* — (\S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -319,10 +320,9 @@ def _structured_report_markdown(text: str) -> str | None:
     if start is None:
         return None
     report_lines = lines[start:]
-    try:
-        indices = [report_lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
-    except ValueError:
+    if any(report_lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
         return "\n".join(report_lines).strip()
+    indices = [report_lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
     if indices != sorted(indices):
         return "\n".join(report_lines).strip()
 
@@ -354,6 +354,12 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
             in_fence = not in_fence
             continue
         if in_fence:
+            if normalized and normalized[-1] != "None.":
+                normalized[-1] = f"{normalized[-1]} {stripped}"
+            else:
+                normalized.append(stripped)
+            continue
+        if not stripped:
             continue
         if stripped in {"None", "None.", "- None", "- None."}:
             normalized.append("None.")
@@ -363,7 +369,19 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
             continue
         ranged = _RANGED_FINDING.fullmatch(stripped)
         if ranged is not None:
-            normalized.append("".join(ranged.groups()))
+            prefix, start, end, suffix = ranged.groups()
+            normalized.append(
+                f"{prefix}{start}{suffix.replace(' — ', f' — [reported range {start}-{end}] ', 1)}"
+            )
+            continue
+        bullet = _BULLET_FINDING.fullmatch(stripped)
+        if bullet is not None:
+            normalized.append(f"{len(normalized) + 1}. **{bullet.group(1)}** — {bullet.group(2)}")
+            continue
+        if normalized and normalized[-1] != "None.":
+            normalized[-1] = f"{normalized[-1]} {stripped}"
+        else:
+            normalized.append(stripped)
     return normalized
 
 
@@ -375,6 +393,7 @@ def extract_report(transcript: Path) -> str:
     :raises ValueError: If no assistant report text exists.
     """
     latest = ""
+    saw_assistant_text = False
     for entry in _transcript_entries(transcript):
         if entry.message is None or entry.message.role != "assistant":
             continue
@@ -383,11 +402,18 @@ def extract_report(transcript: Path) -> str:
             text = content
         else:
             text = "".join(block.text or "" for block in content if block.type == "text")
+        if not text.strip():
+            continue
+        saw_assistant_text = True
         structured = _structured_report_markdown(text)
-        if structured is not None:
-            latest = structured
+        latest = structured or ""
     if not latest:
-        raise ValueError(f"Transcript has no assistant text: {transcript}")
+        detail = (
+            "final assistant text is not a report"
+            if saw_assistant_text
+            else "has no assistant text"
+        )
+        raise ValueError(f"Transcript {detail}: {transcript}")
     return latest
 
 

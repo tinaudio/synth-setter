@@ -385,7 +385,6 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
         "### WARN findings\\n1. **src/example.py:10-12** — Defect.\\n"
         "```python\\n1. **src/fake.py:99-100** — Example.\\n```\\n\\n"
         '### What looks good\\n- Clear.\\n\\nclosing"}}\n'
-        '{"message":{"role":"assistant","content":"done"}}\n'
     )
 
     report = extract_report(transcript)
@@ -393,9 +392,49 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
     assert report == (
         "## code-health review — smoke\n\n"
         "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\n1. **src/example.py:10** — Defect.\n\n"
+        "### WARN findings\n"
+        "1. **src/example.py:10** — [reported range 10-12] Defect. "
+        "1. **src/fake.py:99-100** — Example.\n\n"
         "### What looks good\n- Clear."
     )
+
+
+def test_extract_report_rejects_duplicate_heading_after_good_section(
+    tmp_path: Path,
+) -> None:
+    """Keep duplicate headings visible so validation rejects the report.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        "### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear.\\n\\n"
+        '### BLOCK findings\\n1. **src/hidden.py:9** — Hidden."}}\n'
+    )
+
+    report = extract_report(transcript)
+
+    assert not report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
+    assert "src/hidden.py:9" in report
+
+
+def test_extract_report_requires_final_assistant_report(tmp_path: Path) -> None:
+    """Reject an earlier provisional report followed by a final retraction.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":"Tool failure; retract the report."}}\n'
+    )
+
+    with pytest.raises(ValueError, match="final assistant text is not a report"):
+        extract_report(transcript)
 
 
 def test_extract_report_rejects_untyped_metadata_event(tmp_path: Path) -> None:
