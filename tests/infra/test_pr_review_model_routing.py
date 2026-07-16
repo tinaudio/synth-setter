@@ -173,6 +173,34 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
+    """Run the Python launcher directly through the production execution path.
+
+    :param tmp_path: Temporary directory containing the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_shell_launcher_dry_run_e2e() -> None:
     """Run the user-facing shell launcher without starting model inference."""
     sh = importlib.import_module("sh")
@@ -335,8 +363,8 @@ def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_codex_review_shell_launcher_success_reaps_watchdog_timer(tmp_path: Path) -> None:
-    """A fast review leaves no deadline timer running.
+def test_codex_review_shell_launcher_success_starts_no_watchdog_timer(tmp_path: Path) -> None:
+    """A fast review does not start an external deadline timer.
 
     :param tmp_path: Temporary directory containing fake Codex and sleep executables.
     """
@@ -370,16 +398,19 @@ def test_codex_review_shell_launcher_success_reaps_watchdog_timer(tmp_path: Path
     )
 
     assert str(result) == "structured report"
-    sleep_pid = int(sleep_pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(sleep_pid, 0)
+    assert not sleep_pid_file.exists()
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_codex_review_shell_launcher_timeout_force_kills_process_group(tmp_path: Path) -> None:
+@pytest.mark.parametrize("parent_term_trap", ["trap '' TERM\n", ""])
+def test_codex_review_shell_launcher_timeout_force_kills_process_group(
+    tmp_path: Path,
+    parent_term_trap: str,
+) -> None:
     """Escalate a timed-out review and remove its signal-ignoring child.
 
     :param tmp_path: Temporary directory containing the fake Codex executable.
+    :param parent_term_trap: Whether the process-group leader also ignores SIGTERM.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
@@ -387,8 +418,8 @@ def test_codex_review_shell_launcher_timeout_force_kills_process_group(tmp_path:
     codex = tmp_path / "codex"
     codex.write_text(
         "#!/bin/bash\n"
-        "trap '' TERM\n"
-        "/bin/sleep 5 &\n"
+        f"{parent_term_trap}"
+        "bash -c \"trap '' TERM; exec /bin/sleep 5\" &\n"
         'echo "$!" > "${CODEX_CHILD_PID_FILE}"\n'
         "wait\n"
     )
