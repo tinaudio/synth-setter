@@ -352,13 +352,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
-    def _torchsynth_forbids_gui_toggle(self) -> RenderConfig:
-        """Reject editor cadences for the in-process torchsynth backend.
+    def _validate_torchsynth_backend(self) -> RenderConfig:
+        """Require the in-process backend name and disable plugin editor use.
 
-        :return: ``self`` unchanged for other backends or torchsynth without editor use.
-        :raises ValueError: torchsynth combined with a cadence other than ``"never"``.
+        :return: ``self`` unchanged for other backends or a valid torchsynth config.
+        :raises ValueError: The backend and bare plugin name disagree, or torchsynth
+            uses an editor cadence other than ``"never"``.
         """
-        if self.renderer_backend == "torchsynth" and self.gui_toggle_cadence != "never":
+        if self.plugin_path == "torchsynth" and self.renderer_backend != "torchsynth":
+            raise ValueError('plugin_path="torchsynth" requires renderer_backend="torchsynth"')
+        if self.renderer_backend != "torchsynth":
+            return self
+        if self.plugin_path != "torchsynth":
+            raise ValueError('torchsynth requires plugin_path="torchsynth"')
+        if self.gui_toggle_cadence != "never":
             raise ValueError(
                 'torchsynth requires gui_toggle_cadence="never": it renders in-process '
                 "and has no plugin editor to toggle"

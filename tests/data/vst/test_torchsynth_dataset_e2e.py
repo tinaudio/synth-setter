@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.metadata
+import subprocess
+import sys
 from pathlib import Path
 
 import lance
@@ -74,6 +77,60 @@ def test_make_lance_dataset_renders_a_real_torchsynth_shard(tmp_path: Path) -> N
     assert np.isfinite(params).all()
     assert np.all((params >= 0.0) & (params <= 1.0))
     # Every accepted row passed the loudness gate, so no row may be silent.
+    assert (np.abs(audio.astype(np.float32)).max(axis=(1, 2)) > 0.0).all()
+
+
+def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Path) -> None:
+    """The public CLI parses torchsynth config and writes readable audio rows.
+
+    :param tmp_path: Destination directory for the rendered shard.
+    """
+    shard = tmp_path / "cli-shard.lance"
+    subprocess.run(  # noqa: S603 — sys.executable and every CLI argument are test-owned
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.data.vst.generate_vst_dataset",
+            str(shard),
+            "--plugin_path",
+            "torchsynth",
+            "--plugin_state_path",
+            "",
+            "--param_spec_name",
+            "torchsynth_adsr",
+            "--renderer_version",
+            importlib.metadata.version("torchsynth"),
+            "--renderer_backend",
+            "torchsynth",
+            "--sample_rate",
+            str(_SAMPLE_RATE),
+            "--channels",
+            "2",
+            "--velocity",
+            "100",
+            "--signal_duration_seconds",
+            str(_DURATION_SECONDS),
+            "--min_loudness",
+            "-70.0",
+            "--samples_per_shard",
+            "2",
+            "--samples_per_render_batch",
+            "1",
+            "--base_seed",
+            "42",
+            "--plugin_reload_cadence",
+            "once",
+            "--gui_toggle_cadence",
+            "never",
+        ],
+        check=True,
+        timeout=120,
+    )
+
+    dataset = lance.dataset(str(shard))
+    audio = _read_lance_column(shard, AUDIO_FIELD)
+    assert dataset.count_rows() == 2
+    assert audio.shape == (2, 2, int(_SAMPLE_RATE * _DURATION_SECONDS))
     assert (np.abs(audio.astype(np.float32)).max(axis=(1, 2)) > 0.0).all()
 
 

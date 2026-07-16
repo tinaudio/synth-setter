@@ -61,6 +61,17 @@ def test_pinned_spec_matches_live_voice() -> None:
     assert spec_from_voice(voice) == PARAM_SPEC
 
 
+def test_voice_with_added_parameter_reports_spec_width_drift() -> None:
+    """A live/spec width mismatch fails with both counts instead of positional truncation."""
+    from synth_setter.data.torchsynth_datamodule import _make_renderer
+    from synth_setter.data.vst.torchsynth_param_spec import verify_voice_matches_spec
+
+    voice = _make_renderer(44_100, 4_410).voice
+
+    with pytest.raises(ValueError, match="exposes 78 parameters, spec pins 77"):
+        verify_voice_matches_spec(voice, PARAM_SPEC[:-1])
+
+
 def test_normalization_round_trip_matches_live_voice_curves() -> None:
     """Pure-Python ``to_0to1``/``from_0to1`` mirror torchsynth's curve math for every param.
 
