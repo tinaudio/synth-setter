@@ -15,6 +15,7 @@ import sys
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import torch
@@ -215,7 +216,7 @@ def test_run_audio_probe_propagates_render_failure(
     """
     _stage(tmp_path)
 
-    def failing_run(argv: list[str], **_kwargs: object):
+    def failing_run(argv: list[str], **_kwargs: object) -> NoReturn:
         raise subprocess.CalledProcessError(1, argv)
 
     monkeypatch.setattr(audio_probe.subprocess, "run", failing_run)
@@ -298,6 +299,34 @@ def test_run_audio_probe_metrics_failure_carries_subprocess_stderr(
     assert "No module named" in (excinfo.value.stderr or "")
 
 
+def test_run_audio_probe_render_timeout_carries_partial_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real stage timeout surfaces the child's pre-kill stderr on the raised error.
+
+    CPython attaches the partial capture to ``TimeoutExpired`` as raw bytes even
+    under ``text=True`` — the chain the warning path's bytes handling exists for.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Shrinks the render budget and replaces the argv builder.
+    """
+    _stage(tmp_path)
+    monkeypatch.setattr(audio_probe, "RENDER_TIMEOUT_OVERHEAD_SECONDS", 0.5)
+    monkeypatch.setattr(audio_probe, "RENDER_TIMEOUT_PER_SAMPLE_SECONDS", 0.0)
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys, time; sys.stderr.write('pre-timeout-chatter'); "
+        "sys.stderr.flush(); time.sleep(30)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "pre-timeout-chatter" in str(excinfo.value.stderr)
+
+
 def test_run_audio_probe_forwards_success_stderr_to_debug_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -321,3 +350,25 @@ def test_run_audio_probe_forwards_success_stderr_to_debug_log(
         run_audio_probe(tmp_path, 1, settings=_SETTINGS, upload_uri=None)
 
     assert "deprecation-chatter" in caplog.text
+
+
+def test_run_audio_probe_success_stderr_debug_log_is_tail_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Oversized success-path chatter reaches the debug log tail-only, like failures.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the probe's ``subprocess.run``.
+    :param caplog: Pytest fixture capturing the debug records.
+    """
+    _stage(tmp_path)
+    chatter = "HEAD-marker\n" + "x" * 5000 + "\nTAIL-marker"
+    monkeypatch.setattr(
+        audio_probe.subprocess, "run", _fake_probe_subprocesses(tmp_path, [], stderr=chatter)
+    )
+
+    with caplog.at_level("DEBUG", logger="synth_setter.evaluation.audio_probe"):
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS, upload_uri=None)
+
+    assert "TAIL-marker" in caplog.text
+    assert "HEAD-marker" not in caplog.text

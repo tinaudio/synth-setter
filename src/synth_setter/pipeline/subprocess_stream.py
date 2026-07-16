@@ -27,9 +27,17 @@ from typing import cast
 
 import structlog
 
-__all__ = ["check_call_streamed", "check_call_streamed_async", "scaled_timeout"]
+__all__ = [
+    "STDERR_TAIL_CHARS",
+    "check_call_streamed",
+    "check_call_streamed_async",
+    "scaled_timeout",
+]
 
 _LOG = structlog.get_logger(__name__)
+
+# Cap on the captured-stderr tail a subprocess caller surfaces in one log record.
+STDERR_TAIL_CHARS = 2000
 
 # SIGTERM -> SIGKILL escalation grace, seconds. TERM first so children's EXIT
 # traps run (the VST wrapper reaps its X11 tree, #1634); KILL keeps timeouts real.

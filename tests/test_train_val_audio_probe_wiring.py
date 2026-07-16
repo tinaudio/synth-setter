@@ -33,7 +33,7 @@ def _cfg(
     enabled: bool,
     with_render: bool = True,
     output_dir: str = "/runs/out",
-    datamodule: dict[str, str] | None = None,
+    datamodule: dict[str, str | None] | None = None,
 ) -> DictConfig:
     """Build the minimal train cfg slice ``_configure_val_audio_probe`` reads.
 
@@ -127,8 +127,11 @@ def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() 
     """
     cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
 
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(ValueError) as excinfo:
         _configure_val_audio_probe(cfg, [])
+
+    assert "render.param_spec_name='surge_xt'" in str(excinfo.value)
+    assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
 
 
 def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> None:
@@ -153,11 +156,21 @@ def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> No
         _configure_val_audio_probe(cfg, [])
 
 
-def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec() -> None:
-    """A datamodule without ``param_spec_name`` (non-VST) leaves the guard inert."""
+@pytest.mark.parametrize(
+    "datamodule",
+    [{"batch_size": "8"}, {"param_spec_name": None}],
+    ids=["key-absent", "key-null"],
+)
+def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
+    datamodule: dict[str, str | None],
+) -> None:
+    """A datamodule without a ``param_spec_name`` value (non-VST) leaves the guard inert.
+
+    :param datamodule: Datamodule group variant carrying no usable spec name.
+    """
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=True, datamodule={"batch_size": "8"}), callbacks)
+    _configure_val_audio_probe(_cfg(enabled=True, datamodule=datamodule), callbacks)
 
     assert len(callbacks) == 1
 

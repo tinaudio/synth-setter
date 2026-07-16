@@ -285,6 +285,15 @@ def test_stderr_tail_returns_empty_for_error_without_stderr_attribute() -> None:
     assert _stderr_tail(RuntimeError("boom")) == ""
 
 
+def test_stderr_tail_ignores_non_text_stderr_attribute() -> None:
+    """A non-str/bytes ``stderr`` attribute yields an empty tail, not a TypeError."""
+
+    class _WeirdStderrError(Exception):
+        stderr = 12345
+
+    assert _stderr_tail(_WeirdStderrError("boom")) == ""
+
+
 def test_stderr_tail_surfaces_timeout_stderr() -> None:
     """A timed-out subprocess's captured stderr surfaces like a failed one's."""
     exc = subprocess.TimeoutExpired(["render"], 5.0, stderr="timeout-boom")

@@ -31,6 +31,7 @@ from synth_setter.models.components.transformer import (
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS
 
 log = logging.getLogger(__name__)
 
@@ -40,30 +41,25 @@ _MAX_UPLOAD_ATTEMPTS = 3
 
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
-
-# Cap on the subprocess-stderr tail a probe-failure warning carries; the failed
-# probe dir is kept on disk for anything beyond it.
-_STDERR_TAIL_CHARS = 2000
 _CheckpointRevision = tuple[str, float, int, int | None]
 
 
 def _stderr_tail(exc: BaseException) -> str:
-    """Return the trailing stderr a subprocess error carries, if any.
+    """Return the trailing stderr a subprocess error carries.
 
-    Subprocess errors (``CalledProcessError``, ``TimeoutExpired``) name only the
-    command and exit status/budget in their message; their ``stderr`` attribute
-    holds the child's actual traceback (when the caller captured it), which is
-    what makes a probe failure diagnosable from the run log.
+    That tail is the child traceback that makes a probe failure diagnosable
+    from the run log.
 
     :param exc: Exception whose optional ``stderr`` attribute to read.
-    :returns: Up to the last ``_STDERR_TAIL_CHARS`` characters, or ``""`` when absent.
+    :returns: Up to the last ``STDERR_TAIL_CHARS`` characters, or ``""`` when absent.
     """
     stderr = getattr(exc, "stderr", None)
     if isinstance(stderr, bytes):
+        # TimeoutExpired attaches undecoded bytes even when the runner asked for text.
         stderr = stderr.decode(errors="replace")
-    if not stderr:
+    if not isinstance(stderr, str) or not stderr:
         return ""
-    return stderr[-_STDERR_TAIL_CHARS:]
+    return stderr[-STDERR_TAIL_CHARS:]
 
 
 def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
