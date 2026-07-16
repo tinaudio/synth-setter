@@ -23,6 +23,7 @@ on:
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
+      - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
 permissions:
@@ -47,6 +48,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Reset preloaded Docker state and use separate storage when the runner provides it.
+      - name: Prepare Docker storage capacity
+        uses: ./.github/actions/prepare-docker-storage
 
       - name: Pull image
         run: docker pull "$IMAGE"
