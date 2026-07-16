@@ -130,7 +130,7 @@ def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() 
     with pytest.raises(ValueError) as excinfo:
         _configure_val_audio_probe(cfg, [])
 
-    assert "render.param_spec_name='surge_xt'" in str(excinfo.value)
+    assert "render.param_spec_name is 'surge_xt'" in str(excinfo.value)
     assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
 
 
@@ -147,13 +147,15 @@ def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> 
 
 
 def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> None:
-    """A render group without ``param_spec_name`` cannot decode a spec'd model's output."""
+    """A render group without ``param_spec_name`` fails and the message says it is unset."""
     cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
     with open_dict(cfg):
         del cfg.render.param_spec_name
 
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(ValueError) as excinfo:
         _configure_val_audio_probe(cfg, [])
+
+    assert "render.param_spec_name is unset" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

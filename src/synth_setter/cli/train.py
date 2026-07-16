@@ -174,10 +174,11 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
     render_spec = OmegaConf.select(cfg, "render.param_spec_name")
     datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
     if datamodule_spec is not None and datamodule_spec != render_spec:
+        render_desc = "unset" if render_spec is None else repr(render_spec)
         raise ValueError(
             "training.val_audio_probe=true requires the probe to decode predictions "
-            f"with the model's spec, but render.param_spec_name={render_spec!r} "
-            f"!= datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
+            f"with the model's spec, but render.param_spec_name is {render_desc} while "
+            f"datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
             f"group (e.g. `render={datamodule_spec}`)."
         )
     # The surge experiment base ships trainer.limit_val_batches: 0 — a validation-hooked
