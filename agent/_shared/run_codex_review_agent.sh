@@ -6,11 +6,7 @@ readonly ORCHESTRATOR_TIMEOUT_S=900
 readonly TERMINATION_GRACE_S=2
 readonly WORKER_TIMEOUT_S=600
 
-# Terminate a review process group after its deadline, escalating to SIGKILL.
-# Arguments:
-#   Process group ID, timeout seconds, and timeout marker path.
-# Returns:
-#   Zero after cancellation, target exit, or forced termination.
+# End a timed-out review process group, escalating from SIGTERM to SIGKILL.
 terminate_after() {
   local target_pgid="$1"
   local timeout_s="$2"
