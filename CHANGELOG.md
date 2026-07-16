@@ -1,6 +1,305 @@
 # CHANGELOG
 
 
+## v9.2.0 (2026-07-16)
+
+### Automation
+
+- Bound Codex review launcher ([#1980](https://github.com/tinaudio/synth-setter/pull/1980),
+  [`99bd9e0`](https://github.com/tinaudio/synth-setter/commit/99bd9e0bf5e2c6ea9d4faec5e68fdb7e32426005))
+
+* fix(ci-automation): bound Codex review launcher
+
+* fix(ci-automation): harden review timeout cleanup
+
+* chore(comments): apply pre-PR review rewrite
+
+* fix(ci-automation): move review supervision into Python
+
+* refactor(ci-automation): separate review process capture
+
+* chore(comments): tighten launcher test contracts
+
+* test(ci-automation): cover orchestrator timeout default
+
+* fix(ci-automation): harden review process lifecycle
+
+* fix(ci-automation): tolerate blank Codex event lines
+
+- Provide Ruff to Codex hook tests ([#2000](https://github.com/tinaudio/synth-setter/pull/2000),
+  [`058f3f9`](https://github.com/tinaudio/synth-setter/commit/058f3f93ddeedde878ba0d4ae381ef1dd4d7474a))
+
+### Features
+
+- **data-pipeline**: Torchsynth in-process AudioRenderer + param specs
+  ([#2008](https://github.com/tinaudio/synth-setter/pull/2008),
+  [`af52ce4`](https://github.com/tinaudio/synth-setter/commit/af52ce48b13dffb5f17e4559e8a5dfda3ce8f576))
+
+* feat(data-pipeline): add torchsynth AudioRenderer backend and param specs
+
+Host the torchsynth Voice behind the shared AudioRenderer seam so lance datasets can be generated
+  without a plugin host (~3.6 ms per 4 s note vs seconds under VST hosting):
+
+- TorchSynthRenderer renders in-process via the online datamodule's render_torchsynth path (extended
+  with a note-duration argument); sampled params override a pinned baseline patch, note-on offset is
+  emulated by delaying the audio, and mono output repeats across requested channels. - The pinned
+  voice spec (identity + ranges + drift verification) moves out of torchsynth_datamodule into
+  pure-Python torchsynth_param_spec.py, which adds ModuleParameterRange-mirroring to_0to1/from_0to1
+  curve math and registers torchsynth_adsr / torchsynth_simple / torchsynth_full specs. -
+  renderer_backend gains "torchsynth" (editor cadences rejected), writers dispatch to the new
+  renderer, extract_renderer_version resolves the bare backend name to the installed package
+  version, and render/torchsynth_{full,simple,adsr}.yaml compose valid RenderConfigs.
+
+Refs #1757
+
+* refactor(data-pipeline): hoist torchsynth renderer lookups into spec-module constants
+
+Expose DEFAULT_NORMALIZED_ROW, PARAM_INDEX, and KEYBOARD_DURATION_BOUNDS as precomputed constants
+  (matching the module's existing pattern) so TorchSynthRenderer.__post_init__ shrinks to the drift
+  check and render() stops rebuilding per-instance copies of spec-level data.
+
+* fix(data-pipeline): address pre-PR review findings for the torchsynth backend
+
+- Clamp the note-on offset to the render buffer so a note starting at or after the buffer end yields
+  well-formed silence (matching a VST host) instead of a negative-slice shape error; cover both
+  clamp boundaries. - Add the from_hydra e2e for the torchsynth backend (torchsynth-smoke
+  experiment) mirroring the DawDreamer coverage, plus a direct unit test for render_torchsynth's
+  note_duration_seconds. - Share one RendererBackend literal via interpreter-only
+  renderer_backend.py (spec.py must not import synth_setter.data.vst at module level), name the
+  bare-plugin-path constant TORCHSYNTH_PLUGIN_NAME, wrap DEFAULT_PATCH / PARAM_INDEX in
+  MappingProxyType, drop the dead spec_from_voice re-export, and tighten comments.
+
+* fix(data-pipeline): resolve second-round review warnings for the torchsynth backend
+
+- render_torchsynth validates note_duration_seconds against KEYBOARD_DURATION_BOUNDS (documented
+  ValueError instead of torchsynth's bare assert, which -O strips), with tests for both bounds. -
+  Shard reproducibility e2e now compares audio and mel columns, not just params; the duplicate
+  live-voice drift test consolidates into the param-spec test file. - Hoist importlib.metadata to
+  module scope, document the propagated PackageNotFoundError, sort the registry's torchsynth
+  entries, and tighten YAML/renderer comments.
+
+* docs: cover the torchsynth render-config family in doc-map
+
+The render-config and param-spec doc-map entries claimed every render config inherits surge_xt.yaml
+  and every *_param_spec.py is hand-tuned; the torchsynth family roots at torchsynth_full.yaml with
+  no preset and a pinned code-derived spec. Also map the new renderer_backend module.
+
+### Internal-Feat
+
+- **data-pipeline**: Harden Lance claim failure handling
+  ([#1995](https://github.com/tinaudio/synth-setter/pull/1995),
+  [`0fcbe09`](https://github.com/tinaudio/synth-setter/commit/0fcbe0982cd4f9f4a18cd815cfe2452e5426f463))
+
+* fix(data-pipeline): harden Lance claim failure handling
+
+Detect an existing claim table from the observable dataset postcondition instead of Lance error
+  prose. Cover takeover confirmation and unrelated completion failures so the claim module exercises
+  every correctness-sensitive branch.
+
+Fixes #1992
+
+* fix(data-pipeline): preserve Lance storage error subtypes
+
+Keep the original create exception active across the postcondition probe and cover concrete OSError
+  subtype preservation.
+
+Refs #1992
+
+- **data-pipeline**: Replace the jqueue shard queue with Lance claims
+  ([#1981](https://github.com/tinaudio/synth-setter/pull/1981),
+  [`eb44d8b`](https://github.com/tinaudio/synth-setter/commit/eb44d8b3506c7d39b24dbc5843b760b43cc36bea))
+
+* feat(data-pipeline): replace the jqueue shard queue with a Lance claims table
+
+One Lance table at metadata/shard-claims.lance under the run prefix, one row per shard (status,
+  owner, lease_expiry_s, attempts, claim_gen). Workers claim rows with a conditional UPDATE whose
+  predicate is the compare-and-set; Lance re-evaluates the predicate on commit-conflict retry, so a
+  lost race updates zero rows. A single lease expiry written at claim time replaces the jqueue
+  heartbeat thread: a crashed worker's claim becomes reclaimable when the lease lapses, and
+  claim_gen fences a stale owner's complete after a takeover. Completion truth stays with the
+  per-shard R2 existence probe.
+
+This deletes the hand-rolled conditional-put S3 adapter, the heartbeat machinery, and the jqueue
+  dependency; concurrency now rides Lance's conditional-put commit protocol, validated by real
+  multi-process contention tests locally and an integration_r2 contention test against real R2.
+  Known deliberate caveats (version churn per claim, no lease renewal, tens-of-workers contention
+  ceiling) are documented on #1976.
+
+Refs #1976
+
+* internal-fix(data-pipeline): survive Lance commit-retry exhaustion in claim and complete
+
+Under a whole-fleet CAS storm, Lance's internal conflict retries can exhaust and raise OSError('Too
+  many concurrent writers'). Claiming now backs off with jitter and re-scans instead of killing the
+  worker, and a rendered shard's complete abandons the bookkeeping write instead of failing the run
+  — the row recovers via lease lapse and the durable output is skip-probed by the re-claiming peer.
+  Also fail loudly when the table breaks the one-row-per-shard invariant, report hammer-worker
+  tracebacks through the test queue, and apply simplifier findings (Counter, typed test helper).
+
+* internal-fix(data-pipeline): address pre-PR review findings on shard claims
+
+- Pin the claim-table schema with creation and post-mutation tests (ml-test BLOCK): callers rely on
+  the exact columns and dtypes. - Narrow populate's create fallback to the dataset-already-exists
+  signal; any other OSError (permissions, IO) now propagates instead of surfacing as a confusing
+  not-found from the merge path. - Validate owner at the dataclass boundary so a future caller
+  bypassing for_run() cannot corrupt the SQL predicates fencing relies on. - Extract _attempt_claim
+  so the claim loop reads at one level of abstraction. - Trigger test-dataset-finalization on
+  shard_claims.py changes.
+
+* docs(data-pipeline): tighten shard-claims comments from review pass
+
+Compress the OSError substring-matching note to the two-line cap, state why flat jitter beats
+  exponential backoff for the contention path, tie _available_rows to its schema in the docstring,
+  and unpack the semicolon-joined callbacks doc-map entry.
+
+* test(data-pipeline): document contention-test nondeterminism and guard the R2 prefix
+
+Spell out in the hammer-test docstrings that the assertions are schedule-independent invariants
+  (nondeterministic interleavings are the point, not a reproducibility gap), and fail fast in the
+  real-R2 contention test when the unique prefix is not empty — a leftover there means a prior
+  crashed run leaked.
+
+* test(data-pipeline): pin claim-row value ranges and status-count domain
+
+Assert seeded rows zero their lease/attempt/generation counters, a won claim moves them into valid
+  ranges, and status_counts only ever carries the three claim statuses with positive tallies.
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+Tighten five doc-map entries to one clause each per the C12 rule flagged by the pre-PR review
+  sentinel.
+
+* chore(comments): tighten the review fan-out doc-map section to one clause per entry
+
+Second /fix-review-comments pass: the pre-PR review keeps sampling multi-clause covers entries in
+  the fan-out section, so tighten the whole section rather than only the two lines flagged this
+  round. The repo-wide sweep of the remaining entries is #1979.
+
+* docs(data-pipeline): apply doc-drift advisory for the claims rename
+
+Finish the queue-to-claims wording in the one untouched docstring and bump the freshness stamps on
+  the three design docs this PR edits.
+
+* fix(testing): read shard cadence params from the finalized split datasets
+
+The shard-cadence R2 test still opened the legacy standalone per-shard Lance dataset at shard_uri,
+  which the staged-attempt flow stopped writing when the pipeline went Lance-only — the test has
+  failed on every test-generate-dataset-shards run since. Winner fragments commit in shard order, so
+  each shard's rows sit at a spec-derived offset in its finalized split dataset; read the range from
+  there instead.
+
+Fixes #1982 Refs #1976
+
+* fix(testing): type the cadence test's shard-to-split map as Split
+
+pyright rejects the untyped comprehension key when it feeds split_lance_uri, which takes the Split
+  literal.
+
+Refs #1982
+
+* internal-fix(data-pipeline): back off on every lost claim race, not only storms
+
+Greptile review: an un-delayed fleet racing for the last few claimable rows bursts O(workers)
+  manifest scans per row transition on R2; apply the jittered backoff to every lost race before
+  rescanning. Also relax the hammer tests' generation-sum assertion to >=: a worker whose ownership
+  read races a steal conservatively discards its committed win, burning a generation nobody records
+  — strict equality was latently flaky (the exactly-one-owner-per-generation assertion stays exact).
+
+### Internal-Fix
+
+- **ci-automation**: Make cleanup tests zombie-aware
+  ([#2013](https://github.com/tinaudio/synth-setter/pull/2013),
+  [`297156c`](https://github.com/tinaudio/synth-setter/commit/297156c3dfdecfc01a148a6d48a5ddb8efda4fcb))
+
+* internal-fix(ci-automation): make cleanup tests zombie-aware
+
+* chore(comments): apply comment-hygiene fixes from pre-PR review
+
+* internal-fix(ci-automation): handle inaccessible cleanup PIDs
+
+- **training**: Guard val-audio-probe spec and surface stderr
+  ([#2010](https://github.com/tinaudio/synth-setter/pull/2010),
+  [`710fddc`](https://github.com/tinaudio/synth-setter/commit/710fddcc94c121eea32846e67f7000ba3fee72a4))
+
+* fix(training): fail fast on val-audio-probe param-spec mismatch and surface probe stderr
+
+A surge_simple run probed with render=surge_xt decoded 92-dim predictions against the 164-param
+  spec: every probe cycle died in the subprocess and the run produced zero audio metrics with only a
+  one-line warning naming the exit status. _configure_val_audio_probe now rejects a render spec that
+  differs from datamodule.param_spec_name at configure time, and the probe's subprocess stderr is
+  captured and included (tail-capped) in the per-cycle failure warning so the child traceback is
+  diagnosable from the run log.
+
+The probe e2e test re-pins datamodule.param_spec_name to the fixture spec: the smoke cfg builder
+  re-pins model.net.d_out but leaves the datamodule group default, which the new guard rejects.
+
+Fixes #1990
+
+* fix(training): address review findings on the probe stderr capture
+
+Forward a successful probe subprocess's captured stderr to the debug log so non-fatal chatter is not
+  silently discarded, read the render spec via OmegaConf.select for a clean ValueError on render
+  groups without a spec key, pin the stderr/text subprocess kwargs and the metrics-stage failure
+  path in tests, unit-test _stderr_tail's normalization/capping, and tighten two comments.
+
+Refs #1990
+
+* fix(training): close review gaps in the probe guard and stderr capture
+
+Cover the spec-mismatch guard through the real train entrypoint, decode probe subprocess stderr with
+  errors=replace so a native crash's invalid bytes cannot mask the diagnostic, cap and dedupe the
+  success-path stderr debug logging, pin the render-group-missing-spec-key and TimeoutExpired stderr
+  paths in tests, and annotate the loosened test fakes.
+
+* refactor(training): consolidate probe stderr capture per review
+
+Single STDERR_TAIL_CHARS constant in pipeline.subprocess_stream shared by the probe warning and
+  debug caps, one _run_captured helper for both probe stages, a type check so a non-text stderr
+  attribute yields an empty tail instead of a slice TypeError, and pinned coverage for the real
+  timeout-with-bytes-stderr chain, the debug-log cap boundary, the null datamodule spec, and the
+  guard's error-message values.
+
+* test(training): tighten probe test docstrings and contract pins
+
+Slow-mark the wall-clock timeout test, pin errors=replace in the subprocess kwargs contract, and
+  reword two docstrings to describe current behavior.
+
+* docs(training): point probe raise conditions at the code
+
+Section 6.4 enumerated _configure_val_audio_probe's ValueError conditions and missed the new
+  spec-mismatch guard; a code pointer cannot re-drift when the next guard lands.
+
+* fix(training): name the unset render spec key in the probe guard error
+
+### Testing
+
+- (fix) isolate lineage fallback from rclone
+  ([#2002](https://github.com/tinaudio/synth-setter/pull/2002),
+  [`6ffc84c`](https://github.com/tinaudio/synth-setter/commit/6ffc84c2e77e5614f14b090d567af1775c1e0d1d))
+
+- Isolate Xvfb Lance staging ([#1998](https://github.com/tinaudio/synth-setter/pull/1998),
+  [`9811e2f`](https://github.com/tinaudio/synth-setter/commit/9811e2f95bd114d5f395e6c7196c66d6a10898e9))
+
+- **data-pipeline**: Pin shard-claims duplicate-ack + done-row immunity
+  ([#1993](https://github.com/tinaudio/synth-setter/pull/1993),
+  [`7aa26f2`](https://github.com/tinaudio/synth-setter/commit/7aa26f287b776c203ded80d3e74d89ab0844336e))
+
+* test(data-pipeline): pin duplicate-complete idempotence and done-row lease immunity
+
+Two adversarial pinning tests closing gaps found auditing the shard-claims suite against the
+  jqueue-deprecation stress checklist (#1974): a duplicate ack (complete retried after an ambiguous
+  failure) must stay benign, and a done row must never rejoin the claimable pool via lease lapse
+  alone. Both were verified to fail under their target regressions (a status-guarded complete
+  predicate; a reclaim predicate keyed on lease expiry alone).
+
+Refs #1974
+
+* test(data-pipeline): align duplicate-ack test shape with the idempotency convention
+
+Review polish: arrange the duplicate-complete test like the populate idempotency test (setup call
+  unasserted, blank line before the repeated act) and smooth the done-row docstring wording.
+
+
 ## v9.1.0 (2026-07-15)
 
 ### Features
