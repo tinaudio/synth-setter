@@ -70,14 +70,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Concurrent shard renders each bootstrap their own Xvfb; under startup
-# contention an instance can lose the display-lock race or miss the readiness
-# window, so the bootstrap retries instead of failing the renderer (#2035).
+# Concurrent bootstraps can lose the display-lock race or miss the readiness
+# window, so retry instead of failing the renderer (#2035). Minimum 1.
 XVFB_BOOTSTRAP_ATTEMPTS="${XVFB_BOOTSTRAP_ATTEMPTS:-3}"
 # Readiness probes per attempt, 0.1 s apart; widen on congested hosts.
 XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
-# Max retry jitter in deciseconds; 0 disables (deterministic tests).
+# Max retry jitter in tenths of a second, capped sub-second; 0 disables.
 XVFB_RETRY_JITTER_MAX="${XVFB_RETRY_JITTER_MAX:-9}"
+[ "$XVFB_RETRY_JITTER_MAX" -gt 9 ] && XVFB_RETRY_JITTER_MAX=9
 
 # Start Xvfb and wait until it accepts connections; returns non-zero on any
 # startup fault, leaving XVFB_PID for reap_failed_xvfb to collect.
@@ -98,7 +98,7 @@ start_xvfb_attempt() {
       return 1
     fi
     count=$((count+1))
-    if [ "$count" -gt 100 ]; then
+    if [ "$count" -ge 100 ]; then
       echo "Timeout waiting for Xvfb to start" >&2
       return 1
     fi

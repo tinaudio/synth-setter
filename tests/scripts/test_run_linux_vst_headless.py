@@ -1,11 +1,8 @@
 """Bootstrap-retry tests for ``run-linux-vst-headless.sh`` (#2035).
 
-Concurrent shard renders each spawn their own Xvfb; under startup contention
-an instance can lose the display-lock race or miss the readiness window, and
-the wrapper must retry the bootstrap instead of failing the whole renderer
-subprocess. These tests run the real script with stub X binaries on ``PATH``
-that simulate those losses deterministically, so they stay in the fast suite
-on any platform.
+Runs the real script with stub X binaries on ``PATH`` that simulate startup
+contention losses deterministically, so the tests stay in the fast suite on
+any platform.
 """
 
 from __future__ import annotations
@@ -174,6 +171,21 @@ def test_bootstrap_attempts_env_overrides_retry_budget(
     result = _run_wrapper(stub_env)
     assert result.returncode != 0
     assert _xvfb_calls(stub_env) == 1
+
+
+def test_bootstrap_retry_with_default_jitter_recovers(
+    stub_env: dict[str, str],
+) -> None:
+    """The production jitter path (non-zero max) still retries to success.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    del stub_env["XVFB_RETRY_JITTER_MAX"]
+    stub_env["XVFB_STUB_FAILS"] = "1"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert _xvfb_calls(stub_env) == 2
 
 
 def test_bootstrap_readiness_timeout_retries_and_reaps_stale_xvfb(
