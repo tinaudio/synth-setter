@@ -60,10 +60,9 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
     assert plan[1].candidates[0] == "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
     assert plan[3].candidates[0] == "openrouter/cohere/north-mini-code:free"
     assert all(
-        model.startswith(("openai-codex/", "openrouter/"))
-        for item in plan
-        for model in item.candidates
+        model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
     )
+    assert all(model.startswith("openrouter/") for item in plan[1::2] for model in item.candidates)
 
 
 def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> None:
@@ -357,6 +356,7 @@ def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     """
     transcript = tmp_path / "worker.output"
     transcript.write_text(
+        '{"type":"session_start","sessionId":"metadata-only"}\n'
         '{"message":{"role":"assistant","content":[{"type":"text","text":"draft"}]}}\n'
         '{"message":{"role":"toolResult","content":[{"type":"text","text":"noise"}]}}\n'
         '{"message":{"role":"assistant","content":['
@@ -396,6 +396,18 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
         "### WARN findings\n1. **src/example.py:10** — Defect.\n\n"
         "### What looks good\n- Clear."
     )
+
+
+def test_extract_report_rejects_untyped_metadata_event(tmp_path: Path) -> None:
+    """Reject transcript rows with neither a message nor event discriminator.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text("{}\n")
+
+    with pytest.raises(ValueError, match="message or event type"):
+        extract_report(transcript)
 
 
 def test_extract_report_missing_assistant_text_raises(tmp_path: Path) -> None:

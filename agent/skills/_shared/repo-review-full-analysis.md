@@ -158,8 +158,10 @@ the audit with no agent id or transcript.
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
-the failure and launch a fresh worker with the next candidate. Never resume a
-failed session under another model.
+the failure and launch a fresh worker with the next same-provider candidate.
+Codex-pass candidates are always `openai-codex/*`; OpenRouter-pass candidates
+are always `openrouter/*`. Never cross providers to salvage a logical pass, and
+never resume a failed session under another model.
 
 A completed worker is not successful until its final assistant Markdown passes
 the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
@@ -192,7 +194,7 @@ turn/runtime/token columns, and an existing transcript path for each launched
 attempt. This live smoke is mandatory in addition to helper CLI tests.
 
 Attribute findings from each successful report to the provider that actually
-produced it, including after cross-provider fallback:
+produced it, including after same-provider fallback:
 
 ```bash
 python3 agent/_shared/pi_review_routing.py provenance <effective-model>

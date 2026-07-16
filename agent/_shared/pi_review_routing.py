@@ -1,7 +1,9 @@
 """Build auditable model plans for Pi PR-review workers.
 
-Run ``python3 agent/_shared/pi_review_routing.py plan --help`` for the routing
-CLI and its transcript-validation subcommands.
+For example, inspect one checklist's available passes with::
+
+    python3 agent/_shared/pi_review_routing.py plan \
+      --skill code-health --changed-lines 20
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import sh
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
@@ -49,25 +51,22 @@ _REQUIRED_PROVIDER_SETUP = (
 _DEEP_CANDIDATES = {
     "codex": (
         "openai-codex/gpt-5.6-sol",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/openrouter/free",
+        "openai-codex/gpt-5.6-terra",
     ),
     "openrouter": (
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         "openrouter/openrouter/free",
-        "openai-codex/gpt-5.6-sol",
     ),
 }
 _STANDARD_CANDIDATES = {
     "codex": (
         "openai-codex/gpt-5.6-terra",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/openrouter/free",
+        "openai-codex/gpt-5.6-sol",
     ),
     "openrouter": (
         "openrouter/cohere/north-mini-code:free",
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openai-codex/gpt-5.6-terra",
+        "openrouter/openrouter/free",
     ),
 }
 _REQUIRED_REPORT_HEADINGS = (
@@ -137,10 +136,15 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
 class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
     """Validated trust-boundary shape for one Tintin JSONL row.
 
-    .. attribute :: message
-        :type: _TranscriptMessage
+    .. attribute :: type
+        :type: str | None
 
-        Conversation message stored in the row.
+        Event discriminator for metadata-only rows.
+
+    .. attribute :: message
+        :type: _TranscriptMessage | None
+
+        Conversation message, or ``None`` for typed metadata events.
 
     .. attribute :: timestamp
         :type: str | None
@@ -148,8 +152,20 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
         Optional ISO-8601 event timestamp.
     """
 
-    message: _TranscriptMessage
+    type: str | None = None
+    message: _TranscriptMessage | None = None
     timestamp: str | None = None
+
+    @model_validator(mode="after")
+    def _require_message_or_type(self) -> _TranscriptEntry:
+        """Reject rows that cannot be classified as messages or metadata.
+
+        :returns: Validated transcript row.
+        :raises ValueError: If both the message and event type are absent.
+        """
+        if self.message is None and not self.type:
+            raise ValueError("Transcript row requires a message or event type")
+        return self
 
 
 class WorkerReport(BaseModel, strict=True, extra="forbid"):
@@ -360,7 +376,7 @@ def extract_report(transcript: Path) -> str:
     """
     latest = ""
     for entry in _transcript_entries(transcript):
-        if entry.message.role != "assistant":
+        if entry.message is None or entry.message.role != "assistant":
             continue
         content = entry.message.content
         if isinstance(content, str):
@@ -388,7 +404,7 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
     for entry in _transcript_entries(transcript):
         if entry.timestamp is not None:
             timestamps.append(datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00")))
-        if entry.message.role != "assistant":
+        if entry.message is None or entry.message.role != "assistant":
             continue
         turns += 1
         usage = entry.message.usage
@@ -603,31 +619,39 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_plan(args: argparse.Namespace) -> None:
+    """Build and print a plan from parsed CLI arguments.
+
+    :param args: Parsed ``plan`` arguments.
+    :raises RuntimeError: If Pi is missing or cannot list models.
+    """
+    pi_executable = shutil.which("pi")
+    if pi_executable is None:
+        raise RuntimeError("pi executable not found on PATH")
+    try:
+        model_output = str(sh.Command(pi_executable)("--list-models"))
+    except sh.ErrorReturnCode as error:
+        stderr = error.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"pi --list-models failed: {stderr}") from error
+    plan = build_review_plan(
+        args.skill,
+        changed_lines=args.changed_lines,
+        risk_reasons=args.risk,
+        available_models=parse_available_models(model_output),
+    )
+    sys.stdout.write(f"{json.dumps([asdict(item) for item in plan], indent=2)}\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the routing CLI.
 
     :param argv: Optional command arguments for tests or embedding.
     :returns: Process exit status.
-    :raises RuntimeError: If Pi is unavailable when building a plan.
     :raises AssertionError: If argument parsing returns an unknown command.
     """
     args = _build_parser().parse_args(argv)
     if args.command == "plan":
-        pi_executable = shutil.which("pi")
-        if pi_executable is None:
-            raise RuntimeError("pi executable not found on PATH")
-        try:
-            model_output = str(sh.Command(pi_executable)("--list-models"))
-        except sh.ErrorReturnCode as error:
-            stderr = error.stderr.decode(errors="replace").strip()
-            raise RuntimeError(f"pi --list-models failed: {stderr}") from error
-        plan = build_review_plan(
-            args.skill,
-            changed_lines=args.changed_lines,
-            risk_reasons=args.risk,
-            available_models=parse_available_models(model_output),
-        )
-        sys.stdout.write(f"{json.dumps([asdict(item) for item in plan], indent=2)}\n")
+        _print_plan(args)
         return 0
     if args.command == "extract-report":
         args.output.write_text(f"{extract_report(args.transcript)}\n")
