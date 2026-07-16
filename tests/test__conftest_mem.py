@@ -313,7 +313,7 @@ class TestMemoryAwareWorkerCount:
 
 
 class TestHookCombinesCpuAndMemory:
-    """The hook returns min(cpu, memory), with the env var as a hard override."""
+    """The hook combines resource clamps, with the worker env var as a hard override."""
 
     def test_memory_clamps_below_cpu(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Plenty of CPUs but tight memory → memory count wins the min.
@@ -366,7 +366,7 @@ class TestHookCombinesCpuAndMemory:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
-        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("CI", "1")
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)

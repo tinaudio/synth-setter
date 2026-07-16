@@ -1487,7 +1487,7 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
     cpu_workers = _cgroup_aware_cpu_count()
     mem_workers = _memory_aware_worker_count()
     allocated_workers = cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
-    if sys.platform == "darwin" and os.environ.get("CI") != "true":
+    if sys.platform == "darwin" and not os.environ.get("CI"):
         return min(allocated_workers, _LOCAL_DARWIN_XDIST_WORKERS)
     return allocated_workers
 
