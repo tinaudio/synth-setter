@@ -10,7 +10,9 @@ import os
 import re
 import runpy
 import shutil
+import signal
 import sys
+import time
 import tomllib
 from pathlib import Path
 from unittest import mock
@@ -165,6 +167,8 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
         assert command[0:2] == ["codex", "exec"]
         assert command[command.index("--model") + 1] == providers["codex"][0]
         assert f'model_reasoning_effort="{providers["codex"][1]}"' in command
+        expected_timeout = 900 if role == "pr-review-orchestrator" else 720
+        assert resolved["timeout_s"] == expected_timeout
         if role == "pr-review-orchestrator":
             brief = resolved["prompt"].split("\n\n", 1)[1]
             assert brief.startswith("## Orchestrator agent brief\n")
@@ -360,12 +364,23 @@ def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> N
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(
+    ("timeout", "expected_error"),
+    [
+        ("-1", b"must be a positive integer"),
+        ("9" * 400, b"must be between 1 and 86400"),
+    ],
+)
 def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
     tmp_path: Path,
+    timeout: str,
+    expected_error: bytes,
 ) -> None:
     """Ensure invalid deadlines prevent subprocess startup.
 
     :param tmp_path: Directory for the fake Codex executable.
+    :param timeout: Invalid timeout override under test.
+    :param expected_error: Diagnostic fragment required on standard error.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
@@ -382,11 +397,11 @@ def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
             _cwd=REPO_ROOT,
             _env={
                 "PATH": f"{tmp_path}:{os.environ['PATH']}",
-                "CODEX_REVIEW_TIMEOUT": "-1",
+                "CODEX_REVIEW_TIMEOUT": timeout,
             },
         )
 
-    assert b"CODEX_REVIEW_TIMEOUT must be a positive integer" in exc_info.value.stderr
+    assert expected_error in exc_info.value.stderr
     assert not launched.exists()
 
 
@@ -467,6 +482,50 @@ def test_codex_review_shell_launcher_timeout_force_kills_process_group(
         )
 
     assert b"codex exec timed out after 1s" in exc_info.value.stderr
+    child_pid = int(child_pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_signal_terminates_process_group(tmp_path: Path) -> None:
+    """Ensure launcher termination reaps signal-resistant descendants.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    child_pid_file = tmp_path / "child.pid"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "trap '' TERM\n"
+        "bash -c \"trap '' TERM; exec /bin/sleep 30\" &\n"
+        'echo "$!" > "${CODEX_CHILD_PID_FILE}"\n'
+        "wait\n"
+    )
+    codex.chmod(0o755)
+
+    process = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _bg=True,
+        _cwd=REPO_ROOT,
+        _env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "CODEX_CHILD_PID_FILE": str(child_pid_file),
+        },
+    )
+    deadline = time.monotonic() + 5
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert child_pid_file.exists()
+
+    process.signal(signal.SIGTERM)
+    with pytest.raises(sh.ErrorReturnCode):
+        process.wait()
+
     child_pid = int(child_pid_file.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(child_pid, 0)

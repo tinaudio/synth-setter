@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -16,19 +17,21 @@ import sys
 import tempfile
 import time
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ORCHESTRATOR_TIMEOUT_S = 900
+MAX_TIMEOUT_S = 86_400
 REVIEW_ROLES = (
     "pr-review-orchestrator",
     "pr-review-worker-deep",
     "pr-review-worker-fast",
 )
 TERMINATION_GRACE_S = 2
-WORKER_TIMEOUT_S = 600
+WORKER_TIMEOUT_S = 720
 
 
 class _AgentConfig(BaseModel):
@@ -130,9 +133,14 @@ def _resolve_timeout(role: str) -> int:
     """
     default = ORCHESTRATOR_TIMEOUT_S if role == "pr-review-orchestrator" else WORKER_TIMEOUT_S
     raw_timeout = os.environ.get("CODEX_REVIEW_TIMEOUT", str(default))
-    if not raw_timeout.isascii() or not raw_timeout.isdecimal() or int(raw_timeout) < 1:
+    if not raw_timeout.isascii() or not raw_timeout.isdecimal():
         raise ValueError(f"CODEX_REVIEW_TIMEOUT must be a positive integer, got: {raw_timeout}")
-    return int(raw_timeout)
+    timeout_s = int(raw_timeout)
+    if not 1 <= timeout_s <= MAX_TIMEOUT_S:
+        raise ValueError(
+            f"CODEX_REVIEW_TIMEOUT must be between 1 and {MAX_TIMEOUT_S}, got: {raw_timeout}"
+        )
+    return timeout_s
 
 
 def _wait_for_pid(pid: int, deadline: float) -> int | None:
@@ -181,6 +189,40 @@ def _terminate_process_group(pid: int) -> None:
         pass
 
 
+def _interrupt_process_group(pid: int, signum: int) -> None:
+    """Terminate the active review group before unwinding a launcher signal.
+
+    :param pid: Process-group leader and direct child to reap.
+    :param signum: Signal received by the launcher.
+    :raises InterruptedError: Always, after the child group is reaped.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    _terminate_process_group(pid)
+    raise InterruptedError(signum)
+
+
+@contextlib.contextmanager
+def _forward_termination_signals(pid: int) -> Iterator[None]:
+    """Forward launcher interrupts to an isolated review process group.
+
+    :param pid: Process-group leader that receives termination signals. :yields: Control while
+        forwarding is installed.
+    """
+    forwarded = (signal.SIGINT, signal.SIGTERM)
+    previous = {signum: signal.getsignal(signum) for signum in forwarded}
+    for signum in forwarded:
+        signal.signal(
+            signum,
+            lambda received, _frame: _interrupt_process_group(pid, received),
+        )
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 def _extract_report(output: str) -> str:
     """Extract the last completed agent message from Codex JSON events.
 
@@ -224,7 +266,11 @@ def _execute_agent(command: list[str], prompt: str, timeout_s: int) -> tuple[int
             ],
             setpgroup=0,
         )
-        status = _wait_for_pid(pid, time.monotonic() + timeout_s)
+        try:
+            with _forward_termination_signals(pid):
+                status = _wait_for_pid(pid, time.monotonic() + timeout_s)
+        except InterruptedError as error:
+            status = 128 + int(error.args[0])
         if status is None:
             _terminate_process_group(pid)
         output_file.seek(0)
@@ -249,7 +295,7 @@ def _run_agent(command: list[str], prompt: str, timeout_s: int) -> int:
         return 1
     if status != 0:
         sys.stderr.write(errors)
-        return 1
+        return status
     try:
         report = _extract_report(output)
     except (json.JSONDecodeError, KeyError, ValueError) as error:
@@ -277,14 +323,18 @@ def _main() -> int:
         "--config",
         f'model_reasoning_effort="{agent.model_reasoning_effort}"',
     ]
-    if args.dry_run:
-        sys.stdout.write(json.dumps({"command": command, "prompt": prompt, "dry_run": True}))
-        return 0
     try:
         timeout_s = _resolve_timeout(args.role)
     except ValueError as error:
         sys.stderr.write(f"{error}\n")
         return 1
+    if args.dry_run:
+        sys.stdout.write(
+            json.dumps(
+                {"command": command, "prompt": prompt, "dry_run": True, "timeout_s": timeout_s}
+            )
+        )
+        return 0
     return _run_agent(command, prompt, timeout_s)
 
 
