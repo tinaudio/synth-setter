@@ -149,10 +149,10 @@ run_agent_prompt() {
   fi
   # The prompt precedes --allowedTools: the option is variadic, so anything
   # after it is swallowed into the tool list instead of read as the prompt.
-  # Pin headless reviews to the #1906 non-correctness tier (haiku /
+  # Pin headless reviews to the #1906 non-correctness tier (sonnet /
   # gpt-5.6-terra) so they never inherit the session default; CLAUDE_REVIEW_MODEL
   # / CODEX_REVIEW_MODEL override it.
-  local claude_model="${CLAUDE_REVIEW_MODEL:-haiku}"
+  local claude_model="${CLAUDE_REVIEW_MODEL:-sonnet}"
   local codex_model="${CODEX_REVIEW_MODEL:-gpt-5.6-terra}"
   local -a cmd
   case "$cli" in

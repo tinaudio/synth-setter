@@ -366,7 +366,7 @@ it "doc-drift: gh pr view is called with the captured branch as an explicit arg"
 # ===========================================================================
 # run_agent_prompt — headless review model pin (see #1919)
 # Headless hook reviews must run on the pinned non-correctness review tier
-# from #1906 (haiku / gpt-5.6-terra), not the session default. Each case sources
+# from #1906 (sonnet / gpt-5.6-terra), not the session default. Each case sources
 # _lib.sh and invokes run_agent_prompt directly so the stubs record the exact
 # argv handed to the headless CLI.
 # ===========================================================================
@@ -374,15 +374,15 @@ it "doc-drift: gh pr view is called with the captured branch as an explicit arg"
 T_run_agent_prompt_claude_pins_review_model() {
   local out
   out=$(AGENT_HEADLESS=claude bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
-  [[ "$out" == *"--model haiku"* ]] || { echo "claude headless cmd must pin --model haiku: $out"; return 1; }
+  [[ "$out" == *"--model sonnet"* ]] || { echo "claude headless cmd must pin --model sonnet: $out"; return 1; }
 }
-it "run_agent_prompt: claude headless review pins --model haiku (the #1906 non-correctness tier)" T_run_agent_prompt_claude_pins_review_model
+it "run_agent_prompt: claude headless review pins --model sonnet (the #1906 non-correctness tier)" T_run_agent_prompt_claude_pins_review_model
 
 T_run_agent_prompt_claude_env_override() {
   local out
-  out=$(AGENT_HEADLESS=claude CLAUDE_REVIEW_MODEL=sonnet bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
-  [[ "$out" == *"--model sonnet"* ]] || { echo "CLAUDE_REVIEW_MODEL override must win: $out"; return 1; }
-  [[ "$out" != *"--model haiku"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
+  out=$(AGENT_HEADLESS=claude CLAUDE_REVIEW_MODEL=opus bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model opus"* ]] || { echo "CLAUDE_REVIEW_MODEL override must win: $out"; return 1; }
+  [[ "$out" != *"--model sonnet"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
 }
 it "run_agent_prompt: CLAUDE_REVIEW_MODEL overrides the pinned claude tier" T_run_agent_prompt_claude_env_override
 

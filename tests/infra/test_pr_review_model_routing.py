@@ -30,7 +30,7 @@ _ROLE_MODELS = {
         "codex": ("gpt-5.6-sol", "high"),
     },
     "pr-review-worker-fast": {
-        "claude": ("haiku", "medium"),
+        "claude": ("sonnet", "medium"),
         "codex": ("gpt-5.6-terra", "medium"),
     },
 }
