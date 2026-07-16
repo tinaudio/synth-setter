@@ -14,9 +14,12 @@ from __future__ import annotations
 import ast
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+import torch
 
 import synth_setter.models
 
@@ -106,6 +109,27 @@ def test_flowvae_constructor_requires_param_spec() -> None:
     )
     defaulted_args = init_node.args.args[-len(init_node.args.defaults) :]
     assert "param_spec" not in {arg.arg for arg in defaulted_args}
+
+
+def test_flowvae_constructor_accepts_explicit_param_spec() -> None:
+    """The public constructor stores an explicitly selected ParamSpec."""
+    pytest.importorskip(
+        "nflows",
+        reason=(
+            "optional nflows dependency; run `uv run --with nflows pytest "
+            "tests/models/test_vst_module_aliases.py -k flowvae_constructor`"
+        ),
+    )
+    from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
+
+    module = VSTFlowVAEModule(
+        net=torch.nn.Identity(),
+        optimizer=cast(torch.optim.Optimizer, partial(torch.optim.Adam, lr=1e-4)),
+        scheduler=cast(Any, None),
+        param_spec="surge_simple",
+    )
+
+    assert module.hparams["param_spec"] == "surge_simple"
 
 
 def test_flowvae_deprecated_alias_assigned_in_module_source() -> None:

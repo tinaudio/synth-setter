@@ -1,0 +1,4 @@
+# Archived run configs keep their stable model=surge_fake_oracle contract.
+defaults:
+  - vst_fake_oracle
+  - _self_

@@ -222,14 +222,49 @@ def test_vst_model_group_composes(model_name: str) -> None:
     assert cfg.model._target_.startswith("synth_setter.models.vst_")
 
 
-def test_vst_flowvae_config_uses_active_datamodule_spec() -> None:
-    """The generic Flow-VAE config resolves the active datamodule spec."""
+@pytest.mark.parametrize(
+    ("experiment", "param_spec", "latent_dim"),
+    [("vae_simple", "surge_simple", 92), ("vae_full", "surge_xt", 300)],
+)
+def test_vst_flowvae_experiment_couples_spec_and_output_width(
+    experiment: str, param_spec: str, latent_dim: int
+) -> None:
+    """Concrete Flow-VAE experiments pair each ParamSpec with its encoded width.
+
+    :param experiment: Surge experiment basename.
+    :param param_spec: Expected concrete ParamSpec.
+    :param latent_dim: Expected network output width.
+    """
+    cfg = _compose("train.yaml", [f"experiment=surge/{experiment}", "trainer=cpu"])
+
+    assert cfg.model.param_spec == param_spec
+    assert cfg.model.net.latent_dim == latent_dim
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "target_suffix"),
+    [
+        ("surge_fake_oracle", "vst_fake_oracle_module.VSTFakeOracleModule"),
+        ("surge_ffn", "vst_ff_module.VSTFeedForwardModule"),
+        ("surge_flow", "vst_flow_matching_module.VSTFlowMatchingModule"),
+        ("surge_flowmlp", "vst_flow_matching_module.VSTFlowMatchingModule"),
+        ("surge_flowvae", "vst_flowvae_module.VSTFlowVAEModule"),
+    ],
+)
+def test_legacy_surge_model_group_resolves_vst_target(
+    legacy_name: str, target_suffix: str
+) -> None:
+    """Archived model selections compose through canonical VST groups.
+
+    :param legacy_name: Historical Hydra model-group name.
+    :param target_suffix: Canonical target suffix expected after composition.
+    """
     cfg = _compose(
         "train.yaml",
-        ["datamodule=surge_mini", "model=vst_flowvae", "trainer=cpu"],
+        ["datamodule=surge_simple", f"model={legacy_name}", "trainer=cpu"],
     )
 
-    assert cfg.model.param_spec == "surge_4"
+    assert cfg.model._target_.endswith(target_suffix)
 
 
 @pytest.mark.parametrize(
@@ -255,19 +290,29 @@ def test_vst_callback_group_composes(callbacks_name: str, expected_callback: str
     assert expected_callback in cfg.callbacks
 
 
-def test_eval_surge_callback_alias_composes_prediction_writer() -> None:
-    """The Surge launch-script alias resolves the canonical VST callbacks."""
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_surge", "model_checkpoint"), ("eval_surge", "prediction_writer")],
+)
+def test_legacy_surge_callback_alias_composes_vst_callbacks(
+    callbacks_name: str, expected_callback: str
+) -> None:
+    """Historical callback selections resolve canonical VST callbacks.
+
+    :param callbacks_name: Historical Hydra callback-group name.
+    :param expected_callback: Canonical callback expected after composition.
+    """
     cfg = _compose(
         "train.yaml",
         [
             "datamodule=surge_simple",
             "model=vst_ffn",
-            "callbacks=eval_surge",
+            f"callbacks={callbacks_name}",
             "trainer=cpu",
         ],
     )
 
-    assert "prediction_writer" in cfg.callbacks
+    assert expected_callback in cfg.callbacks
 
 
 def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:

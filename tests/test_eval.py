@@ -33,6 +33,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
+from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import REAL_VST_VARIANTS
@@ -919,8 +920,6 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
         metric_dict, object_dict = evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
-
-    from synth_setter.utils.callbacks import LogPerParamMSE
 
     mse_callbacks = [
         callback
