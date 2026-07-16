@@ -158,8 +158,9 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
 
     :param cfg: Hydra config carrying the opt-in flag, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
-    :raises ValueError: If the probe is enabled without a ``render`` config group, with
-        validation disabled, or with a non-positive-integer sample count.
+    :raises ValueError: If the probe is enabled without a ``render`` config group, with a
+        render spec the model's predictions cannot decode against, with validation
+        disabled, or with a non-positive-integer sample count.
     """
     if not OmegaConf.select(cfg, "training.val_audio_probe"):
         return
@@ -167,6 +168,17 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
         raise ValueError(
             "training.val_audio_probe=true requires a render config group "
             "(e.g. `render=surge_xt`); cfg.render is unset."
+        )
+    # A mismatched spec makes every probe cycle die decoding the model's output
+    # (e.g. 92-dim surge_simple predictions against the 164-param surge_xt spec),
+    # silently producing no audio metrics all run (#1990).
+    datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
+    if datamodule_spec is not None and datamodule_spec != cfg.render.param_spec_name:
+        raise ValueError(
+            "training.val_audio_probe=true requires the probe to decode predictions "
+            f"with the model's spec, but render.param_spec_name={cfg.render.param_spec_name!r} "
+            f"!= datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
+            f"group (e.g. `render={datamodule_spec}`)."
         )
     # The surge experiment base ships trainer.limit_val_batches: 0 — a validation-hooked
     # probe wired into such a run would silently stage nothing forever.

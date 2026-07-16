@@ -172,6 +172,10 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         subprocess.run(  # noqa: S603
             argv,
             check=True,
+            # Captured so a failure's CalledProcessError carries the child traceback
+            # for the caller's warning (#1990) instead of discarding it.
+            stderr=subprocess.PIPE,
+            text=True,
             # 2× samples: --rerender_target renders both pred and target per sample.
             timeout=scaled_timeout(
                 n_samples * 2,
@@ -192,6 +196,8 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             str(num_workers),
         ],
         check=True,
+        stderr=subprocess.PIPE,
+        text=True,
         timeout=scaled_timeout(
             n_samples,
             workers=num_workers,

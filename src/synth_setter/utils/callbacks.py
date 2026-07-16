@@ -40,7 +40,29 @@ _MAX_UPLOAD_ATTEMPTS = 3
 
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
+
+# Cap on the subprocess-stderr tail a probe-failure warning carries; the failed
+# probe dir is kept on disk for anything beyond it.
+_STDERR_TAIL_CHARS = 2000
 _CheckpointRevision = tuple[str, float, int, int | None]
+
+
+def _stderr_tail(exc: BaseException) -> str:
+    """Return the trailing stderr a subprocess error carries, if any.
+
+    ``CalledProcessError``'s message names only the command and exit status; the
+    stderr attribute holds the child's actual traceback (when the caller captured
+    it), which is what makes a probe failure diagnosable from the run log.
+
+    :param exc: Exception whose optional ``stderr`` attribute to read.
+    :returns: Up to the last ``_STDERR_TAIL_CHARS`` characters, or ``""`` when absent.
+    """
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if not stderr:
+        return ""
+    return stderr[-_STDERR_TAIL_CHARS:]
 
 
 def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
@@ -723,7 +745,13 @@ class ValAudioProbe(Callback):
         try:
             metrics = future.result()
         except Exception as exc:
-            log.warning("val audio probe at step %s failed: %s; skipping its metrics.", step, exc)
+            tail = _stderr_tail(exc)
+            log.warning(
+                "val audio probe at step %s failed: %s; skipping its metrics.%s",
+                step,
+                exc,
+                f"\nstderr tail:\n{tail}" if tail else "",
+            )
             return
         if probe_dir is not None:
             shutil.rmtree(probe_dir, ignore_errors=True)

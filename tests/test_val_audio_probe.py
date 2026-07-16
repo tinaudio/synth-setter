@@ -10,6 +10,7 @@ rank/sanity gating all execute for real, and only the subprocess chain behind
 from __future__ import annotations
 
 import concurrent.futures
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any, cast
@@ -254,6 +255,61 @@ def test_val_audio_probe_warns_and_continues_when_probe_raises(
 
     assert module.logged == []
     assert "render exploded" in caplog.text
+
+
+def test_val_audio_probe_failure_warning_includes_subprocess_stderr(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed probe's warning carries the subprocess stderr, not just the exit status.
+
+    ``CalledProcessError``'s repr names only the command and exit code; without the
+    stderr the actual failure (e.g. a decode ValueError) is invisible in the run
+    log and root-causing needs a manual re-run of the render command (#1990).
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param caplog: Pytest fixture capturing the warning record.
+    """
+
+    def failing_probe(probe_dir: Path, step: int) -> dict[str, float]:
+        raise subprocess.CalledProcessError(
+            1, ["render"], stderr="Traceback ...\nValueError: boom-stderr-marker"
+        )
+
+    probe = _probe(tmp_path, probe_fn=failing_probe)
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    with caplog.at_level("WARNING"):
+        _run_validation(probe, _trainer(global_step=200), module)
+
+    assert "boom-stderr-marker" in caplog.text
+
+
+def test_val_audio_probe_failure_warning_truncates_long_stderr_to_tail(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the tail of an oversized stderr reaches the warning; the head is dropped.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param caplog: Pytest fixture capturing the warning record.
+    """
+
+    def failing_probe(probe_dir: Path, step: int) -> dict[str, float]:
+        raise subprocess.CalledProcessError(
+            1, ["render"], stderr="HEAD-marker\n" + "x" * 5000 + "\nTAIL-marker"
+        )
+
+    probe = _probe(tmp_path, probe_fn=failing_probe)
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    with caplog.at_level("WARNING"):
+        _run_validation(probe, _trainer(global_step=200), module)
+
+    assert "TAIL-marker" in caplog.text
+    assert "HEAD-marker" not in caplog.text
 
 
 def test_val_audio_probe_relaunches_after_a_failed_probe(tmp_path: Path) -> None:

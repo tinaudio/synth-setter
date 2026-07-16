@@ -117,7 +117,7 @@ def _fake_probe_subprocesses(probe_dir: Path, calls: list[list[str]]):
     :returns: Callable with the ``subprocess.run`` signature the probe uses.
     """
 
-    def fake_run(argv: list[str], *, check: bool, timeout: float):
+    def fake_run(argv: list[str], **_kwargs: object):
         calls.append(list(argv))
         if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
             sample_dir = probe_dir / "audio" / "sample_0"
@@ -206,10 +206,35 @@ def test_run_audio_probe_propagates_render_failure(
     """
     _stage(tmp_path)
 
-    def failing_run(argv: list[str], *, check: bool, timeout: float):
+    def failing_run(argv: list[str], **_kwargs: object):
         raise subprocess.CalledProcessError(1, argv)
 
     monkeypatch.setattr(audio_probe.subprocess, "run", failing_run)
 
     with pytest.raises(subprocess.CalledProcessError):
         run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+
+def test_run_audio_probe_render_failure_carries_subprocess_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing render's stderr rides the raised error so the caller can log it (#1990).
+
+    The render argv is swapped for a tiny real command that dies with a traceback
+    on stderr; ``run_audio_probe`` runs it through the real ``subprocess.run``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the render argv builder.
+    """
+    _stage(tmp_path)
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('boom-traceback-marker'); sys.exit(1)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "boom-traceback-marker" in (excinfo.value.stderr or "")
