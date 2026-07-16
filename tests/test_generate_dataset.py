@@ -52,7 +52,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests._vst import (
     PLUGIN_PATH,
 )
@@ -1049,7 +1049,7 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
         from_hydra(cfg_dataset)
         with tempfile.TemporaryDirectory() as raw_work_dir:
             finalize_lance(spec, Path(raw_work_dir))
-        split_of = {
+        split_of: dict[int, Split] = {
             shard_id: split
             for split, (lo, hi) in spec.split_shard_ranges.items()
             for shard_id in range(lo, hi)
