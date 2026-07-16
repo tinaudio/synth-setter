@@ -84,13 +84,15 @@ def _validate_rendered_audio(
     channels: int,
     samples: int,
 ) -> np.ndarray:
-    """Validate the shared backend output contract without changing samples.
+    """Validate the shared backend output contract.
+
+    VST audio may legitimately exceed full scale, so amplitude is not bounded.
 
     :param audio: Channel-leading rendered audio.
     :param channels: Required output channel count.
     :param samples: Required output sample count.
     :returns: The validated audio without clipping or replacement.
-    :raises ValueError: If shape, finiteness, or normalized amplitude is invalid.
+    :raises ValueError: If shape or finiteness is invalid.
     """
     if audio.shape != (channels, samples):
         raise ValueError(
@@ -98,8 +100,6 @@ def _validate_rendered_audio(
         )
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
-    if np.any(np.abs(audio) > 1.0):
-        raise ValueError("rendered audio samples must be within [-1, 1]")
     return audio
 
 

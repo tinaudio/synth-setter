@@ -176,14 +176,14 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
     "audio",
     [
         np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32),
-        np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32),
+        np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32),
     ],
 )
 def test_pedalboard_renderer_rejects_invalid_audio(
     monkeypatch: pytest.MonkeyPatch,
     audio: np.ndarray,
 ) -> None:
-    """The shared renderer contract rejects unsafe Pedalboard output.
+    """The shared renderer contract rejects non-finite Pedalboard output.
 
     :param monkeypatch: Patches the Pedalboard render seam.
     :param audio: Invalid backend output under test.
@@ -198,6 +198,29 @@ def test_pedalboard_renderer_rejects_invalid_audio(
 
     with pytest.raises(ValueError, match="rendered audio"):
         renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+
+def test_pedalboard_renderer_returns_over_full_scale_audio_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finite float32 audio outside [-1, 1] passes through without clipping or rejection.
+
+    :param monkeypatch: Patches the Pedalboard render seam.
+    """
+    over_full_scale = np.array([[1.5, -2.0], [0.0, 3.25]], dtype=np.float32)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *args, **kwargs: over_full_scale
+    )
+    renderer = PedalboardRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=2,
+        channels=2,
+        signal_duration_seconds=1.0,
+    )
+
+    result = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+    assert np.array_equal(result, over_full_scale)
 
 
 def test_dawdreamer_renderer_loads_graph_and_renders_audio(
@@ -765,7 +788,6 @@ def test_dawdreamer_renderer_once_cadence_reuses_loaded_plugin(
         (np.zeros((2, 3), dtype=np.float32), "sample count"),
         (np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32), "finite"),
         (np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32), "finite"),
-        (np.array([[0.0, 1.0001], [0.0, 0.0]], dtype=np.float32), r"\[-1, 1\]"),
     ],
 )
 def test_dawdreamer_renderer_rejects_invalid_audio(
