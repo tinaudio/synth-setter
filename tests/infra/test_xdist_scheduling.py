@@ -8,6 +8,8 @@ from typing import NoReturn
 
 import pytest
 
+_GROUP_PROBE_COUNT = 8
+
 
 def _run_pytest(args: list[str]) -> NoReturn:
     """Run a nested pytest session in an isolated interpreter.
@@ -30,7 +32,7 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         f"def test_group_member_{index}() -> None:\n"
         f"    with open({str(worker_log)!r}, 'a') as stream:\n"
         "        stream.write(os.environ['PYTEST_XDIST_WORKER'] + '\\n')"
-        for index in range(8)
+        for index in range(_GROUP_PROBE_COUNT)
     )
     probe.write_text(
         "import os\n\n"
@@ -60,4 +62,6 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         process.join()
 
     assert process.exitcode == 0
-    assert len(set(worker_log.read_text().splitlines())) == 1
+    worker_ids = worker_log.read_text().splitlines()
+    assert len(worker_ids) == _GROUP_PROBE_COUNT
+    assert len(set(worker_ids)) == 1
