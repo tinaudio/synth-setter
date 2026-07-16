@@ -139,15 +139,20 @@ Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 the failure and launch a fresh worker with the next candidate. Never resume a
 failed session under another model.
 
-A completed worker is not successful until its full result passes the report
-contract. Write the result to a unique temporary file and check it with:
+A completed worker is not successful until its final assistant Markdown passes
+the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
+extract its final assistant text deterministically, then validate that file:
 
 ```bash
+python3 agent/_shared/pi_review_routing.py extract-report \
+  <output-file> --output <report-path>
 python3 agent/_shared/pi_review_routing.py validate-report \
   <report-path> --skill <skill-name>
 ```
 
-On nonzero status, record `malformed report` and try the next candidate. This
+Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
+directly to `validate-report`. If extraction or validation fails, record
+`malformed report` and try the next candidate. This
 is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If any pass exhausts its
 candidates without a parseable report, stop before aggregation or delivery;

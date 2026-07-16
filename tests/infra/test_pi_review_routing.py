@@ -8,6 +8,7 @@ import pytest
 
 from agent._shared.pi_review_routing import (
     build_review_plan,
+    extract_report,
     main,
     parse_available_models,
     provenance_for_model,
@@ -222,6 +223,41 @@ def test_report_is_parseable_rejects_wrong_skill() -> None:
     )
 
     assert not report_is_parseable(report, expected_skill="code-health")
+
+
+def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
+    """Extract only final assistant text from Tintin JSONL.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":[{"type":"text","text":"draft"}]}}\n'
+        '{"message":{"role":"toolResult","content":[{"type":"text","text":"noise"}]}}\n'
+        '{"message":{"role":"assistant","content":['
+        '{"type":"thinking","thinking":"hidden"},'
+        '{"type":"text","text":"## code-health review — smoke\\n\\n'
+        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
+        '### What looks good\\n- Clear."}]}}\n'
+    )
+
+    report = extract_report(transcript)
+
+    assert report.startswith("## code-health review — smoke")
+    assert "noise" not in report
+    assert "hidden" not in report
+
+
+def test_extract_report_missing_assistant_text_raises(tmp_path: Path) -> None:
+    """Reject transcripts without a completed assistant report.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text('{"message":{"role":"user","content":"prompt"}}\n')
+
+    with pytest.raises(ValueError, match="assistant text"):
+        extract_report(transcript)
 
 
 def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path) -> None:

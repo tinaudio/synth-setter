@@ -220,6 +220,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     ).read_text()
 
     assert "pi_review_routing.py plan" in text
+    assert "pi_review_routing.py extract-report" in text
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py provenance" in text
     assert "run_in_background: true" in text

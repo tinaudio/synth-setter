@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import sh
+from pydantic import BaseModel
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
@@ -69,6 +70,54 @@ _REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — .+$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
 
 
+class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
+    """One Tintin assistant-content block.
+
+    .. attribute :: type
+        :type: str
+
+        Block discriminator.
+
+    .. attribute :: text
+        :type: str | None
+
+        Text payload when the block contains report content.
+    """
+
+    type: str
+    text: str | None = None
+
+
+class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
+    """Message payload from one Tintin transcript entry.
+
+    .. attribute :: role
+        :type: str
+
+        Conversation role.
+
+    .. attribute :: content
+        :type: str | list[_TranscriptContentBlock]
+
+        Raw string or structured content blocks.
+    """
+
+    role: str
+    content: str | list[_TranscriptContentBlock]
+
+
+class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
+    """Validated trust-boundary shape for one Tintin JSONL row.
+
+    .. attribute :: message
+        :type: _TranscriptMessage
+
+        Conversation message stored in the row.
+    """
+
+    message: _TranscriptMessage
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewPass:
     """One skill/model-family pass and its available candidate sequence.
@@ -124,6 +173,32 @@ def parse_available_models(output: str) -> set[str]:
         if len(columns) >= 2 and columns[0] != "provider":
             models.add(f"{columns[0]}/{columns[1]}")
     return models
+
+
+def extract_report(transcript: Path) -> str:
+    """Extract the final assistant Markdown from a Tintin transcript.
+
+    :param transcript: Tintin JSONL output path returned by ``Agent``.
+    :returns: Final non-empty assistant text.
+    :raises ValueError: If no assistant report text exists.
+    """
+    latest = ""
+    for raw_line in transcript.read_text().splitlines():
+        if not raw_line.strip():
+            continue
+        entry = _TranscriptEntry.model_validate_json(raw_line)
+        if entry.message.role != "assistant":
+            continue
+        content = entry.message.content
+        if isinstance(content, str):
+            text = content
+        else:
+            text = "".join(block.text or "" for block in content if block.type == "text")
+        if text.strip():
+            latest = text.strip()
+    if not latest:
+        raise ValueError(f"Transcript has no assistant text: {transcript}")
+    return latest
 
 
 def provenance_for_model(model: str) -> str:
@@ -271,6 +346,11 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--skill", action="append", required=True)
     plan.add_argument("--changed-lines", type=int, required=True)
     plan.add_argument("--risk", action="append", default=[])
+    extract = subparsers.add_parser(
+        "extract-report", help="write final assistant Markdown from Tintin JSONL"
+    )
+    extract.add_argument("transcript", type=Path)
+    extract.add_argument("--output", type=Path, required=True)
     validate = subparsers.add_parser(
         "validate-report", help="check a worker report's section contract"
     )
@@ -304,6 +384,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             available_models=parse_available_models(model_output),
         )
         sys.stdout.write(f"{json.dumps([asdict(item) for item in plan], indent=2)}\n")
+        return 0
+    if args.command == "extract-report":
+        args.output.write_text(f"{extract_report(args.transcript)}\n")
         return 0
     if args.command == "validate-report":
         return 0 if report_is_parseable(args.path.read_text(), expected_skill=args.skill) else 1
