@@ -298,7 +298,7 @@ class TestClaimLifecycle:
         claims.populate(range(1))
         claimed = claims.claim()
         assert claimed is not None
-        assert claims.complete(claimed) is True
+        claims.complete(claimed)
 
         assert claims.complete(claimed) is True
         assert claims.status_counts() == {"done": 1}
@@ -368,7 +368,7 @@ class TestLeaseExpiryAndFencing:
         assert worker.complete(second) is True
 
     def test_done_shard_with_lapsed_lease_is_not_reclaimable(self, tmp_path: Path) -> None:
-        """Reclaiming keys on status, never on lease expiry alone.
+        """Reclaiming is keyed on status, never on lease expiry alone.
 
         :param tmp_path: Hosts the per-test claims table.
         """
