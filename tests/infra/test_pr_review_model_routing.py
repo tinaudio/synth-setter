@@ -35,6 +35,8 @@ def _process_state(pid: int) -> str | None:
         os.kill(pid, 0)
     except ProcessLookupError:
         return None
+    except PermissionError:
+        return "?"
 
     if not Path("/proc").is_dir():
         return "?"
@@ -57,6 +59,18 @@ def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
         if time.monotonic() >= deadline:
             raise AssertionError(f"process {pid} is still running (state {state})")
         time.sleep(0.05)
+
+
+def test_process_state_permission_denied_reports_pid_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat an inaccessible PID as present rather than terminated.
+
+    :param monkeypatch: Replaces the process probe with its permission-denied result.
+    """
+    monkeypatch.setattr(os, "kill", mock.Mock(side_effect=PermissionError))
+
+    assert _process_state(123) == "?"
 
 
 def test_assert_process_terminated_live_pid_fails() -> None:
