@@ -216,6 +216,15 @@ class _FakeVSTDataSample:
         return "_FakeVSTDataSample()"
 
 
+def _stub_plugin_load_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep writer tests plugin-free under the eager ``"once"`` reload default.
+
+    :param monkeypatch: Caller's fixture, so the stubs revert at that test's teardown.
+    """
+    monkeypatch.setattr(writers, "load_plugin", lambda _path: _FakePlugin())
+    monkeypatch.setattr(writers, "load_preset", lambda _plugin, _path: None)
+
+
 def _stub_render_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -286,6 +295,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
         return sample
 
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
+    _stub_plugin_load_seams(monkeypatch)
 
     _render_in_batches(
         render_cfg=render_cfg,
@@ -360,6 +370,7 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
         return sample
 
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
+    _stub_plugin_load_seams(monkeypatch)
 
     synth_rows = [{"a": 0.1}, {"a": 0.2}, {"a": 0.3}]
     note_rows: list[NoteParams] = [
@@ -902,6 +913,7 @@ def _install_writer_level_fakes(
         "make_spectrogram",
         lambda *_a, **_kw: np.zeros((2, 128, 401), dtype=np.float32),
     )
+    _stub_plugin_load_seams(monkeypatch)
     return warmup_mock, fake_spec
 
 
