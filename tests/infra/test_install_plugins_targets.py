@@ -229,6 +229,20 @@ def test_builder_base_configures_timezone_without_debconf_pipe() -> None:
     assert "debconf-set-selections" not in stage
 
 
+def test_apt_cache_ids_are_scoped_by_target_architecture() -> None:
+    """No image stage can reuse apt state from another architecture."""
+    dockerfile = DOCKERFILE.read_text()
+    cache_id = "id=apt-cache-${TARGETARCH},target=/var/cache/apt"
+    library_id = "id=apt-lib-${TARGETARCH},target=/var/lib/apt"
+    assert "id=apt-cache,target=/var/cache/apt" not in dockerfile
+    assert "id=apt-lib,target=/var/lib/apt" not in dockerfile
+    assert cache_id in dockerfile
+    assert dockerfile.count(cache_id) == dockerfile.count(library_id)
+    for stage in re.split(r"(?=^FROM )", dockerfile, flags=re.MULTILINE):
+        if cache_id in stage:
+            assert stage.index("ARG TARGETARCH") < stage.index(cache_id)
+
+
 def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
     """The KR-106 Docker build surfaces the version label with the pinned ref."""
     stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")

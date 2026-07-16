@@ -74,8 +74,8 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
   software-properties-common \
   gcc-12 \
@@ -91,11 +91,12 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 # installs it system-wide, and symlinks the VST3 into /usr/lib/vst3/.
 # ==========================================
 FROM builder-base AS builder-install-surge-from-source
+ARG TARGETARCH
 COPY --from=arch-vars /artifacts/cmake-arch-name.txt /artifacts/cmake-arch-name.txt
 RUN mkdir /home/build/cmake-install
 WORKDIR /home/build/cmake-install
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends wget
 
 
@@ -105,8 +106,8 @@ RUN cmake_arch_name="$(cat /artifacts/cmake-arch-name.txt )"; \
     chmod 755 ./cmake-3.28.1-linux-${cmake_arch_name}.sh && \
     ./cmake-3.28.1-linux-${cmake_arch_name}.sh --skip-license --prefix=/usr
 # Then install the prerequistes for a juce build
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
         git \
         vim \
@@ -181,10 +182,11 @@ RUN rm -rf /home/build/plugin/surge /home/build/cmake-install
 # installs it together with its runtime dependencies.
 # ==========================================
 FROM builder-base AS builder-install-surge-from-prebuilt
+ARG TARGETARCH
 WORKDIR /home/build
 COPY --from=arch-vars /artifacts/surge-package-filepath.txt /surge-package-filepath.txt
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends wget
 RUN pkg="$(cat /surge-package-filepath.txt)"; \
     echo $pkg; \
@@ -192,8 +194,8 @@ RUN pkg="$(cat /surge-package-filepath.txt)"; \
 
 # Add any additional dependencies needed to install the prebuilt package
 # TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -209,8 +211,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     libxcursor-dev \
     libasound2-dev \
     libjack-jackd2-dev
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     pkg="$(cat /surge-package-filepath.txt)" && \
     fname="${pkg##*/}" && \
     apt-get update && apt-get install -y --no-install-recommends "./${fname}" && \
@@ -229,8 +231,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
@@ -274,8 +276,8 @@ SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
 ARG ULTRAMASTER_KR106_VERSION=v2.5.13
 ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     mkdir -p /plugins-staging && \
     if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 build dependencies on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -313,10 +315,11 @@ RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
 FROM builder-base AS synth-setter-src
+ARG TARGETARCH
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl
@@ -334,6 +337,7 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
+ARG TARGETARCH
 # Surge XT is the only bundle present here; the amd64-only fetched synths land
 # downstream (vst3-synths-fetch COPY), gated and load-validated there.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
@@ -344,8 +348,8 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
 # Install build-time system Python and uv; the runtime venv is created below.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
@@ -407,8 +411,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
 # on 22.04, so install only `fuse`. The launch path must also grant
 # --device=/dev/fuse --cap-add=SYS_ADMIN.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       xvfb \
@@ -508,14 +512,15 @@ WORKDIR /home/build/synth-setter
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
 FROM builder-install-synth-setter-deps AS dev-base
+ARG TARGETARCH
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 # unzip: the in-image pytest run exercises the Makefile install-plugins
 # targets, whose recipes unpack cached .zip archives (#1789).
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
 
 WORKDIR /home/build/synth-setter
@@ -559,10 +564,11 @@ CMD ["/bin/bash"]
 # Published as tinaudio/synth-setter:devcontainer-tools.
 # ==========================================
 FROM dev-base AS devcontainer-tools
+ARG TARGETARCH
 
 # --- CLI tools (as root) ---
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib-${TARGETARCH},target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       bubblewrap \
       curl \
@@ -590,7 +596,6 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
 # verified against a pinned per-arch SHA256 (run `sha256sum` on the release
 # tarballs to refresh these when bumping ZELLIJ_VERSION).
-ARG TARGETARCH
 ARG ZELLIJ_VERSION=v0.44.3
 ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
 ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb
