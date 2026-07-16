@@ -79,10 +79,23 @@ XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
 XVFB_RETRY_JITTER_MAX="${XVFB_RETRY_JITTER_MAX:-9}"
 # Malformed (and zero, where invalid) overrides fall back to defaults so a
 # typo'd knob degrades to stock behavior instead of aborting the bootstrap.
-case "$XVFB_BOOTSTRAP_ATTEMPTS" in '' | *[!0-9]* | 0) XVFB_BOOTSTRAP_ATTEMPTS=3 ;; esac
-case "$XVFB_READY_PROBES" in '' | *[!0-9]* | 0) XVFB_READY_PROBES=50 ;; esac
-case "$XVFB_RETRY_JITTER_MAX" in '' | *[!0-9]*) XVFB_RETRY_JITTER_MAX=9 ;; esac
-[ "$XVFB_RETRY_JITTER_MAX" -gt 9 ] && XVFB_RETRY_JITTER_MAX=9
+case "$XVFB_BOOTSTRAP_ATTEMPTS" in
+  '' | *[!0-9]* | 0) XVFB_BOOTSTRAP_ATTEMPTS=3 ;;
+esac
+case "$XVFB_READY_PROBES" in
+  '' | *[!0-9]* | 0) XVFB_READY_PROBES=50 ;;
+esac
+case "$XVFB_RETRY_JITTER_MAX" in
+  '' | *[!0-9]*) XVFB_RETRY_JITTER_MAX=9 ;;
+esac
+# Force base-10 so zero-padded overrides (e.g. "09") don't parse as octal
+# and silently break the retry loop's $(( )) arithmetic.
+XVFB_BOOTSTRAP_ATTEMPTS=$((10#$XVFB_BOOTSTRAP_ATTEMPTS))
+XVFB_READY_PROBES=$((10#$XVFB_READY_PROBES))
+XVFB_RETRY_JITTER_MAX=$((10#$XVFB_RETRY_JITTER_MAX))
+if [ "$XVFB_RETRY_JITTER_MAX" -gt 9 ]; then
+  XVFB_RETRY_JITTER_MAX=9
+fi
 readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX
 
 # Start Xvfb and wait until it accepts connections; returns non-zero on any
@@ -146,7 +159,8 @@ until start_xvfb_attempt; do
   if [ "$XVFB_RETRY_JITTER_MAX" -gt 0 ]; then
     sleep "0.$((RANDOM % XVFB_RETRY_JITTER_MAX + 1))"
   fi
-  echo "[wrapper] retrying Xvfb bootstrap (attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
+  echo "[wrapper] retrying Xvfb bootstrap" \
+    "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
 done
 
 # Start an XSettings manager.
