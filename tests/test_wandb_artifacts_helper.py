@@ -132,6 +132,184 @@ def test_publish_checkpoint_artifact_swallows_cleanup_failure(
     fake.Api.return_value.run.return_value.delete.assert_called_once()
 
 
+def test_publish_checkpoint_artifact_retries_with_fresh_artifact_after_upload_files_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A recognized upload failure retries the full publish with a fresh name after one second.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    failed_artifact = mock.MagicMock()
+    failed_artifact.wait.side_effect = ValueError(
+        "ArtifactSaver.uploadFiles: most remaining uploads (1/1) have failed, giving up"
+    )
+    successful_artifact = mock.MagicMock()
+    fake.Artifact.side_effect = [failed_artifact, successful_artifact]
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+    sleeps: list[float] = []
+
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full", tmp_path, sleep=sleeps.append
+    ) as ref:
+        assert ref.endswith(":latest")
+
+    assert fake.Artifact.call_count == 2
+    first_name = fake.Artifact.call_args_list[0].kwargs["name"]
+    second_name = fake.Artifact.call_args_list[1].kwargs["name"]
+    assert first_name != second_name
+    assert ref == f"ent/synth-setter-citest/{second_name}:latest"
+    failed_artifact.add_file.assert_called_once_with(str(ckpt), name="model.ckpt")
+    successful_artifact.add_file.assert_called_once_with(str(ckpt), name="model.ckpt")
+    assert fake.init.return_value.log_artifact.call_args_list == [
+        mock.call(failed_artifact),
+        mock.call(successful_artifact),
+    ]
+    assert sleeps == [1]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ArtifactSaver.uploadFiles: most remaining uploads (1/1) have failed, giving up",
+        (
+            "ArtifactSaver.uploadManifest: file transfer: upload: failed to upload: "
+            "status: 403 Forbidden"
+        ),
+    ],
+)
+def test_publish_checkpoint_artifact_retries_each_recognized_wait_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, message: str
+) -> None:
+    """Each recognized ``Artifact.wait`` failure prefix is retryable.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    :param message: Recognized W&B upload failure text.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    failed_artifact = mock.MagicMock()
+    failed_artifact.wait.side_effect = ValueError(message)
+    fake.Artifact.side_effect = [failed_artifact, mock.MagicMock()]
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+    sleeps: list[float] = []
+
+    with publish_checkpoint_artifact(ckpt, "model-citest-ffn_full", tmp_path, sleep=sleeps.append):
+        pass
+
+    assert fake.Artifact.call_count == 2
+    assert sleeps == [1]
+
+
+def test_publish_checkpoint_artifact_three_failures_preserve_final_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Three recognized failures stop after three attempts and re-raise the final error.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    errors = [
+        ValueError("ArtifactSaver.uploadFiles: most remaining uploads failure 1"),
+        ValueError("ArtifactSaver.uploadFiles: most remaining uploads failure 2"),
+        ValueError("ArtifactSaver.uploadFiles: most remaining uploads failure 3"),
+    ]
+    first_artifact = mock.MagicMock()
+    first_artifact.wait.side_effect = errors[0]
+    second_artifact = mock.MagicMock()
+    second_artifact.wait.side_effect = errors[1]
+    third_artifact = mock.MagicMock()
+    third_artifact.wait.side_effect = errors[2]
+    fake.Artifact.side_effect = [first_artifact, second_artifact, third_artifact]
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+    sleeps: list[float] = []
+
+    with pytest.raises(ValueError) as exc_info:
+        with publish_checkpoint_artifact(
+            ckpt, "model-citest-ffn_full", tmp_path, sleep=sleeps.append
+        ):
+            pass
+
+    assert exc_info.value is errors[-1]
+    assert fake.Artifact.call_count == 3
+    assert sleeps == [1, 2]
+
+
+def test_publish_checkpoint_artifact_unrelated_value_error_fails_without_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unrelated ``ValueError`` propagates immediately without sleeping.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    artifact = fake.Artifact.return_value
+    unrelated_error = ValueError("download: status: 403 Forbidden")
+    artifact.wait.side_effect = unrelated_error
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+    sleeps: list[float] = []
+
+    with pytest.raises(ValueError) as exc_info:
+        with publish_checkpoint_artifact(
+            ckpt, "model-citest-ffn_full", tmp_path, sleep=sleeps.append
+        ):
+            pass
+
+    assert exc_info.value is unrelated_error
+    fake.Artifact.assert_called_once()
+    assert sleeps == []
+
+
+def test_publish_checkpoint_artifact_failed_attempts_use_independent_names_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Failed publish attempts receive distinct names and each artifact is cleaned up.
+
+    :param monkeypatch: Installs the fake ``wandb`` SDK in ``sys.modules``.
+    :param tmp_path: Holds the dummy checkpoint and the run dir.
+    """
+    fake = _install_fake_wandb(monkeypatch)
+    failed_artifact = mock.MagicMock()
+    failed_artifact.wait.side_effect = ValueError(
+        "ArtifactSaver.uploadManifest: file transfer: upload: failed to upload: "
+        "status: 403 Forbidden"
+    )
+    fake.Artifact.side_effect = [failed_artifact, mock.MagicMock()]
+    from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_text("weights")
+
+    with publish_checkpoint_artifact(
+        ckpt, "model-citest-ffn_full", tmp_path, sleep=lambda _: None
+    ):
+        pass
+
+    names = [call.kwargs["name"] for call in fake.Artifact.call_args_list]
+    assert len(set(names)) == 2
+    cleaned_refs = [call.args[0] for call in fake.Api.return_value.artifact.call_args_list]
+    assert cleaned_refs == [
+        f"ent/synth-setter-citest/{names[0]}:latest",
+        f"ent/synth-setter-citest/{names[1]}:latest",
+    ]
+    fake.Api.return_value.run.assert_called_once_with("ent/synth-setter-citest/run123")
+
+
 def test_publish_checkpoint_artifact_finish_failure_does_not_skip_deletion(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
