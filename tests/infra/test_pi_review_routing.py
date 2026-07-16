@@ -373,6 +373,29 @@ def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     assert "hidden" not in report
 
 
+def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) -> None:
+    """Keep the structured report when a model wraps it in narration.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"analysis\\n\\n'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear.\\n\\nclosing"}}\n'
+        '{"message":{"role":"assistant","content":"done"}}\n'
+    )
+
+    report = extract_report(transcript)
+
+    assert report == (
+        "## code-health review — smoke\n\n"
+        "### BLOCK findings\nNone.\n\n"
+        "### WARN findings\nNone.\n\n"
+        "### What looks good\n- Clear."
+    )
+
+
 def test_extract_report_missing_assistant_text_raises(tmp_path: Path) -> None:
     """Reject transcripts without a completed assistant report.
 

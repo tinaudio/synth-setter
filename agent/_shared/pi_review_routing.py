@@ -288,6 +288,32 @@ def _transcript_entries(transcript: Path) -> list[_TranscriptEntry]:
     ]
 
 
+def _structured_report_markdown(text: str) -> str | None:
+    """Remove narration surrounding one structured worker report.
+
+    :param text: Assistant text that may wrap a report in prose.
+    :returns: Structured Markdown, or ``None`` when no report title exists.
+    """
+    lines = text.strip().splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if _REPORT_TITLE.fullmatch(line)),
+        None,
+    )
+    if start is None:
+        return None
+    report_lines = lines[start:]
+    try:
+        good_index = report_lines.index("### What looks good")
+    except ValueError:
+        return "\n".join(report_lines).strip()
+    end = len(report_lines)
+    for index, line in enumerate(report_lines[good_index + 1 :], start=good_index + 1):
+        if line.strip() and not line.startswith("- "):
+            end = index
+            break
+    return "\n".join(report_lines[:end]).strip()
+
+
 def extract_report(transcript: Path) -> str:
     """Extract the final assistant Markdown from a Tintin transcript.
 
@@ -304,8 +330,9 @@ def extract_report(transcript: Path) -> str:
             text = content
         else:
             text = "".join(block.text or "" for block in content if block.type == "text")
-        if text.strip():
-            latest = text.strip()
+        structured = _structured_report_markdown(text)
+        if structured is not None:
+            latest = structured
     if not latest:
         raise ValueError(f"Transcript has no assistant text: {transcript}")
     return latest
