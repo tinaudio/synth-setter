@@ -78,6 +78,8 @@ def _make_run_dir(
     *,
     ckpt_mtime: float | None = None,
     wandb_run_id: str | None = None,
+    offline_wandb: bool = False,
+    hydra_experiment: str | None = None,
 ) -> Path:
     """Create one fake Hydra run dir with a ``checkpoints/last.ckpt``.
 
@@ -86,6 +88,9 @@ def _make_run_dir(
     :param ckpt_mtime: Explicit mtime for ``last.ckpt``; newer wins discovery.
     :param wandb_run_id: When set, adds a ``wandb/run-<ts>-<id>`` dir so the id
         is recoverable.
+    :param offline_wandb: Name the wandb dir ``offline-run-*`` instead of ``run-*``.
+    :param hydra_experiment: When set, records this experiment choice in a
+        ``.hydra/hydra.yaml`` so identity is provable without a wandb dir.
     :returns: The created run dir.
     """
     run_dir = root / name
@@ -95,7 +100,14 @@ def _make_run_dir(
     if ckpt_mtime is not None:
         os.utime(ckpt, (ckpt_mtime, ckpt_mtime))
     if wandb_run_id is not None:
-        (run_dir / "wandb" / f"run-20260715_185004-{wandb_run_id}").mkdir(parents=True)
+        prefix = "offline-run" if offline_wandb else "run"
+        (run_dir / "wandb" / f"{prefix}-20260715_185004-{wandb_run_id}").mkdir(parents=True)
+    if hydra_experiment is not None:
+        hydra_dir = run_dir / ".hydra"
+        hydra_dir.mkdir()
+        (hydra_dir / "hydra.yaml").write_text(
+            f"hydra:\n  runtime:\n    choices:\n      experiment: {hydra_experiment}\n"
+        )
     return run_dir
 
 
@@ -104,8 +116,10 @@ def test_discover_local_picks_newest_sibling_last_ckpt(tmp_path: Path) -> None:
 
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
     """
-    _make_run_dir(tmp_path, "ffn-old", ckpt_mtime=1_000)
-    newest = _make_run_dir(tmp_path, "ffn-new", ckpt_mtime=2_000)
+    _make_run_dir(tmp_path, "ffn-old", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple")
+    newest = _make_run_dir(
+        tmp_path, "ffn-new", ckpt_mtime=2_000, hydra_experiment="surge/ffn_simple"
+    )
     current = tmp_path / "ffn-current"
     current.mkdir()
 
@@ -167,14 +181,14 @@ def test_discover_local_skips_sibling_of_a_different_config_id(tmp_path: Path) -
     assert decision.ckpt_path == older_same_config / "checkpoints" / "last.ckpt"
 
 
-def test_discover_local_sibling_without_wandb_dir_is_accepted_with_no_run_id(
+def test_discover_local_wandb_less_sibling_with_matching_hydra_state_is_accepted(
     tmp_path: Path,
 ) -> None:
-    """A wandb-less run dir (logger disabled) still resumes, minting a fresh id.
+    """A wandb-less run dir (logger disabled) resumes when its Hydra state matches.
 
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
     """
-    _make_run_dir(tmp_path, "ffn-prior")
+    _make_run_dir(tmp_path, "ffn-prior", hydra_experiment="surge/ffn_simple")
     current = tmp_path / "ffn-current"
     current.mkdir()
 
@@ -401,3 +415,67 @@ def test_composed_train_config_ships_resume_keys() -> None:
     assert OmegaConf.select(cfg, "training.resume") is None
     assert "resume" in cfg.logger.wandb
     assert cfg.logger.wandb.resume is None
+
+
+def test_discover_local_sibling_without_any_identity_evidence_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """No wandb dir and no ``.hydra`` state means the sibling cannot be trusted.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-prior")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_wandb_less_sibling_with_mismatched_hydra_state_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """A wandb-less sibling recorded for another experiment must not be resumed.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "flow-prior", hydra_experiment="surge/flow_simple")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_recovers_run_id_from_offline_wandb_dir(tmp_path: Path) -> None:
+    """Offline-mode ``wandb/offline-run-*`` dirs carry a recoverable run id too.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(
+        tmp_path,
+        "ffn-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+        offline_wandb=True,
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_wandb_artifact_key_error_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A KeyError from the wandb API (malformed response) degrades to None.
+
+    :param monkeypatch: Pytest fixture used to stub wandb.
+    """
+
+    def _raise(ref: str) -> object:
+        raise KeyError("malformed artifact response")
+
+    _install_fake_wandb(monkeypatch, _raise)
+
+    assert resume.discover_wandb_artifact_checkpoint("ffn_simple") is None

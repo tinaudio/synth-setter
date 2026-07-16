@@ -131,6 +131,10 @@ def test_discover_resume_checkpoint_prefers_local_over_r2(
     local_ckpt = runs_root / "ffn-prior" / "checkpoints" / "last.ckpt"
     local_ckpt.parent.mkdir(parents=True)
     local_ckpt.write_bytes(b"from-local")
+    wandb_dir = (
+        runs_root / "ffn-prior" / "wandb" / "run-20260715_185004-ffn_simple-20260715T225004231Z"
+    )
+    wandb_dir.mkdir(parents=True)
     current = runs_root / "ffn-current"
     current.mkdir()
     cfg = OmegaConf.create(

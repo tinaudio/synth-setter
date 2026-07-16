@@ -1100,6 +1100,11 @@ def test_train_resume_auto_continues_from_newest_sibling_run(
     }
     first_ckpt = tmp_path / "run-first" / "checkpoints" / "last.ckpt"
     assert first_ckpt.is_file()
+    # In-process test runs write no wandb/.hydra state, so plant the identity
+    # evidence a real launch leaves behind (config_id falls back to task_name).
+    config_id = resolve_run_config_id(first_cfg)
+    run_dir_name = f"run-20260716_000000-{config_id}-20260716T000000000Z"
+    (tmp_path / "run-first" / "wandb" / run_dir_name).mkdir(parents=True)
 
     second_cfg = cfg_train.copy()
     with open_dict(second_cfg):

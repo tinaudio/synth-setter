@@ -15,9 +15,10 @@ import re
 import subprocess
 from dataclasses import dataclass
 from importlib.util import find_spec
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
+import yaml
 from omegaconf import DictConfig, OmegaConf
 
 log = logging.getLogger(__name__)
@@ -110,28 +111,57 @@ def _run_id_matches_config(run_id: str, config_id: str) -> bool:
 
 
 def _run_id_from_run_dir(run_dir: Path) -> str | None:
-    """Recover the W&B run id from a run dir's ``wandb/run-<ts>-<id>`` dir.
+    """Recover the W&B run id from a run dir's ``wandb/[offline-]run-<ts>-<id>`` dir.
+
+    Offline-mode launches (``logger.wandb.offline=true``) write
+    ``offline-run-*`` dirs; both spellings carry the same id layout.
 
     :param run_dir: One Hydra run output dir.
     :returns: The run id, or ``None`` when the dir has no wandb run subdir.
     """
-    candidates = sorted(run_dir.glob("wandb/run-*"))
-    if not candidates:
+    names = sorted(
+        candidate.name.removeprefix("offline-")
+        for pattern in ("wandb/run-*", "wandb/offline-run-*")
+        for candidate in run_dir.glob(pattern)
+    )
+    if not names:
         return None
     # ``run-<YYYYMMDD_HHMMSS>-<id>``: the id is everything past the second dash.
-    parts = candidates[-1].name.split("-", 2)
+    parts = names[-1].split("-", 2)
     return parts[2] if len(parts) == 3 else None
+
+
+def _config_id_from_hydra_dir(run_dir: Path) -> str | None:
+    """Recover a run dir's config_id from its recorded Hydra state.
+
+    Mirrors ``resolve_run_config_id``: the ``experiment`` choice basename when
+    one was composed, else the run's ``task_name``.
+
+    :param run_dir: One Hydra run output dir.
+    :returns: The config_id, or ``None`` when no readable ``.hydra`` state exists.
+    """
+    hydra_dir = run_dir / ".hydra"
+    try:
+        experiment = OmegaConf.select(
+            OmegaConf.load(hydra_dir / "hydra.yaml"), "hydra.runtime.choices.experiment"
+        )
+        if experiment not in (None, "null"):
+            return PurePosixPath(str(experiment)).name
+        return OmegaConf.select(OmegaConf.load(hydra_dir / "config.yaml"), "task_name")
+    except (OSError, yaml.YAMLError):
+        return None
 
 
 def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> ResumeDecision | None:
     """Find the newest sibling run dir's ``last.ckpt`` for this config_id.
 
     Scans the current output dir's siblings (the Hydra run-dir family, e.g.
-    ``logs/train/<task>/<name>-<ts>/``). A sibling whose recovered W&B run id
-    is not this config_id's canonical ``{config_id}-{timestamp}`` is skipped;
-    one with no recoverable id (logger disabled) is accepted with a warning
-    naming the unverified-identity assumption, since Lightning still fails
-    loudly on an architecture mismatch.
+    ``logs/train/<task>/<name>-<ts>/``). Every candidate must prove its
+    identity: a recovered W&B run id must be this config_id's canonical
+    ``{config_id}-{timestamp}``; a sibling without a wandb run dir (logger
+    disabled) must instead carry matching recorded Hydra state. A sibling with
+    neither is skipped — an unverifiable checkpoint of a different config
+    could load silently when the architectures happen to match.
 
     :param current_output_dir: This launch's Hydra output dir, excluded from
         the scan.
@@ -144,18 +174,21 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
         if run_dir == current_output_dir:
             continue
         run_id = _run_id_from_run_dir(run_dir)
-        if run_id is not None and not _run_id_matches_config(run_id, config_id):
+        if run_id is not None:
+            if not _run_id_matches_config(run_id, config_id):
+                continue
+        elif _config_id_from_hydra_dir(run_dir) != config_id:
+            log.warning(
+                "Skipping auto-resume candidate %s: no W&B run id or matching "
+                "Hydra state proves it belongs to config_id %r.",
+                ckpt,
+                config_id,
+            )
             continue
         candidates.append((ckpt.stat().st_mtime, ckpt, run_id))
     if not candidates:
         return None
     _, ckpt_path, run_id = max(candidates, key=lambda item: item[0])
-    if run_id is None:
-        log.warning(
-            f"Auto-resume candidate {ckpt_path} has no recoverable W&B run id; "
-            f"assuming it belongs to config_id {config_id!r} (its run-dir family). "
-            "A wrong-architecture checkpoint still fails loudly at load."
-        )
     return ResumeDecision(ckpt_path=ckpt_path, wandb_run_id=run_id, source="local")
 
 
@@ -192,7 +225,7 @@ def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> Resum
         r2_io.ensure_r2_env_loaded()
         entries = r2_io.list_entries(f"{prefix}/", recursive=True)
     except _DEGRADABLE_ERRORS as exc:
-        log.warning(f"Skipping R2 resume discovery under {prefix}: {exc}")
+        log.warning("Skipping R2 resume discovery under %s: %s", prefix, exc)
         return None
     mirrors = [
         entry
@@ -206,7 +239,7 @@ def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> Resum
     try:
         r2_io.download_to_path(f"{prefix}/{newest.path}", dest)
     except _DEGRADABLE_ERRORS as exc:
-        log.warning(f"Failed to download resume checkpoint {newest.path}: {exc}")
+        log.warning("Failed to download resume checkpoint %s: %s", newest.path, exc)
         return None
     namespace = newest.path.split("/", 1)[0]
     return ResumeDecision(
@@ -241,7 +274,7 @@ def discover_wandb_artifact_checkpoint(config_id: str) -> ResumeDecision | None:
         producing_run = artifact.logged_by()
         ckpt_path = Path(resolve_wandb_checkpoint(ref))
     except (*_DEGRADABLE_ERRORS, WandbError, KeyError) as exc:
-        log.warning(f"Skipping W&B artifact resume discovery for {ref}: {exc}")
+        log.warning("Skipping W&B artifact resume discovery for %s: %s", ref, exc)
         return None
     return ResumeDecision(
         ckpt_path=ckpt_path,

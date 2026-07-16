@@ -233,7 +233,7 @@ def test_wandb_resolver_reference_unsafe_basename_raises(
         resolve_wandb_checkpoint("entity/project/model-flow-simple:latest")
 
 
-def testresolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
+def test_resolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A ``ref`` with ``..`` and ``:`` resolves inside the cache root, never above it.
@@ -250,7 +250,7 @@ def testresolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
     assert cache_root in resolved.resolve().parents
 
 
-def testresolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
+def test_resolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bare ``..`` ref resolves inside the cache root, never above it.
@@ -267,7 +267,7 @@ def testresolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
     assert cache_root in resolved.resolve().parents
 
 
-def testresolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
+def test_resolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Refs that slug identically (``a/b`` vs ``a:b``) cache to distinct dirs.
@@ -284,7 +284,7 @@ def testresolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
     assert first != second
 
 
-def testresolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
+def test_resolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A minimal install without ``wandb`` raises a clear ``ModuleNotFoundError``.
@@ -299,7 +299,7 @@ def testresolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
         resolve_wandb_checkpoint("model-x:latest")
 
 
-def testresolve_wandb_checkpoint_multiple_ckpts_raises(
+def test_resolve_wandb_checkpoint_multiple_ckpts_raises(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An artifact with several non-``model.ckpt`` files errors instead of guessing.
@@ -316,7 +316,7 @@ def testresolve_wandb_checkpoint_multiple_ckpts_raises(
         resolve_wandb_checkpoint("model-x:latest")
 
 
-def testresolve_wandb_checkpoint_multiple_model_ckpts_raises(
+def test_resolve_wandb_checkpoint_multiple_model_ckpts_raises(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Several ``model.ckpt`` files across nested dirs error instead of guessing.
@@ -333,7 +333,7 @@ def testresolve_wandb_checkpoint_multiple_model_ckpts_raises(
         resolve_wandb_checkpoint("model-x:latest")
 
 
-def testresolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
+def test_resolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A very long ref yields a cache-dir name within the 255-byte filesystem limit.
@@ -351,7 +351,7 @@ def testresolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
     assert resolved.is_file()
 
 
-def testresolve_wandb_checkpoint_partial_download_redownloads(
+def test_resolve_wandb_checkpoint_partial_download_redownloads(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cached dir with no ``.ckpt`` (partial download) triggers a fresh download.
