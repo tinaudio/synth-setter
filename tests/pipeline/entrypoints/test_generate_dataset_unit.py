@@ -46,6 +46,10 @@ from synth_setter.cli.generate_dataset import (
 )
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
@@ -81,7 +85,9 @@ def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
     :param args: argv list passed to the patched ``_check_call_streamed``.
     :param spec: Dataset spec whose render shape/dtypes define the shard contract.
     """
-    write_minimal_lance_shard(Path(args[find_script_index(args) + 1]), spec)
+    shard_path = Path(args[find_script_index(args) + 1])
+    write_minimal_lance_shard(shard_path, spec)
+    render_metrics_path(shard_path).write_text(RenderRejectionMetrics().model_dump_json())
 
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
@@ -1043,6 +1049,45 @@ class TestRun(RenderSeamFixtures):
             return_value=None,
         ):
             with pytest.raises(RuntimeError, match="did not write expected shard"):
+                generate(spec, tmp_path, [])
+
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+
+    @pytest.mark.parametrize(
+        "report",
+        [None, '{"clipped":"two","silent":3}', b"\xff"],
+    )
+    def test_renderer_invalid_rejection_report_raises_with_shard_context(
+        self,
+        fake_r2_remote: Path,  # noqa: ARG002
+        spec: DatasetSpec,
+        tmp_path: Path,
+        report: str | bytes | None,
+    ) -> None:
+        """Reject missing and malformed renderer reports before shard staging.
+
+        :param fake_r2_remote: Activates the local staging remote.
+        :param spec: Fixture-provided dataset specification.
+        :param tmp_path: Per-test shard work directory.
+        :param report: Invalid text/bytes, or ``None`` for a missing sidecar.
+        """
+
+        def _render_with_invalid_report(args: list[str]) -> None:
+            _render_valid_shard(args, spec)
+            shard_path = Path(args[find_script_index(args) + 1])
+            metrics_path = render_metrics_path(shard_path)
+            if report is None:
+                metrics_path.unlink()
+            elif isinstance(report, bytes):
+                metrics_path.write_bytes(report)
+            else:
+                metrics_path.write_text(report)
+
+        with patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=_render_with_invalid_report,
+        ):
+            with pytest.raises(RuntimeError, match="invalid render metrics for shard 0"):
                 generate(spec, tmp_path, [])
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)

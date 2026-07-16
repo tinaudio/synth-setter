@@ -51,6 +51,10 @@ from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests._vst import (
@@ -411,6 +415,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
             for field, shape in shapes.items()
         }
         write_lance_dataset(output_file, schema, [record_batch_from_arrays(arrays, schema)])
+        render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
 
     with patch(
         "synth_setter.cli.generate_dataset._check_call_streamed",

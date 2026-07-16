@@ -17,6 +17,7 @@ from synth_setter.data.vst.shapes import (
     mel_hop_length,
     mel_n_fft,
 )
+from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
 from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
@@ -62,8 +63,10 @@ class VSTDataSample:
     audio: np.ndarray
     mel_spec: np.ndarray
     param_array: np.ndarray = field(init=False)
-    # Loudness-gate attempt the accepted draw came from (#884).
+    # Attempt provenance stays with the accepted row so shard writers can aggregate it.
     attempt: int = 0
+    clipped_rejections: int = 0
+    silent_rejections: int = 0
 
     def __post_init__(self) -> None:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
@@ -134,6 +137,8 @@ def generate_sample(
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    clipped_rejections = 0
+    silent_rejections = 0
     for attempt in range(max_attempts):
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
@@ -164,6 +169,7 @@ def generate_sample(
             if fixed_synth_params is not None:
                 raise
             warmup = False
+            clipped_rejections += 1
             logger.debug("rendered audio clipped outside [-1, 1], skipping")
             continue
         warmup = False
@@ -182,6 +188,7 @@ def generate_sample(
                     f"lifts a silent patch above the threshold). Provide a louder "
                     f"patch."
                 )
+            silent_rejections += 1
             logger.debug("loudness too low, skipping")
             continue
 
@@ -196,6 +203,8 @@ def generate_sample(
             channels=renderer.channels,
             param_spec=param_spec,
             attempt=attempt,
+            clipped_rejections=clipped_rejections,
+            silent_rejections=silent_rejections,
         )
 
     failed_idx = str(seed.sample_idx) if seed is not None else "<unseeded>"
@@ -205,9 +214,9 @@ def generate_sample(
         else ""
     )
     raise RuntimeError(
-        f"sample {failed_idx} produced no accepted render (below min_loudness "
-        f"{min_loudness:.2f} dB or clipped outside [-1, 1]) after {max_attempts} "
-        f"attempts. {seed_hint}Raise the per-sample attempt budget "
+        f"sample {failed_idx} produced no accepted render after {max_attempts} attempts "
+        f"(silent rejections: {silent_rejections}; clipped rejections: "
+        f"{clipped_rejections}). {seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 
@@ -252,7 +261,10 @@ def main() -> None:
     if OutputFormat.from_extension(suffix) is not OutputFormat.LANCE:
         raise SystemExit(f"data_file must end in .lance, got {suffix!r}")
 
-    make_lance_dataset(args.data_file, render_cfg)
+    metrics_path = render_metrics_path(args.data_file)
+    metrics_path.unlink(missing_ok=True)
+    metrics = make_lance_dataset(args.data_file, render_cfg)
+    metrics_path.write_text(metrics.model_dump_json())
 
 
 if __name__ == "__main__":

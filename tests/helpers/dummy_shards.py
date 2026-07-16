@@ -14,6 +14,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from tests.helpers.finalize_shards import write_minimal_lance_shard
@@ -47,6 +51,7 @@ def stub_renderer(spec: DatasetSpec) -> Callable[[list[str]], None]:
         fmt = OutputFormat.from_extension(output_file.suffix)
         if fmt is OutputFormat.LANCE:
             write_minimal_lance_shard(output_file, spec)
+            render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
         else:
             raise AssertionError(
                 f"stubbed renderer cannot write output with suffix {output_file.suffix!r}"

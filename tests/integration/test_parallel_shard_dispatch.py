@@ -38,10 +38,16 @@ _FAKE_RENDERER_SOURCE = textwrap.dedent(
 
     sys.path.insert(0, sys.argv[3])
 
+    from synth_setter.pipeline.schemas.render_metrics import (
+        RenderRejectionMetrics,
+        render_metrics_path,
+    )
     from synth_setter.pipeline.schemas.spec import DatasetSpec
     from tests.helpers.finalize_shards import write_minimal_lance_shard
 
-    write_minimal_lance_shard(Path(sys.argv[1]), DatasetSpec.model_validate_json(sys.argv[2]))
+    shard_path = Path(sys.argv[1])
+    write_minimal_lance_shard(shard_path, DatasetSpec.model_validate_json(sys.argv[2]))
+    render_metrics_path(shard_path).write_text(RenderRejectionMetrics().model_dump_json())
     """
 ).strip()
 

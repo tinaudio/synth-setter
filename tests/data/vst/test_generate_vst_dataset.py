@@ -1291,6 +1291,35 @@ def test_generate_sample_clipped_render_sampled_params_resamples(
     assert sample.attempt == 1
 
 
+def test_generate_sample_silent_and_clipped_draws_counted_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted sample reports each rejected draw by its distinct reason.
+
+    :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    render_outputs = iter([_silent_audio(), _clipped_audio(), _loud_audio()])
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
+    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * 3)
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_pedalboard_renderer(),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=3),
+    )
+
+    assert sample.silent_rejections == 1
+    assert sample.clipped_rejections == 1
+
+
 def test_generate_sample_clipped_render_fixed_synth_params_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
