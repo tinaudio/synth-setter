@@ -473,7 +473,8 @@ gate_make_sentinel_review() {
   mkdir -p "$(dirname "$path")"
   {
     printf '# repo-review-full-no-comments — review @ %s\n\n' "$sha"
-    printf '## Summary\n\n0 BLOCK, 0 WARN across N skills.\n\n'
+    printf '## Summary\n\n0 BLOCK, 0 WARN across N skills.\n'
+    printf '%s\n\n' '- Worker reports: 8/8 complete and non-empty.'
     printf 'finding line %d\n' {1..20}
   } > "$path"
   printf '%s\n' "$path"
@@ -714,6 +715,7 @@ T_gate_clean_sentinel_no_false_positive() {
     printf '# repo-review-full-no-comments — review @ %s\n\n' "$head_sha"
     printf 'PASS — no findings across all skills (code-health, comment-hygiene,\n'
     printf 'python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n'
+    printf '%s\n\n' '- Worker reports: 8/8 complete and non-empty.'
     printf 'padding line %d\n' {1..20}
   } > "$path"
   out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")

@@ -33,11 +33,12 @@ def _head_sha() -> str:
     ).stdout.strip()
 
 
-def _head_sentinel(tmp_path: Path, body: str) -> Path:
+def _head_sentinel(tmp_path: Path, body: str, *, complete: bool = True) -> Path:
     """Write ``body`` to a HEAD-SHA sentinel file (≥200 bytes) and return its path.
 
     :param tmp_path: Directory the synthetic review file lives in.
     :param body: Sentinel content; padded to clear the 200-byte stub guard.
+    :param complete: Whether to include worker-completeness evidence.
     :returns: Path to the written sentinel.
     """
     filename = subprocess.run(  # noqa: S603
@@ -47,7 +48,8 @@ def _head_sentinel(tmp_path: Path, body: str) -> Path:
         check=True,
     ).stdout.strip()
     review = tmp_path / filename
-    review.write_text(body + ("padding\n" * 40))
+    completeness = "- Worker reports: 8/8 complete and non-empty.\n" if complete else ""
+    review.write_text(body + completeness + ("padding\n" * 40))
     return review
 
 
@@ -138,6 +140,52 @@ def test_block_gate_excludes_comment_hygiene_blocks(tmp_path: Path) -> None:
         "- **L9** — **[comment-hygiene:block]** comment inside a run: block-scalar.\n",
     )
     result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_gate_blocks_clean_pass_without_complete_worker_reports(tmp_path: Path) -> None:
+    """A zero-finding sentinel without worker evidence cannot satisfy the gate.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Summary\n\n0 BLOCK, 0 WARN. PASS.\n",
+        complete=False,
+    )
+    result = _run_gate(review)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "complete worker reports" in result.stderr
+
+
+def test_gate_blocks_clean_pass_with_incomplete_worker_count(tmp_path: Path) -> None:
+    """A zero-finding sentinel cannot omit selected worker reports.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Summary\n\n"
+        "0 BLOCK, 0 WARN. PASS.\n- Worker reports: 6/8 complete and non-empty.\n",
+        complete=False,
+    )
+    result = _run_gate(review)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "complete worker reports" in result.stderr
+
+
+def test_gate_allows_zero_diff_pass_without_worker_reports(tmp_path: Path) -> None:
+    """The explicit zero-diff path remains eligible without fan-out.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Summary\n\n"
+        "0 BLOCK, 0 WARN. PASS.\n- Worker reports: not applicable (zero diff).\n",
+        complete=False,
+    )
+    result = _run_gate(review)
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 

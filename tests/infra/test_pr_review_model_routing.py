@@ -184,6 +184,23 @@ def test_full_review_skills_require_the_pinned_orchestrator() -> None:
         assert "general-purpose" not in text
 
 
+def test_review_fanout_fails_closed_on_incomplete_worker_reports() -> None:
+    """Incomplete fan-out cannot be rendered as a zero-finding sentinel."""
+    shared = (
+        REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
+    ).read_text()
+    no_comments = (
+        REPO_ROOT / "agent" / "skills" / "repo-review-full-no-comments" / "SKILL.md"
+    ).read_text()
+
+    assert "missing" in shared
+    assert "empty" in shared
+    assert "malformed" in shared
+    assert "stop without building" in shared
+    assert "remove that file" in no_comments
+    assert "Worker reports: K/K complete and non-empty" in no_comments
+
+
 def test_review_fanout_promotes_only_correctness() -> None:
     """Keep expensive reasoning reserved for the correctness pass."""
     text = (

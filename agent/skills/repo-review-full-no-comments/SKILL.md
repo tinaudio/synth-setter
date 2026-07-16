@@ -105,8 +105,9 @@ sub-agents; you never launch those directly.
 > `is_zero_diff=true`, skip Steps
 > 2–6 and go straight to Step 7's **PASS short form**: write the sentinel file
 > and return the rendered PASS report ending in `Sentinel: <path>` (note
-> `PASS — no diff vs ${base_ref}` in the report body). Do not early-return a
-> bare string — the pre-PR gate needs the sentinel on disk.
+> `PASS — no diff vs ${base_ref}` and
+> `- Worker reports: not applicable (zero diff).` in the report body). Do not
+> early-return a bare string — the pre-PR gate needs the sentinel on disk.
 >
 > ### Step 2: Inspect PR health
 >
@@ -137,6 +138,11 @@ sub-agents; you never launch those directly.
 >   `null` in local-branch mode. Do not place branch names in `pr_number`; keep
 >   branch/target details in `review_body` and, if the shared JSON builder
 >   supports it, a separate metadata field such as `target`.
+>
+> - If Step 5 reports any missing, empty, or malformed worker result, compute
+>   the current HEAD sentinel path with `review_sentinel.py`, remove that file
+>   and the temporary findings JSON, and return the infrastructure error without
+>   a `Sentinel:` line. Do not continue to Step 7.
 >
 > - Phrase the `review_body` lead-in to reflect what was reviewed and that
 >   nothing was posted. In PR mode, write:
@@ -233,6 +239,7 @@ sub-agents; you never launch those directly.
 > ## Summary
 >
 > - B BLOCK, W WARN across K skills
+> - Worker reports: K/K complete and non-empty.
 > - PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
 > - Reviewed at: <full-sha-from-git-rev-parse-HEAD>
 > - <next-step tip>
@@ -272,6 +279,7 @@ sub-agents; you never launch those directly.
 >   ## Summary
 >
 >   - 0 BLOCK, 0 WARN
+>   - Worker reports: K/K complete and non-empty.
 >   - Reviewed at: <sha>
 >   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```

@@ -153,8 +153,9 @@ unintended shell expansion. A `PreToolUse` hook
   automation is healthy, and address every BLOCK/WARN. The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
-  is unresolved. Server-side tests, metadata checks, branch protection, and
-  Copilot review continue to gate merges.
+  is unresolved. Before re-enabling it, zero-finding sentinels must prove every
+  selected worker report is complete and non-empty. Server-side tests, metadata
+  checks, branch protection, and Copilot review continue to gate merges.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.

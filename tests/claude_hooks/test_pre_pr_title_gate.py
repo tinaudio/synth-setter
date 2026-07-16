@@ -57,7 +57,8 @@ def _clean_sentinel(tmp_path: Path) -> Path:
     ).stdout.strip()
     review = tmp_path / filename
     review.write_text(
-        "# repo-review-full-no-comments\n\n0 BLOCK, 0 WARN. PASS.\n" + ("pad\n" * 40)
+        "# repo-review-full-no-comments\n\n0 BLOCK, 0 WARN. PASS.\n"
+        "- Worker reports: 8/8 complete and non-empty.\n" + ("pad\n" * 40)
     )
     return review
 

@@ -48,6 +48,8 @@
 #       first-parent commits behind it (default 2; override via env). The
 #       `--first-parent` mode means merging `main` into the branch counts as
 #       one commit, not the hundreds it brings in.
+#     - A zero-finding PASS records every selected worker report as complete
+#       and non-empty, or identifies the zero-diff path where no workers run.
 #     - The file lists no unresolved `[comment-hygiene:warn|block]` findings, unless
 #       `REVIEW_COMMENT_GATE` is `warn`/`off` (default `block`).
 #     - The file lists no unresolved `[<skill>:block]` findings from any skill,
@@ -410,6 +412,28 @@ if [[ -z "$lag" ]]; then
 fi
 if [[ "$lag" -gt "$REVIEW_MAX_LAG" ]]; then
   block "review is ${lag} first-parent commits behind ${REVIEW_REF_LABEL} (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
+fi
+
+# A clean result is gate-eligible only after every selected worker returned a
+# non-empty report. Findings already fail through their severity sub-gates;
+# this closes the false-PASS path where missing workers look like zero findings.
+if grep -qE '0 BLOCK, 0 WARN|^PASS — no findings' "$REVIEW_PATH"; then
+  if grep -qF -- '- Worker reports: not applicable (zero diff).' "$REVIEW_PATH"; then
+    :
+  else
+    completeness=$(grep -m1 -E '^- Worker reports: [0-9]+/[0-9]+ complete and non-empty\.$' \
+      "$REVIEW_PATH" || true)
+    completed=""
+    expected=""
+    read -r completed expected < <(
+      sed -nE 's/^- Worker reports: ([0-9]+)\/([0-9]+) complete and non-empty\.$/\1 \2/p' \
+        <<<"$completeness"
+    ) || true
+    if [[ -z "$completed" || -z "$expected" || "$completed" -eq 0 \
+      || "$completed" -ne "$expected" ]]; then
+      block "zero-finding review lacks complete worker reports: $REVIEW_PATH"
+    fi
+  fi
 fi
 
 # Reject any sentinel still listing findings. Match the bracketed

@@ -187,9 +187,19 @@ cross-model pass; a degraded pass still tags every finding
 `(flagged by: native)` and additionally appends the single
 `_opencode pass skipped/failed: …_` line after `### What looks good`.
 
-## Step 5: Aggregate findings
+## Step 5: Validate worker completion and aggregate findings
 
-Once every parallel agent returns, parse each report's BLOCK and WARN findings. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+Before parsing findings, validate all `K` selected worker results. Every result must be
+non-empty after whitespace trimming, start with its expected `## <skill-name> review`
+header, and contain all three required sections: `### BLOCK findings`,
+`### WARN findings`, and `### What looks good`. If any selected worker is missing,
+empty, or malformed, remove `/tmp/<calling-skill>-findings.json` and the current
+HEAD's sentinel path (when the calling skill has one), then stop without building
+the findings JSON or continuing to the calling skill's delivery step. Report the
+failed skill names and shapes as a review infrastructure error; zero findings from
+incomplete workers is never PASS.
+
+Once all `K` parallel agents return valid reports, parse each report's BLOCK and WARN findings. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
 
 Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
 
