@@ -351,6 +351,8 @@ uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt
 
 Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises upload, real rclone-backed download, Lightning restore, and continued training progress.
 
+**Auto-resume.** `training.resume=auto` automates this recovery (default off; `require` additionally errors when nothing is found, for unattended relaunch loops): at launch, discovery (`utils/resume.py`) scans sibling local run dirs, then the launch-scoped R2 mirrors above, then the train-end `model-{config_id}:latest` artifact, points `ckpt_path` at the newest `last.ckpt`, and reuses the recovered W&B run id (`resume=allow`) so one logical training stays on one run page. Resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state); an explicit `ckpt_path` bypasses discovery and combining it with an active `training.resume` is a fail-fast config error.
+
 ### 6.3 Resume From W&B
 
 Resume must work with the same `ckpt_path=` interface users already know.
