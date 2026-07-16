@@ -23,6 +23,7 @@ on:
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
+      - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
 permissions:
@@ -47,6 +48,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # The CUDA dev-snapshot does not fit reliably in the root Docker store.
+      - name: Relocate Docker storage to /mnt
+        uses: ./.github/actions/prepare-docker-storage
 
       - name: Pull image
         run: docker pull "$IMAGE"

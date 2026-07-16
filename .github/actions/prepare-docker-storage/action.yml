@@ -1,0 +1,40 @@
+name: Prepare Docker storage
+description: Relocate disposable Docker state to the runner's separate /mnt filesystem.
+
+runs:
+  using: composite
+  steps:
+    # CUDA image pulls and kind extraction exceed reliable root-disk capacity;
+    # fail closed unless /mnt provides independent writable storage.
+    - name: Relocate Docker storage to /mnt
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! mountpoint -q /mnt; then
+          echo "::error::/mnt is not a mount point"
+          exit 1
+        fi
+        root_source="$(findmnt -n -o SOURCE --target /)"
+        mnt_source="$(findmnt -n -o SOURCE --target /mnt)"
+        if [[ -z "${root_source}" || -z "${mnt_source}" || "${root_source}" == "${mnt_source}" ]]; then
+          echo "::error::/mnt must be mounted from storage separate from /"
+          exit 1
+        fi
+        write_probe="$(sudo mktemp /mnt/.docker-storage-write-test.XXXXXX)"
+        sudo rm -f "${write_probe}"
+
+        sudo systemctl stop docker.service docker.socket
+        sudo rm -rf /var/lib/docker /mnt/docker
+        sudo mkdir -p /mnt/docker /etc/docker
+
+        daemon_json=/etc/docker/daemon.json
+        sudo "${GITHUB_ACTION_PATH}/merge-daemon-config.sh" "${daemon_json}"
+
+        sudo systemctl start docker.socket docker.service
+        docker_root="$(docker info --format '{{ .DockerRootDir }}')"
+        if [[ "${docker_root}" != "/mnt/docker" ]]; then
+          echo "::error::Docker data root is ${docker_root}, expected /mnt/docker"
+          exit 1
+        fi
+        docker info
+        df -h / /mnt
