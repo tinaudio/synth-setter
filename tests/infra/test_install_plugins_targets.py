@@ -222,6 +222,15 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
+def test_runtime_image_validates_surge_with_standalone_loader() -> None:
+    """The pre-install Surge check does not import the unavailable project package."""
+    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
+    copy_index = stage.index("load_vst3_check.py /artifacts/")
+    validation_index = stage.index("python -X faulthandler load_vst3_check.py")
+    assert copy_index < validation_index
+    assert "from core import load_plugin" not in stage
+
+
 def test_builder_base_configures_timezone_without_debconf_pipe() -> None:
     """The shared image base uses Docker-safe noninteractive timezone setup."""
     stage = _dockerfile_stage_text("builder-base")
