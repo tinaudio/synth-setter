@@ -11,9 +11,11 @@ R2. Multi-machine contention is exercised with real OS processes in
 from __future__ import annotations
 
 import multiprocessing
+import traceback
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,19 +27,21 @@ from synth_setter.pipeline.shard_claims import (
 )
 
 
-def _claims(tmp_path: Path, owner: str = "worker-a", **kwargs: object) -> ShardClaims:
+def _claims(
+    tmp_path: Path, owner: str = "worker-a", lease: timedelta = CLAIM_LEASE
+) -> ShardClaims:
     """Build a ``ShardClaims`` over a Lance table under ``tmp_path``.
 
     :param tmp_path: Directory receiving the ``shard-claims.lance`` dataset.
     :param owner: Claimant identity recorded on won rows.
-    :param kwargs: Extra ``ShardClaims`` fields (e.g. ``lease``).
+    :param lease: How long a won claim holds off reclaiming peers.
     :returns: Claims facade over the local-filesystem table.
     """
     return ShardClaims(
         uri=str(tmp_path / "shard-claims.lance"),
         storage_options=None,
         owner=owner,
-        **kwargs,  # type: ignore[arg-type]
+        lease=lease,
     )
 
 
@@ -45,6 +49,10 @@ class TestPopulate:
     """Operator-side seeding of the claims table."""
 
     def test_populate_new_table_seeds_every_shard_available(self, tmp_path: Path) -> None:
+        """A fresh table holds one available row per requested shard.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
 
         inserted = claims.populate(range(3))
@@ -53,6 +61,10 @@ class TestPopulate:
         assert claims.status_counts() == {"available": 3}
 
     def test_populate_existing_table_is_idempotent(self, tmp_path: Path) -> None:
+        """Re-populating the same IDs inserts nothing and changes nothing.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(3))
 
@@ -60,6 +72,10 @@ class TestPopulate:
         assert claims.status_counts() == {"available": 3}
 
     def test_populate_inserts_only_missing_shard_ids(self, tmp_path: Path) -> None:
+        """A grown request tops up only the rows not already present.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(2))
 
@@ -67,6 +83,10 @@ class TestPopulate:
         assert claims.status_counts() == {"available": 4}
 
     def test_populate_preserves_in_flight_claims_on_relaunch(self, tmp_path: Path) -> None:
+        """Relaunch re-population never resets a live claim.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(2))
         claimed = claims.claim()
@@ -76,6 +96,10 @@ class TestPopulate:
         assert claims.status_counts() == {"available": 1, "claimed": 1}
 
     def test_populate_deduplicates_requested_ids(self, tmp_path: Path) -> None:
+        """Duplicate requested IDs seed a single row each.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
 
         assert claims.populate([0, 1, 1, 0]) == 2
@@ -86,6 +110,10 @@ class TestClaimLifecycle:
     """Worker-side claim → complete flow."""
 
     def test_claim_returns_each_shard_exactly_once_until_drained(self, tmp_path: Path) -> None:
+        """Sequential claims partition the table without repeats.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(3))
 
@@ -96,6 +124,10 @@ class TestClaimLifecycle:
         assert sorted(seen) == [0, 1, 2]
 
     def test_claim_on_drained_table_returns_none(self, tmp_path: Path) -> None:
+        """A fully completed table yields no further claims.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(1))
         claimed = claims.claim()
@@ -105,6 +137,10 @@ class TestClaimLifecycle:
         assert claims.claim() is None
 
     def test_claim_records_owner_lease_and_first_generation(self, tmp_path: Path) -> None:
+        """A first claim wins generation 1 and marks the row claimed.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path, owner="worker-a")
         claims.populate(range(1))
 
@@ -114,12 +150,35 @@ class TestClaimLifecycle:
         assert claims.status_counts() == {"claimed": 1}
 
     def test_claim_on_missing_table_raises(self, tmp_path: Path) -> None:
+        """Claiming before the operator populated fails loudly.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
 
         with pytest.raises(ValueError, match="not found"):
             claims.claim()
 
+    def test_claim_on_corrupt_table_with_duplicate_rows_raises(self, tmp_path: Path) -> None:
+        """A broken one-row-per-shard invariant must fail loudly, never claim silently.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+        duplicate = lance.dataset(claims.uri).to_table()
+        lance.write_dataset(duplicate, claims.uri, mode="append")
+
+        with pytest.raises(RuntimeError, match="expected exactly 1"):
+            claims.claim()
+
     def test_complete_marks_shard_done(self, tmp_path: Path) -> None:
+        """Completing a won claim flips its row to done.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims = _claims(tmp_path)
         claims.populate(range(2))
         claimed = claims.claim()
@@ -129,6 +188,10 @@ class TestClaimLifecycle:
         assert claims.status_counts() == {"available": 1, "done": 1}
 
     def test_live_claim_is_not_reclaimable_by_peer(self, tmp_path: Path) -> None:
+        """A peer cannot steal a claim whose lease is still live.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         claims_a = _claims(tmp_path, owner="worker-a")
         claims_a.populate(range(1))
         assert claims_a.claim() is not None
@@ -142,6 +205,10 @@ class TestLeaseExpiryAndFencing:
     """Crashed-worker recovery via lease lapse, and stale-owner fencing."""
 
     def test_expired_lease_is_reclaimed_with_advanced_generation(self, tmp_path: Path) -> None:
+        """A lapsed lease is stolen at the next fencing generation.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         crashed = _claims(tmp_path, owner="worker-a", lease=timedelta(seconds=-1))
         crashed.populate(range(1))
         assert crashed.claim() == ClaimedShard(shard_id=0, claim_gen=1)
@@ -151,6 +218,10 @@ class TestLeaseExpiryAndFencing:
         assert successor.claim() == ClaimedShard(shard_id=0, claim_gen=2)
 
     def test_stale_owner_complete_after_takeover_is_fenced_out(self, tmp_path: Path) -> None:
+        """A stale owner's complete matches nothing after a takeover.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         crashed = _claims(tmp_path, owner="worker-a", lease=timedelta(seconds=-1))
         crashed.populate(range(1))
         stale = crashed.claim()
@@ -165,6 +236,10 @@ class TestLeaseExpiryAndFencing:
     def test_complete_after_own_lease_expired_unclaimed_is_fenced_by_gen(
         self, tmp_path: Path
     ) -> None:
+        """Self re-claim advances the generation and fences the older claim.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         worker = _claims(tmp_path, owner="worker-a", lease=timedelta(seconds=-1))
         worker.populate(range(1))
         first = worker.claim()
@@ -177,7 +252,84 @@ class TestLeaseExpiryAndFencing:
         assert worker.complete(second) is True
 
     def test_default_lease_covers_a_long_render(self) -> None:
+        """The default lease outlasts the slowest expected render."""
         assert CLAIM_LEASE == timedelta(hours=2)
+
+    def test_claim_survives_exhausted_commit_retries_and_retries_the_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A CAS storm exhausting Lance's internal retries must not kill the worker.
+
+        First conditional update raises the real retry-exhaustion error
+        (``OSError: Too many concurrent writers``, reproduced from two
+        same-base-version handles); the claim loop backs off and wins on the
+        next scan. Real storms are exercised by the concurrent hammer tests.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Injects the failing Lance update.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+        real_update = lance.LanceDataset.update
+        storms = iter([True])
+
+        def _stormy_update(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+            if next(storms, False):
+                raise OSError("Too many concurrent writers. Attempted 10 retries.")
+            return real_update(self, *args, **kwargs)
+
+        monkeypatch.setattr(lance.LanceDataset, "update", _stormy_update)
+
+        assert claims.claim() == ClaimedShard(shard_id=0, claim_gen=1)
+
+    def test_claim_reraises_unrelated_storage_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the contention error is retried; real storage failures propagate.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Injects the failing Lance update.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+
+        def _broken_update(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(lance.LanceDataset, "update", _broken_update)
+
+        with pytest.raises(OSError, match="Permission denied"):
+            claims.claim()
+
+    def test_complete_under_exhausted_commit_retries_abandons_without_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A CAS storm at completion never fails a run that already rendered.
+
+        The row recovers via lease lapse — the re-claiming peer skip-probes
+        the durable output and completes it — so ``complete`` reports the
+        abandonment instead of raising.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Injects the failing Lance update.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+        claimed = claims.claim()
+        assert claimed is not None
+
+        def _stormy_update(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("Too many concurrent writers. Attempted 10 retries.")
+
+        monkeypatch.setattr(lance.LanceDataset, "update", _stormy_update)
+
+        assert claims.complete(claimed) is False
 
 
 def test_default_owner_is_unique_and_sql_literal_safe() -> None:
@@ -199,11 +351,14 @@ def _drain_worker(uri: str, worker_index: int, out: multiprocessing.Queue) -> No
     :param out: Receives one ``[(shard_id, claim_gen), ...]`` list.
     """
     claims = ShardClaims(uri=uri, storage_options=None, owner=f"proc-{worker_index}")
-    wins = []
-    while (claimed := claims.claim()) is not None:
-        wins.append((claimed.shard_id, claimed.claim_gen))
-        claims.complete(claimed)
-    out.put(wins)
+    try:
+        wins = []
+        while (claimed := claims.claim()) is not None:
+            wins.append((claimed.shard_id, claimed.claim_gen))
+            claims.complete(claimed)
+        out.put(wins)
+    except BaseException:  # noqa: BLE001 — surfaced as the test's failure detail
+        out.put(traceback.format_exc())
 
 
 def _steal_worker(uri: str, worker_index: int, out: multiprocessing.Queue) -> None:
@@ -221,12 +376,15 @@ def _steal_worker(uri: str, worker_index: int, out: multiprocessing.Queue) -> No
         owner=f"proc-{worker_index}",
         lease=timedelta(seconds=-5),
     )
-    wins = []
-    for _ in range(12):
-        claimed = claims.claim()
-        if claimed is not None:
-            wins.append((claimed.shard_id, claimed.claim_gen))
-    out.put(wins)
+    try:
+        wins = []
+        for _ in range(12):
+            claimed = claims.claim()
+            if claimed is not None:
+                wins.append((claimed.shard_id, claimed.claim_gen))
+        out.put(wins)
+    except BaseException:  # noqa: BLE001 — surfaced as the test's failure detail
+        out.put(traceback.format_exc())
 
 
 class TestConcurrentClaims:
@@ -253,9 +411,15 @@ class TestConcurrentClaims:
         results = [out.get(timeout=120) for _ in procs]
         for proc in procs:
             proc.join(timeout=60)
+        crashed = [r for r in results if isinstance(r, str)]
+        assert not crashed, f"worker died: {crashed[0]}"
         return results
 
     def test_concurrent_drain_renders_every_shard_exactly_once(self, tmp_path: Path) -> None:
+        """Racing workers partition a real shared table with no double-grant.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
         uri = str(tmp_path / "shard-claims.lance")
         ShardClaims(uri=uri, storage_options=None, owner="operator").populate(range(6))
 
@@ -274,6 +438,8 @@ class TestConcurrentClaims:
         fight over two rows continuously. If Lance re-applied a conflicting
         update without re-evaluating its predicate, two workers would win the
         same ``(shard_id, claim_gen)`` or generations would be lost.
+
+        :param tmp_path: Hosts the per-test claims table.
         """
         uri = str(tmp_path / "shard-claims.lance")
         ShardClaims(uri=uri, storage_options=None, owner="operator").populate(range(2))
