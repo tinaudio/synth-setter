@@ -20,6 +20,7 @@ import pytest
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
+from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import (
     shard_has_complete_attempt,
@@ -104,6 +105,53 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
                 [shard_arrays(spec, sid)[field] for sid in shard_ids], axis=0
             )
             np.testing.assert_array_equal(decoded[field], expected)
+
+
+def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Progress fires one shard event per checked winner, then one per landed artifact.
+
+    The fragment finalize decodes no rows, so ``shard_processed`` marks a selected +
+    structural-checked winner; ``artifact_uploaded`` marks each committed split manifest
+    plus the ``stats.npz`` and ``dataset.json`` uploads.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    del fake_r2_remote
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    events: list[str] = []
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    finalize_lance_fragments(spec, work_dir, events.append)
+
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
+
+
+def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """The entrypoint dispatch wires the callback into the Lance branch and the marker upload.
+
+    Drives the real ``finalize_from_spec`` → ``finalize_lance`` →
+    ``finalize_lance_fragments`` path so the entrypoint-to-branch wiring — not
+    just the branch in isolation — is exercised end to end.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    del fake_r2_remote
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    events: list[str] = []
+
+    finalize_from_spec(spec, tmp_path / "work", events.append)
+
+    # One more artifact than finalize_lance_fragments: the dataset.complete marker.
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
 
 
 def test_finalize_split_commit_is_one_atomic_manifest_version(
@@ -447,14 +495,37 @@ def test_finalize_skips_empty_split_and_still_completes(
         {**tiny_lance_spec().model_dump(mode="json"), "train_val_test_sizes": [4, 2, 0]}
     )
     stage_all_shards(spec, tmp_path)
+    events: list[str] = []
 
-    finalize_from_spec(spec, tmp_path / "work")
+    finalize_from_spec(spec, tmp_path / "work", events.append)
 
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     assert (run_root / "train.lance" / "_versions").exists()
     assert (run_root / "val.lance" / "_versions").exists()
     assert not (run_root / "test.lance").exists()
     assert (run_root / "dataset.complete").exists()
+    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 5
+
+
+def test_finalize_reports_checked_shards_before_later_winner_fails(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Checked-shard progress remains visible when a later winner is invalid.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    staging_file(fake_r2_remote, spec, 3, "pod-a-u0003.fragment.json").write_bytes(b"bad")
+    events: list[str] = []
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    with pytest.raises(ValueError, match="shard 3 has no healthy staged-valid attempt"):
+        finalize_lance_fragments(spec, work_dir, events.append)
+
+    assert events == ["shard_processed"] * 3
 
 
 def test_finalize_rejects_stats_sidecar_missing_welford_arrays(

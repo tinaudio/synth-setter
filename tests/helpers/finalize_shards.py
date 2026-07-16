@@ -324,12 +324,16 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from datetime import UTC, datetime
 
+    from synth_setter.pipeline.data.finalize_progress import FinalizeProgressCallback
     from synth_setter.pipeline.data.lance_finalize import (
         CheckedLanceWinner,
         StagedLanceAttempt,
     )
 
-    def fake_select(spec: DatasetSpec) -> dict[int, CheckedLanceWinner]:
+    def fake_select(
+        spec: DatasetSpec,
+        progress_callback: FinalizeProgressCallback | None = None,
+    ) -> dict[int, CheckedLanceWinner]:
         rows = spec.render.samples_per_shard
         shape = (spec.render.channels, 8, 8)
         # Non-degenerate m2 (variance == 1) so finalize's default degenerate-bin
@@ -339,7 +343,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
             np.zeros(shape, dtype=np.float32),
             np.full(shape, float(rows), dtype=np.float32),
         )
-        return {
+        winners = {
             shard.shard_id: CheckedLanceWinner(
                 attempt=StagedLanceAttempt(
                     shard_id=shard.shard_id,
@@ -354,6 +358,10 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
             )
             for shard in spec.shards
         }
+        if progress_callback is not None:
+            for _ in spec.shards:
+                progress_callback("shard_processed")
+        return winners
 
     monkeypatch.setattr(
         "synth_setter.pipeline.data.lance_finalize._select_checked_winners", fake_select
