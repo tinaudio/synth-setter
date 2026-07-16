@@ -1111,9 +1111,15 @@ def test_train_resume_auto_continues_from_newest_sibling_run(
         second_cfg.paths.output_dir = str(tmp_path / "run-second")
         second_cfg.test = False
         second_cfg.training.resume = "auto"
+        # A _target_-less wandb stub: instantiate_loggers skips it, but the
+        # continuity wiring must still pin the recovered id and resume=allow.
+        second_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
     _, second_objects = train(second_cfg)
 
     assert second_objects["cfg"].ckpt_path == str(first_ckpt)
+    second_logger_cfg = second_objects["cfg"].logger.wandb
+    assert second_logger_cfg.id == f"{config_id}-20260716T000000000Z"
+    assert second_logger_cfg.resume == "allow"
     second_weights = dict(second_objects["model"].named_parameters())
     assert set(second_weights) == set(first_weights)
     for name, first_param in first_weights.items():

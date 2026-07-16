@@ -1,11 +1,14 @@
 """Auto-resume checkpoint discovery for ``synth-setter-train`` (#1991).
 
 Discovery logic: given a composed train cfg, find the newest usable
-``last.ckpt`` for the run's config_id across local sibling run dirs, the R2
-mid-run mirrors, and the train-end W&B model artifact. The winning R2/W&B tier
-performs a network fetch; everything else is pure. The imperative wiring
-(setting ``cfg.ckpt_path``, pinning the recovered W&B run id) lives in
-``synth_setter.cli.train``.
+``last.ckpt`` for the run's config_id across local sibling run dirs and the R2
+mid-run mirrors. A winning R2 tier performs a network fetch; everything else
+is pure. Deliberately NOT a tier: the train-end ``model-{config_id}`` W&B
+artifact — it only exists after a *completed* run and carries the
+monitor-best checkpoint, so "resuming" from it warm-starts rather than
+recovers (use an explicit ``ckpt_path='${wandb:...}'`` for that). The
+imperative wiring (setting ``cfg.ckpt_path``, pinning the recovered W&B run
+id) lives in ``synth_setter.cli.train``.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ import logging
 import re
 import subprocess
 from dataclasses import dataclass
-from importlib.util import find_spec
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -34,9 +36,6 @@ _ACTIVE_MODES = ("auto", "require")
 # Failures that degrade a best-effort R2/W&B tier to "not found" instead of
 # aborting the launch; anything outside this set is a programming error and raises.
 _DEGRADABLE_ERRORS = (RuntimeError, OSError, ValueError, subprocess.CalledProcessError)
-
-# Bounds W&B graphql calls so a hung API cannot block a training launch.
-_WANDB_API_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,7 @@ class ResumeDecision:
 
     ckpt_path: Path
     wandb_run_id: str | None
-    source: Literal["local", "r2", "wandb-artifact"]
+    source: Literal["local", "r2"]
 
 
 def resolve_resume_mode(cfg: DictConfig) -> Literal["auto", "require"] | None:
@@ -188,7 +187,9 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
         candidates.append((ckpt.stat().st_mtime, ckpt, run_id))
     if not candidates:
         return None
-    _, ckpt_path, run_id = max(candidates, key=lambda item: item[0])
+    # Path string as tie-break: coarse-mtime filesystems can stamp two
+    # checkpoints identically, and glob order is not deterministic.
+    _, ckpt_path, run_id = max(candidates, key=lambda item: (item[0], str(item[1])))
     return ResumeDecision(ckpt_path=ckpt_path, wandb_run_id=run_id, source="local")
 
 
@@ -242,54 +243,19 @@ def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> Resum
         log.warning("Failed to download resume checkpoint %s: %s", newest.path, exc)
         return None
     namespace = newest.path.split("/", 1)[0]
-    return ResumeDecision(
-        ckpt_path=dest,
-        wandb_run_id=run_id_from_recovery_namespace(namespace),
-        source="r2",
-    )
-
-
-def discover_wandb_artifact_checkpoint(config_id: str) -> ResumeDecision | None:
-    """Fetch the train-end ``model-{config_id}:latest`` artifact checkpoint.
-
-    Last-resort tier: the artifact only exists after a *completed* run, so its
-    checkpoint carries train-end optimizer/scheduler state. Best-effort — a
-    missing ``wandb`` install, unknown artifact, or fetch failure degrades to
-    ``None`` with a warning.
-
-    :param config_id: Run identity naming the model artifact.
-    :returns: The cached checkpoint plus the producing run's id, or ``None``.
-    """
-    if not find_spec("wandb"):
-        return None
-    # Deferred: wandb is an optional dependency group and slow to import.
-    import wandb
-    from wandb.errors import Error as WandbError
-
-    from synth_setter.utils.utils import resolve_wandb_checkpoint
-
-    ref = f"model-{config_id}:latest"
-    try:
-        artifact = wandb.Api(timeout=_WANDB_API_TIMEOUT_SECONDS).artifact(ref)
-        producing_run = artifact.logged_by()
-        ckpt_path = Path(resolve_wandb_checkpoint(ref))
-    except (*_DEGRADABLE_ERRORS, WandbError, KeyError) as exc:
-        log.warning("Skipping W&B artifact resume discovery for %s: %s", ref, exc)
-        return None
-    return ResumeDecision(
-        ckpt_path=ckpt_path,
-        wandb_run_id=producing_run.id if producing_run is not None else None,
-        source="wandb-artifact",
-    )
+    run_id = run_id_from_recovery_namespace(namespace)
+    # The prefix path scopes identity; a foreign embedded run id is never reused.
+    if run_id is not None and not _run_id_matches_config(run_id, config_id):
+        run_id = None
+    return ResumeDecision(ckpt_path=dest, wandb_run_id=run_id, source="r2")
 
 
 def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecision | None:
     """Run the discovery tiers in order and return the first hit.
 
     Tier order trades freshness for cost: local sibling run dirs (free, newest
-    mid-run state), then the R2 mid-run mirrors (survives a lost disk), then
-    the train-end W&B model artifact (survives everything, but is train-end
-    state only). The R2 tier is skipped when ``r2.bucket`` is unset.
+    mid-run state), then the R2 mid-run mirrors (survives a lost disk). The R2
+    tier is skipped when ``r2.bucket`` is unset.
 
     :param cfg: Composed train cfg; reads ``paths.output_dir`` and ``r2.bucket``.
     :param config_id: Run identity keying every tier.
@@ -301,6 +267,4 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
         bucket = OmegaConf.select(cfg, "r2.bucket")
         if bucket:
             decision = discover_r2_checkpoint(bucket, config_id, output_dir / "resume")
-    if decision is None:
-        decision = discover_wandb_artifact_checkpoint(config_id)
     return decision

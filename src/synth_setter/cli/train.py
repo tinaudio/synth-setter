@@ -339,7 +339,7 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
         if mode == "require":
             raise RuntimeError(
                 f"training.resume=require found no checkpoint for config_id {config_id!r} "
-                "in local run dirs, R2 mirrors, or W&B model artifacts."
+                "in local run dirs or R2 mirrors."
             )
         log.info(f"training.resume=auto found no checkpoint for {config_id!r}; starting fresh.")
         return None

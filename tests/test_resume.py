@@ -1,9 +1,6 @@
 """Tests for ``synth_setter.utils.resume`` — auto-resume checkpoint discovery."""
 
-import importlib.machinery
 import os
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -228,18 +225,6 @@ def test_namespace_run_id_without_uuid_suffix_returns_none(namespace: str) -> No
     assert run_id_from_recovery_namespace(namespace) is None
 
 
-def test_discover_wandb_artifact_without_wandb_installed_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The artifact tier is a silent no-op on wandb-free installs.
-
-    :param monkeypatch: Pytest fixture used to stub module attributes.
-    """
-    monkeypatch.setattr(resume, "find_spec", lambda name: None)
-
-    assert resume.discover_wandb_artifact_checkpoint("ffn_simple") is None
-
-
 def test_apply_wandb_resume_continuity_sets_allow_on_wandb_logger() -> None:
     """A cfg with a wandb logger group gets ``resume: allow`` pinned."""
     cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "resume": None}}})
@@ -258,111 +243,13 @@ def test_apply_wandb_resume_continuity_without_wandb_logger_is_noop() -> None:
     assert cfg.logger is None
 
 
-def _install_fake_wandb(
-    monkeypatch: pytest.MonkeyPatch,
-    artifact_factory: object,
-) -> type[Exception]:
-    """Install a fake ``wandb`` module whose ``Api().artifact(ref)`` delegates.
-
-    :param monkeypatch: Pytest fixture used to patch ``sys.modules``.
-    :param artifact_factory: Callable invoked as ``artifact_factory(ref)``.
-    :returns: The fake ``wandb.errors.Error`` class, for raising in tests.
-    """
-
-    class _FakeWandbError(Exception):
-        pass
-
-    class _FakeApi:
-        def __init__(self, timeout: int | None = None) -> None:
-            self.timeout = timeout
-
-        def artifact(self, ref: str) -> object:
-            return artifact_factory(ref)  # type: ignore[operator]
-
-    fake_wandb = types.ModuleType("wandb")
-    fake_wandb.__spec__ = importlib.machinery.ModuleSpec("wandb", loader=None)
-    setattr(fake_wandb, "Api", _FakeApi)
-    fake_errors = types.ModuleType("wandb.errors")
-    setattr(fake_errors, "Error", _FakeWandbError)
-    setattr(fake_wandb, "errors", fake_errors)
-    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
-    monkeypatch.setitem(sys.modules, "wandb.errors", fake_errors)
-    return _FakeWandbError
-
-
-def test_discover_wandb_artifact_success_returns_producing_run_id(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_discover_resume_checkpoint_no_local_and_no_bucket_returns_none(
+    tmp_path: Path,
 ) -> None:
-    """The artifact tier returns the cached checkpoint plus the producing run's id.
+    """With no local sibling and no r2.bucket, discovery falls through to None.
 
-    :param monkeypatch: Pytest fixture used to stub wandb and the resolver.
-    :param tmp_path: Holds the fake resolved checkpoint.
-    """
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"weights")
-    run = types.SimpleNamespace(id="ffn_simple-20260715T225004231Z")
-    artifact = types.SimpleNamespace(logged_by=lambda: run)
-    _install_fake_wandb(monkeypatch, lambda ref: artifact)
-    import synth_setter.utils.utils as utils_module
-
-    monkeypatch.setattr(utils_module, "resolve_wandb_checkpoint", lambda ref: str(ckpt))
-
-    decision = resume.discover_wandb_artifact_checkpoint("ffn_simple")
-
-    assert decision is not None
-    assert decision.source == "wandb-artifact"
-    assert decision.ckpt_path == ckpt
-    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
-
-
-def test_discover_wandb_artifact_unlogged_artifact_has_no_run_id(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``logged_by() is None`` (deleted producing run) degrades to a fresh id.
-
-    :param monkeypatch: Pytest fixture used to stub wandb and the resolver.
-    :param tmp_path: Holds the fake resolved checkpoint.
-    """
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"weights")
-    artifact = types.SimpleNamespace(logged_by=lambda: None)
-    _install_fake_wandb(monkeypatch, lambda ref: artifact)
-    import synth_setter.utils.utils as utils_module
-
-    monkeypatch.setattr(utils_module, "resolve_wandb_checkpoint", lambda ref: str(ckpt))
-
-    decision = resume.discover_wandb_artifact_checkpoint("ffn_simple")
-
-    assert decision is not None
-    assert decision.wandb_run_id is None
-
-
-def test_discover_wandb_artifact_api_error_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A wandb API failure (unknown artifact, auth) degrades to None.
-
-    :param monkeypatch: Pytest fixture used to stub wandb.
-    """
-    holder: dict[str, type[Exception]] = {}
-
-    def _raise(ref: str) -> object:
-        raise holder["error"]("no such artifact")
-
-    holder["error"] = _install_fake_wandb(monkeypatch, _raise)
-
-    assert resume.discover_wandb_artifact_checkpoint("ffn_simple") is None
-
-
-def test_discover_resume_checkpoint_no_bucket_no_wandb_returns_none(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """With no local sibling, no r2.bucket, and no wandb, discovery falls through to None.
-
-    :param monkeypatch: Pytest fixture used to disable the wandb tier.
     :param tmp_path: Empty run-dir family.
     """
-    monkeypatch.setattr(resume, "find_spec", lambda name: None)
     current = tmp_path / "ffn-current"
     current.mkdir()
     cfg = OmegaConf.create({"paths": {"output_dir": str(current)}, "r2": {"bucket": None}})
@@ -370,13 +257,13 @@ def test_discover_resume_checkpoint_no_bucket_no_wandb_returns_none(
     assert resume.discover_resume_checkpoint(cfg, config_id="ffn_simple") is None
 
 
-def test_discover_resume_checkpoint_falls_through_r2_to_wandb_artifact(
+def test_discover_resume_checkpoint_unreachable_r2_returns_none(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """When local misses and R2 creds are unavailable, the wandb-artifact tier wins.
+    """When local misses and R2 creds are unavailable, discovery degrades to None.
 
-    :param monkeypatch: Pytest fixture used to break R2 and stub wandb.
-    :param tmp_path: Empty run-dir family plus the fake resolved checkpoint.
+    :param monkeypatch: Pytest fixture used to break the R2 tier.
+    :param tmp_path: Empty run-dir family.
     """
     from synth_setter.pipeline import r2_io
 
@@ -384,23 +271,47 @@ def test_discover_resume_checkpoint_falls_through_r2_to_wandb_artifact(
         raise RuntimeError("no creds")
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_creds)
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"weights")
-    artifact = types.SimpleNamespace(logged_by=lambda: None)
-    _install_fake_wandb(monkeypatch, lambda ref: artifact)
-    import synth_setter.utils.utils as utils_module
-
-    monkeypatch.setattr(utils_module, "resolve_wandb_checkpoint", lambda ref: str(ckpt))
     current = tmp_path / "ffn-current"
     current.mkdir()
     cfg = OmegaConf.create(
         {"paths": {"output_dir": str(current)}, "r2": {"bucket": "test-bucket"}}
     )
 
-    decision = resume.discover_resume_checkpoint(cfg, config_id="ffn_simple")
+    assert resume.discover_resume_checkpoint(cfg, config_id="ffn_simple") is None
 
-    assert decision is not None
-    assert decision.source == "wandb-artifact"
+
+def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(tmp_path: Path) -> None:
+    """A wandb dir whose name lacks the ``run-<ts>-<id>`` shape yields no run id.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = tmp_path / "ffn-prior"
+    (run_dir / "wandb" / "run-onlyoneseg").mkdir(parents=True)
+    ckpt = run_dir / "checkpoints" / "last.ckpt"
+    ckpt.parent.mkdir(parents=True)
+    ckpt.write_bytes(b"ckpt")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    # A malformed name yields no run id, so identity falls to (absent) Hydra state.
+    assert decision is None
+
+
+def test_config_id_from_hydra_dir_malformed_yaml_returns_none(tmp_path: Path) -> None:
+    """Malformed ``.hydra/hydra.yaml`` state cannot prove identity.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = _make_run_dir(tmp_path, "ffn-prior")
+    hydra_dir = run_dir / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "hydra.yaml").write_text("hydra: [unclosed")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
 
 
 def test_composed_train_config_ships_resume_keys() -> None:
@@ -463,19 +374,3 @@ def test_discover_local_recovers_run_id_from_offline_wandb_dir(tmp_path: Path) -
 
     assert decision is not None
     assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
-
-
-def test_discover_wandb_artifact_key_error_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A KeyError from the wandb API (malformed response) degrades to None.
-
-    :param monkeypatch: Pytest fixture used to stub wandb.
-    """
-
-    def _raise(ref: str) -> object:
-        raise KeyError("malformed artifact response")
-
-    _install_fake_wandb(monkeypatch, _raise)
-
-    assert resume.discover_wandb_artifact_checkpoint("ffn_simple") is None
