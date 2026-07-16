@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import secrets
 import socket
 import time
@@ -52,9 +53,12 @@ _STATUS_AVAILABLE: Final = "available"
 _STATUS_CLAIMED: Final = "claimed"
 _STATUS_DONE: Final = "done"
 
-# Raised by Lance when a commit exhausts its internal conflict retries; the
-# claim loop treats it as one more lost race, not a failure.
+# Lance signals both cases below as plain OSError with no structured type, so
+# the messages are matched as substrings; the storm-injection tests pin them.
+# Raised when a commit exhausts Lance's internal conflict retries.
 _CONTENTION_ERROR: Final = "Too many concurrent writers"
+# Raised by ``write_dataset(mode="create")`` when the table already exists.
+_ALREADY_EXISTS_ERROR: Final = "Dataset already exists"
 _CONTENTION_BACKOFF_RANGE_S: Final = (0.05, 0.25)
 
 # Jitter/shard picks are load-spreading, not security; SystemRandom only
@@ -171,6 +175,14 @@ class ShardClaims:
     owner: str
     lease: timedelta = CLAIM_LEASE
 
+    def __post_init__(self) -> None:
+        """Reject owners that could corrupt the SQL predicates fencing relies on.
+
+        :raises ValueError: ``owner`` holds characters outside ``[A-Za-z0-9._-]``.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", self.owner):
+            raise ValueError(f"owner {self.owner!r} must match [A-Za-z0-9._-]+")
+
     @classmethod
     def for_run(cls, uri: str, storage_options: dict[str, str] | None) -> ShardClaims:
         """Build a claims facade with a generated per-process owner identity.
@@ -203,6 +215,7 @@ class ShardClaims:
 
         :param shard_ids: Logical shard IDs the run renders; duplicates ignored.
         :returns: Number of missing rows inserted.
+        :raises OSError: A storage failure other than the table already existing.
         """
         import lance
 
@@ -212,8 +225,10 @@ class ShardClaims:
             lance.write_dataset(
                 rows, self.uri, mode="create", storage_options=self.storage_options
             )
-        except OSError:
-            # Table already exists (typically a relaunch): top up missing rows.
+        except OSError as exc:
+            if _ALREADY_EXISTS_ERROR not in str(exc):
+                raise
+            # Typically a relaunch: top up missing rows.
             merged = (
                 self._dataset()
                 .merge_insert("shard_id")
@@ -236,11 +251,12 @@ class ShardClaims:
         ownership — a returned update alone is not proof against a lapsed
         lease being re-taken between commit and read.
 
+        Raises ``RuntimeError`` (from the attempt) when the table breaks the
+        one-row-per-shard invariant, and ``OSError`` on storage failures
+        other than commit contention.
+
         :returns: The won claim, or ``None`` when nothing is claimable now
             (all rows done, or claimed under live leases).
-        :raises RuntimeError: The table breaks the one-row-per-shard
-            invariant — claim semantics are undefined over duplicate rows.
-        :raises OSError: A storage failure other than commit contention.
         """
         while True:
             now_s = int(time.time())
@@ -252,48 +268,55 @@ class ShardClaims:
             )
             if not candidates:
                 return None
-            shard_id = _rng.choice(candidates)
-            try:
-                updated = self._dataset().update(
-                    {
-                        "status": f"'{_STATUS_CLAIMED}'",
-                        "owner": f"'{self.owner}'",
-                        "lease_expiry_s": str(now_s + int(self.lease.total_seconds())),
-                        "attempts": "attempts + 1",
-                        "claim_gen": "claim_gen + 1",
-                    },
-                    where=f"shard_id = {shard_id} AND ({_claimable_predicate(now_s)})",
-                )
-            except OSError as exc:
-                if _CONTENTION_ERROR not in str(exc):
-                    raise
-                # A whole fleet colliding can exhaust Lance's internal commit
-                # retries; back off with jitter and re-scan instead of dying.
-                _logger.info("claim_contention_backoff", shard_id=shard_id, owner=self.owner)
-                time.sleep(_rng.uniform(*_CONTENTION_BACKOFF_RANGE_S))
-                continue
-            if updated["num_rows_updated"] == 0:
-                continue
-            rows = (
-                self._dataset()
-                .to_table(filter=f"shard_id = {shard_id}", columns=["owner", "claim_gen"])
-                .to_pylist()
+            won = self._attempt_claim(_rng.choice(candidates), now_s)
+            if won is not None:
+                return won
+
+    def _attempt_claim(self, shard_id: int, now_s: int) -> ClaimedShard | None:
+        """Run one conditional-update attempt on ``shard_id`` and confirm ownership.
+
+        :param shard_id: Candidate row to take.
+        :param now_s: Epoch seconds shared with the candidate scan's predicate.
+        :returns: The won claim, or ``None`` on any lost race (including a
+            contention storm, absorbed with jittered backoff).
+        :raises RuntimeError: The table breaks the one-row-per-shard invariant.
+        :raises OSError: A storage failure other than commit contention.
+        """
+        try:
+            updated = self._dataset().update(
+                {
+                    "status": f"'{_STATUS_CLAIMED}'",
+                    "owner": f"'{self.owner}'",
+                    "lease_expiry_s": str(now_s + int(self.lease.total_seconds())),
+                    "attempts": "attempts + 1",
+                    "claim_gen": "claim_gen + 1",
+                },
+                where=f"shard_id = {shard_id} AND ({_claimable_predicate(now_s)})",
             )
-            if updated["num_rows_updated"] > 1 or len(rows) != 1:
-                raise RuntimeError(
-                    f"claims table holds {len(rows)} rows for shard_id {shard_id}; "
-                    f"expected exactly 1"
-                )
-            row = rows[0]
-            if row["owner"] != self.owner:
-                continue
-            _logger.info(
-                "claimed_shard",
-                shard_id=shard_id,
-                claim_gen=row["claim_gen"],
-                owner=self.owner,
+        except OSError as exc:
+            if _CONTENTION_ERROR not in str(exc):
+                raise
+            # A whole fleet colliding can exhaust Lance's internal commit
+            # retries; back off with jitter and re-scan instead of dying.
+            _logger.info("claim_contention_backoff", shard_id=shard_id, owner=self.owner)
+            time.sleep(_rng.uniform(*_CONTENTION_BACKOFF_RANGE_S))
+            return None
+        if updated["num_rows_updated"] == 0:
+            return None
+        rows = (
+            self._dataset()
+            .to_table(filter=f"shard_id = {shard_id}", columns=["owner", "claim_gen"])
+            .to_pylist()
+        )
+        if updated["num_rows_updated"] > 1 or len(rows) != 1:
+            raise RuntimeError(
+                f"claims table holds {len(rows)} rows for shard_id {shard_id}; expected exactly 1"
             )
-            return ClaimedShard(shard_id=shard_id, claim_gen=int(row["claim_gen"]))
+        if rows[0]["owner"] != self.owner:
+            return None
+        claim_gen = int(rows[0]["claim_gen"])
+        _logger.info("claimed_shard", shard_id=shard_id, claim_gen=claim_gen, owner=self.owner)
+        return ClaimedShard(shard_id=shard_id, claim_gen=claim_gen)
 
     def complete(self, claimed: ClaimedShard) -> bool:
         """Mark a won claim done, fenced against lapsed-lease takeovers.

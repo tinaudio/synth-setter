@@ -35,6 +35,7 @@ on:
       - "src/synth_setter/pipeline/data/lance_shard.py"
       - "src/synth_setter/pipeline/schemas/r2_location.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/shard_claims.py"
       - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/finalize-dataset.yaml"
       - ".github/workflows/generate-dataset-shards.yaml"

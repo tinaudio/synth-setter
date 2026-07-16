@@ -95,6 +95,59 @@ class TestPopulate:
         assert claims.populate(range(2)) == 0
         assert claims.status_counts() == {"available": 1, "claimed": 1}
 
+    def test_populate_creates_table_with_pinned_claim_schema(self, tmp_path: Path) -> None:
+        """The created table carries exactly the claim columns and dtypes callers rely on.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        import lance
+        import pyarrow as pa
+
+        claims = _claims(tmp_path)
+        claims.populate(range(2))
+
+        expected = pa.schema(
+            [
+                pa.field("shard_id", pa.int64()),
+                pa.field("status", pa.string()),
+                pa.field("owner", pa.string()),
+                pa.field("lease_expiry_s", pa.int64()),
+                pa.field("attempts", pa.int64()),
+                pa.field("claim_gen", pa.int64()),
+            ]
+        )
+        assert lance.dataset(claims.uri).schema.equals(expected)
+
+    def test_claim_and_complete_preserve_the_claim_schema(self, tmp_path: Path) -> None:
+        """Conditional updates never alter the table's columns or dtypes.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+        created_schema = lance.dataset(claims.uri).schema
+        claimed = claims.claim()
+        assert claimed is not None
+        claims.complete(claimed)
+
+        assert lance.dataset(claims.uri).schema.equals(created_schema)
+
+    def test_populate_creation_failure_other_than_exists_propagates(self, tmp_path: Path) -> None:
+        """Only the dataset-exists signal routes to the merge path; real IO errors surface.
+
+        :param tmp_path: Hosts the blocking plain file standing in for the table path.
+        """
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dataset directory")
+        claims = ShardClaims(
+            uri=str(blocker / "shard-claims.lance"), storage_options=None, owner="worker-a"
+        )
+
+        with pytest.raises(OSError, match="(?i)io error|walk dir"):
+            claims.populate(range(1))
+
     def test_populate_deduplicates_requested_ids(self, tmp_path: Path) -> None:
         """Duplicate requested IDs seed a single row each.
 
@@ -330,6 +383,12 @@ class TestLeaseExpiryAndFencing:
         monkeypatch.setattr(lance.LanceDataset, "update", _stormy_update)
 
         assert claims.complete(claimed) is False
+
+
+def test_constructing_claims_with_sql_unsafe_owner_raises() -> None:
+    """The dataclass boundary rejects owners that could corrupt update predicates."""
+    with pytest.raises(ValueError, match="owner"):
+        ShardClaims(uri="unused", storage_options=None, owner="bad'owner")
 
 
 def test_default_owner_is_unique_and_sql_literal_safe() -> None:
