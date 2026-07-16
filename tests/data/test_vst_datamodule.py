@@ -36,7 +36,6 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data import surge_datamodule
 from synth_setter.data.lance_datamodule import LanceVSTDataModule, LanceVSTDataset
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -1372,15 +1371,3 @@ class TestVSTDataModule:
         )
         with pytest.raises(KeyError, match="does_not_exist"):
             module.setup()
-
-
-class TestBackCompatAliases:
-    """Surge-prefixed aliases resolve to the Lance-backed classes."""
-
-    def test_surge_data_module_alias_is_lance_vst_data_module(self) -> None:
-        """``SurgeDataModule`` resolves to ``LanceVSTDataModule``."""
-        assert surge_datamodule.SurgeDataModule is LanceVSTDataModule
-
-    def test_surge_xt_dataset_alias_is_lance_vst_dataset(self) -> None:
-        """``SurgeXTDataset`` resolves to ``LanceVSTDataset``."""
-        assert surge_datamodule.SurgeXTDataset is LanceVSTDataset

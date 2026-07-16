@@ -922,7 +922,7 @@ ______________________________________________________________________
 
 **Files to create:**
 
-- `tests/data/test_surge_datamodule.py` — mock rclone, verify copy logic
+- `tests/data/test_vst_datamodule.py` — verify copy logic with a local rclone remote
 
 **Key behaviors:**
 

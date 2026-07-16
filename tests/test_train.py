@@ -662,7 +662,7 @@ def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig, lo
     both governed by ``seed_everything(cfg.seed, workers=True)``. Runs
     ``num_workers=0`` because forking workers over Lance deadlocks on the
     parent's tokio threadpool; the forked-worker re-seed is covered over Lance
-    by ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
+    by ``tests/data/test_vst_datamodule.py::TestNoiseGeneratorSeeding``.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     :param loader: Datamodule read path under test (``legacy`` or ``map``).
