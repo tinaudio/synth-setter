@@ -86,6 +86,7 @@ register_resolvers()
 # launcher's workspace (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _WORKER_VENV = "/venv/main"
+_RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -241,14 +242,16 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     The flag set is derived from ``RenderConfig.model_fields`` so every renderer
     config field surfaces as a ``--<field>`` option automatically; adding a
     field on the model auto-extends the CLI invocation.
+
+    :raises RuntimeError: The packaged renderer script is missing.
     """
     output_path = output_dir / shard.filename
-    # Import-anchored (not repo-root-relative) so dispatch works from any cwd;
-    # kept as a path (not ``-m``) to avoid importing the renderer's heavy deps here.
-    renderer_script = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
+    # The import-anchored path works from any cwd without importing heavy renderer deps.
+    if not _RENDERER_SCRIPT.is_file():
+        raise RuntimeError(f"renderer script not found: {_RENDERER_SCRIPT}")
     args = [
         sys.executable,
-        str(renderer_script),
+        str(_RENDERER_SCRIPT),
         str(output_path),
     ]
     render_args = spec.render_for_shard(shard).model_dump()

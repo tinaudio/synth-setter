@@ -804,10 +804,13 @@ class TestRun(RenderSeamFixtures):
         args = renderer_calls[0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
-            assert args[2].endswith("synth_setter/data/vst/generate_vst_dataset.py")
+            renderer_script = Path(args[2])
         else:
             assert VST_HEADLESS_WRAPPER not in args
-            assert args[1].endswith("synth_setter/data/vst/generate_vst_dataset.py")
+            renderer_script = Path(args[1])
+        assert renderer_script.as_posix().endswith("synth_setter/data/vst/generate_vst_dataset.py")
+        assert renderer_script.is_absolute()
+        assert renderer_script.is_file()
 
     def test_uploads_shard_to_r2_after_generation(
         self,
@@ -1957,6 +1960,22 @@ class TestBuildGenerateArgs:
 
         assert Path(args[1]).is_absolute()
         assert Path(args[1]).is_file()
+
+    def test_missing_renderer_script_raises_at_build_time(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A vanished renderer script fails loudly at arg-build, not inside a worker.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Holds the nonexistent script path.
+        :param monkeypatch: Points the module at the nonexistent script.
+        """
+        from synth_setter.cli import generate_dataset
+
+        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", tmp_path / "gone.py")
+
+        with pytest.raises(RuntimeError, match="renderer script"):
+            build_generate_args(spec, spec.shards[0], tmp_path / "out")
 
 
 # ---------------------------------------------------------------------------

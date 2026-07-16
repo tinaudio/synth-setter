@@ -2,21 +2,26 @@
 
 The torchsynth renderer needs no plugin host, so these tests exercise the real generation → shard
 write → staging → finalize → dataloader path at scales and edge geometries the VST-backed suites
-cannot afford. Everything here runs the real code — no renderer stubs, no fragment-commit stubs.
+cannot afford. Everything here runs real code. Failure injection wraps the fragment writer only
+after a real flush, then verifies that no manifest is committed.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 from omegaconf import DictConfig
 
-from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
 from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _SAMPLE_RATE = 22_050
@@ -35,7 +40,7 @@ def _torchsynth_render_cfg(**overrides: object) -> RenderConfig:
         "plugin_path": "torchsynth",
         "plugin_state_path": "",
         "param_spec_name": "torchsynth_adsr",
-        "renderer_version": "1.0.2",
+        "renderer_version": package_version("torchsynth"),
         "renderer_backend": "torchsynth",
         "sample_rate": _SAMPLE_RATE,
         "channels": 2,
@@ -62,15 +67,35 @@ def _read_params(path: Path) -> np.ndarray:
     return table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
 
 
+def _assert_batch_boundary_shard(path: Path, expected_rows: int) -> None:
+    """Assert row, dtype, and uniqueness contracts for a boundary-sweep shard.
+
+    :param path: Committed ``.lance`` dataset directory.
+    :param expected_rows: Number of rows the shard must contain.
+    """
+    params = _read_params(path)
+    assert params.dtype == np.float32
+    assert params.shape == (expected_rows, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+    table = lance.dataset(str(path)).to_table(columns=["audio", MEL_SPEC_FIELD])
+    audio = table.column("audio").combine_chunks().to_numpy_ndarray()
+    mel = table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray()
+    assert audio.dtype == np.float16
+    assert mel.dtype == np.float32
+    assert audio.shape[0] == expected_rows
+    # Rounding gives each seeded continuous row a float32-stable identity.
+    unique_rows = {tuple(np.round(row, 6)) for row in params}
+    assert len(unique_rows) == expected_rows
+
+
 @pytest.mark.parametrize(
     ("samples_per_shard", "samples_per_render_batch"),
     [
-        (1, 1),  # single-row shard, single-row batch
-        (6, 1),  # one fragment per row
-        (6, 4),  # trailing remainder fragment (4 + 2)
-        (6, 5),  # prime-ish split (5 + 1)
-        (6, 6),  # exactly one fragment
-        (6, 8),  # batch larger than the shard
+        pytest.param(1, 1, id="single-row"),
+        pytest.param(6, 1, id="one-fragment-per-row"),
+        pytest.param(6, 4, id="trailing-remainder"),
+        pytest.param(6, 5, id="non-even-split"),
+        pytest.param(6, 6, id="one-fragment"),
+        pytest.param(6, 8, id="batch-larger-than-shard"),
     ],
 )
 def test_make_lance_dataset_batch_boundary_sweep(
@@ -95,18 +120,7 @@ def test_make_lance_dataset_batch_boundary_sweep(
         ),
     )
 
-    params = _read_params(shard)
-    assert params.shape == (samples_per_shard, len(TORCHSYNTH_ADSR_PARAM_SPEC))
-    audio = (
-        lance.dataset(str(shard)).to_table(columns=["audio"]).column("audio").combine_chunks()
-    ).to_numpy_ndarray()
-    assert audio.dtype == np.float16
-    assert audio.shape[0] == samples_per_shard
-    # Distinct rows prove no duplicated batch tails (row i is seeded by
-    # (base_seed, i)); rounding gives a hashable float32-stable row identity.
-    # Valid while the spec stays all-continuous — discrete fields could collide.
-    unique_rows = {tuple(np.round(row, 6)) for row in params}
-    assert len(unique_rows) == samples_per_shard
+    _assert_batch_boundary_shard(shard, samples_per_shard)
 
 
 def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path) -> None:
@@ -119,38 +133,53 @@ def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path
     """
     shard = tmp_path / "shard.lance"
 
-    make_lance_dataset(shard, _torchsynth_render_cfg())
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
     first = _read_params(shard)
-    make_lance_dataset(shard, _torchsynth_render_cfg())
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
     second = _read_params(shard)
 
     assert first.shape == second.shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
-    assert np.array_equal(first, second)
+    assert not np.array_equal(first, second)
 
 
-def test_make_lance_dataset_failed_render_commits_nothing_and_rerun_recovers(
+def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_recovers(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A mid-shard failure leaves no committed dataset; a clean rerun succeeds.
-
-    ``min_loudness=0.0`` is unreachable, so the loudness gate exhausts its
-    attempt budget and raises. Fragments written before the failure must stay
-    uncommitted (no manifest references them), and a follow-up run over the
-    same directory must produce a complete dataset.
+    """A failure after a fragment flush leaves no dataset; a clean rerun succeeds.
 
     :param tmp_path: Destination directory for the shard.
+    :param monkeypatch: Injects a failure after the first real fragment flush.
     """
+    from synth_setter.pipeline.data import lance_shard
+
     shard = tmp_path / "shard.lance"
+    real_lance_fragment = lance_shard.lance_fragment
+    fragment_calls = 0
 
-    with pytest.raises(RuntimeError, match="min_loudness"):
-        make_lance_dataset(
-            shard,
-            _torchsynth_render_cfg(min_loudness=0.0, attempts_per_sample=2),
-        )
+    def _fail_after_first_fragment(
+        uri: Path | str,
+        schema: pa.Schema,
+        batch: pa.RecordBatch | Iterable[pa.RecordBatch],
+        *,
+        storage_options: dict[str, str] | None = None,
+    ) -> lance.fragment.FragmentMetadata:
+        nonlocal fragment_calls
+        fragment_calls += 1
+        if fragment_calls > 1:
+            raise RuntimeError("injected fragment failure")
+        return real_lance_fragment(uri, schema, batch, storage_options=storage_options)
 
-    with pytest.raises(ValueError, match="was not found"):
+    monkeypatch.setattr(lance_shard, "lance_fragment", _fail_after_first_fragment)
+    with pytest.raises(RuntimeError, match="injected fragment failure"):
+        make_lance_dataset(shard, _torchsynth_render_cfg())
+
+    assert fragment_calls == 2
+    assert any((shard / "data").iterdir())
+    with pytest.raises(ValueError):
         lance.dataset(str(shard))
 
+    monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg())
     assert _read_params(shard).shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
 
@@ -176,7 +205,7 @@ def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:
 
 
 def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
-    """Compose the torchsynth smoke experiment scaled to four tiny shards.
+    """Compose the torchsynth smoke experiment for a small sharded run.
 
     :param tmp_path: Root for Hydra output/work/log paths.
     :returns: Composed, path-pinned ``DictConfig`` with logging disabled.
@@ -209,6 +238,48 @@ def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
     return cfg
 
 
+def _assert_finalized_split_rows(run_root: Path, expected_rows: dict[str, int]) -> None:
+    """Assert every finalized split has its requested row count.
+
+    :param run_root: Finalized dataset root.
+    :param expected_rows: Expected row count keyed by split name.
+    """
+    for split, rows in expected_rows.items():
+        split_ds = lance.dataset(str(run_root / f"{split}.lance"))
+        assert split_ds.count_rows() == rows, split
+
+
+def _assert_map_loader_round_trip(
+    run_root: Path, param_spec_name: ParamSpecName, expected_train_rows: int
+) -> None:
+    """Assert the map loader preserves ragged tails and finite tensor widths.
+
+    :param run_root: Finalized dataset root.
+    :param param_spec_name: Registry name that determines encoded width.
+    :param expected_train_rows: Rows the train loader must return.
+    """
+    from synth_setter.data.lance_datamodule import LanceVSTDataModule
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+
+    datamodule = LanceVSTDataModule(
+        dataset_root=run_root,
+        param_spec_name=param_spec_name,
+        batch_size=4,
+        num_workers=0,
+        loader="map",
+    )
+    datamodule.setup()
+    encoded_width = len(resolve_param_spec(param_spec_name))
+    seen = 0
+    for batch in datamodule.train_dataloader():
+        mel, params = batch["mel_spec"], batch["params"]
+        assert params.shape[1] == encoded_width
+        assert mel.shape[0] == params.shape[0]
+        assert bool(mel.isfinite().all()) and bool(params.isfinite().all())
+        seen += params.shape[0]
+    assert seen == expected_train_rows
+
+
 @pytest.mark.slow
 def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
     tmp_path: Path,
@@ -217,21 +288,16 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
 ) -> None:
     """The full pipeline holds with real renders: generate → stage → finalize → load.
 
-    Four shards render in real worker subprocesses (in-process torchsynth, no
-    plugin), stage to a fake ``r2:`` remote, finalize commits the split
-    datasets + ``stats.npz``, and the production Lance datamodule then serves
-    batches with the spec's parameter width. No renderer or commit stubs. The
-    stages chain deliberately — the contract under test is the hand-off
-    between them; per-stage assertions below localize a failure.
+    Real worker subprocesses render shards, stage to a fake ``r2:`` remote,
+    and finalize the split datasets. The production Lance datamodule then
+    serves finite batches with the spec's parameter width.
 
     :param tmp_path: Scratch root for Hydra paths and the finalize work dir.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the worker rank/world contract and finalize auth.
+    :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+    :param monkeypatch: Pins worker state, finalize auth, and a non-repository cwd.
     """
     from synth_setter.cli.finalize_dataset import finalize_lance
     from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
-    from synth_setter.data.lance_datamodule import LanceVSTDataModule
-    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
@@ -240,6 +306,9 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
     spec = spec_from_cfg(cfg)
     assert spec.num_shards == 4
 
+    worker_cwd = fake_r2_remote / "worker-cwd"
+    worker_cwd.mkdir()
+    monkeypatch.chdir(worker_cwd)
     from_hydra(cfg)
 
     monkeypatch.setattr(
@@ -249,29 +318,13 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
     work_dir.mkdir()
     finalize_lance(spec, work_dir)
 
-    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    run_root = worker_cwd / spec.r2.bucket / spec.r2.prefix
     assert (run_root / "stats.npz").is_file()
     expected_rows = {"train": 12, "val": 6, "test": 6}
-    for split, rows in expected_rows.items():
-        split_ds = lance.dataset(str(run_root / f"{split}.lance"))
-        assert split_ds.count_rows() == rows, split
-
-    # loader="map" preserves ragged shard tails (6-row shards, batch 4); the
-    # legacy batch-indexed path documents dropping them.
-    datamodule = LanceVSTDataModule(
-        dataset_root=run_root,
-        param_spec_name=spec.render.param_spec_name,
-        batch_size=4,
-        num_workers=0,
-        loader="map",
+    _assert_finalized_split_rows(run_root, expected_rows)
+    # The map loader preserves ragged shard tails; the legacy batch-indexed path drops them.
+    _assert_map_loader_round_trip(
+        run_root,
+        spec.render.param_spec_name,
+        expected_rows["train"],
     )
-    datamodule.setup()
-    encoded_width = len(resolve_param_spec(spec.render.param_spec_name))
-    seen = 0
-    for batch in datamodule.train_dataloader():
-        mel, params = batch["mel_spec"], batch["params"]
-        assert params.shape[1] == encoded_width
-        assert mel.shape[0] == params.shape[0]
-        assert bool(mel.isfinite().all()) and bool(params.isfinite().all())
-        seen += params.shape[0]
-    assert seen == expected_rows["train"]
