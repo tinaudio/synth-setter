@@ -201,9 +201,12 @@ python3 agent/_shared/pi_review_routing.py provenance <effective-model>
 Merge duplicate findings using effective provenance. Findings independently
 reported by Codex and OpenRouter are `both`; Codex-only findings are `codex`.
 OpenRouter-only findings never enter aggregation directly. For each skill that
-has any, launch one additional `pr-review-worker` with
-`openai-codex/gpt-5.6-sol` and `high` thinking, supplying the exact candidate
-findings and asking it to return only those it can reproduce from the diff.
+has any, launch one additional `pr-review-worker` with the successful Codex
+pass's effective model, `high` thinking, and the successful Codex pass's
+`max_turns`, supplying the exact candidate findings and asking it to return only
+those it can reproduce from the diff. This model has already passed availability
+preflight; if the original Codex pass used a fallback, verification uses that
+same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
 A confirmed candidate is tagged `openrouter; verified by: codex`; a rejected
 candidate is omitted and recorded in the audit. If verification fails or is

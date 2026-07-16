@@ -1,4 +1,8 @@
-"""Build auditable model plans for Pi PR-review workers."""
+"""Build auditable model plans for Pi PR-review workers.
+
+Run ``python3 agent/_shared/pi_review_routing.py plan --help`` for the routing
+CLI and its transcript-validation subcommands.
+"""
 
 from __future__ import annotations
 
@@ -34,10 +38,13 @@ SUPPORTED_SKILLS = frozenset(
     }
 )
 PI_REVIEW_MAX_TURNS = 12
-REQUIRED_PROVIDERS = {
-    "openai-codex": "authenticate with `/login openai-codex`",
-    "openrouter": "set OPENROUTER_API_KEY before starting Pi or use `/login openrouter`",
-}
+_REQUIRED_PROVIDER_SETUP = (
+    ("openai-codex", "authenticate with `/login openai-codex`"),
+    (
+        "openrouter",
+        "set OPENROUTER_API_KEY before starting Pi or use `/login openrouter`",
+    ),
+)
 
 _DEEP_CANDIDATES = {
     "codex": (
@@ -99,7 +106,7 @@ class _TranscriptUsage(BaseModel, strict=True, extra="ignore"):
         Provider-reported processed tokens for the turn.
     """
 
-    totalTokens: int = 0
+    totalTokens: int | None = None
 
 
 class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
@@ -144,7 +151,7 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
     timestamp: str | None = None
 
 
-class _WorkerReport(BaseModel, strict=True, extra="forbid"):
+class WorkerReport(BaseModel, strict=True, extra="forbid"):
     """Validated worker-report fields consumed by aggregation.
 
     .. attribute :: skill
@@ -313,23 +320,25 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
     timestamps: list[datetime] = []
     turns = 0
     cumulative_tokens = 0
-    usage_available = False
+    usage_complete = True
     for entry in _transcript_entries(transcript):
         if entry.timestamp is not None:
             timestamps.append(datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00")))
         if entry.message.role != "assistant":
             continue
         turns += 1
-        if entry.message.usage is not None:
-            usage_available = True
-            cumulative_tokens += entry.message.usage.totalTokens
+        usage = entry.message.usage
+        if usage is None or usage.totalTokens is None:
+            usage_complete = False
+        else:
+            cumulative_tokens += usage.totalTokens
     elapsed_seconds = None
     if len(timestamps) >= 2:
         elapsed_seconds = int((timestamps[-1] - timestamps[0]).total_seconds())
     return TranscriptStats(
         turns=turns,
         elapsed_seconds=elapsed_seconds,
-        cumulative_tokens=cumulative_tokens if usage_available else None,
+        cumulative_tokens=cumulative_tokens if turns and usage_complete else None,
     )
 
 
@@ -348,48 +357,66 @@ def provenance_for_model(model: str) -> str:
     raise ValueError(f"Unsupported Pi review provider: {provider}")
 
 
-def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
-    """Return whether a worker report satisfies the merge contract.
+def parse_worker_report(report: str, *, expected_skill: str, expected_target: str) -> WorkerReport:
+    """Parse a structurally valid worker report into its boundary model.
 
     :param report: Worker Markdown output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
-    :returns: Whether the title and ordered sections are structurally valid.
+    :returns: Validated report data consumed by aggregation.
+    :raises ValueError: If identity or report structure is invalid.
     """
     lines = report.strip().splitlines()
     if not lines:
-        return False
+        raise ValueError("Worker report is empty")
     title = _REPORT_TITLE.fullmatch(lines[0])
     if (
         title is None
         or title.group("skill") != expected_skill
         or title.group("target") != expected_target
     ):
-        return False
+        raise ValueError("Worker report identity does not match its assignment")
     if any(lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
-        return False
+        raise ValueError("Worker report headings are missing or duplicated")
     indices = [lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
     if indices != sorted(indices) or any(line.strip() for line in lines[1 : indices[0]]):
-        return False
+        raise ValueError("Worker report headings are out of order")
 
     block_lines = lines[indices[0] + 1 : indices[1]]
     warn_lines = lines[indices[1] + 1 : indices[2]]
     good_lines = [line for line in lines[indices[2] + 1 :] if line.strip()]
-    sections_are_valid = (
+    if not (
         _findings_section_is_valid(block_lines)
         and _findings_section_is_valid(warn_lines)
         and bool(good_lines)
         and all(line.startswith("- ") and len(line) > 2 for line in good_lines)
-    )
-    if not sections_are_valid:
-        return False
-    _WorkerReport(
+    ):
+        raise ValueError("Worker report sections are malformed")
+    return WorkerReport(
         skill=title.group("skill"),
         target=title.group("target"),
         block_findings=tuple(line for line in block_lines if line.strip()),
         warn_findings=tuple(line for line in warn_lines if line.strip()),
         what_looks_good=tuple(good_lines),
     )
+
+
+def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
+    """Return whether a worker report satisfies the merge contract.
+
+    :param report: Worker Markdown output.
+    :param expected_skill: Checklist the worker was assigned.
+    :param expected_target: PR or branch label the worker was assigned.
+    :returns: Whether identity and ordered sections are structurally valid.
+    """
+    try:
+        parse_worker_report(
+            report,
+            expected_skill=expected_skill,
+            expected_target=expected_target,
+        )
+    except ValueError:
+        return False
     return True
 
 
@@ -455,7 +482,7 @@ def build_review_plan(
 
 
 def _require_providers(available_models: set[str]) -> None:
-    for provider, setup in REQUIRED_PROVIDERS.items():
+    for provider, setup in _REQUIRED_PROVIDER_SETUP:
         prefix = f"{provider}/"
         if not any(model.startswith(prefix) for model in available_models):
             raise ValueError(f"No {provider} models available; {setup}; credentials required")

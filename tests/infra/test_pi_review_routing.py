@@ -15,6 +15,7 @@ from agent._shared.pi_review_routing import (
     extract_report,
     main,
     parse_available_models,
+    parse_worker_report,
     provenance_for_model,
     report_is_parseable,
     transcript_stats,
@@ -263,6 +264,21 @@ def test_report_is_parseable_requires_structured_contract(report: str, expected:
     )
 
 
+def test_parse_worker_report_returns_validated_boundary_model() -> None:
+    """Return typed report data after structural validation."""
+    report = (
+        "## code-health review — PR #1\n\n"
+        "### BLOCK findings\nNone.\n\n"
+        "### WARN findings\nNone.\n\n"
+        "### What looks good\n- Clear."
+    )
+
+    parsed = parse_worker_report(report, expected_skill="code-health", expected_target="PR #1")
+
+    assert parsed.skill == "code-health"
+    assert parsed.target == "PR #1"
+
+
 def test_report_is_parseable_rejects_wrong_skill_or_target() -> None:
     """Prevent a valid report for another checklist from entering the merge."""
     report = (
@@ -316,6 +332,22 @@ def test_transcript_stats_marks_unavailable_telemetry_unknown(tmp_path: Path) ->
 
     assert stats.elapsed_seconds is None
     assert stats.cumulative_tokens is None
+
+
+def test_transcript_stats_marks_partial_usage_unknown(tmp_path: Path) -> None:
+    """Reject falsely precise totals when one turn omits total tokens.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"draft",'
+        '"usage":{"totalTokens":12}},"timestamp":"2026-07-16T20:00:00Z"}\n'
+        '{"message":{"role":"assistant","content":"final","usage":{}},'
+        '"timestamp":"2026-07-16T20:00:05Z"}\n'
+    )
+
+    assert transcript_stats(transcript).cumulative_tokens is None
 
 
 def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
@@ -402,7 +434,14 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
         "smoke",
     )
 
+    stats = json.loads(str(python(script, "transcript-stats", transcript)))
+    provenance = str(
+        python(script, "provenance", "openrouter/cohere/north-mini-code:free")
+    ).strip()
+
     assert report.read_text().startswith("## code-health review — smoke")
+    assert stats["turns"] == 1
+    assert provenance == "openrouter"
 
 
 def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:

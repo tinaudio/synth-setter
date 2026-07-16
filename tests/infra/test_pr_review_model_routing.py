@@ -232,6 +232,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
     assert "OpenRouter-only findings never enter aggregation directly" in text
+    assert re.search(r"successful Codex\s+pass's effective model", text)
+    assert re.search(r"successful Codex pass's\s+`max_turns`", text)
+    assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
     assert "max_turns: <plan.max_turns>" in text
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
     assert "turn budget exhausted" in text
