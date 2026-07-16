@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784236455466,
+  "lastUpdate": 1784236457739,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15050,6 +15050,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.812130388599986,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78fa1dbdaea8ff0cfaa4f2ad04773c96416d2baa",
+          "message": "test: isolate writer cadence tests from plugin loading (#2023)\n\nThe once-per-shard reload default eagerly loads a plugin before the cadence tests reach their existing render fakes. Plugin-less CI therefore fails while developer machines with Surge XT installed can mask the dependency.\n\nStub the plugin and preset load seams in the affected tests and in the shared writer-level fake so these CPU-only tests exercise cadence behavior without requiring a VST bundle.\n\nFixes #2012",
+          "timestamp": "2026-07-16T16:39:48-04:00",
+          "tree_id": "3470ac6046c309f54e9204dfb5985e67c4d6a9e9",
+          "url": "https://github.com/tinaudio/synth-setter/commit/78fa1dbdaea8ff0cfaa4f2ad04773c96416d2baa"
+        },
+        "date": 1784236457273,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.14597225189209,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.59287772268057,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10680250078439713,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003800690174102783,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.405041217803955,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.263755060800008,
             "unit": "seconds"
           }
         ]
