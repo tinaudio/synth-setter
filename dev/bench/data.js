@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784224244271,
+  "lastUpdate": 1784235133460,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8562,6 +8562,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.054618239402770996,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "af52ce48b13dffb5f17e4559e8a5dfda3ce8f576",
+          "message": "feat(data-pipeline): torchsynth in-process AudioRenderer + param specs (#2008)\n\n* feat(data-pipeline): add torchsynth AudioRenderer backend and param specs\n\nHost the torchsynth Voice behind the shared AudioRenderer seam so lance\ndatasets can be generated without a plugin host (~3.6 ms per 4 s note vs\nseconds under VST hosting):\n\n- TorchSynthRenderer renders in-process via the online datamodule's\n  render_torchsynth path (extended with a note-duration argument); sampled\n  params override a pinned baseline patch, note-on offset is emulated by\n  delaying the audio, and mono output repeats across requested channels.\n- The pinned voice spec (identity + ranges + drift verification) moves out\n  of torchsynth_datamodule into pure-Python torchsynth_param_spec.py, which\n  adds ModuleParameterRange-mirroring to_0to1/from_0to1 curve math and\n  registers torchsynth_adsr / torchsynth_simple / torchsynth_full specs.\n- renderer_backend gains \"torchsynth\" (editor cadences rejected),\n  writers dispatch to the new renderer, extract_renderer_version resolves\n  the bare backend name to the installed package version, and\n  render/torchsynth_{full,simple,adsr}.yaml compose valid RenderConfigs.\n\nRefs #1757\n\n* refactor(data-pipeline): hoist torchsynth renderer lookups into spec-module constants\n\nExpose DEFAULT_NORMALIZED_ROW, PARAM_INDEX, and KEYBOARD_DURATION_BOUNDS as\nprecomputed constants (matching the module's existing pattern) so\nTorchSynthRenderer.__post_init__ shrinks to the drift check and render() stops\nrebuilding per-instance copies of spec-level data.\n\nRefs #1757\n\n* fix(data-pipeline): address pre-PR review findings for the torchsynth backend\n\n- Clamp the note-on offset to the render buffer so a note starting at or\n  after the buffer end yields well-formed silence (matching a VST host)\n  instead of a negative-slice shape error; cover both clamp boundaries.\n- Add the from_hydra e2e for the torchsynth backend (torchsynth-smoke\n  experiment) mirroring the DawDreamer coverage, plus a direct unit test\n  for render_torchsynth's note_duration_seconds.\n- Share one RendererBackend literal via interpreter-only renderer_backend.py\n  (spec.py must not import synth_setter.data.vst at module level), name the\n  bare-plugin-path constant TORCHSYNTH_PLUGIN_NAME, wrap DEFAULT_PATCH /\n  PARAM_INDEX in MappingProxyType, drop the dead spec_from_voice re-export,\n  and tighten comments.\n\nRefs #1757\n\n* fix(data-pipeline): resolve second-round review warnings for the torchsynth backend\n\n- render_torchsynth validates note_duration_seconds against\n  KEYBOARD_DURATION_BOUNDS (documented ValueError instead of torchsynth's\n  bare assert, which -O strips), with tests for both bounds.\n- Shard reproducibility e2e now compares audio and mel columns, not just\n  params; the duplicate live-voice drift test consolidates into the\n  param-spec test file.\n- Hoist importlib.metadata to module scope, document the propagated\n  PackageNotFoundError, sort the registry's torchsynth entries, and tighten\n  YAML/renderer comments.\n\nRefs #1757\n\n* docs: cover the torchsynth render-config family in doc-map\n\nThe render-config and param-spec doc-map entries claimed every render config\ninherits surge_xt.yaml and every *_param_spec.py is hand-tuned; the\ntorchsynth family roots at torchsynth_full.yaml with no preset and a pinned\ncode-derived spec. Also map the new renderer_backend module.\n\nRefs #1757",
+          "timestamp": "2026-07-16T16:23:26-04:00",
+          "tree_id": "04ab03ed6930a8ea25248d7e7d7d219359dca47d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/af52ce48b13dffb5f17e4559e8a5dfda3ce8f576"
+        },
+        "date": 1784235132403,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.343233585357666,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.056773630815441,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02873709611594677,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.035861968994140625,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.188405990600586,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.62752821033331,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.551174640655518,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.54610066895606,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.031159410253167152,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.052227675914764404,
             "unit": "1-cos"
           },
           {
