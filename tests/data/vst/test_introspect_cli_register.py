@@ -256,12 +256,16 @@ def test_register_conflicting_spec_name_fails_before_plugin_load(checkout: Path)
     assert "surge_xt" in result.output
 
 
-def test_register_reserved_render_group_fails_before_plugin_load(checkout: Path) -> None:
+@pytest.mark.parametrize("spec_name", ["vst", "VST"])
+def test_register_reserved_render_group_fails_before_plugin_load(
+    checkout: Path, spec_name: str
+) -> None:
     """The generic ``vst`` render-group name cannot be registered as a synth.
 
     :param checkout: Skeleton checkout fixture.
+    :param spec_name: Exact or case-variant reserved group name.
     """
-    result = _register(checkout, spec_name="vst")
+    result = _register(checkout, spec_name=spec_name)
 
     assert result.exit_code != 0
     assert "reserved for the generic VST render config" in result.output

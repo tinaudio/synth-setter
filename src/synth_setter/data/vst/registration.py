@@ -63,7 +63,7 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
     :returns: The five destination paths.
     :raises ValueError: If the name is reserved for a shared render config.
     """
-    if spec_name in _RESERVED_RENDER_CONFIG_NAMES:
+    if spec_name.casefold() in _RESERVED_RENDER_CONFIG_NAMES:
         raise ValueError(f"{spec_name!r} is reserved for the generic VST render config")
     return RegistrationPaths(
         spec_module=repo_root / "src/synth_setter/data/vst" / f"{spec_name}_param_spec.py",
@@ -308,9 +308,9 @@ def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: st
 
     Generic render knobs (sample rate, shard sizing, cadences) inherit from
     the ``vst`` group config, while this config pins the synth's identity.
-    Every identity scalar is double-quoted via ``json.dumps`` (a subset of YAML's double-quote style)
-    so arbitrary plugin paths cannot break the scalar and a spec name that is
-    a YAML 1.1 literal (``on``, ``true``) stays a string.
+    Every identity scalar is double-quoted via ``json.dumps`` (a subset of
+    YAML's double-quote style) so arbitrary plugin paths cannot break the scalar.
+    A spec name that is a YAML 1.1 literal (``on``, ``true``) stays a string.
 
     :param spec_name: Registry key; names the param spec and preset.
     :param plugin_path: ``.vst3`` path recorded for render workers.
