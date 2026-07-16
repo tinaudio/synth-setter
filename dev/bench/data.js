@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784239244749,
+  "lastUpdate": 1784239247234,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15193,6 +15193,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.263755060800008,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "218bbcd0674ee39c48b25471c67f4f25493da9e2",
+          "message": "fix(data-pipeline): resample clipped renders instead of killing the shard (#2030)\n\nsurge_xt full-spec draws intermittently render audio outside [-1, 1]\n(~0.4% per draw); _validate_rendered_audio raised a shard-fatal\nValueError, so at 500 samples/shard the retry budget was statistically\ncertain to exhaust and no non-trivial surge_xt run could finalize.\n\nSplit the amplitude violation into AudioAmplitudeError (ValueError\nsubclass) and treat it in generate_sample as sampled-data rejection,\nmirroring the min_loudness gate: reject the draw and retry with the\nnext attempt seed. Fixed-param paths (eval/replay) still raise, and\nshape/finiteness violations stay fatal on every path.\n\nRefs #2001",
+          "timestamp": "2026-07-16T17:32:15-04:00",
+          "tree_id": "07e6936951594335dbbfed137917145ee4cd1d98",
+          "url": "https://github.com/tinaudio/synth-setter/commit/218bbcd0674ee39c48b25471c67f4f25493da9e2"
+        },
+        "date": 1784239246938,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.84757137298584,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.54356653034687,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09303992241621017,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0035552382469177246,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2137508392333984,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.688561458800004,
             "unit": "seconds"
           }
         ]
