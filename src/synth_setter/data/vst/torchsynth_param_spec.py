@@ -12,7 +12,9 @@ render against, and the ``torchsynth_adsr`` / ``torchsynth_simple`` /
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from synth_setter.data.vst.param_spec import (
@@ -25,6 +27,10 @@ from synth_setter.data.vst.param_spec import (
 
 if TYPE_CHECKING:
     from torchsynth.synth import Voice
+
+# ``RenderConfig.plugin_path`` value that selects the in-process backend in
+# place of a plugin-bundle path (see ``core.extract_renderer_version``).
+TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 
 
 @dataclass(frozen=True)
@@ -101,9 +107,8 @@ class TorchSynthParam:
         return (1.0 + math.copysign(abs(dist) ** self.curve, dist)) / 2.0
 
 
-# Snapshot of torchsynth 1.0.2 Voice parameters in ``get_parameters()`` order.
-# Targets map positionally, so rename/reorder/range drift must fail loudly
-# (see ``verify_voice_matches_spec``).
+# Snapshot of torchsynth 1.0.2 Voice parameters in ``get_parameters()`` order; targets
+# map positionally, so any drift must fail loudly (``verify_voice_matches_spec``).
 PARAM_SPEC: tuple[TorchSynthParam, ...] = (
     TorchSynthParam("adsr_1", "attack", 0.0, 2.0, 0.5, False),
     TorchSynthParam("adsr_1", "decay", 0.0, 2.0, 0.5, False),
@@ -252,12 +257,9 @@ def verify_voice_matches_spec(
             )
 
 
-# Human-unit baseline for every inferable param. Reduced specs render sampled
-# params on top of this patch, so every un-sampled knob must be pinned: adsr_1
-# is the open amp-envelope route (silence otherwise), adsr_2/lfo_1 pitch routes
-# are open but inert while every ``mod_depth`` is 0, and all other modulation
-# is zeroed. Only vco_2 is mixed in at baseline (reduced specs sample it).
-DEFAULT_PATCH: dict[str, float] = {
+# Human-unit baseline pinning every un-sampled knob: adsr_1 is the open amp
+# route (silence otherwise); other open routes are inert while mod_depth is 0.
+DEFAULT_PATCH: Mapping[str, float] = MappingProxyType({
     "adsr_1.attack": 0.05,
     "adsr_1.decay": 0.2,
     "adsr_1.sustain": 0.7,
@@ -334,7 +336,7 @@ DEFAULT_PATCH: dict[str, float] = {
     "vco_2.mod_depth": 0.0,
     "vco_2.initial_phase": 0.0,
     "vco_2.shape": 0.0,
-}
+})
 
 # The baseline patch as machine-range values in ``INFERABLE_SPEC`` order.
 DEFAULT_NORMALIZED_ROW: tuple[float, ...] = tuple(
@@ -342,7 +344,9 @@ DEFAULT_NORMALIZED_ROW: tuple[float, ...] = tuple(
 )
 # Renderer lookups: dotted key -> positional slot, and the keyboard's pinned
 # human duration range (torchsynth asserts on out-of-range note durations).
-PARAM_INDEX: dict[str, int] = {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
+PARAM_INDEX: Mapping[str, int] = MappingProxyType(
+    {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
+)
 KEYBOARD_DURATION_BOUNDS: tuple[float, float] = next(
     (param.minimum, param.maximum) for param in PARAM_SPEC if param.key == "keyboard.duration"
 )
@@ -382,9 +386,8 @@ TORCHSYNTH_ADSR_PARAM_SPEC = ParamSpec(
     _note_params(),
 )
 
-# Fixed-routing analogue of ``surge_simple``: amp envelope (adsr_1), pitch
-# envelope (adsr_2) and vibrato (lfo_1) through the baseline mod-matrix routes,
-# with vco_2 detune/morph/pitch-mod depth and the three mixer levels sampled.
+# Fixed-routing analogue of ``surge_simple``: amp/pitch envelopes and vibrato
+# ride the baseline routes; vco_2 detune/morph/depth and mixer levels sampled.
 TORCHSYNTH_SIMPLE_PARAM_SPEC = ParamSpec(
     _continuous(
         [

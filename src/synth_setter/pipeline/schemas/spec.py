@@ -39,6 +39,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
     DEFAULT_ATTEMPTS_PER_SAMPLE,
     ShardMetadata,
 )
+from synth_setter.renderer_backend import RendererBackend
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -222,7 +223,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
     )
-    renderer_backend: Literal["pedalboard", "dawdreamer", "torchsynth"] = Field(
+    renderer_backend: RendererBackend = Field(
         default="pedalboard",
         description=(
             "Audio host used to render each sample; ``torchsynth`` renders in-process "

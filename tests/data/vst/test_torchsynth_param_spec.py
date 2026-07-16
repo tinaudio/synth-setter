@@ -48,10 +48,11 @@ def test_datamodule_reexports_pinned_spec_objects() -> None:
 
 def test_pinned_spec_matches_live_voice() -> None:
     """The checked-in snapshot equals the spec extracted from a live torchsynth voice."""
-    from synth_setter.data.torchsynth_datamodule import _make_renderer, _spec_from_voice
+    from synth_setter.data.torchsynth_datamodule import _make_renderer
+    from synth_setter.data.vst.torchsynth_param_spec import spec_from_voice
 
     voice = _make_renderer(44_100, 4_410).voice
-    assert _spec_from_voice(voice) == PARAM_SPEC
+    assert spec_from_voice(voice) == PARAM_SPEC
 
 
 def test_normalization_round_trip_matches_live_voice_curves() -> None:

@@ -118,6 +118,27 @@ def test_render_zero_length_note_clamps_to_the_voice_minimum_duration() -> None:
     assert np.isfinite(audio).all()
 
 
+def test_render_note_window_beyond_voice_maximum_duration_clamps() -> None:
+    """Note windows longer than the keyboard's pinned maximum clamp instead of raising."""
+    renderer = _make_renderer()
+    clamped = renderer.render(_ADSR_PATCH, 60, 100, (0.0, 10.0))
+
+    assert np.array_equal(clamped, renderer.render(_ADSR_PATCH, 60, 100, (0.0, 5.0)))
+
+
+def test_render_note_starting_at_or_after_buffer_end_returns_silence() -> None:
+    """A note-on past the buffer yields well-formed silence (as a VST host would), not a crash.
+
+    The loudness gate downstream rejects such draws; the renderer's contract is only to stay shape-
+    safe for any sampled note window.
+    """
+    for start in (1.0, 1.5):
+        audio = _make_renderer().render(_ADSR_PATCH, 60, 100, (start, start + 0.4))
+
+        assert audio.shape == (1, _SAMPLES)
+        assert np.array_equal(audio, np.zeros((1, _SAMPLES), dtype=np.float32))
+
+
 def test_generate_sample_renders_a_torchsynth_dataset_row() -> None:
     """The dataset sampling loop works end-to-end against the torchsynth backend."""
     sample = generate_sample(

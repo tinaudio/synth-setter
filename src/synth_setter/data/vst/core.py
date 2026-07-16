@@ -11,6 +11,8 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
 # Hard ceiling on how long ``run_with_editor_held_open`` waits for the render
@@ -52,10 +54,10 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
-    if str(plugin_path) == "torchsynth":
+    if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
         import importlib.metadata
 
-        return importlib.metadata.version("torchsynth")
+        return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 

@@ -97,8 +97,8 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT Lance dataset is structurally sound.
 
     Verifies the three required columns exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
-    those failures here rather than letting downstream training crash on opaque NaN losses.
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
+    failures here rather than letting downstream training crash on opaque NaN losses.
     """
     import lance
 
@@ -388,6 +388,31 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the torchsynth smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: torchsynth smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/torchsynth-smoke"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)

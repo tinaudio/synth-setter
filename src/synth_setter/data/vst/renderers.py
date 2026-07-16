@@ -264,6 +264,7 @@ class TorchSynthRenderer(AudioRenderer):
         :raises KeyError: A requested key has no matching voice parameter.
         """
         del velocity, warmup
+        # Lazy: pulls torch + lightning, which this module must not import eagerly.
         import torch
 
         from synth_setter.data.torchsynth_datamodule import render_torchsynth
@@ -285,7 +286,9 @@ class TorchSynthRenderer(AudioRenderer):
             midi_pitch=midi_note,
             note_duration_seconds=duration,
         ).numpy()
-        offset = int(round(start * self.sample_rate))
+        # Clamp: a note starting at/after the buffer end is silence (matching a VST
+        # host), not a negative-slice shape error; the loudness gate rejects it.
+        offset = min(int(round(start * self.sample_rate)), samples)
         if offset:
             delayed = np.zeros_like(audio)
             delayed[:, offset:] = audio[:, : samples - offset]

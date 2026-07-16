@@ -18,10 +18,10 @@ from synth_setter.data.torchsynth_datamodule import (
     TorchSynthDataModule,
     TorchSynthDataset,
     _make_renderer,
-    _spec_from_voice,
     _verify_voice_matches_spec,
     render_torchsynth,
 )
+from synth_setter.data.vst.torchsynth_param_spec import spec_from_voice
 from tests.helpers.run_if import RunIf
 
 _RENDER_KWARGS = {"sample_rate": 44_100, "signal_length": 4_410, "midi_pitch": 60}
@@ -36,7 +36,7 @@ def test_param_spec_matches_live_voice() -> None:
     """
     assert NUM_PARAMS == 76
     voice = _make_renderer(_RENDER_KWARGS["sample_rate"], _RENDER_KWARGS["signal_length"]).voice
-    assert _spec_from_voice(voice) == PARAM_SPEC
+    assert spec_from_voice(voice) == PARAM_SPEC
 
 
 def test_verify_voice_against_perturbed_spec_raises_naming_param() -> None:
@@ -333,6 +333,24 @@ def test_render_torchsynth_wrong_parameter_width_raises() -> None:
     """Reject parameter rows that do not match the native TorchSynth voice."""
     with pytest.raises(ValueError, match=rf"Expected {NUM_PARAMS} TorchSynth parameters"):
         render_torchsynth(torch.rand((1, NUM_PARAMS - 1)), **_RENDER_KWARGS)
+
+
+def test_render_torchsynth_note_duration_shortens_the_note() -> None:
+    """An explicit note duration releases the note early; ``None`` holds it for the buffer."""
+    params = torch.full((1, NUM_PARAMS), 0.4)
+    held = render_torchsynth(params, **_RENDER_KWARGS)
+    released_early = render_torchsynth(params, **_RENDER_KWARGS, note_duration_seconds=0.02)
+
+    assert torch.equal(
+        held,
+        render_torchsynth(
+            params,
+            **_RENDER_KWARGS,
+            note_duration_seconds=_RENDER_KWARGS["signal_length"]
+            / _RENDER_KWARGS["sample_rate"],
+        ),
+    )
+    assert not torch.equal(held, released_early)
 
 
 @pytest.mark.gpu

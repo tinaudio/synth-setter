@@ -20,14 +20,14 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.data.ot import regular_collate_fn
 
-# Re-exported under their historical names: the pinned voice spec moved to the
-# pure-Python param-spec module so the pedalboard-free registry can host it.
+# Re-exported for backward compat: training code imports these names from this module.
 from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC as INFERABLE_SPEC,
     NUM_PARAMS as NUM_PARAMS,
     PARAM_SPEC as PARAM_SPEC,
     TorchSynthParam as TorchSynthParam,
-    spec_from_voice as _spec_from_voice,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
     verify_voice_matches_spec as _verify_voice_matches_spec,
 )
 
