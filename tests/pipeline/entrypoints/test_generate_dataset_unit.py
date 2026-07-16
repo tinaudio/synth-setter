@@ -804,10 +804,10 @@ class TestRun(RenderSeamFixtures):
         args = renderer_calls[0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
-            assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            assert args[2].endswith("synth_setter/data/vst/generate_vst_dataset.py")
         else:
             assert VST_HEADLESS_WRAPPER not in args
-            assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            assert args[1].endswith("synth_setter/data/vst/generate_vst_dataset.py")
 
     def test_uploads_shard_to_r2_after_generation(
         self,
@@ -1936,7 +1936,27 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+        assert args[1].endswith("synth_setter/data/vst/generate_vst_dataset.py")
+        assert Path(args[1]).is_file()
+
+    def test_script_path_resolves_from_any_working_directory(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Shard dispatch survives a cwd far from the repo root (import-anchored script path).
+
+        The path was historically repo-root-relative, so dispatch broke from any
+        other working directory — e.g. under ``fake_r2_remote``'s ``chdir``.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Working directory unrelated to the repo checkout.
+        :param monkeypatch: Changes the process cwd for the call.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        args = build_generate_args(spec, spec.shards[0], tmp_path / "out")
+
+        assert Path(args[1]).is_absolute()
+        assert Path(args[1]).is_file()
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from omegaconf import DictConfig
 
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
@@ -25,7 +26,9 @@ _DURATION_SECONDS = 0.5
 def _torchsynth_render_cfg(**overrides: object) -> RenderConfig:
     """Build a small torchsynth render config for one stress scenario.
 
-    :param \\*\\*overrides: Per-test overrides merged into the defaults.
+    :param \\*\\*overrides: ``RenderConfig`` field overrides — the stress axes are
+        ``samples_per_shard``, ``samples_per_render_batch``, ``min_loudness``,
+        ``attempts_per_sample``, and ``base_seed``.
     :returns: Validated render config.
     """
     kwargs: dict[str, object] = {
@@ -94,8 +97,8 @@ def test_make_lance_dataset_batch_boundary_sweep(
 
     params = _read_params(shard)
     assert params.shape == (samples_per_shard, len(TORCHSYNTH_ADSR_PARAM_SPEC))
-    # Row identities must be the seeded draws in order — distinct rows, no
-    # duplicated batch tails (row i is seeded by (base_seed, i)).
+    # Distinct rows prove no duplicated batch tails (row i is seeded by
+    # (base_seed, i)); rounding gives a hashable float32-stable row identity.
     unique_rows = {tuple(np.round(row, 6)) for row in params}
     assert len(unique_rows) == samples_per_shard
 
@@ -139,7 +142,7 @@ def test_make_lance_dataset_failed_render_commits_nothing_and_rerun_recovers(
             _torchsynth_render_cfg(min_loudness=0.0, attempts_per_sample=2),
         )
 
-    with pytest.raises(Exception, match="[Nn]ot found|does not exist|No such"):
+    with pytest.raises(ValueError, match="was not found"):
         lance.dataset(str(shard))
 
     make_lance_dataset(shard, _torchsynth_render_cfg())
@@ -166,34 +169,17 @@ def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:
     assert len(unique_rows) == stacked.shape[0]
 
 
-@pytest.mark.slow
-def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
-    tmp_path: Path,
-    fake_r2_remote: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The full pipeline holds end-to-end with real renders: generate → stage → finalize → load.
+def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
+    """Compose the torchsynth smoke experiment scaled to four tiny shards.
 
-    Four shards render in real worker subprocesses (in-process torchsynth, no
-    plugin), stage to a fake ``r2:`` remote, finalize commits the split
-    datasets + ``stats.npz``, and the production Lance datamodule then serves
-    batches with the spec's parameter width. No renderer or commit stubs.
-
-    :param tmp_path: Scratch root for Hydra paths and the finalize work dir.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the worker rank/world contract and finalize auth.
+    :param tmp_path: Root for Hydra output/work/log paths.
+    :returns: Composed, path-pinned ``DictConfig`` with logging disabled.
     """
     from hydra import compose, initialize_config_module
     from omegaconf import open_dict
 
-    from synth_setter.cli.finalize_dataset import finalize_lance
-    from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
-    from synth_setter.data.lance_datamodule import LanceVSTDataModule
-    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
     from tests.conftest import _set_workspace_root
 
-    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
@@ -214,6 +200,36 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
             cfg.paths.log_dir = str(tmp_path)
             cfg.r2.prefix = "fake-r2/torchsynth-stress/"
             cfg.logger = None
+    return cfg
+
+
+@pytest.mark.slow
+def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full pipeline holds with real renders: generate → stage → finalize → load.
+
+    Four shards render in real worker subprocesses (in-process torchsynth, no
+    plugin), stage to a fake ``r2:`` remote, finalize commits the split
+    datasets + ``stats.npz``, and the production Lance datamodule then serves
+    batches with the spec's parameter width. No renderer or commit stubs. The
+    stages chain deliberately — the contract under test is the hand-off
+    between them; per-stage assertions below localize a failure.
+
+    :param tmp_path: Scratch root for Hydra paths and the finalize work dir.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker rank/world contract and finalize auth.
+    """
+    from synth_setter.cli.finalize_dataset import finalize_lance
+    from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
+    from synth_setter.data.lance_datamodule import LanceVSTDataModule
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    cfg = _compose_stress_cfg(tmp_path)
 
     spec = spec_from_cfg(cfg)
     assert spec.num_shards == 4
