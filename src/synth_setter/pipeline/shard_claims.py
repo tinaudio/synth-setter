@@ -226,11 +226,13 @@ class ShardClaims:
             lance.write_dataset(
                 rows, self.uri, mode="create", storage_options=self.storage_options
             )
-        except OSError as create_error:
+        except OSError:
             try:
                 dataset = self._dataset()
             except (OSError, ValueError):
-                raise OSError(str(create_error)) from create_error
+                dataset = None
+            if dataset is None:
+                raise
             merged = dataset.merge_insert("shard_id").when_not_matched_insert_all().execute(rows)
             inserted = int(merged["num_inserted_rows"])
             _logger.info("populated_claims", inserted=inserted, requested=len(ids))

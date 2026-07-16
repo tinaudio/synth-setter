@@ -204,6 +204,33 @@ class TestPopulate:
         assert claims.populate([0, 1]) == 1
         assert claims.status_counts() == {"available": 2}
 
+    def test_populate_creation_failure_preserves_original_oserror_subtype(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed postcondition probe re-raises the original create failure unchanged.
+
+        :param tmp_path: Hosts the per-test claims table path.
+        :param monkeypatch: Injects create and postcondition-probe failures.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        create_error = PermissionError("read-only destination")
+
+        def _failed_create(*args: Any, **kwargs: Any) -> Any:
+            raise create_error
+
+        def _missing_dataset(self: ShardClaims) -> Any:
+            raise ValueError("dataset not found")
+
+        monkeypatch.setattr(lance, "write_dataset", _failed_create)
+        monkeypatch.setattr(ShardClaims, "_dataset", _missing_dataset)
+
+        with pytest.raises(PermissionError) as exc_info:
+            claims.populate([0])
+
+        assert exc_info.value is create_error
+
     def test_populate_creation_failure_other_than_exists_propagates(self, tmp_path: Path) -> None:
         """Only the dataset-exists signal routes to the merge path; real IO errors surface.
 
