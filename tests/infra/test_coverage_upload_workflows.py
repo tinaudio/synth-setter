@@ -35,9 +35,13 @@ def test_unit_test_job_uploads_partial_coverage_after_pytest_failure(
     :param job_name: Unit-test workflow job under test.
     """
     upload_step = next(
-        step
-        for step in _job_steps(project_root, job_name)
-        if step.get("name") == _UPLOAD_STEP_NAME
+        (
+            step
+            for step in _job_steps(project_root, job_name)
+            if step.get("name") == _UPLOAD_STEP_NAME
+        ),
+        None,
     )
 
+    assert upload_step is not None, f"Step {_UPLOAD_STEP_NAME!r} not found in job {job_name!r}"
     assert upload_step.get("if") == _EXPECTED_CONDITION
