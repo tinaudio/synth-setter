@@ -275,6 +275,34 @@ def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> N
     assert str(result) == "stdin=[]"
 
 
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> None:
+    """Bound a hung Codex run and report the configured deadline.
+
+    :param tmp_path: Temporary directory containing the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
+    codex = tmp_path / "codex"
+    codex.write_text("#!/bin/bash\nexec sleep 5\n")
+    codex.chmod(0o755)
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.Command(str(launcher))(
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "CODEX_REVIEW_TIMEOUT": "1",
+            },
+        )
+
+    assert exc_info.value.exit_code != 0
+    assert b"codex exec timed out after 1s" in exc_info.value.stderr
+
+
 _OPENCODE_LAUNCHER_PY = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.py"
 _OPENCODE_LAUNCHER_SH = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.sh"
 
