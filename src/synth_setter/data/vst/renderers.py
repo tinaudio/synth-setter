@@ -78,6 +78,15 @@ class _DawDreamerModule(Protocol):
     def RenderEngine(self, sample_rate: float, block_size: int) -> _DawDreamerEngine: ...
 
 
+class AudioAmplitudeError(ValueError):
+    """Rendered audio exceeded [-1, 1] — a property of the sampled patch, not a backend bug.
+
+    Distinct from the generic ``ValueError`` shape/finiteness violations so the
+    generation loop can treat a clipping draw as sampled-data rejection (#2001)
+    while backend contract breaks stay fatal.
+    """
+
+
 def _validate_rendered_audio(
     audio: np.ndarray,
     *,
@@ -90,7 +99,8 @@ def _validate_rendered_audio(
     :param channels: Required output channel count.
     :param samples: Required output sample count.
     :returns: The validated audio without clipping or replacement.
-    :raises ValueError: If shape, finiteness, or normalized amplitude is invalid.
+    :raises ValueError: If shape or finiteness is invalid.
+    :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
     """
     if audio.shape != (channels, samples):
         raise ValueError(
@@ -99,7 +109,7 @@ def _validate_rendered_audio(
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
     if np.any(np.abs(audio) > 1.0):
-        raise ValueError("rendered audio samples must be within [-1, 1]")
+        raise AudioAmplitudeError("rendered audio samples must be within [-1, 1]")
     return audio
 
 
