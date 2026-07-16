@@ -85,21 +85,30 @@ def test_parallel_renders_under_xvfb_wrapper(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
-    uploaded_shards: list[Path] = []
+    local_shard_paths: list[Path] = []
 
-    def _fake_upload_dir(local_dir: Path, _dest: str, exclude: str | None = None) -> None:
-        # The main data upload carries the ``_versions`` exclude; the trailing
-        # manifest upload does not — record only the former to get one dir/shard.
-        if exclude is not None:
-            uploaded_shards.append(Path(local_dir))
+    def _record_lance_shard_attempt(
+        _spec: object, _shard: object, local_shard_path: Path, **_kwargs: object
+    ) -> None:
+        local_shard_paths.append(local_shard_path)
 
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.upload_dir", _fake_upload_dir)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.r2_directory_exists", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+        _record_lance_shard_attempt,
+    )
 
     generate(spec, tmp_path, [])
 
-    assert len(uploaded_shards) == _NUM_SHARDS
-    for path in uploaded_shards:
+    assert len(local_shard_paths) == _NUM_SHARDS
+    for path in local_shard_paths:
         assert path.is_dir(), f"shard dataset missing: {path}"
         assert lance.dataset(str(path)).count_rows() == _SAMPLES_PER_SHARD
 
