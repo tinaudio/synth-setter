@@ -1,40 +1,38 @@
 name: Prepare Docker storage
-description: Relocate disposable Docker state to the runner's separate /mnt filesystem.
+description: Reset disposable Docker state and use separate runner storage when available.
 
 runs:
   using: composite
   steps:
-    # CUDA image pulls and kind extraction exceed reliable root-disk capacity;
-    # fail closed unless /mnt provides independent writable storage.
-    - name: Relocate Docker storage to /mnt
+    # CUDA image pulls and kind extraction exceed reliable root-disk capacity.
+    # Prefer separate /mnt storage, but current hosted images may not provide it.
+    - name: Prepare Docker storage capacity
       shell: bash
       run: |
         set -euo pipefail
-        if ! mountpoint -q /mnt; then
-          echo "::error::/mnt is not a mount point"
-          exit 1
-        fi
+        docker_root="/var/lib/docker"
         root_source="$(findmnt -n -o SOURCE --target /)"
-        mnt_source="$(findmnt -n -o SOURCE --target /mnt)"
-        if [[ -z "${root_source}" || -z "${mnt_source}" || "${root_source}" == "${mnt_source}" ]]; then
-          echo "::error::/mnt must be mounted from storage separate from /"
-          exit 1
+        mnt_source="$(findmnt -n -o SOURCE --target /mnt 2>/dev/null || true)"
+        if mountpoint -q /mnt && [[ -n "${root_source}" && -n "${mnt_source}" && "${root_source}" != "${mnt_source}" ]]; then
+          write_probe="$(sudo mktemp /mnt/.docker-storage-write-test.XXXXXX)"
+          sudo rm -f "${write_probe}"
+          docker_root="/mnt/docker"
+        else
+          echo "::warning::/mnt is not separate storage; resetting Docker on the root filesystem"
         fi
-        write_probe="$(sudo mktemp /mnt/.docker-storage-write-test.XXXXXX)"
-        sudo rm -f "${write_probe}"
 
         sudo systemctl stop docker.service docker.socket
-        sudo rm -rf /var/lib/docker /mnt/docker
-        sudo mkdir -p /mnt/docker /etc/docker
+        sudo rm -rf /var/lib/docker "${docker_root}"
+        sudo mkdir -p "${docker_root}" /etc/docker
 
         daemon_json=/etc/docker/daemon.json
-        sudo "${GITHUB_ACTION_PATH}/merge-daemon-config.sh" "${daemon_json}"
+        sudo "${GITHUB_ACTION_PATH}/merge-daemon-config.sh" "${daemon_json}" "${docker_root}"
 
         sudo systemctl start docker.socket docker.service
-        docker_root="$(docker info --format '{{ .DockerRootDir }}')"
-        if [[ "${docker_root}" != "/mnt/docker" ]]; then
-          echo "::error::Docker data root is ${docker_root}, expected /mnt/docker"
+        effective_root="$(docker info --format '{{ .DockerRootDir }}')"
+        if [[ "${effective_root}" != "${docker_root}" ]]; then
+          echo "::error::Docker data root is ${effective_root}, expected ${docker_root}"
           exit 1
         fi
         docker info
-        df -h / /mnt
+        df -h / /mnt 2>/dev/null || df -h /

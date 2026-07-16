@@ -116,8 +116,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # The CUDA dev-snapshot does not fit reliably in the root Docker store.
-      - name: Relocate Docker storage to /mnt
+      # Reset preloaded Docker state and use separate storage when the runner provides it.
+      - name: Prepare Docker storage capacity
         uses: ./.github/actions/prepare-docker-storage
 
       - name: Pull image

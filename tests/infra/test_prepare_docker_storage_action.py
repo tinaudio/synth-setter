@@ -12,7 +12,7 @@ from workflow_fixtures import load_composite_action, load_workflow
 
 ACTION_NAME = "prepare-docker-storage"
 ACTION_USES = "./.github/actions/prepare-docker-storage"
-PREPARE_STEP_NAME = "Relocate Docker storage to /mnt"
+PREPARE_STEP_NAME = "Prepare Docker storage capacity"
 MERGE_SCRIPT = Path(".github/actions/prepare-docker-storage/merge-daemon-config.sh")
 
 
@@ -58,8 +58,10 @@ def _prepare_script(project_root: Path) -> str:
 
 
 @pytest.mark.infra
-def test_prepare_docker_storage_verifies_separate_writable_mnt(project_root: Path) -> None:
-    """The action rejects an absent, shared, or unwritable `/mnt` mount.
+def test_prepare_docker_storage_uses_separate_writable_mnt_when_available(
+    project_root: Path,
+) -> None:
+    """The action selects `/mnt` only when it is separate and writable.
 
     :param project_root: Checkout containing the action contract.
     """
@@ -69,6 +71,19 @@ def test_prepare_docker_storage_verifies_separate_writable_mnt(project_root: Pat
     assert "--target /" in script
     assert "--target /mnt" in script
     assert "mktemp /mnt/" in script
+    assert 'docker_root="/mnt/docker"' in script
+
+
+@pytest.mark.infra
+def test_prepare_docker_storage_falls_back_to_clean_root_store(project_root: Path) -> None:
+    """Runners without a separate `/mnt` still reset disposable Docker state.
+
+    :param project_root: Checkout containing the action contract.
+    """
+    script = _prepare_script(project_root)
+    assert 'docker_root="/var/lib/docker"' in script
+    assert "::warning::/mnt is not separate storage" in script
+    assert "exit 1" not in script.split("sudo systemctl stop", maxsplit=1)[0]
 
 
 @pytest.mark.infra
@@ -79,7 +94,7 @@ def test_prepare_docker_storage_stops_docker_before_clearing_state(project_root:
     """
     script = _prepare_script(project_root)
     stop = "sudo systemctl stop docker.service docker.socket"
-    clear = "sudo rm -rf /var/lib/docker /mnt/docker"
+    clear = 'sudo rm -rf /var/lib/docker "${docker_root}"'
     assert stop in script
     assert clear in script
     assert script.index(stop) < script.index(clear)
@@ -92,7 +107,10 @@ def test_prepare_docker_storage_atomically_merges_daemon_config(project_root: Pa
     :param project_root: Checkout containing the action contract.
     """
     script = _prepare_script(project_root)
-    assert 'sudo "${GITHUB_ACTION_PATH}/merge-daemon-config.sh" "${daemon_json}"' in script
+    assert (
+        'sudo "${GITHUB_ACTION_PATH}/merge-daemon-config.sh" '
+        '"${daemon_json}" "${docker_root}"' in script
+    )
 
 
 @pytest.mark.infra
@@ -108,7 +126,7 @@ def test_merge_daemon_config_preserves_existing_settings(
     config.write_text('{"features":{"containerd-snapshotter":true},"log-level":"warn"}\n')
 
     subprocess.run(  # noqa: S603 — repository-owned executable and isolated path
-        [project_root / MERGE_SCRIPT, config], check=True
+        [project_root / MERGE_SCRIPT, config, "/mnt/docker"], check=True
     )
 
     assert json.loads(config.read_text()) == {
@@ -131,10 +149,10 @@ def test_merge_daemon_config_missing_file_creates_data_root(
     config = tmp_path / "daemon.json"
 
     subprocess.run(  # noqa: S603 — repository-owned executable and isolated path
-        [project_root / MERGE_SCRIPT, config], check=True
+        [project_root / MERGE_SCRIPT, config, "/var/lib/docker"], check=True
     )
 
-    assert json.loads(config.read_text()) == {"data-root": "/mnt/docker"}
+    assert json.loads(config.read_text()) == {"data-root": "/var/lib/docker"}
 
 
 @pytest.mark.infra

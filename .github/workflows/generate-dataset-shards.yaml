@@ -284,9 +284,8 @@ jobs:
             /usr/local/lib/node_modules
           df -h / || true
 
-      # Keep the CUDA image, kind's docker-save tar, and kind-node extraction
-      # off the capacity-constrained root filesystem (#1893, #1928, #2003).
-      - name: Relocate Docker storage to /mnt
+      # Reset preloaded Docker state and use separate storage when the runner provides it.
+      - name: Prepare Docker storage capacity
         uses: ./.github/actions/prepare-docker-storage
 
       # A2 (#1164): pull the worker image in the background so the kind binary
