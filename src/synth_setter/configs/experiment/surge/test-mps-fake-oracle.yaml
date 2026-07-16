@@ -10,10 +10,10 @@
 
 defaults:
   - surge/base
-  - override /model: surge_fake_oracle
+  - override /model: vst_fake_oracle
   - override /datamodule: surge
   - override /trainer: mps
-  - override /callbacks: [default_surge, eval_surge]
+  - override /callbacks: [default_vst, eval_vst]
   - _self_
 
 run_name: fake_oracle

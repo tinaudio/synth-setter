@@ -2,7 +2,7 @@
 
 defaults:
   - /experiment/surge/base
-  - override /model: surge_flow
+  - override /model: vst_flow
   - override /datamodule: surge
   - _self_
 

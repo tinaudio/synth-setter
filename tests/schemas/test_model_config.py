@@ -51,19 +51,19 @@ class TestModelConfigAcceptsEveryConfig:
         assert parsed.target_
 
 
-class TestSurgeModelTargetsResolve:
+class TestVSTModelTargetsResolve:
     """Each renamed ``VST*`` ``_target_`` string must resolve to a real class."""
 
     @pytest.mark.parametrize(
         "model_name",
-        ["surge_ffn", "surge_flow", "surge_flowmlp", "surge_fake_oracle"],
+        ["vst_ffn", "vst_flow", "vst_flowmlp", "vst_fake_oracle"],
     )
     def test_target_resolves_to_class(self, model_name: str) -> None:
         """``hydra.utils.get_class`` resolves the composed ``_target_`` string.
 
         Guards the hand-edited class paths in the renamed model YAMLs — a typo
         passes schema validation (``extra="allow"``) and fails only at launch.
-        ``surge_flowvae`` is excluded: its module needs the undeclared optional
+        ``vst_flowvae`` is excluded: its module needs the undeclared optional
         ``nflows`` dependency, so its alias is pinned at the AST level in
         ``tests/models/test_vst_module_aliases.py`` instead.
 

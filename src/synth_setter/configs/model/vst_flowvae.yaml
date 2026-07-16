@@ -21,6 +21,7 @@ scheduler:
   eta_min: ${mul:${model.optimizer.lr},1e-2}
 
 warmup_steps: 0
+param_spec: ${datamodule.param_spec_name}
 
 optimizer:
   _target_: torch.optim.Adam

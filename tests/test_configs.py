@@ -201,6 +201,75 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],
+)
+def test_vst_model_group_composes(model_name: str) -> None:
+    """Each synth-neutral VST model group composes successfully.
+
+    :param model_name: Hydra model group selected for the composition.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            f"model={model_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.model._target_.startswith("synth_setter.models.vst_")
+
+
+def test_vst_flowvae_config_uses_active_datamodule_spec() -> None:
+    """The generic Flow-VAE config resolves the active datamodule spec."""
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_mini", "model=vst_flowvae", "trainer=cpu"],
+    )
+
+    assert cfg.model.param_spec == "surge_4"
+
+
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_vst", "model_checkpoint"), ("eval_vst", "prediction_writer")],
+)
+def test_vst_callback_group_composes(callbacks_name: str, expected_callback: str) -> None:
+    """Each synth-neutral VST callback group composes successfully.
+
+    :param callbacks_name: Hydra callback group selected for the composition.
+    :param expected_callback: Callback key expected in the composed group.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            f"callbacks={callbacks_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert expected_callback in cfg.callbacks
+
+
+def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
+    """The generic per-parameter callback resolves the active datamodule spec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_mini",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+
+
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 
@@ -255,7 +324,7 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     # eval.yaml defaults logger to null; the experiment must re-select the
     # wandb group or base.yaml's logger.wandb fragment dangles.
     assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
-    # eval_surge callbacks: the prediction writer must be present.
+    # eval_vst callbacks: the prediction writer must be present.
     assert "prediction_writer" in cfg.callbacks
 
 

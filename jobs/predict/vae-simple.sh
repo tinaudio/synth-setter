@@ -25,7 +25,7 @@ python -m synth_setter.cli.eval \
     experiment=surge/wandb_checkpoint/vae_simple \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/vae_simple/ \
     datamodule=surge_simple \
-    callbacks=eval_surge \
+    callbacks=eval_vst \
     mode=predict \
     datamodule.batch_size=1024 \
     datamodule.num_workers=11

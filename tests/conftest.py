@@ -625,7 +625,7 @@ def _build_surge_xt_smoke_cfg(
             overrides=[
                 f"experiment={experiment}",
                 f"datamodule={datamodule_group}",
-                "callbacks=[default_surge,eval_surge]",
+                "callbacks=[default_vst,eval_vst]",
             ],
         )
         TRAINING_STEPS = 1
@@ -1579,7 +1579,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
-# surge_ffn's AST net hard-codes the production mel shape and channel count, so the
+# vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
 _LANCE_SMOKE_NUM_PARAMS = 16
@@ -1639,7 +1639,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=surge_ffn", "trainer=cpu"],
+            overrides=["datamodule=surge_lance", "model=vst_ffn", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -1650,7 +1650,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             if "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
             cfg.trainer.fast_dev_run = True
-            # Not a loop bound under fast_dev_run — surge_ffn's scheduler resolves
+            # Not a loop bound under fast_dev_run — vst_ffn's scheduler resolves
             # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
             cfg.trainer.max_steps = 1
             cfg.datamodule.dataset_root = str(dataset_root)

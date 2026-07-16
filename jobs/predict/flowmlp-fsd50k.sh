@@ -27,7 +27,7 @@ python -m synth_setter.cli.eval \
     model.test_sample_steps=100 \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/flowmlp_fsd/ \
     datamodule=fsd \
-    callbacks=eval_surge \
+    callbacks=eval_vst \
     mode=predict \
     datamodule.batch_size=1024 \
     datamodule.num_workers=11

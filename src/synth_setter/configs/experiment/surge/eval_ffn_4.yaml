@@ -5,7 +5,7 @@
 
 defaults:
   - /experiment/surge/ffn_4
-  - override /callbacks: eval_surge
+  - override /callbacks: eval_vst
   # eval.yaml defaults logger to null; base.yaml's logger.wandb fragment needs
   # the full wandb group underneath it.
   - override /logger: wandb

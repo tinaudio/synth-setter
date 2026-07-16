@@ -91,6 +91,23 @@ def test_flowvae_renamed_class_defined_in_module_source() -> None:
     ), "no `class VSTFlowVAEModule` definition found"
 
 
+def test_flowvae_constructor_requires_param_spec() -> None:
+    """The generic Flow-VAE constructor requires callers to select a ParamSpec."""
+    tree = _flowvae_module_ast("vst_flowvae_module.py")
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "VSTFlowVAEModule"
+    )
+    init_node = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    defaulted_args = init_node.args.args[-len(init_node.args.defaults) :]
+    assert "param_spec" not in {arg.arg for arg in defaulted_args}
+
+
 def test_flowvae_deprecated_alias_assigned_in_module_source() -> None:
     """``vst_flowvae_module`` binds ``SurgeFlowVAEModule`` to ``VSTFlowVAEModule``.
 

@@ -5,7 +5,7 @@
 
 defaults:
   - override /datamodule: surge_simple
-  - override /callbacks: default_surge
+  - override /callbacks: default_vst
   - override /trainer: gpu
   - _self_
 
@@ -34,9 +34,8 @@ trainer:
   gradient_clip_val: 0.5
   limit_val_batches: 0
   precision: bf16-mixed
-  # Surge model configs interpolate ${trainer.max_steps} into the
-  # CosineAnnealingLR scheduler's T_max, so max_steps must be set for any
-  # surge_* model run. The values below are the default for surge experiments.
+  # VST model schedulers interpolate max_steps into T_max, so every vst_* run needs it.
+  # These values are the defaults for Surge experiments.
   min_steps: 1_000_000
   max_steps: 1_000_000
   log_every_n_steps: 100

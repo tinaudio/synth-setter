@@ -1,15 +1,15 @@
 # @package _global_
 
 # Sibling of test-mps-fake-oracle.yaml for the surge/ffn_full experiment — see that file's
-# header for the lockstep contract with cfg_surge_xt_global; this variant targets surge_ffn
-# instead of surge_fake_oracle.
+# header for the lockstep contract with cfg_surge_xt_global; this variant targets vst_ffn
+# instead of vst_fake_oracle.
 
 defaults:
   - surge/base
-  - override /model: surge_ffn
+  - override /model: vst_ffn
   - override /datamodule: surge
   - override /trainer: mps
-  - override /callbacks: [default_surge, eval_surge]
+  - override /callbacks: [default_vst, eval_vst]
   - _self_
 
 run_name: ffn
