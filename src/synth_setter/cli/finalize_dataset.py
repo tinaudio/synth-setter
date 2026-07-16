@@ -292,10 +292,12 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     loggers = instantiate_loggers(cfg.get("logger"))
     status = "success"
     started_at = perf_counter()
+    elapsed_seconds: float | None = None
     log_summary: Callable[[float], None] | None = None
     try:
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
         finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
+        elapsed_seconds = perf_counter() - started_at
         _log_dataset_artifact(loggers, spec)
     except BaseException:
         status = "failed"
@@ -304,7 +306,9 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     finally:
         try:
             if log_summary is not None:
-                log_summary(perf_counter() - started_at)
+                log_summary(
+                    elapsed_seconds if elapsed_seconds is not None else perf_counter() - started_at
+                )
         finally:
             close_loggers(loggers, status)
 
