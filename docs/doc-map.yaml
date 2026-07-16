@@ -471,6 +471,8 @@ docs:
         covers: "Codex-side pinned review roles with their developer instructions"
       - pattern: ".opencode/agents/*.toml"
         covers: "OpenCode-side pinned review models/variants for the worker roles"
+      - pattern: ".pi/agents/pr-review-*.md"
+        covers: "Pi review worker role with model and thinking selected per pass"
       - pattern: "opencode.json"
         covers: "Read-only pr-reviewer opencode agent permission profile"
       - pattern: "agent/skills/_shared/repo-review-full-analysis.md"

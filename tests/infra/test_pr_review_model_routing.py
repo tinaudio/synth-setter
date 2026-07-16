@@ -1,4 +1,4 @@
-"""Contract tests for PR-review model routing across Claude, Codex, and OpenCode."""
+"""Contract tests for PR-review model routing across supported agent harnesses."""
 
 from __future__ import annotations
 
@@ -194,6 +194,48 @@ def test_review_fanout_promotes_only_correctness() -> None:
     assert re.search(r"all other selected skills use\s+`pr-review-worker-fast`", text)
     assert "general-purpose" not in text
     assert "do not fall back" in text.lower()
+
+
+def test_pi_review_worker_allows_dynamic_model_routing() -> None:
+    """Keep Pi worker model and thinking choices under the review policy."""
+    text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
+    _, frontmatter, prompt = text.split("---", 2)
+    worker = yaml.safe_load(frontmatter)
+
+    assert worker["description"]
+    assert worker["prompt_mode"] == "append"
+    assert set(worker["tools"].split(", ")) == {"bash", "find", "grep", "ls", "read"}
+    assert "model" not in worker
+    assert "thinking" not in worker
+    assert "structured report" in prompt.lower()
+
+
+def test_pi_review_policy_uses_codex_and_free_openrouter_failover() -> None:
+    """Pin Pi's auditable routing pool and quota failover contract."""
+    text = (
+        REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
+    ).read_text()
+
+    assert "openai-codex/gpt-5.6-sol" in text
+    assert "openai-codex/gpt-5.6-terra" in text
+    assert "openrouter/nvidia/nemotron-3-super-120b-a12b:free" in text
+    assert "openrouter/qwen/qwen3-coder:free" in text
+    assert "anthropic/" not in text
+    assert "quota" in text.lower()
+    assert "429" in text
+    assert "run_in_background: true" in text
+    assert "Output file:" in text
+    assert "get_subagent_result(wait: true)" in text
+
+
+def test_full_review_skills_define_flat_pi_orchestration() -> None:
+    """Avoid unsupported nested Tintin fan-out while preserving the pipeline."""
+    for skill in ("repo-review-full", "repo-review-full-no-comments"):
+        text = (REPO_ROOT / "agent" / "skills" / skill / "SKILL.md").read_text()
+        assert "Tintin" in text
+        assert "pr-review-worker" in text
+        assert "flat" in text.lower()
+        assert "Agent" in text
 
 
 def test_headless_hook_review_defaults_match_pinned_tier() -> None:

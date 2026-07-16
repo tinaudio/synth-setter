@@ -11,17 +11,18 @@ description: |-
 
 # repo-review-full — Multi-Skill Parallel PR Review
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result — you do NOT resolve the PR,
-fan out the reviews, aggregate findings, or call `post_review.py` yourself.
+The pipeline normally runs inside one spawned orchestrator. Pi uses the flat
+Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 
 ## What you (the main agent) do
 
 1. Capture the PR argument: if the command was invoked with an explicit `<N>`,
    keep it; otherwise the orchestrator resolves the PR from the current branch.
+
 2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
    unset. If it is set, stop and explain that it overrides the project
    review-agent models; do not run a gate with an overridden model policy.
+
 3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
    the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
    may not expose a custom-role selector, run
@@ -33,11 +34,15 @@ fan out the reviews, aggregate findings, or call `post_review.py` yourself.
    `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
    is unavailable, stop with a configuration error; do not fall back to an
    inherited or anonymous agent.
+
+   **Pi exception:** do not launch `pr-review-orchestrator`. Execute the
+   orchestrator brief in the main Pi session and use Tintin's `Agent` tool with
+   `subagent_type: "pr-review-worker"` for the flat, parallel Step 4 fan-out.
+   Follow the Pi model allocation, quota retry, merge, and transcript-audit
+   rules in `agent/skills/_shared/repo-review-full-analysis.md` exactly.
+
 4. Relay the agent's returned `html_url` and one-line summary to the user
    verbatim. Do not re-run or second-guess the pipeline.
-
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
 
 ## Orchestrator agent brief
 

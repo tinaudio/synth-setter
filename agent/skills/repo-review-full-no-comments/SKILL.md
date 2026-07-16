@@ -18,17 +18,19 @@ Same analysis as `/repo-review-full`, with two differences:
 2. A PR is **not** required. If no PR exists for the current branch, the
    orchestrator reviews the local branch vs. the default branch.
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result.
+The pipeline normally runs inside one spawned orchestrator. Pi uses the flat
+Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 
 ## What you (the main agent) do
 
 1. Capture the target argument: if the command was invoked with an explicit
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
+
 2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
    unset. If it is set, stop and explain that it overrides the project
    review-agent models; do not run a gate with an overridden model policy.
+
 3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
    the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
    may not expose a custom-role selector, run
@@ -40,13 +42,17 @@ agent you launch that agent and relay its result.
    `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
    is unavailable, stop with a configuration error; do not fall back to an
    inherited or anonymous agent.
+
+   **Pi exception:** do not launch `pr-review-orchestrator`. Execute the
+   orchestrator brief in the main Pi session and use Tintin's `Agent` tool with
+   `subagent_type: "pr-review-worker"` for the flat, parallel Step 4 fan-out.
+   Follow the Pi model allocation, quota retry, merge, and transcript-audit
+   rules in `agent/skills/_shared/repo-review-full-analysis.md` exactly.
+
 4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
    append any narration of your own. Do not re-run the pipeline.
-
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
 
 ## Orchestrator agent brief
 
