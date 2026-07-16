@@ -175,6 +175,7 @@ def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
         # kwarg would silently revert probe errors to stderr-less warnings.
         assert kwargs.get("stderr") is subprocess.PIPE
         assert kwargs.get("text") is True
+        assert kwargs.get("errors") == "replace"
 
     landed = fake_r2_remote / "bucket" / "probes" / "run-1" / "step-5000"
     uploaded = sorted(p.relative_to(landed).as_posix() for p in landed.rglob("*") if p.is_file())
@@ -278,11 +279,7 @@ def test_run_audio_probe_render_failure_with_non_utf8_stderr_still_carries_text(
 def test_run_audio_probe_metrics_failure_carries_subprocess_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failing metrics subprocess's stderr rides the raised error, like the render stage's.
-
-    The render argv is swapped for a trivially succeeding command and the metrics module for a
-    nonexistent one, so the real interpreter fails the metrics stage with a diagnosable message on
-    stderr.
+    """A failing metrics subprocess's stderr rides the raised error, like the render stage's (#1990).
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     :param monkeypatch: Replaces the render argv builder and the metrics module name.
@@ -299,6 +296,7 @@ def test_run_audio_probe_metrics_failure_carries_subprocess_stderr(
     assert "No module named" in (excinfo.value.stderr or "")
 
 
+@pytest.mark.slow
 def test_run_audio_probe_render_timeout_carries_partial_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

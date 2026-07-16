@@ -135,7 +135,7 @@ def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() 
 
 
 def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> None:
-    """Matching render/datamodule specs wire the probe as before."""
+    """A render spec matching the datamodule's spec wires the probe normally."""
     callbacks: list[Callback] = []
 
     _configure_val_audio_probe(
