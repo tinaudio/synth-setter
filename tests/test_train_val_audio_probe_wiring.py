@@ -143,6 +143,16 @@ def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> 
     assert isinstance(callbacks[0], ValAudioProbe)
 
 
+def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> None:
+    """A render group without ``param_spec_name`` cannot decode a spec'd model's output."""
+    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
+    with open_dict(cfg):
+        del cfg.render.param_spec_name
+
+    with pytest.raises(ValueError, match="param_spec_name"):
+        _configure_val_audio_probe(cfg, [])
+
+
 def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec() -> None:
     """A datamodule without ``param_spec_name`` (non-VST) leaves the guard inert."""
     callbacks: list[Callback] = []

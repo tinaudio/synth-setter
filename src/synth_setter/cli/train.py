@@ -170,7 +170,8 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
             "(e.g. `render=surge_xt`); cfg.render is unset."
         )
     # A mismatched spec fails the probe's decode every cycle (e.g. 92-dim surge_simple
-    # predictions against the 164-param surge_xt spec) — see #1990.
+    # predictions against the 164-param surge_xt spec) — see #1990. A datamodule
+    # without param_spec_name (non-VST) deliberately opts out of the guard.
     render_spec = OmegaConf.select(cfg, "render.param_spec_name")
     datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
     if datamodule_spec is not None and datamodule_spec != render_spec:

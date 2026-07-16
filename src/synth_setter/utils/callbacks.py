@@ -50,9 +50,10 @@ _CheckpointRevision = tuple[str, float, int, int | None]
 def _stderr_tail(exc: BaseException) -> str:
     """Return the trailing stderr a subprocess error carries, if any.
 
-    ``CalledProcessError``'s message names only the command and exit status; the
-    stderr attribute holds the child's actual traceback (when the caller captured
-    it), which is what makes a probe failure diagnosable from the run log.
+    Subprocess errors (``CalledProcessError``, ``TimeoutExpired``) name only the
+    command and exit status/budget in their message; their ``stderr`` attribute
+    holds the child's actual traceback (when the caller captured it), which is
+    what makes a probe failure diagnosable from the run log.
 
     :param exc: Exception whose optional ``stderr`` attribute to read.
     :returns: Up to the last ``_STDERR_TAIL_CHARS`` characters, or ``""`` when absent.

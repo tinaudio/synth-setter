@@ -38,6 +38,10 @@ METRICS_TIMEOUT_PER_SAMPLE_SECONDS = 30.0
 # Raw prediction tensors stay local; the R2 snapshot is for listening to.
 _UPLOAD_EXCLUDE = "predictions/**"
 
+# Cap on the success-path stderr chatter forwarded to the debug log, matching
+# the failure-path tail cap in ValAudioProbe's warning.
+_STDERR_DEBUG_TAIL_CHARS = 2000
+
 PREDICTIONS_DIRNAME = "predictions"
 AUDIO_DIRNAME = "audio"
 METRICS_DIRNAME = "metrics"
@@ -87,6 +91,16 @@ class ProbeRenderSettings:
     channels: int | None = None
     velocity: int | None = None
     signal_duration_seconds: float | None = None
+
+
+def _log_stage_stderr(stage: str, stderr: str | None) -> None:
+    """Debug-log a successful stage's captured stderr so it is not silently discarded.
+
+    :param stage: Label naming the subprocess stage (``render`` / ``metrics``).
+    :param stderr: Captured stderr text; empty or ``None`` logs nothing.
+    """
+    if stderr:
+        log.debug("val audio probe: %s stderr tail\n%s", stage, stderr[-_STDERR_DEBUG_TAIL_CHARS:])
 
 
 def _staged_sample_count(probe_dir: Path) -> int:
@@ -174,8 +188,11 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             check=True,
             # Captured so a failure's CalledProcessError carries the child traceback
             # for the caller's warning (#1990); success-path chatter goes to debug below.
+            # errors="replace": a native crash's invalid bytes must not swap the
+            # diagnostic for a UnicodeDecodeError.
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             # 2× samples: --rerender_target renders both pred and target per sample.
             timeout=scaled_timeout(
                 n_samples * 2,
@@ -183,8 +200,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
                 per_sample_seconds=RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
             ),
         )
-    if render.stderr:
-        log.debug("val audio probe: render stderr\n%s", render.stderr)
+    _log_stage_stderr("render", render.stderr)
 
     metrics_dir = probe_dir / METRICS_DIRNAME
     scoring = subprocess.run(  # noqa: S603
@@ -200,6 +216,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         check=True,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
         timeout=scaled_timeout(
             n_samples,
             workers=num_workers,
@@ -207,8 +224,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             per_sample_seconds=METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
         ),
     )
-    if scoring.stderr:
-        log.debug("val audio probe: metrics stderr\n%s", scoring.stderr)
+    _log_stage_stderr("metrics", scoring.stderr)
 
     if upload_uri is not None:
         destination = f"{upload_uri.rstrip('/')}/step-{step}"

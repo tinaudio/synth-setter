@@ -285,6 +285,13 @@ def test_stderr_tail_returns_empty_for_error_without_stderr_attribute() -> None:
     assert _stderr_tail(RuntimeError("boom")) == ""
 
 
+def test_stderr_tail_surfaces_timeout_stderr() -> None:
+    """A timed-out subprocess's captured stderr surfaces like a failed one's."""
+    exc = subprocess.TimeoutExpired(["render"], 5.0, stderr="timeout-boom")
+
+    assert _stderr_tail(exc) == "timeout-boom"
+
+
 def test_val_audio_probe_failure_warning_includes_subprocess_stderr(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

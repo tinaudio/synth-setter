@@ -354,6 +354,28 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     assert sample["params"].shape == (2, expected_width)
 
 
+def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
+    """The real train entrypoint dies at configure time on a probe/model spec mismatch.
+
+    A ``surge_simple`` model probed with ``render=surge_xt`` used to fail every probe
+    cycle in the render subprocess, producing zero audio metrics all run (#1990); the
+    guard must kill such a launch before a single training step.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    with open_dict(cfg):
+        cfg.training.val_audio_probe = True
+        cfg.render = {
+            "param_spec_name": "surge_xt",
+            "plugin_state_path": "presets/surge-base.vstpreset",
+        }
+
+    HydraConfig().set_config(cfg)
+    with pytest.raises(ValueError, match="param_spec_name"):
+        train(cfg)
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)

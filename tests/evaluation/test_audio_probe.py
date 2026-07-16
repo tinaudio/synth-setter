@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -111,7 +112,7 @@ def test_render_argv_prepends_headless_wrapper_on_linux(tmp_path: Path) -> None:
 
 def _fake_probe_subprocesses(
     probe_dir: Path, calls: list[tuple[list[str], dict[str, object]]], stderr: str | None = None
-):
+) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Return a ``subprocess.run`` stand-in that materializes each stage's outputs.
 
     :param probe_dir: Probe directory whose ``audio/`` / ``metrics/`` outputs to fake.
@@ -120,7 +121,7 @@ def _fake_probe_subprocesses(
     :returns: Callable with the ``subprocess.run`` signature the probe uses.
     """
 
-    def fake_run(argv: list[str], **kwargs: object):
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((list(argv), kwargs))
         if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
             sample_dir = probe_dir / "audio" / "sample_0"
@@ -246,6 +247,31 @@ def test_run_audio_probe_render_failure_carries_subprocess_stderr(
         run_audio_probe(tmp_path, 1, settings=_SETTINGS)
 
     assert "boom-traceback-marker" in (excinfo.value.stderr or "")
+
+
+def test_run_audio_probe_render_failure_with_non_utf8_stderr_still_carries_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invalid bytes on stderr (e.g. a native VST crash) must not mask the diagnostic.
+
+    With strict decoding the ``UnicodeDecodeError`` would replace the
+    ``CalledProcessError`` this fix exists to enrich.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the render argv builder.
+    """
+    _stage(tmp_path)
+    argv = [
+        sys.executable,
+        "-c",
+        r"import sys; sys.stderr.buffer.write(b'\xff\xfe native-crash-marker'); sys.exit(1)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "native-crash-marker" in (excinfo.value.stderr or "")
 
 
 def test_run_audio_probe_metrics_failure_carries_subprocess_stderr(
