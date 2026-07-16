@@ -17,12 +17,76 @@ import tomllib
 from pathlib import Path
 from unittest import mock
 
+import psutil
 import pytest
 import yaml
 
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _process_state(pid: int) -> str | None:
+    """Return a process state code, or ``None`` when the PID is absent.
+
+    :param pid: Process ID to inspect.
+    :returns: Platform process state code, or ``None`` for an absent PID.
+    """
+    try:
+        status = psutil.Process(pid).status()
+    except psutil.NoSuchProcess:
+        return None
+    return "Z" if status == psutil.STATUS_ZOMBIE else status
+
+
+def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
+    """Wait until a process is absent or zombie, then fail if it remains live.
+
+    :param pid: Process ID expected to stop executing.
+    :param timeout: Maximum seconds to wait for termination.
+    :raises AssertionError: If the process remains live through the timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while (state := _process_state(pid)) not in (None, "Z"):
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"process {pid} is still running (state {state})")
+        time.sleep(0.05)
+
+
+def test_assert_process_terminated_live_pid_fails() -> None:
+    """Reject a descendant that is still executing."""
+    child_pid = os.fork()
+    if child_pid == 0:
+        time.sleep(30)
+        os._exit(0)
+    try:
+        with pytest.raises(AssertionError, match="still running"):
+            _assert_process_terminated(child_pid, timeout=0)
+    finally:
+        os.kill(child_pid, signal.SIGKILL)
+        os.waitpid(child_pid, 0)
+
+
+def test_assert_process_terminated_nonexistent_pid_passes() -> None:
+    """Accept a PID after its process has been reaped."""
+    child_pid = os.fork()
+    if child_pid == 0:
+        os._exit(0)
+    os.waitpid(child_pid, 0)
+
+    _assert_process_terminated(child_pid, timeout=0)
+
+
+def test_assert_process_terminated_zombie_pid_passes() -> None:
+    """Accept a terminated child before its parent reaps it."""
+    child_pid = os.fork()
+    if child_pid == 0:
+        os._exit(0)
+    try:
+        _assert_process_terminated(child_pid, timeout=1)
+    finally:
+        os.waitpid(child_pid, 0)
+
 
 _ROLE_MODELS = {
     "pr-review-orchestrator": {
@@ -513,8 +577,7 @@ def test_codex_review_shell_launcher_timeout_force_kills_process_group(
 
     assert b"codex exec timed out after 1s" in exc_info.value.stderr
     child_pid = int(child_pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    _assert_process_terminated(child_pid)
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -557,8 +620,7 @@ def test_codex_review_python_launcher_signal_terminates_process_group(tmp_path: 
         process.wait()
 
     child_pid = int(child_pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    _assert_process_terminated(child_pid)
 
 
 _OPENCODE_LAUNCHER_PY = REPO_ROOT / "agent" / "_shared" / "run_opencode_review_agent.py"
