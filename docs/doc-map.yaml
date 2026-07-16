@@ -116,7 +116,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/spec_io.py"
         covers: "`input_spec.json` read/write/upload/discover helpers"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Generic VST render defaults and per-synth identity composition; TorchSynth uses a separate in-process root"
+        covers: "Generic VST render defaults and per-synth identity composition"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Canonical pipeline artifact names and staging keys"
       - pattern: "src/synth_setter/renderer_backend.py"
