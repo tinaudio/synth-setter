@@ -158,9 +158,6 @@ compute = [
   "kubernetes==35.0.0",
 ]
 data = [
-  # Distributed shard work queue (consumer pipeline/shard_queue.py lands with #1811); the
-  # S3 extra talks to R2 and its boto3 ceiling resolves optional smoosense to 0.1.37.
-  "jqueue[s3]>=1.0.0",
   "pandas",
   "numpy",
   "pylance>=7.0.0",

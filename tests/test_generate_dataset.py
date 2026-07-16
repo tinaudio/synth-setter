@@ -9,8 +9,11 @@ eval's per-split ``metrics.json`` holds bounded audio metrics under the bare
 ``audio/*`` key for ``test`` and the namespaced ``<split>/audio/*`` key for
 ``train``/``val``; and a variant with ``param_sample_cadence=shard`` that
 asserts the ``shuffled_audio/*`` group also appears (under the same per-split
-prefix) when all sample dirs share uniform ``params.csv`` (#489). The
-integration tests auto-skip when ``rclone`` / R2 creds are absent.
+prefix) when all sample dirs share uniform ``params.csv`` (#489); and an
+``integration_r2`` multi-process contention run over the Lance shard-claims
+table in real R2 that proves each claim generation is granted exactly once
+under R2's conditional-put commit protocol. The integration tests auto-skip
+when ``rclone`` / R2 creds are absent.
 
 Keep this module to tests that drive ``from_hydra`` or the real CLI subprocess.
 Config-composition and ``spec_from_cfg`` unit tests live in
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
 import os
 import shlex
 import shutil
@@ -214,30 +218,27 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
 
 @pytest.mark.fake_vst
-def test_from_hydra_queue_mode_renders_queued_shards_and_drains_queue(
+def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``from_hydra`` with ``use_shard_queue=true`` claims, renders, and acks every shard.
+    """``from_hydra`` with ``use_shard_queue=true`` claims, renders, and completes every shard.
 
     Drives the real worker entrypoint end-to-end like its static-partition
-    sibling above, but with the run's work queue as the shard source: a real
-    jqueue queue (``LocalFileSystemStorage``) whose state file sits at the
-    sanctioned ``metadata/shard-queue.json`` key inside the fake R2 root. Only
-    the S3/credentials seam (``_shard_queue_for_spec``) is bypassed. Asserts
-    every queued shard lands at its spec-derived R2 URI and the queue is
-    drained (all claims acked).
+    sibling above, but with the run's Lance shard-claims table as the shard
+    source. Nothing is patched around the claims path: the worker resolves the
+    table through the real ``lance_target`` to the sanctioned
+    ``metadata/shard-claims.lance`` key inside the fake R2 root, exactly as it
+    does against real R2. Asserts every claimed shard lands at its
+    spec-derived R2 URI and every claim row ends ``done``.
 
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Bridges local-rclone probe errors and injects the
-        file-backed queue.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (also where ``lance_target`` resolves the claims table).
     """
-    from jqueue import LocalFileSystemStorage
-
-    from synth_setter.pipeline.shard_queue import ShardQueue
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
 
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
@@ -249,12 +250,8 @@ def test_from_hydra_queue_mode_renders_queued_shards_and_drains_queue(
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
-    queue_state = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-queue.json"
-    queue = ShardQueue(storage=LocalFileSystemStorage(str(queue_state)))
-    queue.populate([shard.shard_id for shard in spec.shards])
-    monkeypatch.setattr(
-        "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
-    )
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate([shard.shard_id for shard in spec.shards])
 
     render_shard = stub_renderer(spec)
     with patch(
@@ -263,9 +260,84 @@ def test_from_hydra_queue_mode_renders_queued_shards_and_drains_queue(
     ):
         from_hydra(cfg_dataset)
 
+    table_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-claims.lance"
+    assert table_dir.is_dir(), "claims table must live at its sanctioned key in the R2 layout"
     for shard in spec.shards:
         assert shard_has_complete_attempt(spec, shard.shard_id)
-    assert queue.claim(shard_count=spec.num_shards) is None, "queue must be drained after the run"
+    assert claims.claim() is None, "no claimable rows may remain after the run"
+    assert claims.status_counts() == {"done": spec.num_shards}
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+) -> None:
+    """A crashed claim is shielded while its lease lives, then recovered by relaunch.
+
+    Full crash-recovery loop through the real worker entrypoint, no claims
+    seam patched: run 1's renderer fails and the run dies with the claim
+    held; run 2 inside the lease window renders nothing (a poison shard
+    cannot cascade across relaunches); after the lease is aged out, run 3
+    re-claims at the next generation, renders, and completes the shard.
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
+        and ``tmp_path``-pinned paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (fixture-activation only — referenced via the ARG001 noqa).
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/crash-run/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate([0])
+    render_shard = stub_renderer(spec)
+
+    def _crash_renderer(args: list[str]) -> None:
+        if args and args[0] == "rclone":
+            render_shard(args)
+            return
+        raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_crash_renderer,
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            from_hydra(cfg_dataset)
+    assert claims.status_counts() == {"claimed": 1}
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ) as inside_lease:
+        from_hydra(cfg_dataset)
+    renderer_calls = [c for c in inside_lease.call_args_list if c.args[0][0] != "rclone"]
+    assert renderer_calls == [], "a live lease must shield the crashed claim from relaunch"
+    assert not shard_has_complete_attempt(spec, 0)
+
+    # Age the crashed claim's lease in place of waiting out the real 2 hours.
+    lance.dataset(claims.uri).update({"lease_expiry_s": "0"}, where="status = 'claimed'")
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+    assert shard_has_complete_attempt(spec, 0)
+    assert claims.status_counts() == {"done": 1}
+    row = lance.dataset(claims.uri).to_table().to_pylist()[0]
+    assert row["claim_gen"] == 2, "recovery must advance the fencing generation"
+    assert row["attempts"] == 2
 
 
 @pytest.mark.fake_vst
@@ -343,22 +415,20 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_from_hydra_queue_mode_real_vst_writes_consumable_shard(
+def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Queue mode stages one real VST Lance shard that validates from fake R2.
+    """Claims mode stages one real VST Lance shard that validates from fake R2.
 
     :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Injects file-backed queue storage.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (also where ``lance_target`` resolves the claims table).
     :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
     """
-    from jqueue import LocalFileSystemStorage
-
-    from synth_setter.pipeline.shard_queue import ShardQueue
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
 
     (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
     (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
@@ -369,16 +439,12 @@ def test_from_hydra_queue_mode_real_vst_writes_consumable_shard(
         cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
-        cfg_dataset.r2.prefix = "fake-r2/real-vst-queue/"
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
-    queue_state = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-queue.json"
-    queue = ShardQueue(storage=LocalFileSystemStorage(str(queue_state)))
-    queue.populate(shard.shard_id for shard in spec.shards)
-    monkeypatch.setattr(
-        "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
-    )
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate(shard.shard_id for shard in spec.shards)
 
     from_hydra(cfg_dataset)
 
@@ -387,8 +453,8 @@ def test_from_hydra_queue_mode_real_vst_writes_consumable_shard(
     )
     assert len(list(staging_root.rglob("*.valid"))) == 1
     assert validate_all_shards_from_r2(spec) == []
-    assert queue.claim(shard_count=spec.num_shards) is None
-    assert queue.claim(shard_count=spec.num_shards) is None
+    assert claims.claim() is None
+    assert claims.status_counts() == {"done": spec.num_shards}
 
 
 @pytest.mark.requires_vst
@@ -768,6 +834,92 @@ def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_execute
     assert f"render.plugin_path={_TEST_PLUGIN_VST3}" in invocation
     assert f"skypilot_launch.compute_template={compute_template}" in invocation
     assert "+created_at=" in invocation
+
+
+def _r2_claims_steal_worker(
+    uri: str,
+    storage_options: dict[str, str],
+    worker_index: int,
+    out: multiprocessing.Queue[list[tuple[int, int]]],
+) -> None:
+    """Hammer claims on the real-R2 table under an always-expired lease.
+
+    Module-level so ``multiprocessing``'s ``spawn`` context can pickle it.
+
+    :param uri: ``s3://`` URI of the shared claims table in real R2.
+    :param storage_options: Lance object-store credentials for the table.
+    :param worker_index: Distinguishes this worker's owner identity.
+    :param out: Receives this worker's ``[(shard_id, claim_gen), ...]`` wins.
+    """
+    from datetime import timedelta
+
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    claims = ShardClaims(
+        uri=uri,
+        storage_options=storage_options,
+        owner=f"proc-{worker_index}",
+        lease=timedelta(seconds=-5),
+    )
+    wins = []
+    for _ in range(4):
+        claimed = claims.claim()
+        if claimed is not None:
+            wins.append((claimed.shard_id, claimed.claim_gen))
+    out.put(wins)
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.slow
+def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> None:
+    """Concurrent workers stealing claims in real R2 never share a generation.
+
+    The load-bearing assumption behind claims mode is that a Lance
+    conditional ``update`` re-evaluates its predicate when its commit
+    conflicts — on R2's conditional-put commit protocol, not just the local
+    filesystem. Three real OS processes hammer two rows under an
+    always-expired lease; if R2 commits ever let two workers win the same
+    ``(shard_id, claim_gen)``, or dropped a committed win, this fails.
+    Auto-skips without R2; purges the unique prefix in ``finally``.
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.schemas.r2_location import R2Location
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    unique_prefix = f"test-runs/test_shard_claims_contention/{uuid.uuid4().hex[:12]}/"
+    location = R2Location(bucket="intermediate-data", prefix=unique_prefix)
+    uri, storage_options = lance_target(location.shard_claims_uri())
+    assert storage_options is not None, "contention run must target real R2, not local mode"
+    try:
+        ShardClaims(uri=uri, storage_options=storage_options, owner="operator").populate(range(2))
+
+        ctx = multiprocessing.get_context("spawn")
+        out: multiprocessing.Queue = ctx.Queue()
+        procs = [
+            ctx.Process(target=_r2_claims_steal_worker, args=(uri, storage_options, index, out))
+            for index in range(3)
+        ]
+        for proc in procs:
+            proc.start()
+        results = [out.get(timeout=600) for _ in procs]
+        for proc in procs:
+            proc.join(timeout=120)
+
+        all_wins = [win for wins in results for win in wins]
+        assert all_wins, "at least one steal must land for the invariant to be exercised"
+        assert len(set(all_wins)) == len(all_wins), "two workers won the same generation"
+        rows = (
+            lance.dataset(uri, storage_options=storage_options)
+            .to_table(columns=["shard_id", "claim_gen"])
+            .to_pylist()
+        )
+        assert sum(row["claim_gen"] for row in rows) == len(all_wins), "a won generation was lost"
+    finally:
+        r2_io.purge_prefix(location.bucket, location.prefix)
 
 
 @pytest.mark.integration_r2

@@ -11,8 +11,8 @@ this file is the imperative rule sheet.
   not by metadata files, reports, or a coordination database. If R2 disagrees
   with anything else, R2 wins.
 - **Worker / finalize write boundary.** Workers only write under
-  `metadata/workers/`, plus CAS-guarded claim/ack updates to the one shared
-  coordination object `metadata/shard-queue.json` (`pipeline/shard_queue.py`),
+  `metadata/workers/`, plus conditional claim/complete updates to the one
+  shared Lance claims table `metadata/shard-claims.lance` (`pipeline/shard_claims.py`),
   with one deliberate Lance exception: workers write *uncommitted* fragment
   data files into the split dataset `data/` directories (a fragment is only
   readable from the dataset whose `data/` dir physically holds its file —

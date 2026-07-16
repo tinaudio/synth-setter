@@ -59,7 +59,7 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > affinity-aware CPU count; transient renderer subprocess failures are retried
 > up to `render.max_retries` times (default 0 = strict fail-fast).
 > `use_shard_queue=true` instead claims shard IDs dynamically from the run's
-> jqueue work queue (§7.1); queue mode renders one claim at a time and
+> Lance shard-claims table (§7.1); claims mode renders one claim at a time and
 > ignores `render.parallel`. The
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
@@ -204,7 +204,7 @@ R2 serves as both the **data plane** and the **control plane**:
 | **Data plane**    | Actual dataset content | Lance fragment data + split datasets, stats.npz               |
 | **Control plane** | Coordination metadata  | Spec, worker reports, debug logs, `metadata/dataset.complete` |
 
-Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: the pipeline does not rely on conditional writes for data-plane mutual exclusion — all operations are idempotent and produce deterministic outputs; the opt-in shard queue ([§7.1](#71-storage-as-the-source-of-truth)) is the sole CAS consumer ([§7.7](#77-concurrency-semantics)).
+Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: the pipeline does not rely on conditional writes for data-plane mutual exclusion — all operations are idempotent and produce deterministic outputs; the opt-in shard-claims table ([§7.1](#71-storage-as-the-source-of-truth)) is the sole CAS consumer ([§7.7](#77-concurrency-semantics)).
 
 ### Reconciliation Correctness
 
@@ -354,7 +354,7 @@ All structured files in the pipeline, in one place:
 | ---------------------- | ----------------------------------------------------------------------- | ---------- | ------------------------------- | -------------------------------- |
 | Config                 | `metadata/config.yaml`                                                  | YAML       | User                            | `generate`                       |
 | Input spec             | `metadata/input_spec.json`                                              | JSON       | `generate` (first run)          | `generate`, `status`, `finalize` |
-| Shard work queue       | `metadata/shard-queue.json`                                             | JSON       | `generate` (operator populate)  | Workers (claim/ack via CAS)      |
+| Shard-claims table     | `metadata/shard-claims.lance/`                                          | Lance      | `generate` (operator populate)  | Workers (claim/complete via CAS) |
 | Lance fragment sidecar | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.fragment.json`   | JSON       | Workers                         | `finalize` (commits fragment)    |
 | Lance shard stats      | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.shard-stats.npz` | NumPy      | Workers                         | `finalize` (stats reduction)     |
 | Lance fragment data    | `train.lance/data/*`, `val.lance/data/*`, `test.lance/data/*`           | Lance      | Workers                         | `finalize` (manifest commit)     |
@@ -403,14 +403,14 @@ The pipeline uses R2 as both the data layer and the coordination layer. Integrit
 
 **Why R2 for coordination and not a database or queue:**
 
-The design avoids depending on compare-and-set, locking, and transactions (R2 does offer conditional puts; only the opt-in shard queue uses them). A traditional coordination system (Redis, Postgres, SQS) would provide these natively. We use R2 anyway — this is a deliberate trade-off, not a convenience choice.
+The design avoids depending on compare-and-set, locking, and transactions (R2 does offer conditional puts; only the opt-in shard-claims table uses them, through Lance's commit protocol). A traditional coordination system (Redis, Postgres, SQS) would provide these natively. We use R2 anyway — this is a deliberate trade-off, not a convenience choice.
 
 The pipeline doesn't need what coordination systems provide:
 
 - **No compare-and-set for canonical membership** — workers write to per-attempt metadata filenames, and Lance fragment object names are owned by Lance. Concurrent attempts for the same logical shard never decide canonical membership themselves; finalize selects the winners ([§7.7](#77-concurrency-semantics)).
 - **No locking** — each shard is assigned to one worker per invocation. The assignment is a simple partition of the missing set. No lock acquisition needed.
 - **No transactions** — stages are independent. There is no multi-shard operation that must succeed or fail atomically.
-- **No queue for completion truth** — work discovery is reconciliation (compare spec against storage). A queue deciding "what work remains" would be a second source of truth — and a less reliable one than the files themselves. Optional *distribution* is different: `use_shard_queue=true` spreads shard IDs across machines dynamically via a [jqueue](https://github.com/janbjorge/jqueue) `DirectQueue` whose single JSON state object lives in R2 under the run prefix (`metadata/shard-queue.json`, using R2's conditional `If-Match` writes — R2 does support compare-and-set puts). The queue only routes claims; the per-shard R2 probe stays the sole completion authority, so a stale or duplicated queue entry costs at most a skip-probe, never a wrong dataset.
+- **No queue for completion truth** — work discovery is reconciliation (compare spec against storage). A queue deciding "what work remains" would be a second source of truth — and a less reliable one than the files themselves. Optional *distribution* is different: `use_shard_queue=true` spreads shard IDs across machines dynamically via a tiny [Lance](https://lancedb.github.io/lance/) claims table under the run prefix (`metadata/shard-claims.lance`, one row per shard) whose conditional `UPDATE` rides Lance's conditional-put commit protocol — R2 does support compare-and-set puts. A single lease expiry written at claim time replaces heartbeating (a crashed worker's claim is reclaimable once the lease lapses) and a `claim_gen` column fences stale completers. The table only routes claims; the per-shard R2 probe stays the sole completion authority, so a stale or duplicated claim costs at most a skip-probe, never a wrong dataset.
 
 What a coordination system *would* cost:
 
@@ -498,7 +498,7 @@ Shard IDs are logical and deterministic: `shard-000000` through `shard-000479`, 
 - **No naming collisions** — each worker attempt writes unique sidecar filenames (`{worker_id}-{attempt_uuid}.*`), and canonical membership is decided only by finalize
 - **Infrastructure details** (worker IDs) appear in staging filenames and metadata, not in canonical shard paths
 
-**Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. With `use_shard_queue=true`, assignment is instead a dynamic claim from the run's work queue. Either way the shard's identity is independent of which worker computes it: if Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
+**Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. With `use_shard_queue=true`, assignment is instead a dynamic claim from the run's shard-claims table. Either way the shard's identity is independent of which worker computes it: if Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
 
 **Shard write protocol:**
 
