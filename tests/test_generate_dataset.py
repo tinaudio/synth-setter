@@ -124,6 +124,21 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+def test_cfg_dataset_default_plugin_reload_cadence_is_once(
+    cfg_dataset_default_cadence: DictConfig,
+) -> None:
+    """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
+
+    Pins #1999 through the ``spec_from_cfg`` entrypoint path: no experiment or CLI
+    override → per-shard plugin load, not the per-render reload of the #489 era.
+
+    :param cfg_dataset_default_cadence: Function-scoped fixture composing
+        ``dataset.yaml`` with an experiment that sets no cadence keys.
+    """
+    spec = spec_from_cfg(cfg_dataset_default_cadence)
+    assert spec.render.plugin_reload_cadence == "once"
+
+
 @pytest.mark.fake_vst
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     cfg_dataset: DictConfig,

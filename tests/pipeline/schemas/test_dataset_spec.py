@@ -165,7 +165,11 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "once"
 
     def test_always_on_with_default_reload_cadence_accepted(self) -> None:
-        """``gui_toggle_cadence="always_on"`` composes with the default reload cadence (#1999)."""
+        """``gui_toggle_cadence="always_on"`` composes with the default reload cadence (#1999).
+
+        Distinct from ``test_always_on_accepted_with_reload_once``: this pins the
+        implicit default satisfying the pairing validator, not an explicit opt-in.
+        """
         cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "always_on"})
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "always_on"

@@ -1188,7 +1188,7 @@ class RenderConfig(BaseModel):
     attempts_per_sample: int = 100
     max_retries: int = 0        # per-shard retry budget for transient renderer failures
     parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
-    plugin_reload_cadence: Literal["once", "render"] = "once"  # per-shard load; "render" reloads per sample (#1999)
+    plugin_reload_cadence: Literal["once", "render"] = "once"  # per-shard load (#1999)
     # Platform-aware default via Field(default_factory=...): "never" on Darwin
     # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
     # (preserves historical per-render warm-up). An explicit
