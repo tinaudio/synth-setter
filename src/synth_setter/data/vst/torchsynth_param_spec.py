@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME as TORCHSYNTH_PLUGIN_NAME
+
 from synth_setter.data.vst.param_spec import (
     ContinuousParameter,
     DiscreteLiteralParameter,
@@ -28,9 +30,6 @@ from synth_setter.data.vst.param_spec import (
 if TYPE_CHECKING:
     from torchsynth.synth import Voice
 
-# ``RenderConfig.plugin_path`` value that selects the in-process backend in
-# place of a plugin-bundle path (see ``core.extract_renderer_version``).
-TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 
 
 @dataclass(frozen=True)

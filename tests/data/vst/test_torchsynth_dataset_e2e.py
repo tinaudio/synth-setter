@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import lance
+import pytest
 import numpy as np
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
@@ -80,8 +81,12 @@ def test_make_lance_dataset_renders_a_real_torchsynth_shard(tmp_path: Path) -> N
     assert (np.abs(audio.astype(np.float32)).max(axis=(1, 2)) > 0.0).all()
 
 
+@pytest.mark.slow
 def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Path) -> None:
     """The public CLI parses torchsynth config and writes readable audio rows.
+
+    Distinct from the in-process writer test above: this pins the
+    pydantic-settings CLI arg surface end-to-end, at real-subprocess cost.
 
     :param tmp_path: Destination directory for the rendered shard.
     """

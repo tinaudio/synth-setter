@@ -39,7 +39,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
     DEFAULT_ATTEMPTS_PER_SAMPLE,
     ShardMetadata,
 )
-from synth_setter.renderer_backend import RendererBackend
+from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME, RendererBackend
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -206,7 +206,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     plugin_path: str = Field(
-        description="Filesystem path to the VST3 plugin bundle the worker loads."
+        description=(
+            "Filesystem path to the VST3 plugin bundle the worker loads, or the bare "
+            'backend name ``"torchsynth"`` for the in-process backend.'
+        )
     )
     plugin_state_path: str = Field(
         description=(
@@ -359,11 +362,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The backend and bare plugin name disagree, or torchsynth
             uses an editor cadence other than ``"never"``.
         """
-        if self.plugin_path == "torchsynth" and self.renderer_backend != "torchsynth":
+        if self.plugin_path == TORCHSYNTH_PLUGIN_NAME and self.renderer_backend != "torchsynth":
             raise ValueError('plugin_path="torchsynth" requires renderer_backend="torchsynth"')
         if self.renderer_backend != "torchsynth":
             return self
-        if self.plugin_path != "torchsynth":
+        if self.plugin_path != TORCHSYNTH_PLUGIN_NAME:
             raise ValueError('torchsynth requires plugin_path="torchsynth"')
         if self.gui_toggle_cadence != "never":
             raise ValueError(
