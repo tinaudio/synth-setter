@@ -1,6 +1,57 @@
 # CHANGELOG
 
 
+## v9.3.1 (2026-07-16)
+
+### Bug Fixes
+
+- **data-pipeline**: Resample clipped renders instead of killing the shard
+  ([#2030](https://github.com/tinaudio/synth-setter/pull/2030),
+  [`218bbcd`](https://github.com/tinaudio/synth-setter/commit/218bbcd0674ee39c48b25471c67f4f25493da9e2))
+
+surge_xt full-spec draws intermittently render audio outside [-1, 1] (~0.4% per draw);
+  _validate_rendered_audio raised a shard-fatal ValueError, so at 500 samples/shard the retry budget
+  was statistically certain to exhaust and no non-trivial surge_xt run could finalize.
+
+Split the amplitude violation into AudioAmplitudeError (ValueError subclass) and treat it in
+  generate_sample as sampled-data rejection, mirroring the min_loudness gate: reject the draw and
+  retry with the next attempt seed. Fixed-param paths (eval/replay) still raise, and
+  shape/finiteness violations stay fatal on every path.
+
+Refs #2001
+
+### Internal-Fix
+
+- **docker**: Use standalone VST loader in build
+  ([#2031](https://github.com/tinaudio/synth-setter/pull/2031),
+  [`68d824a`](https://github.com/tinaudio/synth-setter/commit/68d824a4ffdc6d74c12c02699885116651e9c6eb))
+
+### Testing
+
+- Accept dataloader worker baseline drift
+  ([#2026](https://github.com/tinaudio/synth-setter/pull/2026),
+  [`8e00de2`](https://github.com/tinaudio/synth-setter/commit/8e00de24b0cf02412b551d2fc67a20853c735e02))
+
+Treat datamodule.num_workers as host-resource sizing so the frozen model baseline remains sensitive
+  to model behavior while accepting the intentional worker reduction from #1935.
+
+Add focused coverage for both the exact 11-to-4 drift and a simultaneous hidden-size change that
+  must remain visible.
+
+- Isolate writer cadence tests from plugin loading
+  ([#2023](https://github.com/tinaudio/synth-setter/pull/2023),
+  [`78fa1db`](https://github.com/tinaudio/synth-setter/commit/78fa1dbdaea8ff0cfaa4f2ad04773c96416d2baa))
+
+The once-per-shard reload default eagerly loads a plugin before the cadence tests reach their
+  existing render fakes. Plugin-less CI therefore fails while developer machines with Surge XT
+  installed can mask the dependency.
+
+Stub the plugin and preset load seams in the affected tests and in the shared writer-level fake so
+  these CPU-only tests exercise cadence behavior without requiring a VST bundle.
+
+Fixes #2012
+
+
 ## v9.3.0 (2026-07-16)
 
 ### Features
