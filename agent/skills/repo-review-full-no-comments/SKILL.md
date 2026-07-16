@@ -141,7 +141,18 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 >   `[<calling-skill>:block]` prefixes inside the `## PR health` bullets (PR mode
 >   only — local-branch mode has no PR-health bullets).
 >
-> - Write the findings JSON to `/tmp/repo-review-full-no-comments-findings.json`.
+> - Before writing findings, create an invocation-isolated path:
+>
+>   ```bash
+>   python3 agent/_shared/review_sentinel.py findings "${TMPDIR:-/tmp}"
+>   ```
+>
+>   Capture the exact printed path and write this invocation's findings JSON only
+>   there. Shell variables do not persist across tool calls, so substitute that
+>   exact path in every later command; never use a shared fixed filename. Bash
+>   tool calls do not share an `EXIT` trap, so remove the path on every
+>   controlled success or failure; an interrupted run leaves only an isolated
+>   file in the platform temporary directory and cannot contaminate another run.
 >
 > - For `pr_number` in the JSON: use the resolved PR number in PR mode, or
 >   `null` in local-branch mode. Do not place branch names in `pr_number`; keep
@@ -162,8 +173,8 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
 > `gh pr review` command. This step has zero GitHub side effects.
 >
-> Transform the JSON payload at
-> `/tmp/repo-review-full-no-comments-findings.json` into a Markdown report. The
+> Transform the JSON payload at the exact printed findings path into a Markdown
+> report. The
 > report is **both** written to a sentinel file **and** returned as your final
 > message (the main agent prints it for the user). The `pre-pr-review-gate.sh`
 > PreToolUse hook validates the path supplied via `REVIEW_FULL=<path>` on
@@ -188,13 +199,14 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 >
 > ```bash
 > is_zero_diff="${is_zero_diff:-false}"
+> findings_json_path="<exact printed path>"
 > finding_count=0
 > pr_health_flag_count=0
 > # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
 > # Otherwise derive them from the Step 6 findings JSON.
-> if [[ "$is_zero_diff" == false && -f /tmp/repo-review-full-no-comments-findings.json ]]; then
->   finding_count=$(jq '.findings | length' /tmp/repo-review-full-no-comments-findings.json)
->   pr_health_flag_count=$(jq -r '.review_body' /tmp/repo-review-full-no-comments-findings.json | grep -c '\[pr-health\]' || true)
+> if [[ "$is_zero_diff" == false && -f "$findings_json_path" ]]; then
+>   finding_count=$(jq '.findings | length' "$findings_json_path")
+>   pr_health_flag_count=$(jq -r '.review_body' "$findings_json_path" | grep -c '\[pr-health\]' || true)
 > fi
 > is_non_pass=false
 > if ((finding_count > 0 || pr_health_flag_count > 0)); then
@@ -294,6 +306,8 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 >
 > - The sentinel file is the gate's contract; your returned report is the human
 >   deliverable. Always produce both.
+>
+> After rendering or failing closed, remove the findings file at the exact printed path with `rm -f -- <exact-path>`. Never remove or read another review's findings file.
 >
 > **Return value.** Reply with the full Markdown report (the exact content you
 > wrote to the sentinel) followed by a final line: `Sentinel: <REVIEW_PATH>`.

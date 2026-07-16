@@ -84,6 +84,22 @@ def test_make_review_filename_rejects_invalid_sha(helper: ModuleType, bad_sha: s
         helper.make_review_filename(bad_sha)
 
 
+def test_make_findings_path_is_unique_per_review(helper: ModuleType, tmp_path: Path) -> None:
+    """Concurrent reviews receive different existing JSON paths.
+
+    :param helper: The loaded helper module.
+    :param tmp_path: Temporary directory for findings files.
+    """
+    first = Path(helper.make_findings_path(str(tmp_path)))
+    second = Path(helper.make_findings_path(str(tmp_path)))
+
+    assert first != second
+    assert first.is_file()
+    assert second.is_file()
+    assert first.name.startswith("repo-review-full-no-comments-findings.")
+    assert first.suffix == ".json"
+
+
 def test_parse_review_filename_round_trips_basename(helper: ModuleType) -> None:
     """``parse(make(sha))`` returns the original SHA.
 
@@ -184,6 +200,23 @@ def test_cli_parse_exits_nonzero_on_bad_filename() -> None:
         check=False,
     )
     assert result.returncode != 0
+
+
+def test_cli_findings_subcommand_emits_unique_path(tmp_path: Path) -> None:
+    """``findings <dir>`` creates one isolated JSON file.
+
+    :param tmp_path: Temporary directory for the findings file.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["python3", str(_HELPER_PATH), "findings", str(tmp_path)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    findings_path = Path(result.stdout.strip())
+    assert findings_path.parent == tmp_path
+    assert findings_path.is_file()
 
 
 def test_cli_path_subcommand_emits_review_dir_filename() -> None:

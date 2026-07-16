@@ -19,13 +19,14 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Sequence
 
 REVIEW_DIR = ".agent-reviews"
 SKILL_PREFIX = "repo-review-full-no-comments"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME_RE = re.compile(rf"^{re.escape(SKILL_PREFIX)}\.([0-9a-f]{{40}})\.md$")
-_SUBCOMMANDS = frozenset({"make", "parse", "path"})
+_SUBCOMMANDS = frozenset({"findings", "make", "parse", "path"})
 _USAGE = f"usage: review_sentinel.py {{{'|'.join(sorted(_SUBCOMMANDS))}}} <arg>"
 
 
@@ -39,6 +40,21 @@ def make_review_filename(sha: str) -> str:
     if not _SHA_RE.match(sha):
         raise ValueError(f"expected 40-char lowercase hex SHA, got {sha!r}")
     return f"{SKILL_PREFIX}.{sha}.md"
+
+
+def make_findings_path(base_dir: str | None = None) -> str:
+    """Create an isolated findings JSON path for one review invocation.
+
+    :param base_dir: Optional temporary directory; defaults to the platform temporary directory.
+    :returns: Absolute path to a newly created empty JSON file.
+    """
+    file_descriptor, path = tempfile.mkstemp(
+        prefix=f"{SKILL_PREFIX}-findings.",
+        suffix=".json",
+        dir=base_dir,
+    )
+    os.close(file_descriptor)
+    return path
 
 
 def parse_review_filename(filename: str) -> str | None:
@@ -75,7 +91,8 @@ def _main(argv: Sequence[str]) -> int:
 
     Subcommands: ``make <sha>`` prints the filename; ``parse <path>`` prints
     the encoded SHA (or exits 1 if the path is not a sentinel); ``path <sha>``
-    prints ``<REVIEW_DIR>/<filename>``.
+    prints ``<REVIEW_DIR>/<filename>``; ``findings <dir>`` creates and prints a
+    unique findings JSON path.
 
     :param argv: Argument list, normally ``sys.argv``.
     :returns: Process exit code (0 success; 1 parse no-match; 2 usage/ValueError).
@@ -85,7 +102,9 @@ def _main(argv: Sequence[str]) -> int:
         return 2
     command, arg = argv[1], argv[2]
     try:
-        if command == "make":
+        if command == "findings":
+            sys.stdout.write(make_findings_path(arg) + "\n")
+        elif command == "make":
             sys.stdout.write(make_review_filename(arg) + "\n")
         elif command == "path":
             sys.stdout.write(make_review_path(arg) + "\n")

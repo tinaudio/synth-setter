@@ -241,6 +241,17 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"print\s+the audit table before stopping", text)
 
 
+def test_no_comments_review_uses_isolated_findings_path() -> None:
+    """Prevent concurrent reviews from sharing one global findings file."""
+    text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
+
+    fixed_findings_path = Path("/").joinpath("tmp", "repo-review-full-no-comments-findings.json")
+    assert "review_sentinel.py findings" in text
+    assert str(fixed_findings_path) not in text
+    assert "exact printed path" in text
+    assert "remove the findings file" in text
+
+
 def test_full_review_skills_define_flat_pi_orchestration() -> None:
     """Avoid unsupported nested Tintin fan-out while preserving the pipeline."""
     for skill in ("repo-review-full", "repo-review-full-no-comments"):
