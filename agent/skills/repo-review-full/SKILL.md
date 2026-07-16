@@ -38,8 +38,10 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
    **Pi exception:** do not launch `pr-review-orchestrator`. Execute the
    orchestrator brief in the main Pi session and use Tintin's `Agent` tool with
    `subagent_type: "pr-review-worker"` for the flat, parallel Step 4 fan-out.
-   Follow the Pi model allocation, quota retry, merge, and transcript-audit
-   rules in `agent/skills/_shared/repo-review-full-analysis.md` exactly.
+   Pi must supply per-invocation model and thinking overrides selected by the
+   shared policy; the non-Pi pinned-role rule does not apply. Follow the Pi
+   allocation, quota retry, merge, and transcript-audit rules in
+   `agent/skills/_shared/repo-review-full-analysis.md` exactly.
 
 4. Relay the agent's returned `html_url` and one-line summary to the user
    verbatim. Do not re-run or second-guess the pipeline.

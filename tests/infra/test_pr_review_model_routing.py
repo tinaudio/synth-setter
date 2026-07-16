@@ -226,6 +226,8 @@ def test_pi_review_policy_uses_codex_and_free_openrouter_failover() -> None:
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
+    assert "pi --list-models" in text
+    assert "authentication" in text.lower()
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:
@@ -236,6 +238,7 @@ def test_full_review_skills_define_flat_pi_orchestration() -> None:
         assert "pr-review-worker" in text
         assert "flat" in text.lower()
         assert "Agent" in text
+        assert "Pi must supply per-invocation model and thinking overrides" in text
 
 
 def test_headless_hook_review_defaults_match_pinned_tier() -> None:

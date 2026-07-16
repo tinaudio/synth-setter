@@ -46,8 +46,10 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
    **Pi exception:** do not launch `pr-review-orchestrator`. Execute the
    orchestrator brief in the main Pi session and use Tintin's `Agent` tool with
    `subagent_type: "pr-review-worker"` for the flat, parallel Step 4 fan-out.
-   Follow the Pi model allocation, quota retry, merge, and transcript-audit
-   rules in `agent/skills/_shared/repo-review-full-analysis.md` exactly.
+   Pi must supply per-invocation model and thinking overrides selected by the
+   shared policy; the non-Pi pinned-role rule does not apply. Follow the Pi
+   allocation, quota retry, merge, and transcript-audit rules in
+   `agent/skills/_shared/repo-review-full-analysis.md` exactly.
 
 4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
@@ -61,8 +63,10 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
 >
-> **Model policy.** Use the named PR-review worker roles from the shared
-> analysis. Do not supply per-invocation model overrides.
+> **Model policy.** Outside Pi, use the named PR-review worker roles from the
+> shared analysis without per-invocation model overrides. Under Pi, use the
+> shared dynamic routing table and supply every worker's model and thinking
+> level explicitly.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >

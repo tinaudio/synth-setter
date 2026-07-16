@@ -114,6 +114,16 @@ the exact transcript path from the result's `Output file:` field in a
 `## Pi review audit` section of `review_body`. This audit section does not
 change the findings JSON shape or inline-comment contract.
 
+Before fan-out, run `pi --list-models` once and parse its provider/model rows.
+If either `openai-codex` or `openrouter` has no available models, stop with an
+actionable authentication prerequisite (`/login <provider>` or set its API key
+before starting Pi); missing authentication is not quota exhaustion. Remove an
+unlisted candidate from its row before launch and record it as `unavailable`
+with no agent id or transcript. If a row has no candidate left, stop. This lets
+a retired free model fall through without hiding a provider setup error. If a
+model disappears after preflight and `Agent` returns `Model not found`, apply
+the same unavailable-candidate rule rather than classifying it as quota.
+
 Choose the model candidates and base thinking level from this table. Start with
 `Initial`; on a qualifying quota/capacity failure try `Fallback 1`, then
 `Fallback 2`, each at most once with the same prompt and thinking level.
