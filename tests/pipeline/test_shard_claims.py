@@ -289,6 +289,20 @@ class TestClaimLifecycle:
         assert claims.complete(claimed) is True
         assert claims.status_counts() == {"available": 1, "done": 1}
 
+    def test_complete_called_twice_returns_true_and_stays_done(self, tmp_path: Path) -> None:
+        """A duplicate ack (a retry after an ambiguous failure) is benign.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        claims = _claims(tmp_path)
+        claims.populate(range(1))
+        claimed = claims.claim()
+        assert claimed is not None
+        assert claims.complete(claimed) is True
+
+        assert claims.complete(claimed) is True
+        assert claims.status_counts() == {"done": 1}
+
     def test_live_claim_is_not_reclaimable_by_peer(self, tmp_path: Path) -> None:
         """A peer cannot steal a claim whose lease is still live.
 
@@ -352,6 +366,22 @@ class TestLeaseExpiryAndFencing:
 
         assert worker.complete(first) is False
         assert worker.complete(second) is True
+
+    def test_done_shard_with_lapsed_lease_is_not_reclaimable(self, tmp_path: Path) -> None:
+        """Reclaiming keys on status, never on lease expiry alone.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        finisher = _claims(tmp_path, owner="worker-a", lease=timedelta(seconds=-1))
+        finisher.populate(range(1))
+        claimed = finisher.claim()
+        assert claimed is not None
+        assert finisher.complete(claimed) is True
+
+        peer = _claims(tmp_path, owner="worker-b")
+
+        assert peer.claim() is None
+        assert peer.status_counts() == {"done": 1}
 
     def test_default_lease_covers_a_long_render(self) -> None:
         """The default lease outlasts the slowest expected render."""
