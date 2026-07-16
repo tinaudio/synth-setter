@@ -31,6 +31,7 @@ from synth_setter.models.components.transformer import (
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +42,24 @@ _MAX_UPLOAD_ATTEMPTS = 3
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
 _CheckpointRevision = tuple[str, float, int, int | None]
+
+
+def _stderr_tail(exc: BaseException) -> str:
+    """Return the trailing stderr a subprocess error carries.
+
+    That tail is the child traceback that makes a probe failure diagnosable
+    from the run log.
+
+    :param exc: Exception whose optional ``stderr`` attribute to read.
+    :returns: Up to the last ``STDERR_TAIL_CHARS`` characters, or ``""`` when absent.
+    """
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        # TimeoutExpired attaches undecoded bytes even when the runner asked for text.
+        stderr = stderr.decode(errors="replace")
+    if not isinstance(stderr, str) or not stderr:
+        return ""
+    return stderr[-STDERR_TAIL_CHARS:]
 
 
 def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
@@ -723,7 +742,13 @@ class ValAudioProbe(Callback):
         try:
             metrics = future.result()
         except Exception as exc:
-            log.warning("val audio probe at step %s failed: %s; skipping its metrics.", step, exc)
+            tail = _stderr_tail(exc)
+            log.warning(
+                "val audio probe at step %s failed: %s; skipping its metrics.%s",
+                step,
+                exc,
+                f"\nstderr tail:\n{tail}" if tail else "",
+            )
             return
         if probe_dir is not None:
             shutil.rmtree(probe_dir, ignore_errors=True)

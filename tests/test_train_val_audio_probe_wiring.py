@@ -28,12 +28,19 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
 
 
-def _cfg(*, enabled: bool, with_render: bool = True, output_dir: str = "/runs/out") -> DictConfig:
+def _cfg(
+    *,
+    enabled: bool,
+    with_render: bool = True,
+    output_dir: str = "/runs/out",
+    datamodule: dict[str, str | None] | None = None,
+) -> DictConfig:
     """Build the minimal train cfg slice ``_configure_val_audio_probe`` reads.
 
     :param enabled: Value for ``training.val_audio_probe``.
     :param with_render: When ``False``, omit the ``render`` group entirely.
     :param output_dir: Value for ``paths.output_dir``.
+    :param datamodule: Optional ``datamodule`` group; ``None`` omits it entirely.
     :returns: Composed cfg fragment.
     """
     cfg = OmegaConf.create(
@@ -44,6 +51,9 @@ def _cfg(*, enabled: bool, with_render: bool = True, output_dir: str = "/runs/ou
             "training": {"val_audio_probe": enabled, "val_audio_probe_samples": 5},
         }
     )
+    if datamodule is not None:
+        with open_dict(cfg):
+            cfg.datamodule = datamodule
     if with_render:
         with open_dict(cfg):
             cfg.render = {
@@ -106,6 +116,65 @@ def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples:
 
     with pytest.raises(ValueError, match="positive integer"):
         _configure_val_audio_probe(cfg, [])
+
+
+def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() -> None:
+    """A render spec that cannot decode the model's output layout fails at configure time.
+
+    A ``surge_simple`` model probed with ``render=surge_xt`` decodes 92-dim
+    predictions against the 164-param spec: every probe cycle dies in the
+    subprocess and the run silently produces no audio metrics (#1990).
+    """
+    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
+
+    with pytest.raises(ValueError) as excinfo:
+        _configure_val_audio_probe(cfg, [])
+
+    assert "render.param_spec_name is 'surge_xt'" in str(excinfo.value)
+    assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
+
+
+def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> None:
+    """A render spec matching the datamodule's spec wires the probe normally."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(
+        _cfg(enabled=True, datamodule={"param_spec_name": "surge_xt"}), callbacks
+    )
+
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], ValAudioProbe)
+
+
+def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> None:
+    """A render group without ``param_spec_name`` fails and the message says it is unset."""
+    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
+    with open_dict(cfg):
+        del cfg.render.param_spec_name
+
+    with pytest.raises(ValueError) as excinfo:
+        _configure_val_audio_probe(cfg, [])
+
+    assert "render.param_spec_name is unset" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "datamodule",
+    [{"batch_size": "8"}, {"param_spec_name": None}],
+    ids=["key-absent", "key-null"],
+)
+def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
+    datamodule: dict[str, str | None],
+) -> None:
+    """A datamodule without a ``param_spec_name`` value (non-VST) leaves the guard inert.
+
+    :param datamodule: Datamodule group variant carrying no usable spec name.
+    """
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True, datamodule=datamodule), callbacks)
+
+    assert len(callbacks) == 1
 
 
 def test_configure_val_audio_probe_rejects_disabled_validation() -> None:

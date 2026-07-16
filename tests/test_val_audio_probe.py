@@ -10,6 +10,7 @@ rank/sanity gating all execute for real, and only the subprocess chain behind
 from __future__ import annotations
 
 import concurrent.futures
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any, cast
@@ -18,7 +19,7 @@ import pytest
 import torch
 from lightning.pytorch import LightningModule, Trainer
 
-from synth_setter.utils.callbacks import ValAudioProbe
+from synth_setter.utils.callbacks import ValAudioProbe, _stderr_tail
 
 _DRAIN_TIMEOUT_SECONDS = 30
 
@@ -254,6 +255,105 @@ def test_val_audio_probe_warns_and_continues_when_probe_raises(
 
     assert module.logged == []
     assert "render exploded" in caplog.text
+    assert "stderr tail:" not in caplog.text  # nothing to show for a stderr-less error
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        (None, ""),
+        ("", ""),
+        ("str-boom", "str-boom"),
+        (b"bytes-boom", "bytes-boom"),
+        ("x" * 3000, "x" * 2000),
+    ],
+    ids=["none", "empty", "str", "bytes", "capped"],
+)
+def test_stderr_tail_normalizes_and_caps(stderr: str | bytes | None, expected: str) -> None:
+    """The tail helper handles absent, empty, str, bytes, and oversized stderr.
+
+    :param stderr: ``CalledProcessError.stderr`` payload variant.
+    :param expected: Text the warning suffix should carry.
+    """
+    exc = subprocess.CalledProcessError(1, ["render"], stderr=stderr)
+
+    assert _stderr_tail(exc) == expected
+
+
+def test_stderr_tail_returns_empty_for_error_without_stderr_attribute() -> None:
+    """Plain exceptions (no ``stderr`` attribute) yield an empty tail."""
+    assert _stderr_tail(RuntimeError("boom")) == ""
+
+
+def test_stderr_tail_ignores_non_text_stderr_attribute() -> None:
+    """A non-str/bytes ``stderr`` attribute yields an empty tail, not a TypeError."""
+
+    class _WeirdStderrError(Exception):
+        stderr = 12345
+
+    assert _stderr_tail(_WeirdStderrError("boom")) == ""
+
+
+def test_stderr_tail_surfaces_timeout_stderr() -> None:
+    """A timed-out subprocess's captured stderr surfaces like a failed one's."""
+    exc = subprocess.TimeoutExpired(["render"], 5.0, stderr="timeout-boom")
+
+    assert _stderr_tail(exc) == "timeout-boom"
+
+
+def test_val_audio_probe_failure_warning_includes_subprocess_stderr(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed probe's warning carries the subprocess stderr, not just the exit status.
+
+    ``CalledProcessError``'s repr names only the command and exit code; without the
+    stderr the actual failure (e.g. a decode ValueError) is invisible in the run
+    log and root-causing needs a manual re-run of the render command (#1990).
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param caplog: Pytest fixture capturing the warning record.
+    """
+
+    def failing_probe(probe_dir: Path, step: int) -> dict[str, float]:
+        raise subprocess.CalledProcessError(
+            1, ["render"], stderr="Traceback ...\nValueError: boom-stderr-marker"
+        )
+
+    probe = _probe(tmp_path, probe_fn=failing_probe)
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    with caplog.at_level("WARNING"):
+        _run_validation(probe, _trainer(global_step=200), module)
+
+    assert "boom-stderr-marker" in caplog.text
+
+
+def test_val_audio_probe_failure_warning_truncates_long_stderr_to_tail(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the tail of an oversized stderr reaches the warning; the head is dropped.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param caplog: Pytest fixture capturing the warning record.
+    """
+
+    def failing_probe(probe_dir: Path, step: int) -> dict[str, float]:
+        raise subprocess.CalledProcessError(
+            1, ["render"], stderr="HEAD-marker\n" + "x" * 5000 + "\nTAIL-marker"
+        )
+
+    probe = _probe(tmp_path, probe_fn=failing_probe)
+    module = _RecordingModule()
+
+    _run_validation(probe, _trainer(global_step=100), module)
+    _drain(probe)
+    with caplog.at_level("WARNING"):
+        _run_validation(probe, _trainer(global_step=200), module)
+
+    assert "TAIL-marker" in caplog.text
+    assert "HEAD-marker" not in caplog.text
 
 
 def test_val_audio_probe_relaunches_after_a_failed_probe(tmp_path: Path) -> None:

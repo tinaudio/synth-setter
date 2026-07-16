@@ -20,7 +20,7 @@ import torch
 
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.subprocess_stream import scaled_timeout
+from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS, scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,28 @@ class ProbeRenderSettings:
     channels: int | None = None
     velocity: int | None = None
     signal_duration_seconds: float | None = None
+
+
+def _run_captured(argv: list[str], stage: str, timeout: float) -> None:  # noqa: DOC502 — raised by subprocess.run
+    """Run one probe stage with stderr captured for failure diagnosis (#1990).
+
+    A failure's ``CalledProcessError``/``TimeoutExpired`` carries the child's
+    stderr for the caller's warning; ``errors="replace"`` keeps invalid bytes
+    from masking that diagnostic with a ``UnicodeDecodeError``. A successful
+    stage's chatter goes to the debug log, tail-capped, so it is not silently
+    discarded.
+
+    :param argv: Stage command line.
+    :param stage: Label naming the subprocess stage (``render`` / ``metrics``).
+    :param timeout: Stage budget in seconds.
+    :raises subprocess.CalledProcessError: on a non-zero stage exit.
+    :raises subprocess.TimeoutExpired: when the stage exceeds ``timeout``.
+    """
+    result = subprocess.run(  # noqa: S603
+        argv, check=True, stderr=subprocess.PIPE, text=True, errors="replace", timeout=timeout
+    )
+    if result.stderr:
+        log.debug("val audio probe: %s stderr tail\n%s", stage, result.stderr[-STDERR_TAIL_CHARS:])
 
 
 def _staged_sample_count(probe_dir: Path) -> int:
@@ -169,9 +191,9 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
     with ExitStack() as stack:
         argv = _render_argv(probe_dir, settings, stack)
         log.info("val audio probe: rendering %s samples at step %s", n_samples, step)
-        subprocess.run(  # noqa: S603
+        _run_captured(
             argv,
-            check=True,
+            "render",
             # 2× samples: --rerender_target renders both pred and target per sample.
             timeout=scaled_timeout(
                 n_samples * 2,
@@ -181,7 +203,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         )
 
     metrics_dir = probe_dir / METRICS_DIRNAME
-    subprocess.run(  # noqa: S603
+    _run_captured(
         [
             sys.executable,
             "-m",
@@ -191,7 +213,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
             "-w",
             str(num_workers),
         ],
-        check=True,
+        "metrics",
         timeout=scaled_timeout(
             n_samples,
             workers=num_workers,

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import torch
@@ -109,16 +111,19 @@ def test_render_argv_prepends_headless_wrapper_on_linux(tmp_path: Path) -> None:
         assert argv[1] == sys.executable
 
 
-def _fake_probe_subprocesses(probe_dir: Path, calls: list[list[str]]):
+def _fake_probe_subprocesses(
+    probe_dir: Path, calls: list[tuple[list[str], dict[str, object]]], stderr: str | None = None
+) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Return a ``subprocess.run`` stand-in that materializes each stage's outputs.
 
     :param probe_dir: Probe directory whose ``audio/`` / ``metrics/`` outputs to fake.
-    :param calls: Receives each invocation's argv for later assertions.
+    :param calls: Receives each invocation's ``(argv, kwargs)`` for later assertions.
+    :param stderr: Stderr text attached to each successful completion.
     :returns: Callable with the ``subprocess.run`` signature the probe uses.
     """
 
-    def fake_run(argv: list[str], *, check: bool, timeout: float):
-        calls.append(list(argv))
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((list(argv), kwargs))
         if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
             sample_dir = probe_dir / "audio" / "sample_0"
             sample_dir.mkdir(parents=True, exist_ok=True)
@@ -130,7 +135,7 @@ def _fake_probe_subprocesses(probe_dir: Path, calls: list[list[str]]):
             (metrics_dir / "aggregated_metrics.csv").write_text(
                 ",mean,std\nmss,1.5,0.1\nrms,0.9,0.05\n"
             )
-        return subprocess.CompletedProcess(argv, 0)
+        return subprocess.CompletedProcess(argv, 0, stderr=stderr)
 
     return fake_run
 
@@ -149,7 +154,7 @@ def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
     """
     probe_dir = fake_r2_remote / "probe"
     _stage(probe_dir)
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
     monkeypatch.setattr(audio_probe.subprocess, "run", _fake_probe_subprocesses(probe_dir, calls))
 
     metrics = run_audio_probe(
@@ -163,8 +168,14 @@ def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
         "val_audio/rms_std": 0.05,
     }
     assert len(calls) == 2, "expected exactly a render call then a metrics call"
-    assert audio_probe._PREDICT_VST_AUDIO_MODULE in calls[0]
-    assert audio_probe._COMPUTE_AUDIO_METRICS_MODULE in calls[1]
+    assert audio_probe._PREDICT_VST_AUDIO_MODULE in calls[0][0]
+    assert audio_probe._COMPUTE_AUDIO_METRICS_MODULE in calls[1][0]
+    for _argv, kwargs in calls:
+        # Contract pin for the failure-diagnosability fix (#1990): dropping either
+        # kwarg would silently revert probe errors to stderr-less warnings.
+        assert kwargs.get("stderr") is subprocess.PIPE
+        assert kwargs.get("text") is True
+        assert kwargs.get("errors") == "replace"
 
     landed = fake_r2_remote / "bucket" / "probes" / "run-1" / "step-5000"
     uploaded = sorted(p.relative_to(landed).as_posix() for p in landed.rglob("*") if p.is_file())
@@ -206,10 +217,156 @@ def test_run_audio_probe_propagates_render_failure(
     """
     _stage(tmp_path)
 
-    def failing_run(argv: list[str], *, check: bool, timeout: float):
+    def failing_run(argv: list[str], **_kwargs: object) -> NoReturn:
         raise subprocess.CalledProcessError(1, argv)
 
     monkeypatch.setattr(audio_probe.subprocess, "run", failing_run)
 
     with pytest.raises(subprocess.CalledProcessError):
         run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+
+def test_run_audio_probe_render_failure_carries_subprocess_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing render's stderr rides the raised error so the caller can log it (#1990).
+
+    The render argv is swapped for a tiny real command that dies with a traceback
+    on stderr; ``run_audio_probe`` runs it through the real ``subprocess.run``.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the render argv builder.
+    """
+    _stage(tmp_path)
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('boom-traceback-marker'); sys.exit(1)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "boom-traceback-marker" in (excinfo.value.stderr or "")
+
+
+def test_run_audio_probe_render_failure_with_non_utf8_stderr_still_carries_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invalid bytes on stderr (e.g. a native VST crash) must not mask the diagnostic.
+
+    With strict decoding the ``UnicodeDecodeError`` would replace the
+    ``CalledProcessError`` this fix exists to enrich.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the render argv builder.
+    """
+    _stage(tmp_path)
+    argv = [
+        sys.executable,
+        "-c",
+        r"import sys; sys.stderr.buffer.write(b'\xff\xfe native-crash-marker'); sys.exit(1)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "native-crash-marker" in (excinfo.value.stderr or "")
+
+
+def test_run_audio_probe_metrics_failure_carries_subprocess_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing metrics subprocess's stderr rides the raised error, like the render stage's (#1990).
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the render argv builder and the metrics module name.
+    """
+    _stage(tmp_path)
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(
+        audio_probe, "_COMPUTE_AUDIO_METRICS_MODULE", "synth_setter.nonexistent_probe_metrics"
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "No module named" in (excinfo.value.stderr or "")
+
+
+@pytest.mark.slow
+def test_run_audio_probe_render_timeout_carries_partial_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real stage timeout surfaces the child's pre-kill stderr on the raised error.
+
+    CPython attaches the partial capture to ``TimeoutExpired`` as raw bytes even
+    under ``text=True`` — the chain the warning path's bytes handling exists for.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Shrinks the render budget and replaces the argv builder.
+    """
+    _stage(tmp_path)
+    monkeypatch.setattr(audio_probe, "RENDER_TIMEOUT_OVERHEAD_SECONDS", 0.5)
+    monkeypatch.setattr(audio_probe, "RENDER_TIMEOUT_PER_SAMPLE_SECONDS", 0.0)
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys, time; sys.stderr.write('pre-timeout-chatter'); "
+        "sys.stderr.flush(); time.sleep(30)",
+    ]
+    monkeypatch.setattr(audio_probe, "_render_argv", lambda *_args: argv)
+
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS)
+
+    assert "pre-timeout-chatter" in str(excinfo.value.stderr)
+
+
+def test_run_audio_probe_forwards_success_stderr_to_debug_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Non-fatal stderr chatter from a successful stage lands in the debug log, not nowhere.
+
+    Capturing stderr for failure diagnosis (#1990) stops it streaming to the run
+    log; on success the captured text must still be reachable for operators.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the probe's ``subprocess.run``.
+    :param caplog: Pytest fixture capturing the debug records.
+    """
+    _stage(tmp_path)
+    monkeypatch.setattr(
+        audio_probe.subprocess,
+        "run",
+        _fake_probe_subprocesses(tmp_path, [], stderr="deprecation-chatter"),
+    )
+
+    with caplog.at_level("DEBUG", logger="synth_setter.evaluation.audio_probe"):
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS, upload_uri=None)
+
+    assert "deprecation-chatter" in caplog.text
+
+
+def test_run_audio_probe_success_stderr_debug_log_is_tail_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Oversized success-path chatter reaches the debug log tail-only, like failures.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the probe's ``subprocess.run``.
+    :param caplog: Pytest fixture capturing the debug records.
+    """
+    _stage(tmp_path)
+    chatter = "HEAD-marker\n" + "x" * 5000 + "\nTAIL-marker"
+    monkeypatch.setattr(
+        audio_probe.subprocess, "run", _fake_probe_subprocesses(tmp_path, [], stderr=chatter)
+    )
+
+    with caplog.at_level("DEBUG", logger="synth_setter.evaluation.audio_probe"):
+        run_audio_probe(tmp_path, 1, settings=_SETTINGS, upload_uri=None)
+
+    assert "TAIL-marker" in caplog.text
+    assert "HEAD-marker" not in caplog.text

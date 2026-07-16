@@ -354,6 +354,27 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     assert sample["params"].shape == (2, expected_width)
 
 
+def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
+    """The real train entrypoint dies at configure time on a probe/model spec mismatch.
+
+    The guard kills a launch whose probe cannot decode the model's predictions
+    before a single training step runs (#1990).
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    with open_dict(cfg):
+        cfg.training.val_audio_probe = True
+        cfg.render = {
+            "param_spec_name": "surge_xt",
+            "plugin_state_path": "presets/surge-base.vstpreset",
+        }
+
+    HydraConfig().set_config(cfg)
+    with pytest.raises(ValueError, match="param_spec_name"):
+        train(cfg)
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
@@ -998,6 +1019,9 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             "velocity": 100,
             "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
         }
+        # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
+        # spec so the configure-time spec-match guard (#1990) passes.
+        cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
         cfg_surge_real_train.training.val_audio_probe = True
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
         # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
