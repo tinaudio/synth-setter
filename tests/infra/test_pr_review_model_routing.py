@@ -205,6 +205,36 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path) -> None:
+    """Preserve valid reports around blank NDJSON records.
+
+    :param tmp_path: Directory for the fake Codex executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
+    codex = tmp_path / "codex"
+    codex.write_text(
+        "#!/bin/bash\n"
+        "printf '\\n'\n"
+        "printf '%s\\n' "
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"structured report"}}\'\n'
+        "printf '  \\n'\n"
+    )
+    codex.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "pr-review-worker-fast",
+        "--prompt",
+        "routing probe",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert str(result) == "structured report"
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_orchestrator_default_timeout_launches(tmp_path: Path) -> None:
     """Protect the orchestrator's default-deadline execution path.
 

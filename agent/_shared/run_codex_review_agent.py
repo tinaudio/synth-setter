@@ -232,6 +232,8 @@ def _extract_report(output: str) -> str:
     """
     reports = []
     for line in output.splitlines():
+        if not line.strip():
+            continue
         event = json.loads(line)
         item = event.get("item", {})
         if event.get("type") == "item.completed" and item.get("type") == "agent_message":
