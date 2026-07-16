@@ -1072,3 +1072,82 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert not [p for p in landed if p.endswith(".pt")], (
         f"raw prediction tensors must stay local, but reached R2: {landed}"
     )
+
+
+def test_train_resume_auto_continues_from_newest_sibling_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """A second launch with ``training.resume=auto`` loads the first run's ``last.ckpt``.
+
+    Both runs share ``max_epochs=1``: the resumed launch restores the completed
+    epoch and trains zero additional steps, so its final weights must equal the
+    first run's — proving the discovered checkpoint was actually loaded, not
+    merely located.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of both sibling run output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    first_cfg = cfg_train.copy()
+    with open_dict(first_cfg):
+        first_cfg.paths.output_dir = str(tmp_path / "run-first")
+        first_cfg.test = False
+    _, first_objects = train(first_cfg)
+    # Parameters only: the state dict also holds ``_d``, an *uninitialized*
+    # device-tracker buffer whose bytes are garbage and never restored-to-equal.
+    first_weights = {
+        name: param.detach().clone() for name, param in first_objects["model"].named_parameters()
+    }
+    first_ckpt = tmp_path / "run-first" / "checkpoints" / "last.ckpt"
+    assert first_ckpt.is_file()
+
+    second_cfg = cfg_train.copy()
+    with open_dict(second_cfg):
+        second_cfg.paths.output_dir = str(tmp_path / "run-second")
+        second_cfg.test = False
+        second_cfg.training.resume = "auto"
+    _, second_objects = train(second_cfg)
+
+    assert second_objects["cfg"].ckpt_path == str(first_ckpt)
+    second_weights = dict(second_objects["model"].named_parameters())
+    assert set(second_weights) == set(first_weights)
+    for name, first_param in first_weights.items():
+        assert torch.equal(second_weights[name], first_param), f"{name} diverged"
+
+
+def test_train_resume_require_without_checkpoint_raises(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``training.resume=require`` refuses to silently start fresh.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+
+    with pytest.raises(RuntimeError, match="training.resume=require"):
+        train(cfg_train)
+
+
+def test_train_resume_auto_without_checkpoint_starts_fresh(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``training.resume=auto`` with nothing to resume trains from scratch.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+
+    metric_dict, object_dict = train(cfg_train)
+
+    assert "train/loss" in metric_dict
+    assert object_dict["cfg"].ckpt_path is None
