@@ -460,17 +460,17 @@ docs:
     description: Code-review section — review fan-out worker configuration
     sources:
       - pattern: "agent/_shared/run_codex_review_agent.*"
-        covers: "Codex review launcher: role resolution from .codex/agents TOMLs, codex exec invocation, agent_message extraction"
+        covers: "Codex review launcher from role resolution through agent_message extraction"
       - pattern: "agent/_shared/run_opencode_review_agent.*"
-        covers: "OpenCode review launcher: role resolution from .opencode/agents TOMLs, read-only pr-reviewer agent, watchdog timeout, exit-3 degrade signal"
+        covers: "OpenCode review launcher from role resolution through the exit-3 degrade signal"
       - pattern: ".claude/agents/pr-review-*.md"
-        covers: "Claude-side pinned review roles (model/effort frontmatter) and worker briefs incl. the opencode-launcher carve-out"
+        covers: "Claude-side pinned review roles with their worker briefs"
       - pattern: ".codex/agents/*.toml"
-        covers: "Codex-side pinned review roles (model/model_reasoning_effort) and developer instructions"
+        covers: "Codex-side pinned review roles with their developer instructions"
       - pattern: ".opencode/agents/*.toml"
         covers: "OpenCode-side pinned review models/variants for the worker roles"
       - pattern: "opencode.json"
-        covers: "Read-only pr-reviewer opencode agent: edit/task deny, read-only bash allowlist"
+        covers: "Read-only pr-reviewer opencode agent permission profile"
       - pattern: "agent/skills/_shared/repo-review-full-analysis.md"
         covers: "Shared fan-out pipeline from skill selection through the sentinel contract"
 
