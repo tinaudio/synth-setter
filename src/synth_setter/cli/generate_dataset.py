@@ -161,14 +161,12 @@ def _run_oracle_eval_subprocess(
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # eval.yaml leaves render null; render_vst=true re-renders predicted
-        # params. Take the surge_simple group for structure, then override every
-        # render field predict_vst_audio renders with to the generation render so
-        # the round-trip matches it exactly (not the group / CLI defaults).
-        "render=surge_simple",
-        f"render.param_spec_name={render.param_spec_name}",
-        f"render.plugin_state_path={render.plugin_state_path}",
-        f"render.plugin_path={render.plugin_path}",
+        # eval.yaml leaves render null; use the generic VST structure and copy
+        # the generation render fields needed for an exact round-trip.
+        "render=vst",
+        f"+render.param_spec_name={render.param_spec_name}",
+        f"+render.plugin_state_path={render.plugin_state_path}",
+        f"+render.plugin_path={render.plugin_path}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",

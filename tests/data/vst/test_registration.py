@@ -300,14 +300,14 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_pins_synth_identity_over_surge_xt_defaults() -> None:
-    """The emitted config inherits surge_xt knobs and overrides the identity fields."""
+def test_render_config_yaml_pins_synth_identity_over_vst_defaults() -> None:
+    """The emitted config inherits generic VST knobs and pins synth identity."""
     text = render_config_yaml(
         "fake_synth", plugin_path="plugins/fake.vst3", renderer_version="9.9.9"
     )
 
     cfg = yaml.safe_load(text)
-    assert cfg["defaults"] == ["surge_xt"]
+    assert cfg["defaults"] == ["vst"]
     assert cfg["plugin_path"] == "plugins/fake.vst3"
     assert cfg["plugin_state_path"] == "presets/fake_synth-base.vstpreset"
     assert cfg["param_spec_name"] == "fake_synth"

@@ -69,7 +69,7 @@ def checkout(tmp_path: Path) -> Path:
     shutil.copy(_REAL_PKG_DIR / "data/vst/param_spec_registry.py", vst_dir)
     render_dir = root / "src/synth_setter/configs/render"
     render_dir.mkdir(parents=True)
-    shutil.copy(_REAL_PKG_DIR / "configs/render/surge_xt.yaml", render_dir)
+    shutil.copy(_REAL_PKG_DIR / "configs/render/vst.yaml", render_dir)
     bundle = root / "plugins/fake.vst3/Contents"
     bundle.mkdir(parents=True)
     (bundle / "moduleinfo.json").write_text('{"Version": "9.9.9"}')

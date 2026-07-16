@@ -130,8 +130,8 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
 
     Pins #1999 through the ``spec_from_cfg`` entrypoint path: the composed
-    ``surge_simple`` render group (inheriting ``render/surge_xt.yaml``'s surfaced
-    value) resolves ``"once"`` when neither experiment nor CLI overrides it. The
+    ``surge_simple`` render group (inheriting ``render/vst.yaml``'s surfaced value)
+    resolves ``"once"`` when neither experiment nor CLI overrides it. The
     schema-level Field default is pinned separately in
     ``tests/pipeline/schemas/test_dataset_spec.py::test_cadence_defaults_off_darwin``.
 
