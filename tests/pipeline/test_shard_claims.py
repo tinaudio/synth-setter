@@ -183,6 +183,54 @@ class TestPopulate:
 
         assert lance.dataset(claims.uri).schema.equals(created_schema)
 
+    def test_populate_existing_table_ignores_changed_lance_error_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An existing table is detected by its postcondition, not Lance's error prose.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Rewords Lance's unstructured already-exists error.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate([0])
+
+        def _reworded_create(*args: Any, **kwargs: Any) -> Any:
+            raise OSError("the destination is present")
+
+        monkeypatch.setattr(lance, "write_dataset", _reworded_create)
+
+        assert claims.populate([0, 1]) == 1
+        assert claims.status_counts() == {"available": 2}
+
+    def test_populate_creation_failure_preserves_original_oserror_subtype(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed postcondition probe re-raises the original create failure unchanged.
+
+        :param tmp_path: Hosts the per-test claims table path.
+        :param monkeypatch: Injects create and postcondition-probe failures.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        create_error = PermissionError("read-only destination")
+
+        def _failed_create(*args: Any, **kwargs: Any) -> Any:
+            raise create_error
+
+        def _missing_dataset(self: ShardClaims) -> Any:
+            raise ValueError("dataset not found")
+
+        monkeypatch.setattr(lance, "write_dataset", _failed_create)
+        monkeypatch.setattr(ShardClaims, "_dataset", _missing_dataset)
+
+        with pytest.raises(PermissionError) as exc_info:
+            claims.populate([0])
+
+        assert exc_info.value is create_error
+
     def test_populate_creation_failure_other_than_exists_propagates(self, tmp_path: Path) -> None:
         """Only the dataset-exists signal routes to the merge path; real IO errors surface.
 
@@ -436,6 +484,63 @@ class TestLeaseExpiryAndFencing:
 
         with pytest.raises(OSError, match="Permission denied"):
             claims.claim()
+
+    def test_claim_lost_after_commit_returns_drained_without_reporting_the_stale_win(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A takeover before ownership confirmation discards the stale committed win.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Inserts a real peer update before the confirmation read.
+        """
+        import lance
+
+        claims = _claims(tmp_path, owner="worker-a")
+        claims.populate([0])
+        real_to_table = lance.LanceDataset.to_table
+        intercepted = False
+
+        def _take_over_before_read(dataset: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+            nonlocal intercepted
+            if not intercepted and kwargs.get("columns") == ["owner", "claim_gen"]:
+                intercepted = True
+                dataset.update(
+                    {
+                        "owner": "'worker-b'",
+                        "lease_expiry_s": "9223372036854775807",
+                        "claim_gen": "claim_gen + 1",
+                    },
+                    where="shard_id = 0",
+                )
+            return real_to_table(dataset, *args, **kwargs)
+
+        monkeypatch.setattr(lance.LanceDataset, "to_table", _take_over_before_read)
+
+        assert claims.claim() is None
+        assert lance.dataset(claims.uri).to_table().to_pylist()[0]["owner"] == "worker-b"
+
+    def test_complete_reraises_unrelated_storage_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Completion only absorbs commit contention; other storage errors propagate.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Injects an unrelated Lance update failure.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate([0])
+        claimed = claims.claim()
+        assert claimed is not None
+
+        def _broken_update(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(lance.LanceDataset, "update", _broken_update)
+
+        with pytest.raises(OSError, match="Permission denied"):
+            claims.complete(claimed)
 
     def test_complete_under_exhausted_commit_retries_abandons_without_raising(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

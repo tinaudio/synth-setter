@@ -53,10 +53,9 @@ _STATUS_AVAILABLE: Final = "available"
 _STATUS_CLAIMED: Final = "claimed"
 _STATUS_DONE: Final = "done"
 
-# Lance raises both cases as plain OSError (no structured type), so they are
-# matched as substrings; the storm-injection tests pin the messages.
+# Lance raises commit-retry exhaustion as plain OSError with no structured
+# fields, so the storm-injection tests pin the message used for discrimination.
 _CONTENTION_ERROR: Final = "Too many concurrent writers"
-_ALREADY_EXISTS_ERROR: Final = "Dataset already exists"
 # Applied to every lost race before the next scan. Flat jitter suffices:
 # claims are minutes apart in production, so contention is short-lived and
 # exponential growth would only delay recovery.
@@ -227,16 +226,14 @@ class ShardClaims:
             lance.write_dataset(
                 rows, self.uri, mode="create", storage_options=self.storage_options
             )
-        except OSError as exc:
-            if _ALREADY_EXISTS_ERROR not in str(exc):
+        except OSError:
+            try:
+                dataset = self._dataset()
+            except (OSError, ValueError):
+                dataset = None
+            if dataset is None:
                 raise
-            # Typically a relaunch: top up missing rows.
-            merged = (
-                self._dataset()
-                .merge_insert("shard_id")
-                .when_not_matched_insert_all()
-                .execute(rows)
-            )
+            merged = dataset.merge_insert("shard_id").when_not_matched_insert_all().execute(rows)
             inserted = int(merged["num_inserted_rows"])
             _logger.info("populated_claims", inserted=inserted, requested=len(ids))
             return inserted
