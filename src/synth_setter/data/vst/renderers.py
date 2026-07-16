@@ -206,6 +206,100 @@ class PedalboardRenderer(AudioRenderer):
 
 
 @dataclass(kw_only=True)
+class TorchSynthRenderer(AudioRenderer):
+    """Render through the in-process torchsynth ``Voice`` (no plugin host).
+
+    Shares the online datamodule's cached voice and render path
+    (``render_torchsynth``): sampled params (normalized ``[0, 1]`` values keyed
+    ``module.name``) override the spec module's baseline patch, so every
+    un-sampled knob is pinned. ``plugin_path`` is the bare backend name
+    (``"torchsynth"``) and ``plugin_state_path`` is unused. MIDI velocity is
+    ignored — the voice has no velocity input, and production configs hold it
+    constant per run. The note-on offset is emulated by delaying the rendered
+    audio, and the voice's mono output is repeated across requested channels.
+    """
+
+    _param_indices: dict[str, int] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Verify the live voice against the pinned spec (``ValueError`` on drift), build the key index."""
+        from synth_setter.data.torchsynth_datamodule import _make_renderer
+        from synth_setter.data.vst.torchsynth_param_spec import (
+            INFERABLE_SPEC,
+            verify_voice_matches_spec,
+        )
+
+        verify_voice_matches_spec(
+            _make_renderer(int(self.sample_rate), self._signal_length()).voice
+        )
+        self._param_indices = {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
+
+    def _signal_length(self) -> int:
+        """Return the render length in samples.
+
+        :returns: Configured duration at the configured sample rate.
+        """
+        return int(self.sample_rate * self.signal_duration_seconds)
+
+    def render(
+        self,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Write params over the baseline patch and render one note in-process.
+
+        :param params: Normalized values keyed ``module.name``, overriding the
+            baseline patch; keys outside the pinned voice spec are rejected.
+        :param midi_note: MIDI pitch of the note.
+        :param velocity: Ignored; torchsynth's voice has no velocity input.
+        :param note_start_and_end: Note start and end times in seconds. The
+            note-on length clamps into the keyboard's pinned duration range and
+            the start offset delays the audio with a zero-filled head.
+        :param warmup: Unused; there is no plugin editor to warm up.
+        :returns: Rendered audio with channels on the first axis.
+        :raises KeyError: A requested key has no matching voice parameter.
+        """
+        del velocity, warmup
+        import torch
+
+        from synth_setter.data.torchsynth_datamodule import render_torchsynth
+        from synth_setter.data.vst.torchsynth_param_spec import (
+            PARAM_SPEC,
+            default_normalized_row,
+        )
+
+        unknown = sorted(params.keys() - self._param_indices.keys())
+        if unknown:
+            raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
+        row = list(default_normalized_row())
+        for key, value in params.items():
+            row[self._param_indices[key]] = value
+        start, end = note_start_and_end
+        duration_range = next(p for p in PARAM_SPEC if p.key == "keyboard.duration")
+        duration = min(max(end - start, duration_range.minimum), duration_range.maximum)
+        samples = self._signal_length()
+        audio = render_torchsynth(
+            torch.tensor([row], dtype=torch.float32),
+            sample_rate=int(self.sample_rate),
+            signal_length=samples,
+            midi_pitch=midi_note,
+            note_duration_seconds=duration,
+        ).numpy()
+        offset = int(round(start * self.sample_rate))
+        if offset:
+            delayed = np.zeros_like(audio)
+            delayed[:, offset:] = audio[:, : samples - offset]
+            audio = delayed
+        if self.channels > 1:
+            audio = np.repeat(audio, self.channels, axis=0)
+        return _validate_rendered_audio(audio, channels=self.channels, samples=samples)
+
+
+@dataclass(kw_only=True)
 class DawDreamerRenderer(AudioRenderer):
     """Render through DawDreamer's JUCE-backed VST host.
 

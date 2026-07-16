@@ -96,6 +96,29 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.param_sample_cadence == "sample"
 
 
+@pytest.mark.parametrize(
+    ("name", "num_params"),
+    [("torchsynth_adsr", 8), ("torchsynth_simple", 19), ("torchsynth_full", 79)],
+)
+def test_render_torchsynth_composes_into_valid_render_config(name: str, num_params: int) -> None:
+    """Each ``render=torchsynth_*`` group composes into a valid in-process ``RenderConfig``.
+
+    :param name: Render group / param-spec registry key under test.
+    :param num_params: Expected encoded parameter width.
+    """
+    spec = _spec_from_dataset_overrides([f"render={name}"])
+
+    assert spec.render.param_spec_name == name
+    assert spec.render.renderer_backend == "torchsynth"
+    assert spec.render.plugin_path == "torchsynth"
+    assert spec.render.plugin_state_path == ""
+    assert spec.render.renderer_version == "1.0.2"
+    assert spec.render.gui_toggle_cadence == "never"
+    # One shared voice per shard: rebuilding it per render would dominate render time.
+    assert spec.render.plugin_reload_cadence == "once"
+    assert spec.num_params == num_params
+
+
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["render=obxf"])

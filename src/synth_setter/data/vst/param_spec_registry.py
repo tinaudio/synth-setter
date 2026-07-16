@@ -26,6 +26,11 @@ from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_SIMPLE_PARAM_SPEC,
     SURGE_XT_PARAM_SPEC,
 )
+from synth_setter.data.vst.torchsynth_param_spec import (
+    TORCHSYNTH_ADSR_PARAM_SPEC,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+    TORCHSYNTH_SIMPLE_PARAM_SPEC,
+)
 from synth_setter.param_spec_name import ParamSpecName
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
@@ -33,6 +38,9 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
+    ParamSpecName("torchsynth_adsr"): TORCHSYNTH_ADSR_PARAM_SPEC,
+    ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,
+    ParamSpecName("torchsynth_full"): TORCHSYNTH_FULL_PARAM_SPEC,
 }
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
@@ -41,6 +49,10 @@ plugin_state_paths: dict[str, str] = {
     "surge_simple": "presets/surge-simple.vstpreset",
     "surge_4": "presets/surge-mini.vstpreset",
     "obxf": "presets/obxf-base.vstpreset",
+    # Python backends have no preset file; the baseline patch lives in the spec module.
+    "torchsynth_adsr": "",
+    "torchsynth_simple": "",
+    "torchsynth_full": "",
 }
 
 

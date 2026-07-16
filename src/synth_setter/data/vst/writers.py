@@ -23,7 +23,12 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
+from synth_setter.data.vst.renderers import (
+    AudioRenderer,
+    DawDreamerRenderer,
+    PedalboardRenderer,
+    TorchSynthRenderer,
+)
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -98,6 +103,13 @@ def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -
             plugin_state_path=render_cfg.plugin_state_path,
             parameter_map=joint_map,
             reload_plugin_each_render=render_cfg.plugin_reload_cadence == "render",
+        )
+    if render_cfg.renderer_backend == "torchsynth":
+        return TorchSynthRenderer(
+            plugin_path=render_cfg.plugin_path,
+            sample_rate=render_cfg.sample_rate,
+            channels=render_cfg.channels,
+            signal_duration_seconds=render_cfg.signal_duration_seconds,
         )
     return PedalboardRenderer(
         plugin_path=render_cfg.plugin_path,

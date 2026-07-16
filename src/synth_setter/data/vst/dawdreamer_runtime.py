@@ -7,7 +7,7 @@ import sys
 from importlib import import_module
 from typing import Literal
 
-RendererBackend = Literal["pedalboard", "dawdreamer"]
+RendererBackend = Literal["pedalboard", "dawdreamer", "torchsynth"]
 
 _SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {

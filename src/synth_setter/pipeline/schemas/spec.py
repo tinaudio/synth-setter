@@ -222,9 +222,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
     )
-    renderer_backend: Literal["pedalboard", "dawdreamer"] = Field(
+    renderer_backend: Literal["pedalboard", "dawdreamer", "torchsynth"] = Field(
         default="pedalboard",
-        description="Audio host used to render each sample.",
+        description=(
+            "Audio host used to render each sample; ``torchsynth`` renders in-process "
+            "with no plugin host."
+        ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -344,6 +347,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError(
                 'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
                 "call blocks the main thread and exposes no close-event API"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _torchsynth_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences for the in-process torchsynth backend.
+
+        :return: ``self`` unchanged for other backends or torchsynth without editor use.
+        :raises ValueError: torchsynth combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "torchsynth" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'torchsynth requires gui_toggle_cadence="never": it renders in-process '
+                "and has no plugin editor to toggle"
             )
         return self
 

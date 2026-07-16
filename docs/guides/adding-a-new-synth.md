@@ -62,7 +62,11 @@ audio = renderer.render(
 )
 ```
 
-`PedalboardRenderer` has the same constructor and `render` contract. DawDreamer
+`PedalboardRenderer` has the same constructor and `render` contract, and
+`TorchSynthRenderer` implements it for the in-process torchsynth backend
+(`renderer_backend: torchsynth`, no `.vst3` bundle or preset — its param specs
+are defined in `torchsynth_param_spec.py` rather than introspected, so the
+steps below don't apply). DawDreamer
 0.8.3 requires a CPython 3.12 render worker. Its published wheels cover
 Linux x86_64, macOS x86_64/arm64, and Windows x86_64; Linux arm64 is not
 supported. This requirement applies to the worker that renders audio.
