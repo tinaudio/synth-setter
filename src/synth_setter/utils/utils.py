@@ -30,10 +30,10 @@ def register_resolvers() -> None:
     if not OmegaConf.has_resolver("div"):
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
     if not OmegaConf.has_resolver("wandb"):
-        OmegaConf.register_new_resolver("wandb", resolve_wandb_checkpoint)
+        OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
 
 
-def resolve_wandb_checkpoint(ref: str) -> str:
+def _resolve_wandb_checkpoint(ref: str) -> str:
     """Resolve a W&B model-artifact reference to a local cached checkpoint path.
 
     Downloads the artifact under ``$PROJECT_ROOT/.cache/checkpoints/<key>`` once

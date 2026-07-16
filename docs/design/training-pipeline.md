@@ -351,7 +351,13 @@ uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt
 
 Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises upload, real rclone-backed download, Lightning restore, and continued training progress.
 
-**Auto-resume.** `training.resume=auto` automates this recovery (default off; `require` additionally errors when nothing is found, for unattended relaunch loops): at launch, discovery (`utils/resume.py`) scans sibling local run dirs, then the launch-scoped R2 mirrors above, points `ckpt_path` at the newest `last.ckpt`, and reuses the recovered W&B run id (`resume=allow`) so one logical training stays on one run page. Resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state) — which is also why the train-end `model-{config_id}` artifact is deliberately not a discovery tier: it only exists after a *completed* run and references the monitor-best checkpoint, so continuing from it is a warm start, served by the explicit `ckpt_path='${wandb:...}'` flow in §6.3. An explicit `ckpt_path` bypasses discovery and combining it with an active `training.resume` is a fail-fast config error.
+**Auto-resume.** `training.resume=auto` automates this recovery (default off); `require` additionally errors when nothing is found, for unattended relaunch loops. At launch, discovery (`utils/resume.py`):
+
+- scans sibling local run dirs, then the launch-scoped R2 mirrors above (honoring a `training.upload_checkpoints_uri` override), and points `ckpt_path` at the newest `last.ckpt`;
+- requires identity evidence from every local candidate — a canonical `{config_id}-{timestamp}` W&B run id (online or offline dir) or matching recorded `.hydra` state — and skips anything unverifiable;
+- reuses the recovered W&B run id (`resume=allow`) so one logical training stays on one run page.
+
+Boundaries: resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state) — which is also why the train-end `model-{config_id}` artifact is deliberately not a discovery tier: it only exists after a *completed* run and references the monitor-best checkpoint, so continuing from it is a warm start, served by the explicit `ckpt_path='${wandb:...}'` flow in §6.3. An explicit `ckpt_path` bypasses discovery, and combining it with an active `training.resume` is a fail-fast config error. Hydra **multirun** sweeps get a fresh sweep dir per invocation, so the local tier finds no siblings there — the R2 mirror tier is the recovery path for sweeps.
 
 ### 6.3 Resume From W&B
 

@@ -367,16 +367,18 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    # Before any instantiation work: a require-mode miss or a resume/ckpt_path
+    # config error must fail the launch fast.
+    config_id = resolve_run_config_id(cfg)
+    recovered_run_id = _apply_auto_resume(cfg, config_id)
+    run_id = recovered_run_id or make_wandb_run_id(config_id)
+    recovery_namespace = _make_recovery_namespace(run_id)
+
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
-
-    config_id = resolve_run_config_id(cfg)
-    recovered_run_id = _apply_auto_resume(cfg, config_id)
-    run_id = recovered_run_id or make_wandb_run_id(config_id)
-    recovery_namespace = _make_recovery_namespace(run_id)
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
     _configure_checkpoint_durability(cfg, callbacks, recovery_namespace)

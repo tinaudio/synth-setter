@@ -1140,7 +1140,9 @@ def test_train_resume_require_without_checkpoint_raises(
         cfg_train.test = False
         cfg_train.training.resume = "require"
 
-    with pytest.raises(RuntimeError, match="training.resume=require"):
+    with pytest.raises(
+        RuntimeError, match=r"training.resume=require found no checkpoint for config_id 'train'"
+    ):
         train(cfg_train)
 
 
@@ -1162,3 +1164,46 @@ def test_train_resume_auto_without_checkpoint_starts_fresh(
 
     assert "train/loss" in metric_dict
     assert object_dict["cfg"].ckpt_path is None
+
+
+def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """A wandb-less sibling proven by ``.hydra`` state resumes without id reuse.
+
+    Covers the ``decision.wandb_run_id is None`` branch through the real
+    entrypoint: ``ckpt_path`` is set, but no wandb continuity is pinned.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of both sibling run output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    first_cfg = cfg_train.copy()
+    with open_dict(first_cfg):
+        first_cfg.paths.output_dir = str(tmp_path / "run-first")
+        first_cfg.test = False
+    train(first_cfg)
+    first_ckpt = tmp_path / "run-first" / "checkpoints" / "last.ckpt"
+    assert first_ckpt.is_file()
+    # Identity via recorded Hydra state only (no wandb dir): config_id falls
+    # back to task_name for this experiment-less composition.
+    hydra_dir = tmp_path / "run-first" / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text(f"task_name: {resolve_run_config_id(first_cfg)}\n")
+
+    second_cfg = cfg_train.copy()
+    with open_dict(second_cfg):
+        second_cfg.paths.output_dir = str(tmp_path / "run-second")
+        second_cfg.test = False
+        second_cfg.training.resume = "auto"
+        second_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+    _, second_objects = train(second_cfg)
+
+    assert second_objects["cfg"].ckpt_path == str(first_ckpt)
+    second_logger_cfg = second_objects["cfg"].logger.wandb
+    # A fresh id is minted (no recovered one) and continuity is NOT pinned.
+    assert second_logger_cfg.id is not None
+    assert second_logger_cfg.resume is None

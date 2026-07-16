@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
 
 from synth_setter.pipeline import r2_io
-from synth_setter.utils.resume import discover_r2_checkpoint
+from synth_setter.utils.resume import discover_r2_checkpoint, discover_resume_checkpoint
 
 _UUID_A = "a" * 32
 _UUID_B = "b" * 32
@@ -58,7 +59,7 @@ def test_discover_r2_downloads_newest_namespace_last_ckpt(
     dest_dir = tmp_path / "resume-dest"
 
     decision = discover_r2_checkpoint(
-        bucket="test-bucket", config_id="ffn_simple", dest_dir=dest_dir
+        prefix="r2://test-bucket/checkpoints/ffn_simple", config_id="ffn_simple", dest_dir=dest_dir
     )
 
     assert decision is not None
@@ -79,7 +80,9 @@ def test_discover_r2_empty_prefix_returns_none(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
 
     decision = discover_r2_checkpoint(
-        bucket="test-bucket", config_id="ffn_simple", dest_dir=tmp_path / "dest"
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
     )
 
     assert decision is None
@@ -100,7 +103,9 @@ def test_discover_r2_unavailable_creds_returns_none(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
 
     decision = discover_r2_checkpoint(
-        bucket="test-bucket", config_id="ffn_simple", dest_dir=tmp_path / "dest"
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
     )
 
     assert decision is None
@@ -178,9 +183,126 @@ def test_discover_r2_ignores_stray_objects_outside_namespace_mirrors(
     os.utime(epoch, (9_000, 9_000))
 
     decision = discover_r2_checkpoint(
-        bucket="test-bucket", config_id="ffn_simple", dest_dir=tmp_path / "dest"
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
     )
 
     assert decision is not None
     assert decision.ckpt_path.read_bytes() == valid.read_bytes()
     assert decision.wandb_run_id == "ffn_simple-20260714T000000000Z"
+
+
+def test_discover_resume_checkpoint_honors_upload_uri_override(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirrors under a custom ``training.upload_checkpoints_uri`` parent are found.
+
+    :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
+    :param tmp_path: Holds the current run dir.
+    :param monkeypatch: Pytest fixture used to stub the R2 auth probe.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+    namespace = f"ffn_simple-20260715T225004231Z-{_UUID_A}"
+    obj = fake_r2_remote / "custom-bucket" / "my" / "spot" / namespace / "last.ckpt"
+    obj.parent.mkdir(parents=True)
+    obj.write_bytes(b"custom")
+    current = tmp_path / "runs" / "ffn-current"
+    current.mkdir(parents=True)
+    cfg = OmegaConf.create(
+        {
+            "paths": {"output_dir": str(current)},
+            "r2": {"bucket": "other-bucket"},
+            "training": {"upload_checkpoints_uri": "r2://custom-bucket/my/spot/model.ckpt"},
+        }
+    )
+
+    decision = discover_resume_checkpoint(cfg, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.source == "r2"
+    assert decision.ckpt_path.read_bytes() == b"custom"
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_r2_download_failure_degrades_to_none(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed transfer (post-listing) degrades to None instead of aborting.
+
+    :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
+    :param tmp_path: Holds the download destination.
+    :param monkeypatch: Pytest fixture used to stub the auth probe and break the download.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+    _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"ffn_simple-20260715T225004231Z-{_UUID_A}",
+        b"new",
+        mtime=1_000,
+    )
+
+    def _broken_download(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _broken_download)
+
+    decision = discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
+    )
+
+    assert decision is None
+
+
+def test_discover_r2_non_degradable_error_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A programming error (outside the degradable set) raises instead of degrading.
+
+    :param tmp_path: Holds the download destination.
+    :param monkeypatch: Pytest fixture used to make listing raise a TypeError.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+
+    def _broken_listing(*args: object, **kwargs: object) -> None:
+        raise TypeError("programming error")
+
+    monkeypatch.setattr(r2_io, "list_entries", _broken_listing)
+
+    with pytest.raises(TypeError, match="programming error"):
+        discover_r2_checkpoint(
+            prefix="r2://test-bucket/checkpoints/ffn_simple",
+            config_id="ffn_simple",
+            dest_dir=tmp_path / "dest",
+        )
+
+
+def test_discover_r2_foreign_namespace_run_id_is_not_reused(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A namespace embedding another config's run id yields the checkpoint but no id.
+
+    :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
+    :param tmp_path: Holds the download destination.
+    :param monkeypatch: Pytest fixture used to stub the R2 auth probe.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+    _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"other_config-20260715T225004231Z-{_UUID_A}",
+        b"foreign",
+        mtime=1_000,
+    )
+
+    decision = discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
+    )
+
+    assert decision is not None
+    assert decision.wandb_run_id is None

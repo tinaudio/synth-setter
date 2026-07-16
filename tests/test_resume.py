@@ -374,3 +374,65 @@ def test_discover_local_recovers_run_id_from_offline_wandb_dir(tmp_path: Path) -
 
     assert decision is not None
     assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_local_prefix_related_config_id_cannot_cross_match(tmp_path: Path) -> None:
+    """A ``flow-x`` sibling never matches config_id ``flow`` despite the shared prefix.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "flowx-prior", wandb_run_id="flow-x-20260715T225004231Z")
+    current = tmp_path / "flow-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="flow") is None
+
+
+def test_discover_local_equal_mtime_tie_breaks_on_path_string(tmp_path: Path) -> None:
+    """Two candidates stamped identically resolve deterministically by path.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-a", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple")
+    later_path = _make_run_dir(
+        tmp_path, "ffn-b", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple"
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == later_path / "checkpoints" / "last.ckpt"
+
+
+def test_checkpoint_mirror_prefix_prefers_upload_uri_override() -> None:
+    """The override's parent wins over the auto-derived bucket prefix."""
+    cfg = OmegaConf.create(
+        {
+            "r2": {"bucket": "other-bucket"},
+            "training": {"upload_checkpoints_uri": "r2://custom/my/spot/model.ckpt"},
+        }
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://custom/my/spot"
+
+
+def test_checkpoint_mirror_prefix_auto_derives_from_bucket() -> None:
+    """Without an override the canonical checkpoints/{config_id} prefix is derived."""
+    cfg = OmegaConf.create({"r2": {"bucket": "bkt"}, "training": {}})
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://bkt/checkpoints/ffn_simple"
+
+
+@pytest.mark.parametrize("override", ["r2://", "r2://bucket/", "not-a-uri"])
+def test_checkpoint_mirror_prefix_malformed_override_returns_none(override: str) -> None:
+    """A malformed override degrades to no-prefix instead of aborting the launch.
+
+    :param override: Parametrized malformed ``training.upload_checkpoints_uri``.
+    """
+    cfg = OmegaConf.create(
+        {"r2": {"bucket": "bkt"}, "training": {"upload_checkpoints_uri": override}}
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") is None

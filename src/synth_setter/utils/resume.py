@@ -184,7 +184,11 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
                 config_id,
             )
             continue
-        candidates.append((ckpt.stat().st_mtime, ckpt, run_id))
+        try:
+            mtime = ckpt.stat().st_mtime
+        except OSError:  # a concurrent launch rotated the checkpoint away mid-scan
+            continue
+        candidates.append((mtime, ckpt, run_id))
     if not candidates:
         return None
     # Path string as tie-break: coarse-mtime filesystems can stamp two
@@ -204,24 +208,51 @@ def run_id_from_recovery_namespace(namespace: str) -> str | None:
     return match.group("run_id") if match else None
 
 
-def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> ResumeDecision | None:
-    """Download the newest mid-run mirror ``last.ckpt`` for this config_id.
+def checkpoint_mirror_prefix(cfg: DictConfig, config_id: str) -> str | None:
+    """Return the ``r2://`` parent prefix mid-run mirrors upload under.
 
-    Scans ``r2://{bucket}/checkpoints/{config_id}/`` for per-launch recovery
-    namespaces (written by ``CheckpointUploader``) and pulls the newest by the
-    storage-assigned mtime. Best-effort: missing creds, an unreachable remote,
-    or a failed transfer degrade to ``None`` with a warning so local runs never
-    hard-depend on R2.
+    Mirrors ``cli.train._checkpoint_prefix_uri`` sans the per-launch recovery
+    namespace: the parent of ``training.upload_checkpoints_uri`` when that
+    override is set, else the auto-derived
+    ``r2://{r2.bucket}/checkpoints/{config_id}``. Tolerant where the uploader
+    fails fast — a malformed override or missing bucket yields ``None`` so
+    discovery degrades instead of aborting the launch.
 
-    :param bucket: R2 bucket name (``cfg.r2.bucket``).
-    :param config_id: Run identity keying the mirror prefix.
+    :param cfg: Composed train cfg; reads ``training.upload_checkpoints_uri``
+        and ``r2.bucket``.
+    :param config_id: Run identity keying the auto-derived prefix.
+    :returns: The mirror parent prefix, or ``None`` when R2 is not configured.
+    """
+    override = OmegaConf.select(cfg, "training.upload_checkpoints_uri")
+    if override:
+        prefix = str(override).rsplit("/", 1)[0]
+        if str(override).endswith("/") or not prefix.startswith("r2://") or prefix == "r2://":
+            log.warning("Ignoring malformed training.upload_checkpoints_uri %r.", str(override))
+            return None
+        return prefix
+    bucket = OmegaConf.select(cfg, "r2.bucket")
+    if not bucket:
+        return None
+    return f"r2://{bucket}/checkpoints/{config_id}"
+
+
+def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> ResumeDecision | None:
+    """Download the newest mid-run mirror ``last.ckpt`` under ``prefix``.
+
+    Scans the mirror prefix (see :func:`checkpoint_mirror_prefix`) for
+    per-launch recovery namespaces (written by ``CheckpointUploader``) and
+    pulls the newest by the storage-assigned mtime. Best-effort: missing
+    creds, an unreachable remote, or a failed transfer degrade to ``None``
+    with a warning so local runs never hard-depend on R2.
+
+    :param prefix: ``r2://`` parent prefix the mirrors upload under.
+    :param config_id: Run identity a namespace-embedded run id must match to be reused.
     :param dest_dir: Local directory the checkpoint downloads into.
     :returns: The downloaded checkpoint, or ``None``.
     """
     # Deferred so importing this module never pulls the rclone/env machinery.
     from synth_setter.pipeline import r2_io
 
-    prefix = f"r2://{bucket}/checkpoints/{config_id}"
     try:
         r2_io.ensure_r2_env_loaded()
         entries = r2_io.list_entries(f"{prefix}/", recursive=True)
@@ -255,7 +286,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
 
     Tier order trades freshness for cost: local sibling run dirs (free, newest
     mid-run state), then the R2 mid-run mirrors (survives a lost disk). The R2
-    tier is skipped when ``r2.bucket`` is unset.
+    tier is skipped (with a warning) when no mirror prefix is configured.
 
     :param cfg: Composed train cfg; reads ``paths.output_dir`` and ``r2.bucket``.
     :param config_id: Run identity keying every tier.
@@ -264,7 +295,9 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
     output_dir = Path(cfg.paths.output_dir)
     decision = discover_local_checkpoint(output_dir, config_id)
     if decision is None:
-        bucket = OmegaConf.select(cfg, "r2.bucket")
-        if bucket:
-            decision = discover_r2_checkpoint(bucket, config_id, output_dir / "resume")
+        prefix = checkpoint_mirror_prefix(cfg, config_id)
+        if prefix is None:
+            log.warning("Skipping R2 resume discovery: no mirror prefix is configured.")
+        else:
+            decision = discover_r2_checkpoint(prefix, config_id, output_dir / "resume")
     return decision
