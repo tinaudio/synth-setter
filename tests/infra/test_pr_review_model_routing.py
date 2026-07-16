@@ -17,7 +17,6 @@ import tomllib
 from pathlib import Path
 from unittest import mock
 
-import psutil
 import pytest
 import yaml
 
@@ -27,16 +26,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _process_state(pid: int) -> str | None:
-    """Return a process state code, or ``None`` when the PID is absent.
+    """Return Linux scheduler state; elsewhere distinguish only PID presence.
 
-    :param pid: Process ID to inspect.
-    :returns: Platform process state code, or ``None`` for an absent PID.
+    :param pid: Must identify a process created by the current test.
+    :returns: Scheduler state, ``?`` for non-Linux presence, or ``None`` when absent.
     """
     try:
-        status = psutil.Process(pid).status()
-    except psutil.NoSuchProcess:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return None
-    return "Z" if status == psutil.STATUS_ZOMBIE else status
+
+    if not Path("/proc").is_dir():
+        return "?"
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    return stat.rpartition(")")[2].split()[0]
 
 
 def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
@@ -77,6 +83,7 @@ def test_assert_process_terminated_nonexistent_pid_passes() -> None:
     _assert_process_terminated(child_pid, timeout=0)
 
 
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="requires Linux process states")
 def test_assert_process_terminated_zombie_pid_passes() -> None:
     """Accept a terminated child before its parent reaps it."""
     child_pid = os.fork()
