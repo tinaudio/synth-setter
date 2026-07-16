@@ -77,6 +77,23 @@ class TestExtractRendererVersion:
 
         assert version == importlib.metadata.version("torchsynth")
 
+    def test_torchsynth_backend_missing_package_propagates_dependency_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing torchsynth installation reports the package-metadata failure.
+
+        :param monkeypatch: Replaces package metadata lookup with a missing dependency.
+        """
+        import importlib.metadata
+
+        def _missing_package(name: str) -> str:
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        monkeypatch.setattr(importlib.metadata, "version", _missing_package)
+
+        with pytest.raises(importlib.metadata.PackageNotFoundError, match="torchsynth"):
+            extract_renderer_version(Path("torchsynth"))
+
 
 class TestLoadPluginNoWarmup:
     """``load_plugin`` is a pure loader — never calls ``show_editor`` by itself."""
