@@ -142,3 +142,41 @@ def test_discover_resume_checkpoint_prefers_local_over_r2(
     assert decision is not None
     assert decision.source == "local"
     assert decision.ckpt_path == local_ckpt
+
+
+def test_discover_r2_ignores_stray_objects_outside_namespace_mirrors(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only ``<namespace>/last.ckpt`` objects count — noise under the prefix is skipped.
+
+    :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
+    :param tmp_path: Holds the download destination.
+    :param monkeypatch: Pytest fixture used to stub the R2 auth probe.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+    prefix = fake_r2_remote / "test-bucket" / "checkpoints" / "ffn_simple"
+    valid = _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"ffn_simple-20260714T000000000Z-{_UUID_A}",
+        b"valid",
+        mtime=1_000,
+    )
+    top_level = prefix / "last.ckpt"
+    top_level.write_bytes(b"top-level-noise")
+    os.utime(top_level, (9_000, 9_000))
+    nested = prefix / f"ffn_simple-20260715T225004231Z-{_UUID_B}" / "sub" / "last.ckpt"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"nested-noise")
+    os.utime(nested, (9_000, 9_000))
+    epoch = prefix / f"ffn_simple-20260715T225004231Z-{_UUID_B}" / "epoch_001.ckpt"
+    epoch.write_bytes(b"epoch-noise")
+    os.utime(epoch, (9_000, 9_000))
+
+    decision = discover_r2_checkpoint(
+        bucket="test-bucket", config_id="ffn_simple", dest_dir=tmp_path / "dest"
+    )
+
+    assert decision is not None
+    assert decision.ckpt_path.read_bytes() == valid.read_bytes()
+    assert decision.wandb_run_id == "ffn_simple-20260714T000000000Z"

@@ -37,7 +37,7 @@ from synth_setter.utils import (
 )
 from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
 from synth_setter.utils.resume import (
-    ResumeDecision,
+    apply_wandb_resume_continuity,
     discover_resume_checkpoint,
     resolve_resume_mode,
 )
@@ -318,18 +318,22 @@ def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | 
             log.warning(f"_log_model_artifact failed on {type(lg).__name__}: {exc}")
 
 
-def _apply_auto_resume(cfg: DictConfig) -> ResumeDecision | None:
+def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
     """Discover the ``training.resume`` checkpoint and point ``cfg.ckpt_path`` at it.
 
+    On a hit with a recoverable W&B run id, also marks the wandb logger for
+    run continuity (``apply_wandb_resume_continuity``) so the reused id
+    continues the original run page.
+
     :param cfg: Hydra-composed train cfg, mutated in place on a discovery hit.
-    :returns: The applied decision, or ``None`` when resume is disabled or
-        ``auto`` found nothing.
+    :param config_id: Run identity keying discovery and error messages.
+    :returns: The recovered W&B run id, or ``None`` when resume is disabled,
+        nothing was found, or the checkpoint's launch had no wandb run.
     :raises RuntimeError: When ``training.resume=require`` finds no checkpoint.
     """
     mode = resolve_resume_mode(cfg)
     if mode is None:
         return None
-    config_id = resolve_run_config_id(cfg)
     decision = discover_resume_checkpoint(cfg, config_id)
     if decision is None:
         if mode == "require":
@@ -344,7 +348,9 @@ def _apply_auto_resume(cfg: DictConfig) -> ResumeDecision | None:
         f"Auto-resume: {decision.source} checkpoint {decision.ckpt_path} "
         f"(recovered wandb run id: {decision.wandb_run_id})"
     )
-    return decision
+    if decision.wandb_run_id:
+        apply_wandb_resume_continuity(cfg)
+    return decision.wandb_run_id
 
 
 @task_wrapper
@@ -367,9 +373,9 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
-    resume_decision = _apply_auto_resume(cfg)
-    recovered_run_id = resume_decision.wandb_run_id if resume_decision else None
-    run_id = recovered_run_id or make_wandb_run_id(resolve_run_config_id(cfg))
+    config_id = resolve_run_config_id(cfg)
+    recovered_run_id = _apply_auto_resume(cfg, config_id)
+    run_id = recovered_run_id or make_wandb_run_id(config_id)
     recovery_namespace = _make_recovery_namespace(run_id)
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
@@ -378,9 +384,6 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, run_id, "training")
-    # A recovered id continues the original W&B run page instead of erroring on reuse.
-    if recovered_run_id and OmegaConf.select(cfg, "logger.wandb") is not None:
-        OmegaConf.update(cfg, "logger.wandb.resume", "allow")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")

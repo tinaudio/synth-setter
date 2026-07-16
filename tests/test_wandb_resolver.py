@@ -23,7 +23,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
 from synth_setter.utils import utils as utils_mod
-from synth_setter.utils.utils import _resolve_wandb_checkpoint, register_resolvers
+from synth_setter.utils.utils import register_resolvers, resolve_wandb_checkpoint
 
 
 class _FakeArtifact:
@@ -182,7 +182,7 @@ def test_wandb_resolver_reference_artifact_downloads_checkpoint_from_r2(
     ref = "s3://intermediate-data/checkpoints/flow-simple/model.ckpt"
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=(), refs=(ref,)))
 
-    resolved = Path(_resolve_wandb_checkpoint("entity/project/model-flow-simple:latest"))
+    resolved = Path(resolve_wandb_checkpoint("entity/project/model-flow-simple:latest"))
 
     assert resolved.name == "model.ckpt"
     assert workspace / ".cache" / "checkpoints" in resolved.parents
@@ -203,7 +203,7 @@ def test_wandb_resolver_file_artifact_uses_native_download(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=("model.ckpt",)))
 
-    resolved = Path(_resolve_wandb_checkpoint("model-x:latest"))
+    resolved = Path(resolve_wandb_checkpoint("model-x:latest"))
 
     assert resolved.name == "model.ckpt"
     assert resolved.is_file()
@@ -230,10 +230,10 @@ def test_wandb_resolver_reference_unsafe_basename_raises(
     )
 
     with pytest.raises(ValueError, match="unsafe checkpoint basename"):
-        _resolve_wandb_checkpoint("entity/project/model-flow-simple:latest")
+        resolve_wandb_checkpoint("entity/project/model-flow-simple:latest")
 
 
-def test_resolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
+def testresolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A ``ref`` with ``..`` and ``:`` resolves inside the cache root, never above it.
@@ -244,13 +244,13 @@ def test_resolve_wandb_checkpoint_traversal_ref_stays_inside_cache(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
 
-    resolved = Path(_resolve_wandb_checkpoint("../../etc/model:latest"))
+    resolved = Path(resolve_wandb_checkpoint("../../etc/model:latest"))
 
     cache_root = (workspace / ".cache" / "checkpoints").resolve()
     assert cache_root in resolved.resolve().parents
 
 
-def test_resolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
+def testresolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bare ``..`` ref resolves inside the cache root, never above it.
@@ -261,13 +261,13 @@ def test_resolve_wandb_checkpoint_dot_dot_ref_stays_inside_cache(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
 
-    resolved = Path(_resolve_wandb_checkpoint(".."))
+    resolved = Path(resolve_wandb_checkpoint(".."))
 
     cache_root = (workspace / ".cache" / "checkpoints").resolve()
     assert cache_root in resolved.resolve().parents
 
 
-def test_resolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
+def testresolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Refs that slug identically (``a/b`` vs ``a:b``) cache to distinct dirs.
@@ -278,13 +278,13 @@ def test_resolve_wandb_checkpoint_slug_colliding_refs_get_distinct_dirs(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
 
-    first = Path(_resolve_wandb_checkpoint("a/b:latest")).parent
-    second = Path(_resolve_wandb_checkpoint("a:b:latest")).parent
+    first = Path(resolve_wandb_checkpoint("a/b:latest")).parent
+    second = Path(resolve_wandb_checkpoint("a:b:latest")).parent
 
     assert first != second
 
 
-def test_resolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
+def testresolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A minimal install without ``wandb`` raises a clear ``ModuleNotFoundError``.
@@ -296,10 +296,10 @@ def test_resolve_wandb_checkpoint_missing_wandb_raises_module_not_found(
 
     # Pin the guidance to the real PEP 735 group ('util'), not a non-existent 'wandb' group.
     with pytest.raises(ModuleNotFoundError, match="util"):
-        _resolve_wandb_checkpoint("model-x:latest")
+        resolve_wandb_checkpoint("model-x:latest")
 
 
-def test_resolve_wandb_checkpoint_multiple_ckpts_raises(
+def testresolve_wandb_checkpoint_multiple_ckpts_raises(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An artifact with several non-``model.ckpt`` files errors instead of guessing.
@@ -313,10 +313,10 @@ def test_resolve_wandb_checkpoint_multiple_ckpts_raises(
     )
 
     with pytest.raises(ValueError, match="ambiguous"):
-        _resolve_wandb_checkpoint("model-x:latest")
+        resolve_wandb_checkpoint("model-x:latest")
 
 
-def test_resolve_wandb_checkpoint_multiple_model_ckpts_raises(
+def testresolve_wandb_checkpoint_multiple_model_ckpts_raises(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Several ``model.ckpt`` files across nested dirs error instead of guessing.
@@ -330,10 +330,10 @@ def test_resolve_wandb_checkpoint_multiple_model_ckpts_raises(
     )
 
     with pytest.raises(ValueError, match="ambiguous"):
-        _resolve_wandb_checkpoint("model-x:latest")
+        resolve_wandb_checkpoint("model-x:latest")
 
 
-def test_resolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
+def testresolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A very long ref yields a cache-dir name within the 255-byte filesystem limit.
@@ -344,14 +344,14 @@ def test_resolve_wandb_checkpoint_long_ref_cache_dir_within_name_limit(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls))
 
-    resolved = Path(_resolve_wandb_checkpoint("x" * 400 + ":latest"))
+    resolved = Path(resolve_wandb_checkpoint("x" * 400 + ":latest"))
 
     cache_dir = resolved.parent
     assert len(cache_dir.name.encode()) <= 255
     assert resolved.is_file()
 
 
-def test_resolve_wandb_checkpoint_partial_download_redownloads(
+def testresolve_wandb_checkpoint_partial_download_redownloads(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cached dir with no ``.ckpt`` (partial download) triggers a fresh download.
@@ -362,10 +362,10 @@ def test_resolve_wandb_checkpoint_partial_download_redownloads(
     calls: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=()))
     with pytest.raises(FileNotFoundError):
-        _resolve_wandb_checkpoint("model-x:latest")
+        resolve_wandb_checkpoint("model-x:latest")
 
     monkeypatch.setitem(sys.modules, "wandb", _fake_api(calls, filenames=("model.ckpt",)))
-    resolved = Path(_resolve_wandb_checkpoint("model-x:latest"))
+    resolved = Path(resolve_wandb_checkpoint("model-x:latest"))
 
     assert resolved.is_file()
     assert len(calls) == 2

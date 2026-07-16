@@ -1,8 +1,9 @@
 """Auto-resume checkpoint discovery for ``synth-setter-train`` (#1991).
 
-Pure discovery logic: given a composed train cfg, find the newest usable
+Discovery logic: given a composed train cfg, find the newest usable
 ``last.ckpt`` for the run's config_id across local sibling run dirs, the R2
-mid-run mirrors, and the train-end W&B model artifact. The imperative wiring
+mid-run mirrors, and the train-end W&B model artifact. The winning R2/W&B tier
+performs a network fetch; everything else is pure. The imperative wiring
 (setting ``cfg.ckpt_path``, pinning the recovered W&B run id) lives in
 ``synth_setter.cli.train``.
 """
@@ -23,9 +24,18 @@ log = logging.getLogger(__name__)
 
 # Recovery namespaces are ``{run_id}-{uuid4().hex}`` (cli.train._make_recovery_namespace).
 _RECOVERY_NAMESPACE_RE = re.compile(r"^(?P<run_id>.+)-[0-9a-f]{32}$")
+# Canonical run ids are ``{config_id}-<YYYYMMDD>T<HHMMSSmmm>Z`` (run_id.make_wandb_run_id).
+_RUN_ID_TIMESTAMP_RE = r"\d{8}T\d{9}Z"
 
 _DISABLED_VALUES = (None, False, "off")
 _ACTIVE_MODES = ("auto", "require")
+
+# Failures that degrade a best-effort R2/W&B tier to "not found" instead of
+# aborting the launch; anything outside this set is a programming error and raises.
+_DEGRADABLE_ERRORS = (RuntimeError, OSError, ValueError, subprocess.CalledProcessError)
+
+# Bounds W&B graphql calls so a hung API cannot block a training launch.
+_WANDB_API_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -51,7 +61,7 @@ class ResumeDecision:
     source: Literal["local", "r2", "wandb-artifact"]
 
 
-def resolve_resume_mode(cfg: DictConfig) -> str | None:
+def resolve_resume_mode(cfg: DictConfig) -> Literal["auto", "require"] | None:
     """Validate ``training.resume`` and return the active mode.
 
     :param cfg: Composed train cfg; reads ``training.resume`` and ``ckpt_path``.
@@ -73,6 +83,32 @@ def resolve_resume_mode(cfg: DictConfig) -> str | None:
     return mode
 
 
+def apply_wandb_resume_continuity(cfg: DictConfig) -> None:
+    """Mark the W&B logger to continue an existing run instead of erroring on id reuse.
+
+    No-op when the cfg has no ``logger.wandb`` group (mirrors
+    ``pin_wandb_run_id``), so logger-free runs need no special-casing.
+
+    :param cfg: Composed train cfg; ``logger.wandb.resume`` is updated in place.
+    """
+    if OmegaConf.select(cfg, "logger.wandb") is None:
+        return
+    OmegaConf.update(cfg, "logger.wandb.resume", "allow")
+
+
+def _run_id_matches_config(run_id: str, config_id: str) -> bool:
+    """Report whether a run id is this config_id's canonical ``{config_id}-{timestamp}``.
+
+    Anchored on the timestamp shape so config_ids that prefix each other (e.g.
+    ``flow`` vs ``flow-x``) can never cross-match.
+
+    :param run_id: Candidate W&B run id.
+    :param config_id: Run identity the id must belong to.
+    :returns: Whether the id matches.
+    """
+    return re.fullmatch(re.escape(config_id) + "-" + _RUN_ID_TIMESTAMP_RE, run_id) is not None
+
+
 def _run_id_from_run_dir(run_dir: Path) -> str | None:
     """Recover the W&B run id from a run dir's ``wandb/run-<ts>-<id>`` dir.
 
@@ -92,8 +128,10 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
 
     Scans the current output dir's siblings (the Hydra run-dir family, e.g.
     ``logs/train/<task>/<name>-<ts>/``). A sibling whose recovered W&B run id
-    belongs to a different config_id is skipped; one with no recoverable id is
-    accepted (Lightning fails loudly on an architecture mismatch anyway).
+    is not this config_id's canonical ``{config_id}-{timestamp}`` is skipped;
+    one with no recoverable id (logger disabled) is accepted with a warning
+    naming the unverified-identity assumption, since Lightning still fails
+    loudly on an architecture mismatch.
 
     :param current_output_dir: This launch's Hydra output dir, excluded from
         the scan.
@@ -106,12 +144,18 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
         if run_dir == current_output_dir:
             continue
         run_id = _run_id_from_run_dir(run_dir)
-        if run_id is not None and not run_id.startswith(f"{config_id}-"):
+        if run_id is not None and not _run_id_matches_config(run_id, config_id):
             continue
         candidates.append((ckpt.stat().st_mtime, ckpt, run_id))
     if not candidates:
         return None
     _, ckpt_path, run_id = max(candidates, key=lambda item: item[0])
+    if run_id is None:
+        log.warning(
+            f"Auto-resume candidate {ckpt_path} has no recoverable W&B run id; "
+            f"assuming it belongs to config_id {config_id!r} (its run-dir family). "
+            "A wrong-architecture checkpoint still fails loudly at load."
+        )
     return ResumeDecision(ckpt_path=ckpt_path, wandb_run_id=run_id, source="local")
 
 
@@ -140,13 +184,14 @@ def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> Resum
     :param dest_dir: Local directory the checkpoint downloads into.
     :returns: The downloaded checkpoint, or ``None``.
     """
+    # Deferred so importing this module never pulls the rclone/env machinery.
     from synth_setter.pipeline import r2_io
 
     prefix = f"r2://{bucket}/checkpoints/{config_id}"
     try:
         r2_io.ensure_r2_env_loaded()
         entries = r2_io.list_entries(f"{prefix}/", recursive=True)
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    except _DEGRADABLE_ERRORS as exc:
         log.warning(f"Skipping R2 resume discovery under {prefix}: {exc}")
         return None
     mirrors = [
@@ -160,7 +205,7 @@ def discover_r2_checkpoint(bucket: str, config_id: str, dest_dir: Path) -> Resum
     dest = dest_dir / "last.ckpt"
     try:
         r2_io.download_to_path(f"{prefix}/{newest.path}", dest)
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    except _DEGRADABLE_ERRORS as exc:
         log.warning(f"Failed to download resume checkpoint {newest.path}: {exc}")
         return None
     namespace = newest.path.split("/", 1)[0]
@@ -184,16 +229,18 @@ def discover_wandb_artifact_checkpoint(config_id: str) -> ResumeDecision | None:
     """
     if not find_spec("wandb"):
         return None
+    # Deferred: wandb is an optional dependency group and slow to import.
     import wandb
+    from wandb.errors import Error as WandbError
 
-    from synth_setter.utils.utils import _resolve_wandb_checkpoint
+    from synth_setter.utils.utils import resolve_wandb_checkpoint
 
     ref = f"model-{config_id}:latest"
     try:
-        artifact = wandb.Api().artifact(ref)
+        artifact = wandb.Api(timeout=_WANDB_API_TIMEOUT_SECONDS).artifact(ref)
         producing_run = artifact.logged_by()
-        ckpt_path = Path(_resolve_wandb_checkpoint(ref))
-    except Exception as exc:  # noqa: BLE001 — wandb's error hierarchy is not enumerable
+        ckpt_path = Path(resolve_wandb_checkpoint(ref))
+    except (*_DEGRADABLE_ERRORS, WandbError, KeyError) as exc:
         log.warning(f"Skipping W&B artifact resume discovery for {ref}: {exc}")
         return None
     return ResumeDecision(
@@ -209,7 +256,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
     Tier order trades freshness for cost: local sibling run dirs (free, newest
     mid-run state), then the R2 mid-run mirrors (survives a lost disk), then
     the train-end W&B model artifact (survives everything, but is train-end
-    state only).
+    state only). The R2 tier is skipped when ``r2.bucket`` is unset.
 
     :param cfg: Composed train cfg; reads ``paths.output_dir`` and ``r2.bucket``.
     :param config_id: Run identity keying every tier.

@@ -54,10 +54,8 @@ ckpt_path: null
 seed: null
 
 training:
-  # Auto-resume: null/"off" disables; "auto" resumes from the newest last.ckpt for
-  # this config_id (local run dirs -> R2 mirrors -> W&B model artifact), reusing the
-  # original W&B run id; "require" additionally errors when nothing is found.
-  # Mutually exclusive with an explicit `ckpt_path`.
+  # Auto-resume from the newest last.ckpt: null/"off" | "auto" | "require" (errors when
+  # none found); excludes explicit `ckpt_path`. See docs/design/training-pipeline.md §6.2.
   resume: null
   # Optional `r2://bucket/key` override for the checkpoint upload target the model
   # W&B artifact references; null auto-derives
