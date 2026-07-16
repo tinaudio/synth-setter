@@ -352,7 +352,7 @@ class TestHookCombinesCpuAndMemory:
     def test_local_darwin_caps_workers_at_four(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Local Darwin runs retain CPU headroom above the configured worker cap.
 
-        :param monkeypatch: Pytest monkeypatch fixture.
+        :param monkeypatch: Controls the simulated host allocation.
         """
         monkeypatch.delenv("CI", raising=False)
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
@@ -364,7 +364,7 @@ class TestHookCombinesCpuAndMemory:
     def test_darwin_ci_uses_all_allocated_workers(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Dedicated Darwin CI keeps allocation-aware parallelism.
 
-        :param monkeypatch: Pytest monkeypatch fixture.
+        :param monkeypatch: Controls the simulated CI host allocation.
         """
         monkeypatch.setenv("CI", "1")
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
