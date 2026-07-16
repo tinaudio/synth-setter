@@ -89,13 +89,13 @@ def _validate_rendered_audio(
     channels: int,
     samples: int,
 ) -> np.ndarray:
-    """Validate the shared backend output contract without changing samples.
+    """Validate and clip rendered audio to the shared normalized-range contract.
 
     :param audio: Channel-leading rendered audio.
     :param channels: Required output channel count.
     :param samples: Required output sample count.
-    :returns: The validated audio without clipping or replacement.
-    :raises ValueError: If shape, finiteness, or normalized amplitude is invalid.
+    :returns: Finite, shape-valid audio clipped to ``[-1, 1]``.
+    :raises ValueError: If shape or finiteness is invalid.
     """
     if audio.shape != (channels, samples):
         raise ValueError(
@@ -103,9 +103,7 @@ def _validate_rendered_audio(
         )
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
-    if np.any(np.abs(audio) > 1.0):
-        raise ValueError("rendered audio samples must be within [-1, 1]")
-    return audio
+    return np.clip(audio, -1.0, 1.0)
 
 
 @dataclass(kw_only=True)

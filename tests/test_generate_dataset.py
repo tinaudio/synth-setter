@@ -440,7 +440,7 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
 ) -> None:
     """Claims mode stages one real VST Lance shard that validates from fake R2.
 
-    :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
+    :param cfg_dataset: Hydra dataset config reduced to one shard that exercises multi-sample rendering.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
         (also where ``lance_target`` resolves the claims table).
     :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
@@ -452,11 +452,11 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.train_val_test_sizes = [2, 0, 0]
         cfg_dataset.use_shard_queue = True
         cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
         cfg_dataset.render.samples_per_render_batch = 1
-        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.render.samples_per_shard = 2
         cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
         cfg_dataset.logger = None
 
@@ -471,6 +471,19 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     )
     assert len(list(staging_root.rglob("*.valid"))) == 1
     assert validate_all_shards_from_r2(spec) == []
+
+    with tempfile.TemporaryDirectory() as raw_work_dir:
+        finalize_lance(spec, Path(raw_work_dir))
+    audio = (
+        lance.dataset(str(fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance"))
+        .to_table(columns=["audio"])
+        .column("audio")
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    assert np.isfinite(audio).all()
+    assert np.abs(audio).max() <= 1.0
+
     assert claims.claim() is None
     assert claims.status_counts() == {"done": spec.num_shards}
 

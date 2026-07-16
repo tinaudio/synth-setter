@@ -156,7 +156,7 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
 
     result = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
 
-    assert result is expected
+    assert np.array_equal(result, expected)
     assert seen == {
         "args": (
             "plugin.vst3",
@@ -172,18 +172,40 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
     }
 
 
+def test_pedalboard_renderer_clips_over_full_scale_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendered = np.array([[2.0, -2.0], [0.0, 1.0]], dtype=np.float32)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *args, **kwargs: rendered
+    )
+    renderer = PedalboardRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=2,
+        channels=2,
+        signal_duration_seconds=1.0,
+    )
+
+    audio = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+    assert np.array_equal(audio, np.array([[1.0, -1.0], [0.0, 1.0]], dtype=np.float32))
+    assert audio.dtype == np.float32
+    assert audio.shape == rendered.shape
+
+
 @pytest.mark.parametrize(
     "audio",
     [
+        np.zeros((2, 3), dtype=np.float32),
         np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32),
-        np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32),
+        np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32),
     ],
 )
 def test_pedalboard_renderer_rejects_invalid_audio(
     monkeypatch: pytest.MonkeyPatch,
     audio: np.ndarray,
 ) -> None:
-    """The shared renderer contract rejects unsafe Pedalboard output.
+    """Malformed or non-finite Pedalboard output fails before dataset writers.
 
     :param monkeypatch: Patches the Pedalboard render seam.
     :param audio: Invalid backend output under test.
@@ -765,7 +787,6 @@ def test_dawdreamer_renderer_once_cadence_reuses_loaded_plugin(
         (np.zeros((2, 3), dtype=np.float32), "sample count"),
         (np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32), "finite"),
         (np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32), "finite"),
-        (np.array([[0.0, 1.0001], [0.0, 0.0]], dtype=np.float32), r"\[-1, 1\]"),
     ],
 )
 def test_dawdreamer_renderer_rejects_invalid_audio(
@@ -861,12 +882,30 @@ def test_dawdreamer_renderer_rejects_invalid_audio(
         renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
 
 
-def test_dawdreamer_renderer_accepts_full_scale_audio(
+@pytest.mark.parametrize(
+    ("rendered", "expected"),
+    [
+        (
+            np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32),
+            np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32),
+        ),
+        (
+            np.array([[2.0, -2.0], [0.0, 1.0]], dtype=np.float32),
+            np.array([[1.0, -1.0], [0.0, 1.0]], dtype=np.float32),
+        ),
+    ],
+    ids=["full-scale", "over-full-scale"],
+)
+def test_dawdreamer_renderer_clips_to_normalized_audio_range(
     monkeypatch: pytest.MonkeyPatch,
+    rendered: np.ndarray,
+    expected: np.ndarray,
 ) -> None:
-    """Exact normalized full scale remains valid.
+    """DawDreamer output preserves full scale and clips samples beyond it.
 
     :param monkeypatch: Installs a fake DawDreamer module.
+    :param rendered: Audio returned by the fake backend.
+    :param expected: Normalized-range audio expected from the renderer.
     """
 
     class FakeProcessor:
@@ -896,7 +935,7 @@ def test_dawdreamer_renderer_accepts_full_scale_audio(
             pass
 
         def get_audio(self) -> np.ndarray:
-            return np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32)
+            return rendered
 
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
     renderer = DawDreamerRenderer(
@@ -909,4 +948,6 @@ def test_dawdreamer_renderer_accepts_full_scale_audio(
 
     audio = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
 
-    assert np.array_equal(audio, np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32))
+    assert np.array_equal(audio, expected)
+    assert audio.dtype == np.float32
+    assert audio.shape == rendered.shape

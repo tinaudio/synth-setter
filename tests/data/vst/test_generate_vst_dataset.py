@@ -370,6 +370,7 @@ def _assert_lance_structure_is_valid(
         assert meta.min_loudness == min_loudness
 
     assert np.isfinite(audio_arr).all()
+    assert np.abs(audio_arr).max() <= 1.0
     assert np.isfinite(mel_arr).all()
     assert np.isfinite(params_arr).all()
 
