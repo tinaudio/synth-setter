@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import multiprocessing
 from pathlib import Path
+from typing import NoReturn
+
+import pytest
+
+
+def _run_pytest(args: list[str]) -> NoReturn:
+    """Run a nested pytest session in an isolated interpreter.
+
+    :param args: Arguments passed to pytest.
+    :raises SystemExit: Always, with pytest's session status.
+    """
+    raise SystemExit(pytest.main(args))
 
 
 def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Path) -> None:
@@ -28,13 +39,25 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         f"{tests}\n"
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-c", "pyproject.toml", "-n", "2", str(probe), "-q"],
-        cwd=project_root,
-        check=False,
-        capture_output=True,
-        text=True,
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(
+        target=_run_pytest,
+        args=(
+            [
+                "-c",
+                str(project_root / "pyproject.toml"),
+                "-n",
+                "2",
+                str(probe),
+                "-q",
+            ],
+        ),
     )
+    process.start()
+    process.join(timeout=60)
+    if process.is_alive():
+        process.kill()
+        process.join()
 
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert process.exitcode == 0
     assert len(set(worker_log.read_text().splitlines())) == 1

@@ -123,8 +123,8 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     """Run 1 train, val, and test step on CPU with `fast_dev_run`.
 
     Dataset/batch size constraints come from the shared `cfg_train` fixture
-    (`batch_size=1`, `train_val_test_sizes=[2, 2, 2]`). This test uses two
-    DataLoader workers to cover spawn integration and caps each loop at one batch.
+    (`batch_size=1`, `train_val_test_sizes=[2, 2, 2]`). DataLoader workers
+    exercise spawn integration while ``fast_dev_run`` caps each loop.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
     """
