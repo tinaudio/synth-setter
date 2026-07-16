@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import plistlib
 import threading
@@ -40,7 +41,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     """Extract the version string from a VST3 plugin bundle or Python backend.
 
     The bare Python-backend name (``torchsynth``) resolves to the installed
-    package version. Otherwise, tries the static-metadata files first
+    package version (propagating ``importlib.metadata.PackageNotFoundError``
+    when the package is missing). Otherwise, tries the static-metadata files first
     (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
     falls back to loading the plugin via pedalboard and reading
     `plugin.version`. The fallback requires a usable X11 display, so callers in
@@ -55,8 +57,6 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
-        import importlib.metadata
-
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")

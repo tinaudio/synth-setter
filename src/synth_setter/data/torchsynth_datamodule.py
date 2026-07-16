@@ -28,6 +28,9 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     TorchSynthParam as TorchSynthParam,
 )
 from synth_setter.data.vst.torchsynth_param_spec import (
+    KEYBOARD_DURATION_BOUNDS,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
     verify_voice_matches_spec as _verify_voice_matches_spec,
 )
 
@@ -132,15 +135,29 @@ def render_torchsynth(
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
     :param note_duration_seconds: Note-on length before the release stage; ``None``
         holds the note for the whole buffer. Must lie within the keyboard
-        parameter's pinned human range.
+        parameter's pinned human range (``KEYBOARD_DURATION_BOUNDS``).
     :returns: Float32 audio shaped ``(batch, signal_length)``.
-    :raises ValueError: The parameter width, a non-finite parameter, or the rendered
-        audio violates the data contract.
+    :raises ValueError: The parameter width, a non-finite parameter, an
+        out-of-range note duration, or the rendered audio violates the data
+        contract.
     """
     if not torch.isfinite(params).all():
         raise ValueError("TorchSynth params must be finite")
     if params.shape[1] != NUM_PARAMS:
         raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
+    duration = (
+        note_duration_seconds
+        if note_duration_seconds is not None
+        else signal_length / sample_rate
+    )
+    minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
+    if not minimum_duration <= duration <= maximum_duration:
+        # Validate here (not via torchsynth's bare asserts, stripped under -O) so
+        # out-of-range durations fail the documented ValueError contract.
+        raise ValueError(
+            f"note duration {duration}s outside the keyboard's pinned range "
+            f"[{minimum_duration}, {maximum_duration}]s"
+        )
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
     with renderer.lock:
@@ -148,11 +165,6 @@ def render_torchsynth(
         native = [all_parameters[(spec.module, spec.name)] for spec in INFERABLE_SPEC]
         for values, parameter in zip(params.T, native, strict=True):
             parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
-        duration = (
-            note_duration_seconds
-            if note_duration_seconds is not None
-            else signal_length / sample_rate
-        )
         for name, value in (
             ("midi_f0", float(midi_pitch)),
             ("duration", duration),

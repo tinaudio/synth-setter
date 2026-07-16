@@ -21,24 +21,13 @@ from synth_setter.data.torchsynth_datamodule import (
     _verify_voice_matches_spec,
     render_torchsynth,
 )
-from synth_setter.data.vst.torchsynth_param_spec import spec_from_voice
 from tests.helpers.run_if import RunIf
 
 _RENDER_KWARGS = {"sample_rate": 44_100, "signal_length": 4_410, "midi_pitch": 60}
 
 
-def test_param_spec_matches_live_voice() -> None:
-    """The checked-in ``PARAM_SPEC`` snapshot equals the spec extracted from a live voice.
-
-    This is the drift test: a torchsynth upgrade that adds, renames, reorders, or
-    re-ranges any voice parameter fails here (and in ``setup()``) instead of silently
-    mislabeling the model's positional targets.
-    """
-    assert NUM_PARAMS == 76
-    voice = _make_renderer(_RENDER_KWARGS["sample_rate"], _RENDER_KWARGS["signal_length"]).voice
-    assert spec_from_voice(voice) == PARAM_SPEC
-
-
+# The live-voice drift test lives with the pinned spec in
+# tests/data/vst/test_torchsynth_param_spec.py::test_pinned_spec_matches_live_voice.
 def test_verify_voice_against_perturbed_spec_raises_naming_param() -> None:
     """Verification against a spec with one drifted range fails and names the parameter."""
     voice = _make_renderer(_RENDER_KWARGS["sample_rate"], _RENDER_KWARGS["signal_length"]).voice
@@ -351,6 +340,17 @@ def test_render_torchsynth_note_duration_shortens_the_note() -> None:
         ),
     )
     assert not torch.equal(held, released_early)
+
+
+@pytest.mark.parametrize("duration", [0.0, 4.5])
+def test_render_torchsynth_out_of_range_note_duration_raises(duration: float) -> None:
+    """Durations outside the keyboard's pinned range fail the ValueError contract.
+
+    :param duration: Out-of-range note duration under test.
+    """
+    params = torch.full((1, NUM_PARAMS), 0.4)
+    with pytest.raises(ValueError, match="outside the keyboard's pinned range"):
+        render_torchsynth(params, **_RENDER_KWARGS, note_duration_seconds=duration)
 
 
 @pytest.mark.gpu

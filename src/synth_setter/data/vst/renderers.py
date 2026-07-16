@@ -293,6 +293,7 @@ class TorchSynthRenderer(AudioRenderer):
             delayed = np.zeros_like(audio)
             delayed[:, offset:] = audio[:, : samples - offset]
             audio = delayed
+        # Independent of the delay above: the mono voice fans out to the requested channels.
         if self.channels > 1:
             audio = np.repeat(audio, self.channels, axis=0)
         return _validate_rendered_audio(audio, channels=self.channels, samples=samples)

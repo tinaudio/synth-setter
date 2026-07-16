@@ -47,10 +47,16 @@ def test_datamodule_reexports_pinned_spec_objects() -> None:
 
 
 def test_pinned_spec_matches_live_voice() -> None:
-    """The checked-in snapshot equals the spec extracted from a live torchsynth voice."""
+    """The checked-in snapshot equals the spec extracted from a live torchsynth voice.
+
+    This is the drift test: a torchsynth upgrade that adds, renames, reorders, or
+    re-ranges any voice parameter fails here (and in the datamodule's ``setup()``)
+    instead of silently mislabeling the model's positional targets.
+    """
     from synth_setter.data.torchsynth_datamodule import _make_renderer
     from synth_setter.data.vst.torchsynth_param_spec import spec_from_voice
 
+    assert NUM_PARAMS == 76
     voice = _make_renderer(44_100, 4_410).voice
     assert spec_from_voice(voice) == PARAM_SPEC
 

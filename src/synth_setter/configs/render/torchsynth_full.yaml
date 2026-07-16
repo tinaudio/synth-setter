@@ -1,6 +1,5 @@
 # In-process torchsynth backend (no plugin host): plugin_path is the bare backend
-# name, renderer_version pins the installed package version, and there is no preset
-# file — the baseline patch lives in torchsynth_param_spec.py.
+# name; the no-preset baseline patch lives in torchsynth_param_spec.py.
 plugin_path: torchsynth
 plugin_state_path: ""
 param_spec_name: torchsynth_full

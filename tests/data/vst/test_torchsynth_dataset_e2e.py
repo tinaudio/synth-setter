@@ -78,7 +78,10 @@ def test_make_lance_dataset_renders_a_real_torchsynth_shard(tmp_path: Path) -> N
 
 
 def test_make_lance_dataset_same_seed_reproduces_the_shard(tmp_path: Path) -> None:
-    """Two renders with one seed produce identical parameter rows (per-sample seeding).
+    """Two renders with one seed produce identical rows across every column.
+
+    Params pin the per-sample seeding; audio and mel equality additionally pin the render path
+    itself (a stray global-RNG dependency would diverge here).
 
     :param tmp_path: Destination directory for the two rendered shards.
     """
@@ -87,7 +90,8 @@ def test_make_lance_dataset_same_seed_reproduces_the_shard(tmp_path: Path) -> No
     make_lance_dataset(first, _torchsynth_render_cfg())
     make_lance_dataset(second, _torchsynth_render_cfg())
 
-    assert np.array_equal(
-        _read_lance_column(first, PARAM_ARRAY_FIELD),
-        _read_lance_column(second, PARAM_ARRAY_FIELD),
-    )
+    for field in (PARAM_ARRAY_FIELD, AUDIO_FIELD, MEL_SPEC_FIELD):
+        assert np.array_equal(
+            _read_lance_column(first, field),
+            _read_lance_column(second, field),
+        ), field

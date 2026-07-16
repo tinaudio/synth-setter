@@ -4,6 +4,8 @@
 # experiment for validating the Python backend before larger runs.
 
 defaults:
+  # dataset.yaml requires a datamodule choice; DatasetSpec never consumes it,
+  # and no torchsynth-specific lance datamodule exists yet.
   - override /datamodule: surge_simple
   - override /render: torchsynth_simple
   - _self_
