@@ -221,9 +221,9 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 
 ### Consumers
 
-Interactive captured-patch evaluation: `src/synth_setter/tools/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
+Interactive captured-patch evaluation: `src/synth_setter/tools/vst_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/vst-interactive.md`](../guides/vst-interactive.md)).
 
-Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and `cfg.evaluation.{render_vst,compute_metrics}` enabled, `cli/eval.py` shells out to the render and metrics modules itself, so the render and metrics stages are reachable from a single Hydra entrypoint as well as from `surge_xt_interactive.py`.
+Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and `cfg.evaluation.{render_vst,compute_metrics}` enabled, `cli/eval.py` shells out to the render and metrics modules itself, so the render and metrics stages are reachable from a single Hydra entrypoint as well as from `vst_interactive.py`.
 
 ## 5. Stage Definitions
 

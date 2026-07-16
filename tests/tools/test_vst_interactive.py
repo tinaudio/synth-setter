@@ -1,4 +1,4 @@
-"""Tests for src/synth_setter/tools/surge_xt_interactive.py prediction decoding helpers."""
+"""Tests for src/synth_setter/tools/vst_interactive.py prediction decoding helpers."""
 
 import importlib
 import os
@@ -25,9 +25,9 @@ SURGE_SIMPLE = "surge_simple"
 
 
 @pytest.fixture(scope="module")
-def surge_xt_interactive():
-    """Import the script module lazily so collection doesn't fail on heavy imports."""
-    return importlib.import_module("synth_setter.tools.surge_xt_interactive")
+def vst_interactive():
+    """Import the tool module lazily so collection doesn't fail on heavy imports."""
+    return importlib.import_module("synth_setter.tools.vst_interactive")
 
 
 @pytest.fixture(scope="module")
@@ -70,12 +70,12 @@ class TestDecodePredictionRow:
 
     def test_returns_expected_keys_and_finite_floats(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_pred_tensor: torch.Tensor,
         simple_spec: ParamSpec,
     ) -> None:
         """Decoded row contains every synth-param key with finite float values."""
-        synth_params = surge_xt_interactive.decode_prediction_row(
+        synth_params = vst_interactive.decode_prediction_row(
             simple_pred_tensor, batch_idx=0, param_spec_name=SURGE_SIMPLE
         )
 
@@ -100,13 +100,13 @@ class TestDecodePredictionRow:
     )
     def test_clips_and_rescales_per_column(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_pred_tensor: torch.Tensor,
         param_name: str,
         expected: float,
     ) -> None:
         """Each column is rescaled from ``[-1, 1]`` to ``[0, 1]`` and clipped before decoding."""
-        synth_params = surge_xt_interactive.decode_prediction_row(
+        synth_params = vst_interactive.decode_prediction_row(
             simple_pred_tensor, batch_idx=0, param_spec_name=SURGE_SIMPLE
         )
         assert synth_params[param_name] == pytest.approx(expected, abs=1e-6)
@@ -114,13 +114,13 @@ class TestDecodePredictionRow:
     @pytest.mark.parametrize("bad_idx", [99, -1], ids=["above-range", "negative"])
     def test_out_of_range_idx_raises(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_pred_tensor: torch.Tensor,
         bad_idx: int,
     ) -> None:
         """``batch_idx`` outside ``[0, batch_size)`` raises ``IndexError``."""
         with pytest.raises(IndexError):
-            surge_xt_interactive.decode_prediction_row(
+            vst_interactive.decode_prediction_row(
                 simple_pred_tensor, batch_idx=bad_idx, param_spec_name=SURGE_SIMPLE
             )
 
@@ -128,19 +128,17 @@ class TestDecodePredictionRow:
 class TestPredictionRefType:
     """PredictionRefType parses ``PATH:BATCH_IDX`` into a PredictionRef."""
 
-    def test_parses_path_and_batch_idx(self, surge_xt_interactive) -> None:
+    def test_parses_path_and_batch_idx(self, vst_interactive) -> None:
         """A ``PATH:BATCH_IDX`` string parses into a ``PredictionRef`` with matching fields."""
-        parser = surge_xt_interactive.PredictionRefType()
+        parser = vst_interactive.PredictionRefType()
 
         ref = parser.convert("outputs/pred-0.pt:42", None, None)
 
-        assert ref == surge_xt_interactive.PredictionRef(
-            path=Path("outputs/pred-0.pt"), batch_idx=42
-        )
+        assert ref == vst_interactive.PredictionRef(path=Path("outputs/pred-0.pt"), batch_idx=42)
 
-    def test_splits_on_last_colon(self, surge_xt_interactive) -> None:
+    def test_splits_on_last_colon(self, vst_interactive) -> None:
         """Absolute Windows-style paths still parse because rpartition uses the last ':'."""
-        parser = surge_xt_interactive.PredictionRefType()
+        parser = vst_interactive.PredictionRefType()
 
         ref = parser.convert(r"C:\models\pred-0.pt:7", None, None)
 
@@ -152,19 +150,19 @@ class TestPredictionRefType:
         ["pred-0.pt", "pred-0.pt:not-an-int", ":42", "pred-0.pt:"],
         ids=["missing-colon", "non-int-idx", "empty-path", "empty-idx"],
     )
-    def test_rejects_invalid_uri(self, surge_xt_interactive, value: str) -> None:
+    def test_rejects_invalid_uri(self, vst_interactive, value: str) -> None:
         """Malformed prediction references raise ``click.BadParameter``."""
-        parser = surge_xt_interactive.PredictionRefType()
+        parser = vst_interactive.PredictionRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
 
-    def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
+    def test_rejects_negative_batch_idx(self, vst_interactive) -> None:
         """Reject negative indices to match ``decode_prediction_row``'s contract.
 
         Negative indexing would otherwise silently select the last row.
         """
-        parser = surge_xt_interactive.PredictionRefType()
+        parser = vst_interactive.PredictionRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert("pred-0.pt:-1", None, None)
@@ -173,29 +171,29 @@ class TestPredictionRefType:
 class TestDatasetRefType:
     """DatasetRefType parses ``PATH:DATASET_IDX`` into a DatasetRef."""
 
-    def test_parses_path_and_batch_idx(self, surge_xt_interactive) -> None:
+    def test_parses_path_and_batch_idx(self, vst_interactive) -> None:
         """A ``PATH:DATASET_IDX`` string parses into a ``DatasetRef`` with matching fields."""
-        parser = surge_xt_interactive.DatasetRefType()
+        parser = vst_interactive.DatasetRefType()
 
         ref = parser.convert("data/test.lance:3", None, None)
 
-        assert ref == surge_xt_interactive.DatasetRef(path=Path("data/test.lance"), batch_idx=3)
+        assert ref == vst_interactive.DatasetRef(path=Path("data/test.lance"), batch_idx=3)
 
     @pytest.mark.parametrize(
         "value",
         ["test.lance", "test.lance:not-an-int", ":0", "test.lance:"],
         ids=["missing-colon", "non-int-idx", "empty-path", "empty-idx"],
     )
-    def test_rejects_invalid_uri(self, surge_xt_interactive, value: str) -> None:
+    def test_rejects_invalid_uri(self, vst_interactive, value: str) -> None:
         """Malformed dataset references raise ``click.BadParameter``."""
-        parser = surge_xt_interactive.DatasetRefType()
+        parser = vst_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
 
-    def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
+    def test_rejects_negative_batch_idx(self, vst_interactive) -> None:
         """Reject negative indices to avoid a silent ``param_array[-1]`` last-row fallback."""
-        parser = surge_xt_interactive.DatasetRefType()
+        parser = vst_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert("test.lance:-1", None, None)
@@ -206,7 +204,7 @@ class TestLoadPredictionSynthParams:
 
     def test_matches_decode_prediction_row_on_same_row(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_pred_tensor: torch.Tensor,
         simple_spec: ParamSpec,
         tmp_path: Path,
@@ -214,13 +212,11 @@ class TestLoadPredictionSynthParams:
         """Loading from disk and in-memory ``decode_prediction_row`` produce identical outputs."""
         pred_path = tmp_path / "pred-0.pt"
         torch.save(simple_pred_tensor, pred_path)
-        ref = surge_xt_interactive.PredictionRef(path=pred_path, batch_idx=0)
+        ref = vst_interactive.PredictionRef(path=pred_path, batch_idx=0)
 
-        loaded = surge_xt_interactive.load_prediction_synth_params(
-            ref, param_spec_name=SURGE_SIMPLE
-        )
+        loaded = vst_interactive.load_prediction_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
-        direct = surge_xt_interactive.decode_prediction_row(
+        direct = vst_interactive.decode_prediction_row(
             simple_pred_tensor, batch_idx=0, param_spec_name=SURGE_SIMPLE
         )
         expected_keys = {p.name for p in simple_spec.synth_params}
@@ -233,7 +229,7 @@ class TestLoadDatasetSynthParams:
 
     def test_round_trip_returns_original_synth_params(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
@@ -242,16 +238,16 @@ class TestLoadDatasetSynthParams:
         encoded = simple_spec.encode(synth_param_dict, note_param_dict)
         lance_path = tmp_path / "test.lance"
         _write_param_array_lance(lance_path, encoded[None, :])
-        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=0)
+        ref = vst_interactive.DatasetRef(path=lance_path, batch_idx=0)
 
-        loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
+        loaded = vst_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
         for name, value in synth_param_dict.items():
             assert loaded[name] == pytest.approx(value, abs=1e-5)
 
     def test_selects_correct_row(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
@@ -266,16 +262,16 @@ class TestLoadDatasetSynthParams:
         )
         lance_path = tmp_path / "test.lance"
         _write_param_array_lance(lance_path, encoded)
-        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=1)
+        ref = vst_interactive.DatasetRef(path=lance_path, batch_idx=1)
 
-        loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
+        loaded = vst_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
         for name, value in row_1_synth.items():
             assert loaded[name] == pytest.approx(value, abs=1e-5)
 
     def test_out_of_range_idx_raises(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
@@ -283,16 +279,16 @@ class TestLoadDatasetSynthParams:
         encoded = simple_spec.encode(*simple_spec.sample())
         lance_path = tmp_path / "test.lance"
         _write_param_array_lance(lance_path, encoded[None, :])
-        ref = surge_xt_interactive.DatasetRef(path=lance_path, batch_idx=99)
+        ref = vst_interactive.DatasetRef(path=lance_path, batch_idx=99)
 
         with pytest.raises((IndexError, ValueError)):
-            surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
+            vst_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
     @pytest.mark.requires_vst
     @pytest.mark.slow
     def test_loads_row_from_surge_xt_smoke_fixture(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         surge_xt_smoke_datasets: Path,
         param_spec_name: str,
     ) -> None:
@@ -301,13 +297,9 @@ class TestLoadDatasetSynthParams:
         The decode spec must match the spec the fixture generated the dataset with —
         otherwise the decoder slices off the end of the row and ``.item()`` raises.
         """
-        ref = surge_xt_interactive.DatasetRef(
-            path=surge_xt_smoke_datasets / "test.lance", batch_idx=0
-        )
+        ref = vst_interactive.DatasetRef(path=surge_xt_smoke_datasets / "test.lance", batch_idx=0)
 
-        loaded = surge_xt_interactive.load_dataset_synth_params(
-            ref, param_spec_name=param_spec_name
-        )
+        loaded = vst_interactive.load_dataset_synth_params(ref, param_spec_name=param_spec_name)
 
         expected_keys = {p.name for p in param_specs[param_spec_name].synth_params}
         assert set(loaded.keys()) == expected_keys
@@ -349,46 +341,43 @@ class _ConstantPlugin:
 class TestPlayAudioRecorded:
     """play_audio_recorded renders a deterministic clip via a single plugin.process() call."""
 
-    def test_writes_exact_duration_frames(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_writes_exact_duration_frames(self, vst_interactive, tmp_path: Path) -> None:
         """The WAV's frame count is exactly ``DURATION * SAMPLE_RATE`` (one process call)."""
         plugin = _ConstantPlugin(sample_value=0.25)
         output_path = tmp_path / "session.wav"
         expected_frames = int(
-            surge_xt_interactive.SESSION_RECORDING_DURATION_SECONDS
-            * surge_xt_interactive.SAMPLE_RATE
+            vst_interactive.SESSION_RECORDING_DURATION_SECONDS * vst_interactive.SAMPLE_RATE
         )
 
-        surge_xt_interactive.play_audio_recorded(plugin, output_path)
+        vst_interactive.play_audio_recorded(plugin, output_path)
 
         assert plugin.process_call_count == 1
         assert output_path.is_file()
         with AudioFile(str(output_path)) as f:
             audio = f.read(f.frames)
-        assert audio.shape == (surge_xt_interactive.CHANNELS, expected_frames)
+        assert audio.shape == (vst_interactive.CHANNELS, expected_frames)
         np.testing.assert_allclose(audio, plugin.sample_value, atol=1e-3)
 
-    def test_passes_expected_midi_events(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_passes_expected_midi_events(self, vst_interactive, tmp_path: Path) -> None:
         """plugin.process is called with note_on/off middle-C events at NOTE_START/END."""
         plugin = _ConstantPlugin(sample_value=0.0)
 
-        surge_xt_interactive.play_audio_recorded(plugin, tmp_path / "events.wav")
+        vst_interactive.play_audio_recorded(plugin, tmp_path / "events.wav")
 
         assert plugin.last_midi_messages is not None
         assert len(plugin.last_midi_messages) == 2
         (note_on_bytes, note_on_t), (note_off_bytes, note_off_t) = plugin.last_midi_messages
 
-        assert note_on_t == pytest.approx(
-            surge_xt_interactive.SESSION_RECORDING_NOTE_START_SECONDS
-        )
-        assert note_off_t == pytest.approx(surge_xt_interactive.SESSION_RECORDING_NOTE_END_SECONDS)
+        assert note_on_t == pytest.approx(vst_interactive.SESSION_RECORDING_NOTE_START_SECONDS)
+        assert note_off_t == pytest.approx(vst_interactive.SESSION_RECORDING_NOTE_END_SECONDS)
 
         # MIDI wire format: status byte (high nibble = type), note, velocity.
         # 0x90 = note_on (channel 0), 0x80 = note_off (channel 0).
         assert note_on_bytes[0] & 0xF0 == 0x90
         assert note_off_bytes[0] & 0xF0 == 0x80
-        assert note_on_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
-        assert note_off_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
-        assert note_on_bytes[2] == surge_xt_interactive.SESSION_RECORDING_VELOCITY
+        assert note_on_bytes[1] == vst_interactive.SESSION_RECORDING_MIDI_NOTE
+        assert note_off_bytes[1] == vst_interactive.SESSION_RECORDING_MIDI_NOTE
+        assert note_on_bytes[2] == vst_interactive.SESSION_RECORDING_VELOCITY
 
 
 class _FakeMidiMessage:
@@ -442,7 +431,7 @@ class _FakeMidiPortHandle:
 class TestMidiListener:
     """``midi_listener`` filters mido messages by type and forwards them to a queue."""
 
-    def test_only_relevant_message_types_are_forwarded(self, surge_xt_interactive) -> None:
+    def test_only_relevant_message_types_are_forwarded(self, vst_interactive) -> None:
         """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
         forwarded = [
             _FakeMidiMessage("note_on", [0x90, 0x3C, 0x40]),
@@ -476,7 +465,7 @@ class TestMidiListener:
         # ``daemon=True`` so a hung listener can't block pytest shutdown if the
         # ``drain_event`` assertion below fails before we set ``stop_event``.
         listener_thread = threading.Thread(
-            target=surge_xt_interactive.midi_listener,
+            target=vst_interactive.midi_listener,
             args=("fake-port", midi_queue, stop_event),
             kwargs={"port_opener": fake_port_opener},
             daemon=True,
@@ -499,7 +488,7 @@ class TestMidiListener:
 
         assert drained == [(m.bytes(), 0.0) for m in forwarded]
 
-    def test_stop_event_exits_listener_with_no_messages(self, surge_xt_interactive) -> None:
+    def test_stop_event_exits_listener_with_no_messages(self, vst_interactive) -> None:
         """``stop_event`` set before any message arrives drains the listener cleanly."""
 
         class _IdlePort:
@@ -516,13 +505,13 @@ class TestMidiListener:
         stop_event = threading.Event()
         stop_event.set()
 
-        surge_xt_interactive.midi_listener(
+        vst_interactive.midi_listener(
             "fake-port", midi_queue, stop_event, port_opener=lambda _port: _IdlePort()
         )
 
         assert midi_queue.empty()
 
-    def test_open_input_failure_logs_and_exits_thread(self, surge_xt_interactive, caplog) -> None:
+    def test_open_input_failure_logs_and_exits_thread(self, vst_interactive, caplog) -> None:
         """``midi_listener`` must not raise; failures are logged so the daemon exits cleanly."""
 
         def raising_port_opener(_port_name: str) -> object:
@@ -531,7 +520,7 @@ class TestMidiListener:
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
         with caplog.at_level("ERROR"):
-            surge_xt_interactive.midi_listener(
+            vst_interactive.midi_listener(
                 "fake-port", midi_queue, stop_event, port_opener=raising_port_opener
             )
 
@@ -600,12 +589,12 @@ class _RecordingPlugin:
 class TestPlayAudioQueueDrain:
     """``play_audio`` drains the MIDI queue into ``plugin.process`` once per buffer."""
 
-    def test_queued_events_are_forwarded_to_plugin_process(self, surge_xt_interactive) -> None:
+    def test_queued_events_are_forwarded_to_plugin_process(self, vst_interactive) -> None:
         """Tuples enqueued by the listener are drained and passed to ``plugin.process``."""
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
-            surge_xt_interactive.CHANNELS,
-            surge_xt_interactive.BUFFER_SIZE,
+            vst_interactive.CHANNELS,
+            vst_interactive.BUFFER_SIZE,
             stop_event=stop_event,
             stop_after_n_calls=1,
         )
@@ -615,7 +604,7 @@ class TestPlayAudioQueueDrain:
         midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
         midi_queue.put(([0x80, 0x3C, 0x00], 0.0))
 
-        surge_xt_interactive.play_audio(
+        vst_interactive.play_audio(
             plugin, stop_event, midi_queue, audio_stream_factory=lambda: stream
         )
 
@@ -623,34 +612,32 @@ class TestPlayAudioQueueDrain:
         assert stop_event.is_set()
         assert len(stream.writes) == 1
 
-    def test_none_queue_passes_empty_messages_list(self, surge_xt_interactive) -> None:
+    def test_none_queue_passes_empty_messages_list(self, vst_interactive) -> None:
         """When no MIDI port is configured, ``play_audio`` is invoked with ``midi_queue=None``."""
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
-            surge_xt_interactive.CHANNELS,
-            surge_xt_interactive.BUFFER_SIZE,
+            vst_interactive.CHANNELS,
+            vst_interactive.BUFFER_SIZE,
             stop_event=stop_event,
             stop_after_n_calls=1,
         )
         stream = _FakeStream()
 
-        surge_xt_interactive.play_audio(
-            plugin, stop_event, None, audio_stream_factory=lambda: stream
-        )
+        vst_interactive.play_audio(plugin, stop_event, None, audio_stream_factory=lambda: stream)
 
         assert plugin.messages_per_call == [[]]
         assert stop_event.is_set()
 
-    def test_drain_is_capped_at_max_midi_events_per_buffer(self, surge_xt_interactive) -> None:
+    def test_drain_is_capped_at_max_midi_events_per_buffer(self, vst_interactive) -> None:
         """Drain queues larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` in chunks across buffers.
 
         Prevents one realtime callback from stretching to process the full backlog.
         """
-        cap = surge_xt_interactive._MAX_MIDI_EVENTS_PER_BUFFER
+        cap = vst_interactive._MAX_MIDI_EVENTS_PER_BUFFER
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
-            surge_xt_interactive.CHANNELS,
-            surge_xt_interactive.BUFFER_SIZE,
+            vst_interactive.CHANNELS,
+            vst_interactive.BUFFER_SIZE,
             stop_event=stop_event,
             stop_after_n_calls=1,  # stop after the first buffer to assert the per-buffer cap
         )
@@ -661,7 +648,7 @@ class TestPlayAudioQueueDrain:
         for _ in range(cap + 5):
             midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
 
-        surge_xt_interactive.play_audio(
+        vst_interactive.play_audio(
             plugin, stop_event, midi_queue, audio_stream_factory=lambda: stream
         )
 
@@ -673,38 +660,30 @@ class TestPlayAudioQueueDrain:
 class TestResolveMidiPort:
     """``_resolve_midi_port`` maps the click flag value to a concrete port name."""
 
-    def test_returns_first_available_when_requested_is_empty_string(
-        self, surge_xt_interactive
-    ) -> None:
+    def test_returns_first_available_when_requested_is_empty_string(self, vst_interactive) -> None:
         """Empty string means auto-pick: return ``available[0]``."""
-        resolved = surge_xt_interactive._resolve_midi_port("", ["port-a", "port-b"])
+        resolved = vst_interactive._resolve_midi_port("", ["port-a", "port-b"])
         assert resolved == "port-a"
 
-    def test_returns_requested_when_present_in_available(self, surge_xt_interactive) -> None:
+    def test_returns_requested_when_present_in_available(self, vst_interactive) -> None:
         """A named port that exists in ``available`` is returned verbatim."""
-        resolved = surge_xt_interactive._resolve_midi_port("port-b", ["port-a", "port-b"])
+        resolved = vst_interactive._resolve_midi_port("port-b", ["port-a", "port-b"])
         assert resolved == "port-b"
 
-    def test_raises_usage_error_when_requested_not_in_available(
-        self, surge_xt_interactive
-    ) -> None:
+    def test_raises_usage_error_when_requested_not_in_available(self, vst_interactive) -> None:
         """A named port absent from ``available`` raises ``click.UsageError``."""
         with pytest.raises(click.UsageError, match="port-z"):
-            surge_xt_interactive._resolve_midi_port("port-z", ["port-a", "port-b"])
+            vst_interactive._resolve_midi_port("port-z", ["port-a", "port-b"])
 
-    def test_raises_usage_error_when_available_is_empty_and_auto(
-        self, surge_xt_interactive
-    ) -> None:
+    def test_raises_usage_error_when_available_is_empty_and_auto(self, vst_interactive) -> None:
         """Auto-pick with no ports available raises ``click.UsageError``."""
         with pytest.raises(click.UsageError, match="no MIDI input"):
-            surge_xt_interactive._resolve_midi_port("", [])
+            vst_interactive._resolve_midi_port("", [])
 
-    def test_raises_usage_error_when_available_is_empty_and_named(
-        self, surge_xt_interactive
-    ) -> None:
+    def test_raises_usage_error_when_available_is_empty_and_named(self, vst_interactive) -> None:
         """Named port with no ports available raises ``click.UsageError``."""
         with pytest.raises(click.UsageError, match="no MIDI input"):
-            surge_xt_interactive._resolve_midi_port("port-a", [])
+            vst_interactive._resolve_midi_port("port-a", [])
 
 
 class _FakeParam:
@@ -731,53 +710,53 @@ class _FakeSpec:
 class TestValidateNoDrift:
     """``_validate_no_drift`` raises if a non-spec param drifted from its default."""
 
-    def test_returns_none_when_all_non_spec_params_at_default(self, surge_xt_interactive) -> None:
+    def test_returns_none_when_all_non_spec_params_at_default(self, vst_interactive) -> None:
         """No drift on any non-spec param → no exception."""
         plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7}
 
-        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+        result = vst_interactive._validate_no_drift(plugin, spec, defaults)
 
         assert result is None
 
-    def test_raises_value_error_when_non_spec_param_drifted(self, surge_xt_interactive) -> None:
+    def test_raises_value_error_when_non_spec_param_drifted(self, vst_interactive) -> None:
         """A non-spec param away from its default → ``ValueError`` naming the param."""
         plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.9})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3}
 
         with pytest.raises(ValueError, match="fx_amount"):
-            surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+            vst_interactive._validate_no_drift(plugin, spec, defaults)
 
-    def test_ignores_drift_on_spec_params(self, surge_xt_interactive) -> None:
+    def test_ignores_drift_on_spec_params(self, vst_interactive) -> None:
         """Spec params are allowed to vary; only non-spec drift is flagged."""
         plugin = _FakePlugin({"a_synth": 0.99, "fx_amount": 0.3})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3}
 
-        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+        result = vst_interactive._validate_no_drift(plugin, spec, defaults)
 
         assert result is None
 
-    def test_drift_within_tolerance_does_not_raise(self, surge_xt_interactive) -> None:
+    def test_drift_within_tolerance_does_not_raise(self, vst_interactive) -> None:
         """Tiny float deviation within abs_tol=1e-6 is treated as equal."""
         plugin = _FakePlugin({"fx_amount": 0.3 + 5e-7})
         spec = _FakeSpec([])
         defaults = {"fx_amount": 0.3}
 
-        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+        result = vst_interactive._validate_no_drift(plugin, spec, defaults)
 
         assert result is None
 
-    def test_drift_just_above_tolerance_raises(self, surge_xt_interactive) -> None:
+    def test_drift_just_above_tolerance_raises(self, vst_interactive) -> None:
         """Deviation just above abs_tol=1e-6 is flagged."""
         plugin = _FakePlugin({"fx_amount": 0.3 + 1e-3})
         spec = _FakeSpec([])
         defaults = {"fx_amount": 0.3}
 
         with pytest.raises(ValueError, match="fx_amount"):
-            surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+            vst_interactive._validate_no_drift(plugin, spec, defaults)
 
 
 def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", dict[str, float]]:
@@ -797,13 +776,13 @@ def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", 
 class TestKeyboardLoop:
     """Read keystrokes via ``keystroke_source`` and snapshot params on ``p`` until exit."""
 
-    def test_p_records_patch_q_quits(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
+    def test_p_records_patch_q_quits(self, vst_interactive, simple_spec: ParamSpec) -> None:
         """``["p", "q"]`` records exactly one patch with every spec synth-param key, then quits."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["p", "q"])
 
-        patches = surge_xt_interactive.keyboard_loop(
+        patches = vst_interactive.keyboard_loop(
             plugin,
             stop_event,
             SURGE_SIMPLE,
@@ -818,13 +797,13 @@ class TestKeyboardLoop:
             assert np.isfinite(value), f"{name} = {value} is not finite"
         assert stop_event.is_set()
 
-    def test_unknown_keys_are_ignored(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
+    def test_unknown_keys_are_ignored(self, vst_interactive, simple_spec: ParamSpec) -> None:
         """Ignore keystrokes outside ``{p, q}``: no patch, no ``stop_event``, no raise."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["x", "p", "z", "q"])
 
-        patches = surge_xt_interactive.keyboard_loop(
+        patches = vst_interactive.keyboard_loop(
             plugin,
             stop_event,
             SURGE_SIMPLE,
@@ -836,7 +815,7 @@ class TestKeyboardLoop:
         assert stop_event.is_set()
 
     def test_stop_event_set_externally_exits_without_consuming_source(
-        self, surge_xt_interactive, simple_spec: ParamSpec
+        self, vst_interactive, simple_spec: ParamSpec
     ) -> None:
         """Return ``[]`` immediately without polling the source when ``stop_event`` is set."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
@@ -849,7 +828,7 @@ class TestKeyboardLoop:
             consumed.append("polled")
             return "p"
 
-        patches = surge_xt_interactive.keyboard_loop(
+        patches = vst_interactive.keyboard_loop(
             plugin,
             stop_event,
             SURGE_SIMPLE,
@@ -861,14 +840,14 @@ class TestKeyboardLoop:
         assert consumed == [], "loop must check stop_event before polling the source"
 
     def test_source_exhaustion_quits_gracefully_and_sets_stop_event(
-        self, surge_xt_interactive, simple_spec: ParamSpec
+        self, vst_interactive, simple_spec: ParamSpec
     ) -> None:
         """Return recorded patches and set ``stop_event`` on source ``StopIteration``."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["p"])  # No q — source will raise StopIteration on the second poll.
 
-        patches = surge_xt_interactive.keyboard_loop(
+        patches = vst_interactive.keyboard_loop(
             plugin,
             stop_event,
             SURGE_SIMPLE,
@@ -880,7 +859,7 @@ class TestKeyboardLoop:
         assert stop_event.is_set()
 
     def test_drift_during_record_raises_valueerror_and_sets_stop_event(
-        self, surge_xt_interactive, simple_spec: ParamSpec
+        self, vst_interactive, simple_spec: ParamSpec
     ) -> None:
         """Raise ``ValueError`` via ``_validate_no_drift`` when a non-spec param drifted.
 
@@ -894,7 +873,7 @@ class TestKeyboardLoop:
         keystrokes = iter(["p"])
 
         with pytest.raises(ValueError, match="drifted"):
-            surge_xt_interactive.keyboard_loop(
+            vst_interactive.keyboard_loop(
                 plugin,
                 stop_event,
                 SURGE_SIMPLE,
@@ -931,9 +910,9 @@ def _write_pred_files(
 class TestExpectedPredictionFilenames:
     """``_expected_prediction_filenames`` enumerates ``PredictionWriter``'s output names."""
 
-    def test_returns_three_names_per_sample(self, surge_xt_interactive) -> None:
+    def test_returns_three_names_per_sample(self, vst_interactive) -> None:
         """For ``num_samples`` samples, three sorted filenames per sample are returned."""
-        names = surge_xt_interactive._expected_prediction_filenames(num_samples=2)
+        names = vst_interactive._expected_prediction_filenames(num_samples=2)
 
         assert names == sorted(
             [
@@ -946,13 +925,13 @@ class TestExpectedPredictionFilenames:
             ]
         )
 
-    def test_zero_samples_returns_empty(self, surge_xt_interactive) -> None:
+    def test_zero_samples_returns_empty(self, vst_interactive) -> None:
         """Zero samples returns an empty list."""
-        assert surge_xt_interactive._expected_prediction_filenames(num_samples=0) == []
+        assert vst_interactive._expected_prediction_filenames(num_samples=0) == []
 
 
 class _RecordingSubprocessRunner:
-    """Test fake matching the ``SubprocessRunner`` shape from ``surge_xt_interactive``.
+    """Test fake matching the ``SubprocessRunner`` shape from ``vst_interactive``.
 
     Records every invocation's positional argv and keyword arguments so tests assert on
     real state instead of a ``MagicMock`` argv-spy. Used by every test that exercises a
@@ -976,13 +955,13 @@ class _RecordingSubprocessRunner:
 class TestRunPredict:
     """Tests for ``_run_predict``'s eval-CLI invocation and Hydra overrides."""
 
-    def test_passes_param_spec_and_absolute_paths(self, surge_xt_interactive: ModuleType) -> None:
+    def test_passes_param_spec_and_absolute_paths(self, vst_interactive: ModuleType) -> None:
         """No width override may reach the subprocess, and paths must be cwd-independent.
 
         ``model.net.d_out`` must be absent — width follows the spec selection — and
         relative inputs must arrive resolved because the subprocess may run elsewhere.
 
-        :param surge_xt_interactive: Lazily imported interactive module fixture.
+        :param vst_interactive: Lazily imported interactive module fixture.
         """
         # Use relative paths so the test fails if .resolve() is dropped.
         ckpt = Path("relative/ckpt.ckpt")
@@ -992,7 +971,7 @@ class TestRunPredict:
 
         runner = _RecordingSubprocessRunner()
 
-        surge_xt_interactive._run_predict(
+        vst_interactive._run_predict(
             ckpt,
             dataset_root,
             predict_file,
@@ -1023,33 +1002,29 @@ class TestRunPredict:
 class TestValidatePredictions:
     """``_validate_predictions`` checks expected files exist and tensors are finite."""
 
-    def test_passes_on_complete_finite_outputs(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_passes_on_complete_finite_outputs(self, vst_interactive, tmp_path: Path) -> None:
         """Happy path: complete file set with finite predictions does not raise."""
         _write_pred_files(tmp_path, num_samples=2)
 
-        surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+        vst_interactive._validate_predictions(tmp_path, num_samples=2)
 
-    def test_missing_file_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
+    def test_missing_file_raises_filenotfounderror(self, vst_interactive, tmp_path: Path) -> None:
         """A missing per-sample file raises ``FileNotFoundError`` listing the missing entry."""
         _write_pred_files(tmp_path, num_samples=2)
         (tmp_path / "pred-1.pt").unlink()
 
         with pytest.raises(FileNotFoundError, match="pred-1.pt"):
-            surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+            vst_interactive._validate_predictions(tmp_path, num_samples=2)
 
-    def test_extra_file_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
+    def test_extra_file_raises_filenotfounderror(self, vst_interactive, tmp_path: Path) -> None:
         """An unexpected file in the directory raises ``FileNotFoundError`` (set mismatch)."""
         _write_pred_files(tmp_path, num_samples=1)
         torch.save(torch.zeros(1), tmp_path / "stray-extra.pt")
 
         with pytest.raises(FileNotFoundError, match="stray-extra.pt"):
-            surge_xt_interactive._validate_predictions(tmp_path, num_samples=1)
+            vst_interactive._validate_predictions(tmp_path, num_samples=1)
 
-    def test_nan_prediction_raises_valueerror(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_nan_prediction_raises_valueerror(self, vst_interactive, tmp_path: Path) -> None:
         """A NaN value in any ``pred-{i}.pt`` raises ``ValueError`` naming the offending file."""
 
         def factory(idx: int) -> torch.Tensor:
@@ -1060,44 +1035,44 @@ class TestValidatePredictions:
         _write_pred_files(tmp_path, num_samples=2, pred_tensor_factory=factory)
 
         with pytest.raises(ValueError, match="pred-0.pt"):
-            surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+            vst_interactive._validate_predictions(tmp_path, num_samples=2)
 
 
 class TestValidateMetricsDf:
     """``_validate_metrics_df`` validates row count, expected columns, and finiteness."""
 
-    def test_passes_on_matching_shape_and_finite(self, surge_xt_interactive) -> None:
+    def test_passes_on_matching_shape_and_finite(self, vst_interactive) -> None:
         """Happy path: matching rows, expected columns, all-finite values does not raise."""
         df = pd.DataFrame({"mss": [0.1, 0.2], "extra": [1.0, 2.0]})
-        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+        spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
-        surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+        vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_wrong_rows_raises_valueerror(self, surge_xt_interactive) -> None:
+    def test_wrong_rows_raises_valueerror(self, vst_interactive) -> None:
         """Row count mismatch raises ``ValueError`` mentioning expected and actual."""
         df = pd.DataFrame({"mss": [0.1]})
-        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+        spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="expected 2 rows"):
-            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+            vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_missing_column_raises_valueerror(self, surge_xt_interactive) -> None:
+    def test_missing_column_raises_valueerror(self, vst_interactive) -> None:
         """A missing expected column raises ``ValueError`` listing the missing column."""
         df = pd.DataFrame({"other": [0.1, 0.2]})
-        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+        spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="missing expected columns"):
-            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+            vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_nan_in_expected_column_raises_valueerror(self, surge_xt_interactive) -> None:
+    def test_nan_in_expected_column_raises_valueerror(self, vst_interactive) -> None:
         """A NaN in any expected column raises ``ValueError`` (NaN/Inf message)."""
         df = pd.DataFrame({"mss": [0.1, float("nan")]})
-        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+        spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="NaN/Inf"):
-            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+            vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_nan_error_reports_offending_row_count_not_full_df(self, surge_xt_interactive) -> None:
+    def test_nan_error_reports_offending_row_count_not_full_df(self, vst_interactive) -> None:
         """Error message reports only the offending row count and rows, not the full DataFrame.
 
         Otherwise a 1000-row metrics.csv with one bad row dumps a thousand lines into the
@@ -1109,10 +1084,10 @@ class TestValidateMetricsDf:
                 "wmfcc": [0.2, 0.3, 0.4, 0.5, 0.6],
             }
         )
-        spec = surge_xt_interactive._MetricsFileSpec(rows=5, columns=frozenset({"mss", "wmfcc"}))
+        spec = vst_interactive._MetricsFileSpec(rows=5, columns=frozenset({"mss", "wmfcc"}))
 
         with pytest.raises(ValueError) as exc_info:
-            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+            vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
         msg = str(exc_info.value)
         assert "1 of 5 rows" in msg
@@ -1122,7 +1097,7 @@ class TestValidateMetricsDf:
 
 
 class _RecordingEvalRunner:
-    """Test fake matching the ``EvalRunner`` shape from ``surge_xt_interactive``.
+    """Test fake matching the ``EvalRunner`` shape from ``vst_interactive``.
 
     Records the positional args from each invocation and the call count so tests can assert
     on real state instead of patching the module-level ``eval_patches`` symbol. Reused
@@ -1160,14 +1135,14 @@ class TestMaybeEvalCapturedPatches:
     """``_maybe_eval_captured_patches`` wires up the train.lance -> sibling replication."""
 
     def test_no_checkpoint_skips_replication_and_eval(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Skip sibling-file creation and ``eval_patches`` when ``--checkpoint-path`` is absent."""
         train_path = tmp_path / "train.lance"
         _write_stub_lance_dir(train_path, b"stub")
         runner = _RecordingEvalRunner()
 
-        surge_xt_interactive._maybe_eval_captured_patches(
+        vst_interactive._maybe_eval_captured_patches(
             patch_file_path=train_path,
             output_dataset_dir_path=tmp_path,
             num_patches=1,
@@ -1182,11 +1157,11 @@ class TestMaybeEvalCapturedPatches:
         assert runner.calls == []
 
     def test_replicates_train_lance_to_three_siblings(
-        self, surge_xt_interactive: ModuleType, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """Copy ``train.lance`` to test/val/predict.lance and forward args to the eval runner.
 
-        :param surge_xt_interactive: The lazily-imported tool module under test.
+        :param vst_interactive: The lazily-imported tool module under test.
         :param tmp_path: Per-test tmp dir holding the source and replicated Lance dirs.
         """
         train_path = tmp_path / "train.lance"
@@ -1196,7 +1171,7 @@ class TestMaybeEvalCapturedPatches:
         ckpt_path.write_bytes(b"ckpt")
         runner = _RecordingEvalRunner()
 
-        surge_xt_interactive._maybe_eval_captured_patches(
+        vst_interactive._maybe_eval_captured_patches(
             patch_file_path=train_path,
             output_dataset_dir_path=tmp_path,
             num_patches=3,
@@ -1216,7 +1191,7 @@ class TestMaybeEvalCapturedPatches:
         ]
 
     def test_failed_copy_rolls_back_partial_siblings(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Roll back earlier siblings on later ``shutil.copytree`` ``OSError``; skip eval.
 
@@ -1235,7 +1210,7 @@ class TestMaybeEvalCapturedPatches:
         runner = _RecordingEvalRunner()
 
         with pytest.raises(OSError):
-            surge_xt_interactive._maybe_eval_captured_patches(
+            vst_interactive._maybe_eval_captured_patches(
                 patch_file_path=train_path,
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
@@ -1297,13 +1272,13 @@ class TestBuildPredictVstAudioArgv:
     monkeypatching ``sys.platform`` or the module-level wrapper constant.
     """
 
-    def test_linux_prepends_wrapper_to_argv(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_linux_prepends_wrapper_to_argv(self, vst_interactive, tmp_path: Path) -> None:
         """On Linux, the existing wrapper script is the first argv entry."""
         wrapper_path = tmp_path / "wrapper.sh"
         wrapper_path.write_text('#!/usr/bin/env bash\nexec "$@"\n')
         wrapper_path.chmod(0o755)
 
-        argv = surge_xt_interactive._build_predict_vst_audio_argv(
+        argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
             SURGE_SIMPLE,
@@ -1315,13 +1290,13 @@ class TestBuildPredictVstAudioArgv:
         assert argv[0] == str(wrapper_path)
 
     def test_linux_missing_wrapper_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """On Linux, a missing wrapper path raises ``FileNotFoundError`` naming the path."""
         missing_wrapper = tmp_path / "definitely-does-not-exist.sh"
 
         with pytest.raises(FileNotFoundError, match="VST headless wrapper not found"):
-            surge_xt_interactive._build_predict_vst_audio_argv(
+            vst_interactive._build_predict_vst_audio_argv(
                 tmp_path / "preds",
                 tmp_path / "audio",
                 SURGE_SIMPLE,
@@ -1330,13 +1305,11 @@ class TestBuildPredictVstAudioArgv:
                 wrapper_path=missing_wrapper,
             )
 
-    def test_non_linux_does_not_prepend_wrapper(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
+    def test_non_linux_does_not_prepend_wrapper(self, vst_interactive, tmp_path: Path) -> None:
         """On non-Linux platforms the wrapper is not prepended and a missing wrapper is fine."""
         missing_wrapper = tmp_path / "definitely-does-not-exist.sh"
 
-        argv = surge_xt_interactive._build_predict_vst_audio_argv(
+        argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
             SURGE_SIMPLE,
@@ -1346,20 +1319,20 @@ class TestBuildPredictVstAudioArgv:
         )
 
         assert str(missing_wrapper) not in argv
-        assert argv[0] == surge_xt_interactive.sys.executable
+        assert argv[0] == vst_interactive.sys.executable
 
     def test_param_spec_and_plugin_state_path_are_forwarded(
-        self, surge_xt_interactive: ModuleType, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """``param_spec_name`` and ``plugin_state_path`` follow their flag tokens in argv.
 
         Otherwise ``predict_vst_audio.py`` would silently fall back to ``surge_xt`` /
         ``presets/surge-base.vstpreset`` and decode/render against a mismatched spec.
 
-        :param surge_xt_interactive: The lazily-imported tool module under test.
+        :param vst_interactive: The lazily-imported tool module under test.
         :param tmp_path: Per-test tmp dir for the predictions and audio output paths.
         """
-        argv = surge_xt_interactive._build_predict_vst_audio_argv(
+        argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
             "custom-spec",
@@ -1374,13 +1347,13 @@ class TestBuildPredictVstAudioArgv:
         assert argv[-1] == "-t"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Match the two positional argv entries to the caller's source/destination paths."""
         preds_dir = tmp_path / "preds"
         audio_dir = tmp_path / "audio"
 
-        argv = surge_xt_interactive._build_predict_vst_audio_argv(
+        argv = vst_interactive._build_predict_vst_audio_argv(
             preds_dir, audio_dir, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET, platform="darwin"
         )
 
@@ -1394,17 +1367,17 @@ class TestValidateRenderedAudioDir:
     """``_validate_rendered_audio_dir`` checks the per-sample artifacts after rendering."""
 
     def test_returns_none_on_complete_non_silent_dir(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """All artifacts present and audible → returns ``None`` without raising."""
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=2)
 
         # Returns None (implicit) — no assertion needed beyond the absence of exceptions.
-        surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
+        vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
     def test_missing_artifact_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """A missing per-sample artifact (``spec.png``) raises ``FileNotFoundError`` naming it."""
         audio_dir = tmp_path / "audio"
@@ -1412,18 +1385,18 @@ class TestValidateRenderedAudioDir:
         (audio_dir / "sample_0" / "spec.png").unlink()
 
         with pytest.raises(FileNotFoundError, match="spec.png"):
-            surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
+            vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
 
-    def test_silent_wav_raises_valueerror(self, surge_xt_interactive, tmp_path: Path) -> None:
+    def test_silent_wav_raises_valueerror(self, vst_interactive, tmp_path: Path) -> None:
         """A silent rendered WAV raises ``ValueError`` naming the offending sample / file."""
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=1, silent=True)
 
         with pytest.raises(ValueError, match=r"sample_0/(target|pred)\.wav is silent"):
-            surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
+            vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
 
     def test_unexpected_sample_dirs_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Mismatched sample directory set (missing) raises ``FileNotFoundError``."""
         audio_dir = tmp_path / "audio"
@@ -1431,10 +1404,10 @@ class TestValidateRenderedAudioDir:
         _populate_audio_dir(audio_dir, num_samples=1)
 
         with pytest.raises(FileNotFoundError, match="unexpected sample directories"):
-            surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
+            vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
     def test_extra_sample_dir_raises_filenotfounderror(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Raise ``FileNotFoundError`` on an extra sample dir to reject stale leftovers."""
         audio_dir = tmp_path / "audio"
@@ -1448,11 +1421,9 @@ class TestValidateRenderedAudioDir:
         (leftover / "params.csv").write_text("name,value\n")
 
         with pytest.raises(FileNotFoundError, match="unexpected sample directories"):
-            surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
+            vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
-    def test_num_samples_12_does_not_trip_lex_sort(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
+    def test_num_samples_12_does_not_trip_lex_sort(self, vst_interactive, tmp_path: Path) -> None:
         """Regression: ``num_samples=12`` must survive ``sample_10`` sorting before ``sample_2``.
 
         Set comparison + index iteration keeps validation index-based regardless of directory
@@ -1461,7 +1432,7 @@ class TestValidateRenderedAudioDir:
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=12)
 
-        surge_xt_interactive._validate_rendered_audio_dir(audio_dir, num_samples=12)
+        vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=12)
 
 
 class TestRenderPredictedAudioSubprocessIntegration:
@@ -1472,7 +1443,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
     """
 
     def test_runner_receives_argv_with_check_and_timeout(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Forward argv to the runner with ``check=True`` and a positive ``timeout``.
 
@@ -1482,7 +1453,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
         _populate_audio_dir(audio_dir, num_samples=1)
         runner = _RecordingSubprocessRunner()
 
-        surge_xt_interactive._render_predicted_audio(
+        vst_interactive._render_predicted_audio(
             tmp_path / "preds",
             audio_dir,
             num_samples=1,
@@ -1502,7 +1473,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
         assert timeout > 0
 
 
-# --- E2E tests: real Surge XT plugin + real subprocess ----------------------------------------
+# These tests require real Surge XT plugin behavior rather than fakes.
 
 
 @pytest.mark.requires_vst
@@ -1511,7 +1482,7 @@ class TestPlayAudioRecordedE2E:
     """End-to-end: real Surge XT plugin renders a non-silent deterministic clip."""
 
     def test_play_audio_recorded_produces_non_silent_wav(
-        self, surge_xt_interactive, tmp_path: Path
+        self, vst_interactive, tmp_path: Path
     ) -> None:
         """Render a WAV via real Surge XT + ``surge-simple.vstpreset`` with non-silent audio.
 
@@ -1530,21 +1501,20 @@ class TestPlayAudioRecordedE2E:
         plugin = load_plugin(plugin_path)
         load_preset(plugin, plugin_state_path)
         # Production parity: post-load flush commits preset state — see render_params and main.
-        surge_xt_interactive._flush_plugin(plugin)
+        vst_interactive._flush_plugin(plugin)
 
         output_path = tmp_path / "session.wav"
-        surge_xt_interactive.play_audio_recorded(plugin, output_path)
+        vst_interactive.play_audio_recorded(plugin, output_path)
 
         assert output_path.is_file()
         with AudioFile(str(output_path)) as f:
             audio = f.read(f.frames)
         expected_frames = int(
-            surge_xt_interactive.SESSION_RECORDING_DURATION_SECONDS
-            * surge_xt_interactive.SAMPLE_RATE
+            vst_interactive.SESSION_RECORDING_DURATION_SECONDS * vst_interactive.SAMPLE_RATE
         )
-        assert audio.shape == (surge_xt_interactive.CHANNELS, expected_frames)
+        assert audio.shape == (vst_interactive.CHANNELS, expected_frames)
         peak = float(np.abs(audio).max())
-        assert peak > surge_xt_interactive.SILENCE_PEAK_THRESHOLD, (
+        assert peak > vst_interactive.SILENCE_PEAK_THRESHOLD, (
             f"recorded WAV is silent (peak={peak:.2e}); a real preset should produce audible output"
         )
 
@@ -1584,7 +1554,7 @@ class TestRenderPredictedAudioE2E:
 
     def test_render_predicted_audio_against_real_subprocess(
         self,
-        surge_xt_interactive,
+        vst_interactive,
         tmp_path: Path,
         simple_spec: ParamSpec,
     ) -> None:
@@ -1605,7 +1575,7 @@ class TestRenderPredictedAudioE2E:
         audio_dir = tmp_path / "audio"
         _write_synthetic_prediction_files(pred_dir, num_samples, simple_spec)
 
-        surge_xt_interactive._render_predicted_audio(
+        vst_interactive._render_predicted_audio(
             pred_dir,
             audio_dir,
             num_samples,
@@ -1621,7 +1591,7 @@ class TestRenderPredictedAudioE2E:
                 with AudioFile(str(sample_dir / wav_name)) as f:
                     audio = f.read(f.frames)
                 peak = float(np.abs(audio).max())
-                assert peak > surge_xt_interactive.SILENCE_PEAK_THRESHOLD, (
+                assert peak > vst_interactive.SILENCE_PEAK_THRESHOLD, (
                     f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})"
                 )
 
@@ -1632,7 +1602,7 @@ class TestKeyboardLoopE2E:
     """End-to-end: real Surge XT plugin records a patch via deterministic keystrokes."""
 
     def test_p_q_against_real_plugin_records_one_patch(
-        self, surge_xt_interactive, simple_spec: ParamSpec
+        self, vst_interactive, simple_spec: ParamSpec
     ) -> None:
         """Record a patch whose synth-param values match the post-preset-load Surge XT state.
 
@@ -1655,7 +1625,7 @@ class TestKeyboardLoopE2E:
         # actually exposed (Surge XT hides oscillator-shape params until the active osc type
         # is committed). Same flush pattern used by ``render_params`` and ``main`` in the
         # production script.
-        surge_xt_interactive._flush_plugin(plugin)
+        vst_interactive._flush_plugin(plugin)
 
         # Snapshot post-flush defaults so _validate_no_drift has a known baseline.
         default_params = {
@@ -1666,7 +1636,7 @@ class TestKeyboardLoopE2E:
         stop_event = threading.Event()
         keystrokes = iter(["p", "q"])
 
-        patches = surge_xt_interactive.keyboard_loop(
+        patches = vst_interactive.keyboard_loop(
             plugin,
             stop_event,
             SURGE_SIMPLE,
@@ -1701,7 +1671,7 @@ class TestMainPluginPathDefault:
 
     def test_env_var_overrides_default_plugin_path(self) -> None:
         """``$SYNTH_SETTER_PLUGIN_PATH`` reaches ``load_plugin`` when no flag is passed."""
-        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        sxi = importlib.import_module("synth_setter.tools.vst_interactive")
         with mock.patch.object(sxi, "load_plugin", _raise_stop):
             result = CliRunner().invoke(
                 sxi.main,
@@ -1713,7 +1683,7 @@ class TestMainPluginPathDefault:
 
     def test_unset_env_falls_back_to_bundle(self) -> None:
         """With no override, ``--plugin-path`` resolves to the in-repo bundle default."""
-        sxi = importlib.import_module("synth_setter.tools.surge_xt_interactive")
+        sxi = importlib.import_module("synth_setter.tools.vst_interactive")
         with mock.patch.dict(os.environ), mock.patch.object(sxi, "load_plugin", _raise_stop):
             os.environ.pop("SYNTH_SETTER_PLUGIN_PATH", None)
             result = CliRunner().invoke(sxi.main, ["--param-spec-name", "surge_xt"])

@@ -1,4 +1,4 @@
-"""Interactive Surge XT preview with real-time audio streaming via pedalboard."""
+"""Interactive VST3 preview with real-time audio streaming via pedalboard."""
 
 import logging
 import math
@@ -133,7 +133,7 @@ SILENCE_PEAK_THRESHOLD = 1e-4
 _METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
 
 
-# ----- Test seams ---------------------------------------------------------------------
+# External I/O seams keep tests state-based without patching module globals (#844).
 # Narrow dependency-injection points so tests can substitute fakes that capture state
 # instead of monkey-patching module-level functions. Defaults preserve production behavior;
 # CLI surface is unchanged. Each seam is keyword-only at the call sites that accept it.
@@ -421,7 +421,7 @@ def play_audio(
     *,
     audio_stream_factory: AudioStreamFactory | None = None,
 ) -> None:
-    """Stream Surge XT output to the audio device, processing any pending MIDI messages.
+    """Stream VST3 output to the audio device, processing any pending MIDI messages.
 
     Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
     ``main`` after the plugin editor is closed). When ``midi_queue`` is provided, drains it
@@ -490,9 +490,9 @@ def midi_listener(
     — otherwise the queue would keep growing after the audio thread stops (e.g. while
     ``main`` waits at the post-editor "press any key" prompt).
 
-    ``port_opener`` exists for test injection (#844). ``None`` (the default) resolves to
-    ``mido.open_input`` at call time so legacy ``monkeypatch.setattr(surge_xt_interactive.mido,
-    "open_input", ...)`` tests keep working until they migrate to direct injection.
+    ``port_opener`` exists for test injection (#844). ``None`` resolves to
+    ``mido.open_input`` at call time; callers can inject an opener without
+    replacing the module-level mido dependency.
     """
     logger.info("Listening on MIDI port: %s", port_name)
     opener = port_opener if port_opener is not None else mido.open_input  # pyright: ignore[reportAttributeAccessIssue]
@@ -1100,7 +1100,7 @@ def main(
     checkpoint_path: Path | None,
     session_recording_path: Path | None,
 ) -> None:
-    """Open Surge XT GUI with real-time audio streaming and record patches to a Lance dataset.
+    """Open a VST3 plugin GUI, stream audio, and record patches to a Lance dataset.
 
     The base preset is selected by ``plugin_state_paths[param_spec_name]`` so a spec/preset
     mismatch is unrepresentable.
