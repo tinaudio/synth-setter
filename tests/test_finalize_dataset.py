@@ -396,28 +396,16 @@ def test_finalize_keeps_r2_artifacts_when_live_metric_logging_fails(
     assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
 
 
-def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
+def test_finalize_failure_logs_partial_summary_then_closes_loggers_failed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """A ``finalize_from_spec`` failure propagates but still closes the wandb run as failed.
-
-    Pins the ``finalize()`` ``try/finally`` contract: the body's exception must
-    re-raise *and* the loggers must be closed with ``status="failed"`` so the
-    data-generation run is not left dangling. A real offline ``WandbLogger`` is
-    instantiated (via the offline-wandb cfg builder) so the close path runs
-    ``wandb.finish()`` for real. ``close_loggers`` is wrapped with a spy that
-    still delegates to the real helper: the spy captures the forwarded
-    ``status`` (the state-based ``wandb.run is None`` witness alone can't
-    distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that skips the
-    close entirely, because wandb teardown can null the run by other means). The
-    failure is injected at ``finalize_from_spec`` so the ``except`` sets
-    ``status="failed"`` before re-raising.
+    """A partial failure records its traceback and terminal W&B totals before closing.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, raises from
-        ``finalize_from_spec``, and wraps ``close_loggers`` with the status spy.
+    :param monkeypatch: Pins offline W&B, injects partial progress followed by failure, and records
+        exception logging plus logger-close status.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
@@ -431,10 +419,21 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
         work_dir: Path,
         progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
     ) -> NoReturn:
-        del spec, work_dir, progress_callback
+        del spec, work_dir
+        assert progress_callback is not None
+        progress_callback("shard_processed")
+        progress_callback("artifact_uploaded")
         raise RuntimeError("simulated finalize_from_spec failure")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+
+    exception_messages: list[str] = []
+
+    class SpyLogger:
+        def exception(self, message: str) -> None:
+            exception_messages.append(message)
+
+    monkeypatch.setattr(finalize_dataset, "logger", SpyLogger())
 
     real_close = finalize_dataset.close_loggers
     close_statuses: list[str] = []
@@ -455,10 +454,20 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
     with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
         finalize_dataset.finalize(cfg)
 
+    assert exception_messages == [""]
     assert close_statuses == ["failed"], (
         f"finalize() must close loggers exactly once as failed, got {close_statuses}"
     )
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
+
+    run_binary = next((tmp_path / "wandb").glob("offline-run-*/run-*.wandb"))
+    summary_rows = [
+        row for row in read_history_rows(run_binary) if "finalize/elapsed_seconds" in row
+    ]
+    assert len(summary_rows) == 1
+    assert json.loads(summary_rows[0]["finalize/shards_processed"]) == 1
+    assert json.loads(summary_rows[0]["finalize/artifacts_uploaded"]) == 1
+    assert json.loads(summary_rows[0]["finalize/elapsed_seconds"]) >= 0
 
 
 def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(

@@ -273,8 +273,8 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     lineage DAG). The wandb run id is pinned and ``resume=allow`` is forced so
     finalize attaches to the generation run rather than minting a new one;
     both are no-ops when ``cfg`` carries no ``logger`` group (the wandb-free
-    default). On any failure the loggers are still closed (status ``"failed"``)
-    before the exception re-raises.
+    default). On any failure the traceback and partial progress summary are
+    logged before the loggers close with status ``"failed"`` and the exception re-raises.
 
     :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
         accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
@@ -291,17 +291,22 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
     loggers = instantiate_loggers(cfg.get("logger"))
     status = "success"
+    started_at = perf_counter()
+    log_summary: Callable[[float], None] | None = None
     try:
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
-        started_at = perf_counter()
         finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
-        log_summary(perf_counter() - started_at)
         _log_dataset_artifact(loggers, spec)
     except BaseException:
         status = "failed"
+        logger.exception("")
         raise
     finally:
-        close_loggers(loggers, status)
+        try:
+            if log_summary is not None:
+                log_summary(perf_counter() - started_at)
+        finally:
+            close_loggers(loggers, status)
 
 
 @hydra.main(
