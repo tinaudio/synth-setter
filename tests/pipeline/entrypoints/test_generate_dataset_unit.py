@@ -1944,8 +1944,8 @@ class TestBuildGenerateArgs:
     ) -> None:
         """Shard dispatch survives a cwd far from the repo root (import-anchored script path).
 
-        The path was historically repo-root-relative, so dispatch broke from any
-        other working directory — e.g. under ``fake_r2_remote``'s ``chdir``.
+        The script argv entry must resolve to an existing absolute file
+        regardless of process cwd — e.g. under ``fake_r2_remote``'s ``chdir``.
 
         :param spec: Smoke dataset spec fixture.
         :param tmp_path: Working directory unrelated to the repo checkout.

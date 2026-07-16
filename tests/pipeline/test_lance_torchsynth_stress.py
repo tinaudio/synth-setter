@@ -97,8 +97,14 @@ def test_make_lance_dataset_batch_boundary_sweep(
 
     params = _read_params(shard)
     assert params.shape == (samples_per_shard, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+    audio = (
+        lance.dataset(str(shard)).to_table(columns=["audio"]).column("audio").combine_chunks()
+    ).to_numpy_ndarray()
+    assert audio.dtype == np.float16
+    assert audio.shape[0] == samples_per_shard
     # Distinct rows prove no duplicated batch tails (row i is seeded by
     # (base_seed, i)); rounding gives a hashable float32-stable row identity.
+    # Valid while the spec stays all-continuous — discrete fields could collide.
     unique_rows = {tuple(np.round(row, 6)) for row in params}
     assert len(unique_rows) == samples_per_shard
 
