@@ -267,6 +267,12 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 > - Preserve the PR-health bullets from `review_body` verbatim — they are
 >   important for human reviewers and easy to lose if you re-summarize.
 >
+> - **Pi PASS report.** When Pi has no findings or PR-health flags, preserve the
+>   complete `## Pi review audit` section from `review_body` between the PASS
+>   line and `## Summary`; a successful review must not discard its model,
+>   attempt, agent-id, or transcript evidence. The fixed short form below is
+>   only for non-Pi harnesses.
+>
 > - **PASS short form.** If the JSON has no findings AND no PR-health flags,
 >   still write the sentinel file. The gate's size guard rejects files under
 >   200 bytes, and the header + `PASS` line + `Reviewed at:` line are

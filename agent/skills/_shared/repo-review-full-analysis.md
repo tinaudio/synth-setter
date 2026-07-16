@@ -107,52 +107,63 @@ state.
 
 Run two model passes for every selected skill, then merge their reports using
 the existing union and near-duplicate rules in **Cross-model opencode pass**
-below. For Pi, replace `native` provenance with `codex` and `opencode`
-provenance with `openrouter`; do not run the opencode launcher. Record each
-attempt's skill, pass, exact model, thinking level, Tintin agent id, status, and
+below. Pi does not run the opencode launcher; it derives provenance from each
+successful effective model as specified below. Record each attempt's skill,
+pass, exact model, thinking level, Tintin agent id, status, and
 the exact transcript path from the result's `Output file:` field in a
 `## Pi review audit` section of `review_body`. This audit section does not
 change the findings JSON shape or inline-comment contract.
 
-Before fan-out, run `pi --list-models` once and parse its provider/model rows.
-If either `openai-codex` or `openrouter` has no available models, stop with an
-actionable authentication prerequisite (`/login <provider>` or set its API key
-before starting Pi); missing authentication is not quota exhaustion. Remove an
-unlisted candidate from its row before launch and record it as `unavailable`
-with no agent id or transcript. If a row has no candidate left, stop. This lets
-a retired free model fall through without hiding a provider setup error. If a
-model disappears after preflight and `Agent` returns `Model not found`, apply
-the same unavailable-candidate rule rather than classifying it as quota.
+Use the tested routing helper as the single source of model candidates,
+availability filtering, thinking levels, and allocation reasons. Count changed
+lines and inspect the diff for these risk signals: file moves, concurrency,
+persistence, authentication, workflow permissions, and numeric/dtype/shape
+logic. Pass each detected signal with `--risk` and one `--skill` argument per
+selected checklist:
 
-Choose the model candidates and base thinking level from this table. Start with
-`Initial`; on a qualifying quota/capacity failure try `Fallback 1`, then
-`Fallback 2`, each at most once with the same prompt and thinking level.
+```bash
+python3 agent/_shared/pi_review_routing.py plan \
+  --skill correctness-review --skill code-health \
+  --changed-lines "$changed_lines" --risk concurrency
+```
 
-| Pass                | Skills                               | Initial                                             | Fallback 1                   | Fallback 2                                          | Base thinking |
-| ------------------- | ------------------------------------ | --------------------------------------------------- | ---------------------------- | --------------------------------------------------- | ------------- |
-| Codex deep          | `correctness-review`, `lance-review` | `openai-codex/gpt-5.6-sol`                          | `openrouter/openrouter/free` | `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | `high`        |
-| OpenRouter deep     | `correctness-review`, `lance-review` | `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | `openai-codex/gpt-5.6-sol`   | `openrouter/openrouter/free`                        | `high`        |
-| Codex standard      | Every other skill                    | `openai-codex/gpt-5.6-terra`                        | `openrouter/openrouter/free` | `openrouter/qwen/qwen3-coder:free`                  | `medium`      |
-| OpenRouter standard | Every other skill                    | `openrouter/qwen/qwen3-coder:free`                  | `openai-codex/gpt-5.6-terra` | `openrouter/openrouter/free`                        | `medium`      |
+The command runs `pi --list-models` and returns JSON with two passes per skill,
+the ordered available `candidates`, skipped `unavailable` models, `thinking`,
+and `reason`. It fails before fan-out with an actionable authentication error
+when Codex or OpenRouter has no available models. Record skipped candidates in
+the audit with no agent id or transcript.
 
-Downgrade `comment-hygiene`, `python-style`, and `shell-style` to `low` on a
-diff under 200 changed lines. Promote a pass one level, capped at `high`, when
-the diff exceeds 800 changed lines or touches file moves, concurrency,
-persistence, authentication, workflow permissions, or numeric/dtype/shape
-logic. State the applicable condition in the audit row so the allocation is
-reproducible.
+Start each pass with its first candidate. If `Agent` reports HTTP `429`,
+`quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
+`no endpoints available`, `provider unavailable`, or `Model not found`, record
+the failure and launch a fresh worker with the next candidate. Never resume a
+failed session under another model.
 
-If an `Agent` result fails with an out-of-quota or transient capacity signal —
-HTTP `429`, `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
-`no endpoints available`, or `provider unavailable` — follow that row's
-fallbacks. The allocation is per pass, so mechanical checks stay cheap while
-correctness-sensitive checks retain deep reasoning.
+A completed worker is not successful until its full result passes the report
+contract. Write the result to a unique temporary file and check it with:
 
-Never resume the failed session under another model. Add every failed and
-successful attempt to the audit section. If all candidates fail, stop and
-surface the quota/capacity error; silently dropping a checklist would violate
-the review gate. Do not retry authentication, malformed-output, tool, or
-checklist errors as quota failures.
+```bash
+python3 agent/_shared/pi_review_routing.py validate-report \
+  <report-path> --skill <skill-name>
+```
+
+On nonzero status, record `malformed report` and try the next candidate. This
+is a bounded report-quality retry, not a quota classification. Authentication,
+tool, and checklist errors stop immediately. If any pass exhausts its
+candidates without a parseable report, stop before aggregation or delivery;
+never write a PASS sentinel after silently dropping a model pass.
+
+Attribute findings from each successful report to the provider that actually
+produced it, including after cross-provider fallback:
+
+```bash
+python3 agent/_shared/pi_review_routing.py provenance <effective-model>
+```
+
+Merge duplicate findings using the set of effective provenance labels: emit
+`codex`, `openrouter`, or `both` only when both providers actually flagged the
+defect. Add every unavailable, failed, malformed, and successful attempt to
+the audit section.
 
 ### Claude Code, Codex, and OpenCode
 

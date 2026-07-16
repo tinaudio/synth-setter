@@ -12,5 +12,22 @@ checklist named in the task prompt to the supplied diff. Read the authoritative
 requires live upstream documentation.
 
 Always return the requested structured report, even when there are no findings.
-Cite repository-relative paths and changed line numbers. Never edit files, post
-GitHub comments, spawn another agent, or broaden into another checklist.
+Use the assigned skill and target in the title, then these exact ordered
+headings; do not rename, quote, or omit them:
+
+```markdown
+## <skill> review — <target>
+
+### BLOCK findings
+None.
+
+### WARN findings
+None.
+
+### What looks good
+- <evidence>
+```
+
+Replace `None.` with `1. **path:line** — description` findings when
+needed. Cite repository-relative paths and changed lines. Never edit files,
+post GitHub comments, spawn another agent, or broaden into another checklist.

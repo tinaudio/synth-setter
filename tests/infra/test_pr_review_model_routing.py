@@ -197,7 +197,7 @@ def test_review_fanout_promotes_only_correctness() -> None:
 
 
 def test_pi_review_worker_allows_dynamic_model_routing() -> None:
-    """Keep Pi worker model and thinking choices under the review policy."""
+    """Ensure policy, rather than the agent definition, selects Pi worker models."""
     text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
     _, frontmatter, prompt = text.split("---", 2)
     worker = yaml.safe_load(frontmatter)
@@ -208,26 +208,23 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "model" not in worker
     assert "thinking" not in worker
     assert "structured report" in prompt.lower()
+    assert "### BLOCK findings" in prompt
+    assert "### WARN findings" in prompt
+    assert "### What looks good" in prompt
 
 
-def test_pi_review_policy_uses_codex_and_free_openrouter_failover() -> None:
-    """Pin Pi's auditable routing pool and quota failover contract."""
+def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
+    """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "openai-codex/gpt-5.6-sol" in text
-    assert "openai-codex/gpt-5.6-terra" in text
-    assert "openrouter/nvidia/nemotron-3-super-120b-a12b:free" in text
-    assert "openrouter/qwen/qwen3-coder:free" in text
-    assert "anthropic/" not in text
-    assert "quota" in text.lower()
-    assert "429" in text
+    assert "pi_review_routing.py plan" in text
+    assert "pi_review_routing.py validate-report" in text
+    assert "pi_review_routing.py provenance" in text
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
-    assert "pi --list-models" in text
-    assert "authentication" in text.lower()
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:
@@ -239,6 +236,8 @@ def test_full_review_skills_define_flat_pi_orchestration() -> None:
         assert "flat" in text.lower()
         assert "Agent" in text
         assert "Pi must supply per-invocation model and thinking overrides" in text
+        if skill == "repo-review-full-no-comments":
+            assert "Pi PASS report" in text
 
 
 def test_headless_hook_review_defaults_match_pinned_tier() -> None:
