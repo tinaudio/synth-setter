@@ -468,7 +468,9 @@ docker run --rm -it synth-setter:dev-snapshot bash
 
 Headless X11 issues — check in order:
 
-1. **Xvfb running?** `src/synth_setter/scripts/run-linux-vst-headless.sh` starts it automatically
+1. **Xvfb running?** `src/synth_setter/scripts/run-linux-vst-headless.sh` starts it automatically,
+   retrying the bootstrap up to `XVFB_BOOTSTRAP_ATTEMPTS` (default 3) times with jittered backoff;
+   widen `XVFB_READY_PROBES` (default 50 × 0.1 s) on congested hosts
 2. **Missing libraries?** `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
 3. **Software rendering?** Verify `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
 

@@ -70,42 +70,76 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Start Xvfb (let it pick a display)
-# -displayfd 3 writes the chosen display number to file descriptor 3
-# 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
-Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
-  </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
-XVFB_PID=$!
+# Concurrent shard renders each bootstrap their own Xvfb; under startup
+# contention an instance can lose the display-lock race or miss the readiness
+# window, so the bootstrap retries instead of failing the renderer (#2035).
+XVFB_BOOTSTRAP_ATTEMPTS="${XVFB_BOOTSTRAP_ATTEMPTS:-3}"
+# Readiness probes per attempt, 0.1 s apart; widen on congested hosts.
+XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
 
-# Wait for Xvfb to output the display number
-count=0
-while [ ! -s "$DISPLAY_FILE" ]; do
-  sleep 0.1
-  count=$((count+1))
-  if [ "$count" -ge 100 ]; then
-     echo "Timeout waiting for Xvfb to start" >&2
-     cat "$TMP_DIR/xvfb.log" >&2
-     exit 1
+# Start Xvfb and wait until it accepts connections; returns non-zero on any
+# startup fault, leaving XVFB_PID for reap_failed_xvfb to collect.
+start_xvfb_attempt() {
+  : > "$DISPLAY_FILE"
+  # -displayfd 3 writes the chosen display number to file descriptor 3;
+  # 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
+  Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
+    </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
+  XVFB_PID=$!
+
+  local count=0
+  while [ ! -s "$DISPLAY_FILE" ]; do
+    sleep 0.1
+    count=$((count+1))
+    if [ "$count" -ge 100 ]; then
+      echo "Timeout waiting for Xvfb to start" >&2
+      return 1
+    fi
+    if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+      echo "Xvfb died unexpectedly" >&2
+      return 1
+    fi
+  done
+
+  DISPLAY_NUM=$(cat "$DISPLAY_FILE")
+  export DISPLAY=:${DISPLAY_NUM}
+
+  local probe=0
+  while [ "$probe" -lt "$XVFB_READY_PROBES" ]; do
+    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+    probe=$((probe+1))
+  done
+  echo "Xvfb did not become ready on $DISPLAY" >&2
+  return 1
+}
+
+# Kill and reap a failed attempt's Xvfb (a readiness timeout leaves it
+# running) so retries never stack servers, then surface its log.
+reap_failed_xvfb() {
+  if [ -n "${XVFB_PID-}" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
+    kill "$XVFB_PID" 2>/dev/null || true
+    wait "$XVFB_PID" 2>/dev/null || true
   fi
-  # Check if Xvfb died
-  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
-    echo "Xvfb died unexpectedly" >&2
-    cat "$TMP_DIR/xvfb.log" >&2
+  XVFB_PID=""
+  cat "$TMP_DIR/xvfb.log" >&2 || true
+}
+
+attempt=1
+until start_xvfb_attempt; do
+  reap_failed_xvfb
+  if [ "$attempt" -ge "$XVFB_BOOTSTRAP_ATTEMPTS" ]; then
+    echo "Xvfb bootstrap failed after ${attempt} attempt(s)" >&2
     exit 1
   fi
+  attempt=$((attempt+1))
+  # Sub-second jitter decorrelates concurrent bootstraps racing the same
+  # display locks.
+  sleep "0.$((RANDOM % 9 + 1))"
+  echo "[wrapper] retrying Xvfb bootstrap (attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
 done
-
-DISPLAY_NUM=$(cat "$DISPLAY_FILE")
-export DISPLAY=:${DISPLAY_NUM}
-
-# Wait for X to be ready (avoid races)
-for _ in {1..50}; do
-  if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat "$TMP_DIR/xvfb.log" || true; exit 1; }
 
 # Start an XSettings manager.
 # `</dev/null` detaches stdin so backgrounded daemons (and any grandchildren
