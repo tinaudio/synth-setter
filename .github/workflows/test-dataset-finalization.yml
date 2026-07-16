@@ -8,7 +8,7 @@ name: Test Dataset Finalization
 #
 # Matrix:
 #   * Lance with static rank/world shard ownership.
-#   * Lance with jqueue dynamic shard claims.
+#   * Lance with dynamic shard claims (Lance claims table).
 #
 # Each row calls `generate-dataset-shards.yaml` (which itself chains
 # `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
@@ -35,6 +35,7 @@ on:
       - "src/synth_setter/pipeline/data/lance_shard.py"
       - "src/synth_setter/pipeline/schemas/r2_location.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/shard_claims.py"
       - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/finalize-dataset.yaml"
       - ".github/workflows/generate-dataset-shards.yaml"

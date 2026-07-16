@@ -580,8 +580,8 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: use_shard_queue
 
-        Whether workers claim shard IDs dynamically from the run's jqueue
-        work queue in R2 instead of owning a static rank/world slice.
+        Whether workers claim shard IDs dynamically from the run's Lance
+        shard-claims table in R2 instead of owning a static rank/world slice.
 
     .. attribute :: git_sha
 
@@ -656,9 +656,9 @@ class DatasetSpec(BaseModel):
     use_shard_queue: bool = Field(
         default=False,
         description=(
-            "Whether workers claim shard IDs dynamically from the run's jqueue "
-            "work queue in R2 instead of owning a static rank/world slice; the "
-            "operator populates the queue at launch (``False`` keeps static "
+            "Whether workers claim shard IDs dynamically from the run's Lance "
+            "shard-claims table in R2 instead of owning a static rank/world slice; "
+            "the operator populates the table at launch (``False`` keeps static "
             "partitioning, the default)."
         ),
     )

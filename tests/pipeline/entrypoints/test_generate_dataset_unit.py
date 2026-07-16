@@ -28,8 +28,6 @@ which reads the shard's staged ``.valid`` marker under ``fake_r2_remote``).
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import subprocess
 import sys
@@ -41,7 +39,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from jqueue import DirectQueue, InMemoryStorage
 
 from synth_setter.cli.generate_dataset import (
     build_generate_args,
@@ -50,7 +47,7 @@ from synth_setter.cli.generate_dataset import (
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
-from synth_setter.pipeline.shard_queue import SHARD_QUEUE_ENTRYPOINT, ShardQueue
+from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
@@ -1609,11 +1606,11 @@ class TestRun(RenderSeamFixtures):
         provenance.assert_not_called()
 
 
-# generate() with use_shard_queue — dynamic claim/ack dispatch
+# generate() with use_shard_queue — dynamic claim-table dispatch
 
 
-def _queue_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
-    """Return an ``n``-shard DatasetSpec that opts into queue distribution.
+def _claims_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
+    """Return an ``n``-shard DatasetSpec that opts into dynamic claims.
 
     :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
     :param n: Number of train shards (10000 samples each).
@@ -1627,87 +1624,106 @@ def _queue_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
-def test_shard_queue_for_spec_builds_s3_queue_over_run_prefix(
+def test_shard_claims_for_spec_targets_s3_table_under_run_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The queue seam binds env storage credentials to the run's queue-state key.
+    """The claims seam binds env storage credentials to the run's table URI.
 
     :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
     :param monkeypatch: Injects the canonical ``SYNTH_SETTER_STORAGE_*`` env.
     """
-    from synth_setter.cli.generate_dataset import _shard_queue_for_spec
-    from synth_setter.pipeline.shard_queue import _ConditionalCreateS3Storage
+    from synth_setter.cli.generate_dataset import _shard_claims_for_spec
 
+    monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
     monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
     monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
     monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://endpoint.example")
-    spec = _queue_spec(tmp_path)
+    spec = _claims_spec(tmp_path)
 
-    queue = _shard_queue_for_spec(spec)
+    claims = _shard_claims_for_spec(spec)
 
-    storage = queue.storage
-    assert isinstance(storage, _ConditionalCreateS3Storage)
-    assert storage.bucket == spec.r2.bucket
-    assert storage.key == f"{spec.r2.prefix}metadata/shard-queue.json"
-    assert storage.endpoint_url == "https://endpoint.example"
+    assert claims.uri == f"s3://{spec.r2.bucket}/{spec.r2.prefix}metadata/shard-claims.lance"
+    assert claims.storage_options is not None
+    assert claims.storage_options["endpoint"] == "https://endpoint.example"
+    assert claims.storage_options["access_key_id"] == "ak"
 
 
-class TestRunWithShardQueue(RenderSeamFixtures):
-    """``generate()`` with ``use_shard_queue=True`` claims shards from the run queue."""
+def test_shard_claims_for_spec_local_remote_resolves_under_cwd(
+    tmp_path: Path,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+) -> None:
+    """With the local-typed ``r2:`` remote, the table sits inside the fake R2 root.
 
-    @pytest.fixture()
-    def memory_queue(self, monkeypatch: pytest.MonkeyPatch) -> ShardQueue:
-        """Route ``generate()``'s queue construction to an in-memory jqueue.
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (fixture-activation only — referenced via the ARG001 noqa).
+    """
+    from synth_setter.cli.generate_dataset import _shard_claims_for_spec
 
-        The queue semantics stay real (jqueue ``DirectQueue`` over
-        ``InMemoryStorage``); only the S3/credentials seam is bypassed.
+    spec = _claims_spec(tmp_path)
 
-        :param monkeypatch: Replaces ``_shard_queue_for_spec`` with the fake-backed queue.
-        :returns: The queue ``generate()`` will claim from.
+    claims = _shard_claims_for_spec(spec)
+
+    expected = Path.cwd() / spec.r2.bucket / spec.r2.prefix / "metadata/shard-claims.lance"
+    assert claims.uri == str(expected)
+    assert claims.storage_options is None
+
+
+class TestRunWithShardClaims(RenderSeamFixtures):
+    """``generate()`` with ``use_shard_queue=True`` claims shards from the run table.
+
+    No seam is patched: ``_shard_claims_for_spec`` resolves through the real
+    ``lance_target`` against the local-typed remote the ``patched_subprocess``
+    fixture activates, so the worker and these tests read one real Lance
+    table inside the fake R2 root.
+    """
+
+    def _populate(self, spec: DatasetSpec, shard_ids: list[int]) -> ShardClaims:
+        """Seed the run's claims table the way the operator does.
+
+        :param spec: Spec locating the table under the fake R2 root.
+        :param shard_ids: Rows to seed.
+        :returns: A peer claims handle over the same table, for assertions.
         """
-        queue = ShardQueue(storage=InMemoryStorage())
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
-        )
-        return queue
+        from synth_setter.cli.generate_dataset import _shard_claims_for_spec
 
-    def test_generate_renders_every_queued_shard_and_drains_queue(
+        claims = _shard_claims_for_spec(spec)
+        claims.populate(shard_ids)
+        return claims
+
+    def test_generate_renders_every_claimed_shard_and_completes_all(
         self,
-        patched_subprocess: MagicMock,  # noqa: ARG002
-        memory_queue: ShardQueue,
+        patched_subprocess: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """All queued shards render, upload, and are acked off the queue.
+        """All populated shards render, upload, and are marked done.
 
-        :param patched_subprocess: Fixture-activation only; the renderer
-            materializes each shard so the real rclone upload runs.
-        :param memory_queue: Queue ``generate()`` claims from.
+        :param patched_subprocess: Renderer stub; the real rclone upload runs.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        spec = _queue_spec(tmp_path, n=3)
-        memory_queue.populate([shard.shard_id for shard in spec.shards])
+        spec = _claims_spec(tmp_path, n=3)
+        claims = self._populate(spec, [shard.shard_id for shard in spec.shards])
         patched_subprocess.side_effect = stub_renderer(spec)
 
         generate(spec, tmp_path, [])
 
         for shard in spec.shards:
             assert shard_has_complete_attempt(spec, shard.shard_id)
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        assert claims.claim() is None
+        assert claims.status_counts() == {"done": 3}
 
-    def test_generate_renders_only_queued_shards_not_full_spec_range(
+    def test_generate_renders_only_claimed_shards_not_full_spec_range(
         self,
-        patched_subprocess: MagicMock,  # noqa: ARG002
-        memory_queue: ShardQueue,
+        patched_subprocess: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """The queue, not the spec's shard range, decides this worker's assignment.
+        """The claims table, not the spec's shard range, decides the assignment.
 
-        :param patched_subprocess: Fixture-activation only.
-        :param memory_queue: Queue holding a single shard of the three-shard spec.
+        :param patched_subprocess: Renderer stub; the real rclone upload runs.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        spec = _queue_spec(tmp_path, n=3)
-        memory_queue.populate([1])
+        spec = _claims_spec(tmp_path, n=3)
+        self._populate(spec, [1])
         patched_subprocess.side_effect = stub_renderer(spec)
 
         generate(spec, tmp_path, [])
@@ -1717,27 +1733,20 @@ class TestRunWithShardQueue(RenderSeamFixtures):
         assert not shard_has_complete_attempt(spec, spec.shards[2].shard_id)
 
     @pytest.mark.parametrize("invalid_shard_id", [-1, 3, 10_000])
-    def test_generate_invalid_queue_shard_id_retires_without_rendering(
+    def test_generate_out_of_range_claimed_shard_id_fails_before_rendering(
         self,
         invalid_shard_id: int,
         patched_subprocess: MagicMock,
-        memory_queue: ShardQueue,
         tmp_path: Path,
     ) -> None:
-        """Persisted queue IDs outside the spec range fail before rendering.
+        """Persisted claim rows outside the spec range fail before rendering.
 
         :param invalid_shard_id: Negative, upper-bound, or far-out shard ID.
         :param patched_subprocess: Renderer spy that must remain unused.
-        :param memory_queue: Queue receiving the raw untrusted payload.
         :param tmp_path: Per-test work directory.
         """
-        spec = _queue_spec(tmp_path, n=3)
-        asyncio.run(
-            DirectQueue(memory_queue.storage).enqueue(
-                SHARD_QUEUE_ENTRYPOINT,
-                json.dumps({"shard_id": invalid_shard_id}).encode(),
-            )
-        )
+        spec = _claims_spec(tmp_path, n=3)
+        self._populate(spec, [invalid_shard_id])
 
         with pytest.raises(
             ValueError,
@@ -1746,29 +1755,23 @@ class TestRunWithShardQueue(RenderSeamFixtures):
             generate(spec, tmp_path, [])
 
         patched_subprocess.assert_not_called()
-        # The poison job must be retired, not left claimable for a peer.
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
-        state = asyncio.run(DirectQueue(memory_queue.storage).read_state())
-        assert not state.jobs
 
-    def test_generate_render_failure_retires_claim_and_propagates(
+    def test_generate_render_failure_leaves_claim_held_and_propagates(
         self,
         patched_subprocess: MagicMock,
-        memory_queue: ShardQueue,
         tmp_path: Path,
     ) -> None:
-        """A failed render retires its job from the queue and fails the run.
+        """A failed render fails the run with its claim still held.
 
-        Retirement (not re-queueing) keeps a deterministically failing shard
-        from cascading across the fleet; the empty-queue assertion via
-        ``populate`` proves the job was removed, not left in-progress.
+        Holding the claim (rather than releasing it) keeps a deterministically
+        failing shard from cascading across the live fleet: peers cannot
+        re-claim it until the lease lapses.
 
         :param patched_subprocess: Overridden to raise on the renderer call.
-        :param memory_queue: Queue holding the single shard.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        spec = _queue_spec(tmp_path, n=1)
-        memory_queue.populate([0])
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
         patched_subprocess.side_effect = subprocess.CalledProcessError(
             1, "generate_vst_dataset.py"
         )
@@ -1776,91 +1779,49 @@ class TestRunWithShardQueue(RenderSeamFixtures):
         with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
 
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
-        assert memory_queue.populate([0]) == 1  # empty queue ⇒ job was retired
+        assert claims.status_counts() == {"claimed": 1}
+        assert claims.claim() is None  # live lease shields the poison shard
 
-    def test_generate_retire_ack_failure_never_masks_render_exception(
+    def test_generate_keyboard_interrupt_leaves_claim_held_and_propagates(
         self,
         patched_subprocess: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """When the retiring ack also fails, the render's exception still propagates.
-
-        :param patched_subprocess: Overridden to raise on the renderer call.
-        :param monkeypatch: Injects the exploding-ack queue.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
-        """
-
-        class _AckExplodes(ShardQueue):
-            """Queue whose retire/ack path always fails."""
-
-            def ack(self, job_id: str) -> None:
-                """Simulate a storage failure during retirement.
-
-                :param job_id: Ignored.
-                :raises RuntimeError: Always.
-                """
-                raise RuntimeError("injected ack failure")
-
-        queue = _AckExplodes(storage=InMemoryStorage())
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._shard_queue_for_spec", lambda _spec: queue
-        )
-        spec = _queue_spec(tmp_path, n=1)
-        queue.populate([0])
-        patched_subprocess.side_effect = subprocess.CalledProcessError(
-            1, "generate_vst_dataset.py"
-        )
-
-        with pytest.raises(subprocess.CalledProcessError):
-            generate(spec, tmp_path, [])
-
-    def test_generate_keyboard_interrupt_retires_claim_and_propagates(
-        self,
-        patched_subprocess: MagicMock,
-        memory_queue: ShardQueue,
-        tmp_path: Path,
-    ) -> None:
-        """Ctrl-C mid-render retires the claim — the design intent of the broad except.
+        """Ctrl-C mid-render propagates; the held claim recovers via lease lapse.
 
         :param patched_subprocess: Overridden to raise ``KeyboardInterrupt``.
-        :param memory_queue: Queue holding the single shard.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        spec = _queue_spec(tmp_path, n=1)
-        memory_queue.populate([0])
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
         patched_subprocess.side_effect = KeyboardInterrupt()
 
         with pytest.raises(KeyboardInterrupt):
             generate(spec, tmp_path, [])
 
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
-        assert memory_queue.populate([0]) == 1  # empty queue ⇒ claim was retired
+        assert claims.status_counts() == {"claimed": 1}
 
-    def test_generate_queue_mode_ignores_render_parallel_with_warning(
+    def test_generate_claims_mode_ignores_render_parallel_with_warning(
         self,
-        patched_subprocess: MagicMock,  # noqa: ARG002
-        memory_queue: ShardQueue,
+        patched_subprocess: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """``render.parallel=true`` + queue mode warns and never enters the thread pool.
+        """``render.parallel=true`` + claims mode warns and never enters the thread pool.
 
-        :param patched_subprocess: Fixture-activation only; renders succeed.
-        :param memory_queue: Queue holding both shards.
+        :param patched_subprocess: Renderer stub; renders succeed.
         :param monkeypatch: Guards the parallel dispatcher against being called.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
-        base = _queue_spec(tmp_path, n=2)
+        base = _claims_spec(tmp_path, n=2)
         spec = base.model_copy(
             update={"render": base.render.model_copy(update={"parallel": True})}
         )
-        memory_queue.populate([0, 1])
+        claims = self._populate(spec, [0, 1])
         patched_subprocess.side_effect = stub_renderer(spec)
 
         def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
-            raise AssertionError("_dispatch_shards_parallel must not run in queue mode")
+            raise AssertionError("_dispatch_shards_parallel must not run in claims mode")
 
         monkeypatch.setattr(
             "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
@@ -1878,19 +1839,17 @@ class TestRunWithShardQueue(RenderSeamFixtures):
         assert any("render.parallel=true is ignored" in w for w in warnings)
         assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
         assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        assert claims.status_counts() == {"done": 2}
 
-    def test_generate_shard_already_in_r2_is_acked_without_render(
+    def test_generate_shard_already_in_r2_completes_without_render(
         self,
         patched_subprocess: MagicMock,
-        memory_queue: ShardQueue,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """The R2 skip-probe stays authoritative in queue mode: present → ack, no render.
+        """The R2 skip-probe stays authoritative in claims mode: present → done, no render.
 
         :param patched_subprocess: Introspected to assert no renderer call ran.
-        :param memory_queue: Queue holding the single shard.
         :param monkeypatch: Marks the shard present in R2.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
@@ -1898,13 +1857,13 @@ class TestRunWithShardQueue(RenderSeamFixtures):
             "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
             lambda *_a, **_k: True,
         )
-        spec = _queue_spec(tmp_path, n=1)
-        memory_queue.populate([0])
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
 
         generate(spec, tmp_path, [])
 
         assert _renderer_argv_lists(patched_subprocess) == []
-        assert memory_queue.claim(shard_count=spec.num_shards) is None
+        assert claims.status_counts() == {"done": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -2269,13 +2228,15 @@ class TestMainDispatchBranches:
             assert path.is_file(), f"extras did not write {artifact}"
             assert path.stat().st_size > 0, f"{artifact} is empty"
 
-    def test_use_shard_queue_local_run_populates_queue_before_generate(
+    def test_use_shard_queue_local_run_populates_claims_before_generate(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
-        """``use_shard_queue=true`` fills the run queue with every shard before generating.
+        """``use_shard_queue=true`` seeds every claim row before generating.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
+        :param tmp_path: Hosts the run's local claims table.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -2287,14 +2248,14 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        queue = ShardQueue(storage=InMemoryStorage())
-        monkeypatch.setattr(gd, "_shard_queue_for_spec", lambda _spec: queue)
+        claims = ShardClaims.for_run(str(tmp_path / "shard-claims.lance"), None)
+        monkeypatch.setattr(gd, "_shard_claims_for_spec", lambda _spec: claims)
 
         recorded: dict[str, object] = {}
 
         def _fake_run(spec: DatasetSpec, _work_dir: object, _loggers: object) -> None:
             recorded["spec"] = spec
-            recorded["claim_during_generate"] = queue.claim(shard_count=spec.num_shards)
+            recorded["claim_during_generate"] = claims.claim()
 
         monkeypatch.setattr(gd, "generate", _fake_run)
 
@@ -2303,19 +2264,19 @@ class TestMainDispatchBranches:
         spec = recorded["spec"]
         assert isinstance(spec, DatasetSpec)
         assert recorded["claim_during_generate"] is not None, (
-            "queue must be populated before generate runs"
+            "claims must be populated before generate runs"
         )
         drained = 0
-        while queue.claim(shard_count=spec.num_shards) is not None:
+        while claims.claim() is not None:
             drained += 1
         assert drained == spec.num_shards - 1
 
-    def test_use_shard_queue_dispatch_branch_populates_queue_before_launch(
+    def test_use_shard_queue_dispatch_branch_populates_claims_before_launch(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """The SkyPilot branch fills the queue before any worker is launched.
+        """The SkyPilot branch seeds the claims table before any worker is launched.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -2335,25 +2296,24 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        queue = ShardQueue(storage=InMemoryStorage())
-        monkeypatch.setattr(gd, "_shard_queue_for_spec", lambda _spec: queue)
+        claims = ShardClaims.for_run(str(tmp_path / "shard-claims.lance"), None)
+        monkeypatch.setattr(gd, "_shard_claims_for_spec", lambda _spec: claims)
 
         recorded: dict[str, object] = {}
 
         def _fake_dispatch(_sky_cfg: object) -> None:
-            spec = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
-            recorded["claim_at_dispatch"] = queue.claim(shard_count=spec.num_shards)
+            recorded["claim_at_dispatch"] = claims.claim()
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
 
         _call_hydra_main(gd.main)
 
         assert recorded["claim_at_dispatch"] is not None, (
-            "queue must be populated before workers are dispatched"
+            "claims must be populated before workers are dispatched"
         )
         uploaded_spec = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
         drained = 0
-        while queue.claim(shard_count=uploaded_spec.num_shards) is not None:
+        while claims.claim() is not None:
             drained += 1
         assert drained == uploaded_spec.num_shards - 1
 

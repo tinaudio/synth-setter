@@ -57,10 +57,9 @@ from synth_setter.pipeline.partitioning import (
     get_my_shards,
     read_rank_world_from_env,
 )
-from synth_setter.pipeline.schemas.object_storage import storage_settings_from_sources
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
-from synth_setter.pipeline.shard_queue import ShardQueue, shard_queue_location
+from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
@@ -335,7 +334,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             rendered=rendered,
             skipped=skipped,
             assignment=(
-                f"({assigned} queue claims won by this machine)"
+                f"({assigned} shard claims won by this machine)"
                 if spec.use_shard_queue
                 else f"of {assigned} assigned"
             ),
@@ -443,7 +442,7 @@ def _log_summary(
     :param rendered: Shards this rank actually rendered.
     :param skipped: Shards short-circuited by the R2-skip probe.
     :param total: Owned shard count for this rank (``len(my_range)``); in
-        queue mode, the claims this machine won (``rendered + skipped``).
+        claims mode, the claims this machine won (``rendered + skipped``).
     :param elapsed_s: Wall-clock seconds bracketing the dispatcher (includes
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
@@ -554,28 +553,28 @@ def _dispatch_shards(
     work_dir: Path,
     loggers: list[Logger],
 ) -> tuple[int, int, int]:
-    """Dispatch shards by dynamic queue claims or static rank/world ownership.
+    """Dispatch shards by dynamic claim-table wins or static rank/world ownership.
 
     :param spec: Validated dataset spec.
     :param work_dir: Directory where shards are rendered before upload.
     :param loggers: Loggers receiving per-shard metrics.
     :returns: ``(rendered, skipped, assigned)`` counts; ``assigned`` is the
-        static rank's shard count or, in queue mode, the claims processed by
+        static rank's shard count or, in claims mode, the claims won by
         this machine (``rendered + skipped``).
     """
     if spec.use_shard_queue:
         logger.info(
-            "shard distribution: dynamic queue over {num_shards} shards "
+            "shard distribution: dynamic claims over {num_shards} shards "
             "(use_shard_queue=true; rank/world partitioning bypassed)",
             num_shards=spec.num_shards,
         )
         if spec.render.parallel:
             logger.warning(
                 "render.parallel=true is ignored with use_shard_queue=true: "
-                "queue mode renders one claim at a time per machine"
+                "claims mode renders one claim at a time per machine"
             )
-        rendered, skipped = _dispatch_shards_from_queue(
-            _shard_queue_for_spec(spec),
+        rendered, skipped = _dispatch_shards_from_claims(
+            _shard_claims_for_spec(spec),
             spec,
             work_dir=work_dir,
             loggers=loggers,
@@ -601,71 +600,54 @@ def _dispatch_shards(
     return rendered, skipped, len(my_range)
 
 
-def _shard_queue_for_spec(spec: DatasetSpec) -> ShardQueue:
-    """Build the run's shard work queue from process-env storage settings.
+def _shard_claims_for_spec(spec: DatasetSpec) -> ShardClaims:
+    """Build the run's shard-claims table from process-env storage settings.
 
     Callers run after ``ensure_r2_env_loaded`` (operator) or the worker env
     bootstrap, so the canonical ``SYNTH_SETTER_STORAGE_*`` keys are present.
 
-    :param spec: Validated dataset spec; ``spec.r2`` locates the queue state.
-    :returns: Queue over the run's ``metadata/shard-queue.json`` object in R2.
+    :param spec: Validated dataset spec; ``spec.r2`` locates the claims table.
+    :returns: Claims over the run's ``metadata/shard-claims.lance`` table.
     """
-    config = storage_settings_from_sources().to_config()
-    return ShardQueue.for_location(config, shard_queue_location(spec.r2))
+    return ShardClaims.for_run(*r2_io.lance_target(spec.r2.shard_claims_uri()))
 
 
-def _dispatch_shards_from_queue(
-    queue: ShardQueue,
+def _dispatch_shards_from_claims(
+    claims: ShardClaims,
     spec: DatasetSpec,
     *,
     work_dir: Path,
     loggers: list[Logger],
 ) -> tuple[int, int]:
-    """Claim, render, and acknowledge shards until the queue is drained.
+    """Claim, render, and complete shards until nothing is claimable.
 
-    A failed render retires its claim before propagating; the next population
-    restores the missing shard ID. If retirement fails, stale-claim recovery
-    preserves the job without masking the render failure.
+    A failed render propagates with its claim left held: peers cannot pile
+    onto the poison shard until the lease lapses, after which it is re-tried
+    by whichever worker (or relaunch) claims it next.
 
-    :param queue: Queue from which this worker claims shards.
+    :param claims: Claims table from which this worker takes shards.
     :param spec: Validated dataset spec.
     :param work_dir: Directory where shards are rendered before upload.
     :param loggers: Loggers receiving per-shard metrics.
-    :returns: ``(rendered, skipped)`` counts over claims processed by this worker.
-    :raises BaseException: The render failure; claim-cleanup errors never replace it.
+    :returns: ``(rendered, skipped)`` counts over claims won by this worker.
+    :raises ValueError: A claimed row's shard ID falls outside the spec —
+        the persisted table drifted from the spec (negative IDs would
+        otherwise silently render the wrong shard via Python indexing).
     """
     rendered = 0
     skipped = 0
-    while (claimed := queue.claim(shard_count=spec.num_shards)) is not None:
-        logger.info(
-            "claimed shard {shard_id} from queue (job {job_id})",
-            shard_id=claimed.shard_id,
-            job_id=claimed.job_id,
-        )
-        try:
-            with queue.maintain_heartbeat(claimed.job_id):
-                did_render, did_skip = _render_one_owned_shard(
-                    spec, claimed.shard_id, work_dir, loggers
-                )
-        except BaseException:
-            # Deliberately broad (incl. Ctrl-C): retire the claim so peers don't
-            # re-claim it; relaunch reconciliation re-renders anything unfinished.
-            logger.error(
-                "retiring failed shard {shard_id} from queue; "
-                "it will re-render on the next relaunch",
-                shard_id=claimed.shard_id,
+    while (claimed := claims.claim()) is not None:
+        if not 0 <= claimed.shard_id < spec.num_shards:
+            raise ValueError(
+                f"claimed shard_id {claimed.shard_id} is outside [0, {spec.num_shards})"
             )
-            try:
-                queue.ack(claimed.job_id)
-            except Exception as retire_exc:  # noqa: BLE001 — never mask the render failure
-                # The stale-claim sweep recovers the unretired job later.
-                logger.error(
-                    "failed to retire claim {job_id}: {error}",
-                    job_id=claimed.job_id,
-                    error=retire_exc,
-                )
-            raise
-        queue.ack(claimed.job_id)
+        logger.info(
+            "claimed shard {shard_id} (generation {claim_gen})",
+            shard_id=claimed.shard_id,
+            claim_gen=claimed.claim_gen,
+        )
+        did_render, did_skip = _render_one_owned_shard(spec, claimed.shard_id, work_dir, loggers)
+        claims.complete(claimed)
         rendered += int(did_render)
         skipped += int(did_skip)
     return rendered, skipped
@@ -1020,12 +1002,12 @@ def main(cfg: DictConfig) -> None:
     spec_uri = spec.r2.input_spec_uri()
 
     if spec.use_shard_queue:
-        # Before any worker starts (local or SkyPilot) so no claim can race an
-        # empty queue; a relaunch restores IDs absent from active queue state.
-        enqueued = _shard_queue_for_spec(spec).populate(shard.shard_id for shard in spec.shards)
+        # Before any worker starts (local or SkyPilot) so no claim can race a
+        # missing table; a relaunch only tops up rows absent from the table.
+        inserted = _shard_claims_for_spec(spec).populate(shard.shard_id for shard in spec.shards)
         logger.info(
-            "shard queue populated: enqueued {enqueued} of {num_shards} shard jobs",
-            enqueued=enqueued,
+            "shard claims populated: inserted {inserted} of {num_shards} claim rows",
+            inserted=inserted,
             num_shards=spec.num_shards,
         )
 

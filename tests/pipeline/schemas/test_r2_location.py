@@ -196,10 +196,12 @@ class TestR2LocationLayoutHelpers:
             "shard-000007/rank0-abc123.lance"
         )
 
-    def test_shard_queue_uri(self) -> None:
-        """``shard_queue_uri()`` returns ``<prefix>metadata/shard-queue.json``."""
+    def test_shard_claims_uri(self) -> None:
+        """``shard_claims_uri()`` returns ``<prefix>metadata/shard-claims.lance``."""
         loc = R2Location(bucket="intermediate-data", prefix="data/run/")
-        assert loc.shard_queue_uri() == "r2://intermediate-data/data/run/metadata/shard-queue.json"
+        assert (
+            loc.shard_claims_uri() == "r2://intermediate-data/data/run/metadata/shard-claims.lance"
+        )
 
     def test_worker_attempt_report_uri(self) -> None:
         """Joins worker_id and attempt_uuid under metadata/workers/attempts/.../report.json."""
@@ -223,7 +225,7 @@ class TestR2LocationLayoutHelpers:
         assert loc.dataset_complete_marker_uri().startswith(expected_root)
         assert loc.split_lance_uri("train").startswith(expected_root)
         assert loc.stats_uri().startswith(expected_root)
-        assert loc.shard_queue_uri().startswith(expected_root)
+        assert loc.shard_claims_uri().startswith(expected_root)
         assert loc.worker_staged_shard_uri(
             shard_id=0, worker_id="w", attempt_uuid="u", ext=".lance"
         ).startswith(expected_root)

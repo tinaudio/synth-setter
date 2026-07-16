@@ -36,8 +36,8 @@ tags: ["dev", "generate_dataset"]
 # Smoke configs override to ``true``.
 mask_degenerate_bins: false
 
-# Dynamic jqueue-based shard claiming instead of a static rank/world slice;
-# the operator populates the queue at launch.
+# Dynamic shard claiming from the run's Lance claims table instead of a
+# static rank/world slice; the operator populates the table at launch.
 use_shard_queue: false
 
 # Run synth-setter-finalize-dataset inline after generate completes.
