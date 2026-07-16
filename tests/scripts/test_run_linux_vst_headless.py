@@ -173,6 +173,34 @@ def test_bootstrap_attempts_env_overrides_retry_budget(
     assert _xvfb_calls(stub_env) == 1
 
 
+def test_bootstrap_succeeds_on_final_attempt_of_budget(
+    stub_env: dict[str, str],
+) -> None:
+    """Success on the last permitted attempt (3 of 3) still runs the command.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XVFB_STUB_FAILS"] = "2"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert _xvfb_calls(stub_env) == 3
+
+
+def test_bootstrap_non_numeric_attempts_falls_back_to_default(
+    stub_env: dict[str, str],
+) -> None:
+    """A malformed retry-budget override degrades to the default of 3.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XVFB_STUB_FAILS"] = "99"
+    stub_env["XVFB_BOOTSTRAP_ATTEMPTS"] = "not-a-number"
+    result = _run_wrapper(stub_env)
+    assert result.returncode != 0
+    assert _xvfb_calls(stub_env) == 3
+
+
 def test_bootstrap_retry_with_default_jitter_recovers(
     stub_env: dict[str, str],
 ) -> None:

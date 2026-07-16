@@ -71,13 +71,19 @@ cleanup() {
 trap cleanup EXIT
 
 # Concurrent bootstraps can lose the display-lock race or miss the readiness
-# window, so retry instead of failing the renderer (#2035). Minimum 1.
+# window, so retry instead of failing the renderer (#2035).
 XVFB_BOOTSTRAP_ATTEMPTS="${XVFB_BOOTSTRAP_ATTEMPTS:-3}"
 # Readiness probes per attempt, 0.1 s apart; widen on congested hosts.
 XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
 # Max retry jitter in tenths of a second, capped sub-second; 0 disables.
 XVFB_RETRY_JITTER_MAX="${XVFB_RETRY_JITTER_MAX:-9}"
+# Malformed (and zero, where invalid) overrides fall back to defaults so a
+# typo'd knob degrades to stock behavior instead of aborting the bootstrap.
+case "$XVFB_BOOTSTRAP_ATTEMPTS" in '' | *[!0-9]* | 0) XVFB_BOOTSTRAP_ATTEMPTS=3 ;; esac
+case "$XVFB_READY_PROBES" in '' | *[!0-9]* | 0) XVFB_READY_PROBES=50 ;; esac
+case "$XVFB_RETRY_JITTER_MAX" in '' | *[!0-9]*) XVFB_RETRY_JITTER_MAX=9 ;; esac
 [ "$XVFB_RETRY_JITTER_MAX" -gt 9 ] && XVFB_RETRY_JITTER_MAX=9
+readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX
 
 # Start Xvfb and wait until it accepts connections; returns non-zero on any
 # startup fault, leaving XVFB_PID for reap_failed_xvfb to collect.
