@@ -1,7 +1,7 @@
 # Design Note: Provider-Neutral Object Storage Contracts
 
 > **Status**: Draft
-> **Last Updated**: 2026-07-11
+> **Last Updated**: 2026-07-16
 
 ## Context
 

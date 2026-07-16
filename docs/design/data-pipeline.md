@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-09
+> **Last Updated**: 2026-07-16
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 

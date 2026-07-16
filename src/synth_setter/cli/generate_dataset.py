@@ -442,7 +442,7 @@ def _log_summary(
     :param rendered: Shards this rank actually rendered.
     :param skipped: Shards short-circuited by the R2-skip probe.
     :param total: Owned shard count for this rank (``len(my_range)``); in
-        queue mode, the claims this machine won (``rendered + skipped``).
+        claims mode, the claims this machine won (``rendered + skipped``).
     :param elapsed_s: Wall-clock seconds bracketing the dispatcher (includes
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
