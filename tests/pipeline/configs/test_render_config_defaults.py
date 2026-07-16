@@ -24,7 +24,7 @@ _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
     "samples_per_render_batch": 16,
     "max_retries": 3,
     "parallel": True,
-    "plugin_reload_cadence": "once",
+    "plugin_reload_cadence": "render",
     "gui_toggle_cadence": "never",
     "param_sample_cadence": "shard",
 }
@@ -91,7 +91,7 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.samples_per_render_batch == 32
     assert spec.render.max_retries == 0
     assert spec.render.parallel is False
-    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.plugin_reload_cadence == "once"
     assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
 
@@ -106,4 +106,4 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.plugin_state_path == "presets/obxf-base.vstpreset"
     assert spec.num_params == 187
     # Inherited from the surge_xt base group, proving defaults: [surge_xt] is live.
-    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.plugin_reload_cadence == "once"

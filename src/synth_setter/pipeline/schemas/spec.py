@@ -278,11 +278,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         ),
     )
     plugin_reload_cadence: _PluginReloadCadence = Field(
-        default="render",
+        default="once",
         description=(
-            'How often to reload the plugin within a shard: ``"once"`` loads + applies '
-            'the preset once per shard and reuses the cached instance; ``"render"`` '
-            "(default, historical per-#489 behaviour) reloads on every render."
+            'How often to reload the plugin within a shard: ``"once"`` (default, #1999) '
+            "loads + applies the preset once per shard and reuses the cached instance; "
+            '``"render"`` reloads on every render (historical per-#489 behaviour).'
         ),
     )
     gui_toggle_cadence: _GuiToggleCadence = Field(
