@@ -1,6 +1,137 @@
 # CHANGELOG
 
 
+## v9.1.0 (2026-07-15)
+
+### Features
+
+- **data-pipeline**: Distribute shards via jqueue
+  ([#1811](https://github.com/tinaudio/synth-setter/pull/1811),
+  [`8afb69b`](https://github.com/tinaudio/synth-setter/commit/8afb69b2ab068a242805f52473c3df71d9376e43))
+
+
+## v9.0.1 (2026-07-15)
+
+### Automation
+
+- Route pr-checkbox trigger through pr_command_classifier
+  ([#1967](https://github.com/tinaudio/synth-setter/pull/1967),
+  [`35e4d66`](https://github.com/tinaudio/synth-setter/commit/35e4d66fb854e434bc61b989667e4eded2a126c1))
+
+* fix(ci): route pr-checkbox trigger through pr_command_classifier
+
+Fixes #1942
+
+The PR-checkbox-trigger PostToolUse hook detected PR creation with a plain substring grep of the
+  whole Bash command, so any command whose quoted arguments contained the phrase 'gh pr create' —
+  e.g. a 'gh issue create' whose body text mentions the recipe, or an echo quoting it — fired the
+  'You MUST now invoke /pr-checkbox' reminder even though no PR was created.
+
+Replace the inline jq|grep body with agent/hooks/pr-checkbox-trigger.sh, which routes through
+  agent/_shared/pr_command_classifier.py (the same direct/wrapped/unparsable/"" contract the pre-PR
+  review gate uses). The reminder now fires only on a real gh pr create invocation in any form
+  (direct, wrapped, or unparsable); quoted prose classifies as "" and is silent. Behavior on actual
+  PR creation is unchanged.
+
+Add tests/claude_hooks/test_pr_checkbox_trigger.py covering: - direct gh pr create -> reminder fires
+  - gh issue create whose --body quotes the recipe -> reminder silent - echo quoting the recipe ->
+  reminder silent - classified wrapped gh pr create -> reminder fires - unrelated command ->
+  reminder silent
+
+Register the new shared hook path in _EXPECTED_SHARED_HOOK_COMMANDS so
+  test_named_handlers_use_shared_agent_hook_paths enforces the convention.
+
+* fix(ci): add trailing newlines to pr-checkbox trigger files
+
+end-of-file-fixer (pre-commit) failed in CI on the two new files introduced by #1967 because
+  pre-commit run -a only inspects TRACKED files and they were still untracked when I ran make format
+  locally. Add the missing final newlines so the code-quality job passes.
+
+### Bug Fixes
+
+- **config**: Resolve DawDreamer FX parameters by unique names
+  ([#1971](https://github.com/tinaudio/synth-setter/pull/1971),
+  [`37fb796`](https://github.com/tinaudio/synth-setter/commit/37fb79652434b18abbfc2e0af2b5c67099c5f65c))
+
+* fix(testing): refresh stale dawdreamer fx_a1_delay_time identity
+
+Surge XT now labels its host FX slot parameters `FX <bank> Param <slot>` (the live DawDreamer
+  enumeration reports e.g. `FX A1 Param 1` at index 20). The committed `surge_xt_param_map.json`
+  still held the older `FX <bank> -` label, so DawDreamerRenderer._validate_parameter_map raised
+  `stale DawDreamer identity for 'fx_a1_delay_time' at index 20` and turned the VST slow leg red on
+  main (#1940). All 29 FX-slot DawDreamer identities across banks A1/A2/A3 had drifted the same way;
+  the validator stops at the first mismatch so only the first surfaced.
+
+Regenerate the committed dawdreamer FX labels to match the live plugin (indices and the 2855
+  parameter count are unchanged) and align the build-param-map tool so future tool-driven regen
+  accepts the current Surge XT labeling:
+
+- src/synth_setter/data/vst/surge_xt_param_map.json: 29 dawdreamer FX slot names refreshed from `FX
+  <bank> -` to `FX <bank> Param <slot>`. - src/synth_setter/tools/build_param_map.py:
+  `_resolve_dawdreamer_fx_bank` now expects the live `FX <bank> Param <slot>` slot label instead of
+  the stale `FX <bank} -`, so the builder stays consistent with the plugin it maps (underlying
+  fragility tracked in #1831). - tests/data/vst/test_param_map_completeness.py: pin every committed
+  dawdreamer FX identity to the live `FX <bank> Param <slot>` label. -
+  tests/tools/test_build_param_map.py: FX-bank fixture + anchor-slot assertion updated to the
+  current label.
+
+Fixes #1940
+
+* internal-refactor(testing): resolve FX parameters by host name
+
+### Documentation
+
+- Document pi and Hermes in the devcontainer-tools inventory
+  ([#1962](https://github.com/tinaudio/synth-setter/pull/1962),
+  [`5145718`](https://github.com/tinaudio/synth-setter/commit/5145718074bde1ff938dc44568b48dc275376293))
+
+Fixes #1926
+
+The devcontainer-tools inventory prose enumerates every CLI tool the stage installs but omitted two
+  added in #1836: `@earendil-works/pi-coding-agent` (`pi`), installed via the same per-user
+  `~/.npm-global` npm prefix as claude-code and codex; and NousResearch `hermes-agent` (`hermes`),
+  installed by a SHA256-pinned upstream `install.sh` into a dedicated per-user venv run with
+  `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset so its uv does not write into the root-owned
+  `/opt/uv` tree that `/venv/main` reads (the #1923 bug class). The line-113 summary is updated to
+  name all five agent CLIs.
+
+### Internal-Fix
+
+- **automation**: Pin headless hook review model to the review tier
+  ([#1963](https://github.com/tinaudio/synth-setter/pull/1963),
+  [`00c7143`](https://github.com/tinaudio/synth-setter/commit/00c71431081b128cf1d71e80361cbe708b4ca62e))
+
+run_agent_prompt in agent/hooks/_lib.sh launched `claude -p` and `codex exec` without a model flag,
+  so headless advisory reviews (doc-drift PostToolUse on gh pr create) inherited the session/user
+  default instead of the pinned non-correctness review tier from #1906. Pin the claude invocation to
+  `--model haiku` and the codex invocation to `--model gpt-5.6-terra`, mirroring
+  pr-review-worker-fast, with CLAUDE_REVIEW_MODEL / CODEX_REVIEW_MODEL operator overrides. Adds
+  bash-suite coverage for the default + override paths and a Python drift guard tying the _lib.sh
+  defaults to the pinned agent files.
+
+Fixes #1919
+
+### Testing
+
+- Relocate train config-composition test out of entrypoint suite
+  ([#1970](https://github.com/tinaudio/synth-setter/pull/1970),
+  [`95dbbbe`](https://github.com/tinaudio/synth-setter/commit/95dbbbec0333c235f6fc43fef7b16cad946d04e4))
+
+#1935 (172d5747) added test_train_builds_vst_datamodule_with_ram_bounded_num_workers to
+  tests/test_train.py, composing train.yaml via initialize_config_module and instantiating the
+  datamodule to assert the RAM-bounded num_workers default. That made test_train.py import
+  initialize_config_module, which tests/_meta/test_entrypoint_e2e_only.py bans for canonical
+  entrypoint test modules -- config-composition tests (compose + instantiate/schema-only assertions,
+  no entrypoint call) belong in tests/pipeline/configs/.
+
+Move the test verbatim to tests/pipeline/configs/test_train_datamodule_config.py and drop the
+  now-unused imports (compose, initialize_config_module, GlobalHydra, instantiate) from
+  tests/test_train.py. HydraConfig stays (still used by the entrypoint fixtures). The test's intent
+  -- pinning the #1935 num_workers default where train consumes it -- is unchanged.
+
+Fixes #1945 Fixes #1951
+
+
 ## v9.0.0 (2026-07-15)
 
 ### Automation

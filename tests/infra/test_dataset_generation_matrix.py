@@ -34,6 +34,36 @@ def workflow(project_root: Path) -> dict:
     return load_workflow(project_root, WORKFLOW_FILENAME)
 
 
+@pytest.fixture(scope="module")
+def finalization_workflow(project_root: Path) -> dict:
+    """Return the PR-time generate/finalize workflow.
+
+    :param project_root: Repo root provided by the infra fixture.
+    :returns: Parsed ``test-dataset-finalization.yml`` document.
+    """
+    return load_workflow(project_root, "test-dataset-finalization.yml")
+
+
+def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
+    finalization_workflow: dict,
+) -> None:
+    """PR CI retains static Lance and adds the queue distribution path.
+
+    :param finalization_workflow: Parsed PR-time generate/finalize workflow.
+    """
+    generate = finalization_workflow["jobs"]["smoke-pipeline"]
+    rows = generate["strategy"]["matrix"]["include"]
+    assert [row["scenario"] for row in rows] == ["static", "queue"]
+    assert "matrix.scenario == 'queue'" in generate["with"]["hydra_overrides"]
+    assert "use_shard_queue=true" in generate["with"]["hydra_overrides"]
+    assert "matrix.scenario" in generate["with"]["artifact_name"]
+
+    verify_rows = finalization_workflow["jobs"]["verify-artifacts"]["strategy"]["matrix"][
+        "include"
+    ]
+    assert [row["scenario"] for row in verify_rows] == ["static", "queue"]
+
+
 @pytest.mark.parametrize("job_name", LAUNCHER_JOBS)
 def test_generate_job_has_output_format_matrix_axis(workflow: dict, job_name: str) -> None:
     """Assert both generate jobs declare an `output_format` strategy.matrix axis.
@@ -47,6 +77,18 @@ def test_generate_job_has_output_format_matrix_axis(workflow: dict, job_name: st
         f"{job_name}.strategy.matrix is missing the `output_format` axis — "
         f"found keys: {sorted(matrix.keys())}"
     )
+
+
+@pytest.mark.parametrize("job_name", LAUNCHER_JOBS)
+def test_generate_job_has_static_and_queue_scenario_axis(workflow: dict, job_name: str) -> None:
+    """Assert generation expands over static and dynamic queue distribution.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    :param job_name: The generate job (parametrized; currently ``generate-launcher``).
+    """
+    matrix = workflow["jobs"][job_name]["strategy"]["matrix"]
+    assert "scenario" in matrix
+    assert "needs.setup.outputs.scenarios" in matrix["scenario"]
 
 
 @pytest.mark.parametrize("job_name", LAUNCHER_JOBS)
@@ -87,10 +129,10 @@ def test_validate_spec_uri_indexes_setup_map_by_matrix_coords(workflow: dict) ->
 
 
 def test_generate_launcher_pins_run_id_per_cell(workflow: dict) -> None:
-    """Assert ``generate-launcher.with.run_id`` interpolates both matrix axes.
+    """Assert ``generate-launcher.with.run_id`` interpolates every matrix axis.
 
     The per-cell ``run_id`` pin (threaded into the launcher as ``+run_id=<value>``)
-    must encode the same ``<provider>-<output_format>`` coordinate the validate
+    must encode the same ``<provider>-<output_format>-<scenario>`` coordinate the validate
     cell uses to index the spec_uris map, so generate and validate cells pair
     on the same R2 prefix.
 
@@ -98,10 +140,34 @@ def test_generate_launcher_pins_run_id_per_cell(workflow: dict) -> None:
     """
     generate_launcher = workflow["jobs"]["generate-launcher"]
     run_id = generate_launcher["with"]["run_id"]
-    assert "matrix.provider" in run_id and "matrix.output_format" in run_id, (
-        "generate-launcher.with.run_id must interpolate matrix.provider and "
-        f"matrix.output_format so each cell writes under its own R2 prefix — got: {run_id!r}"
+    assert all(
+        coordinate in run_id
+        for coordinate in ("matrix.provider", "matrix.output_format", "matrix.scenario")
+    ), (
+        "generate-launcher.with.run_id must interpolate provider, output format, and "
+        f"scenario so each cell writes under its own R2 prefix — got: {run_id!r}"
     )
+
+
+def test_queue_scenario_enables_queue_and_two_cloud_workers(workflow: dict) -> None:
+    """Queue cells must opt into dynamic claims and real cloud concurrency.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    """
+    inputs = workflow["jobs"]["generate-launcher"]["with"]
+    assert "matrix.scenario == 'queue'" in inputs["hydra_overrides"]
+    assert "use_shard_queue=true" in inputs["hydra_overrides"]
+    assert "matrix.scenario == 'queue'" in inputs["num_workers"]
+    assert "'2'" in inputs["num_workers"]
+
+
+def test_validate_spec_uri_indexes_setup_map_by_scenario(workflow: dict) -> None:
+    """Validation must select the R2 URI for its exact distribution scenario.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    """
+    spec_uri = workflow["jobs"]["validate"]["with"]["spec_uri"]
+    assert "matrix.scenario" in spec_uri
 
 
 def test_setup_emits_spec_uris_map_output(workflow: dict) -> None:
@@ -135,6 +201,18 @@ def test_setup_emits_output_formats_with_lance_row(workflow: dict) -> None:
     assert "output_formats" in workflow["jobs"]["setup"]["outputs"], (
         "setup.outputs is missing the `output_formats` key consumed by downstream jobs"
     )
+
+
+def test_setup_emits_static_and_queue_scenarios(workflow: dict) -> None:
+    """Weekly/manual matrices include queue while hourly local stays static.
+
+    :param workflow: Parsed workflow YAML from the module-scoped fixture.
+    """
+    matrix_step = _find_step(workflow["jobs"]["setup"]["steps"], step_id="matrix")
+    run_script = matrix_step["run"]
+    assert "scenarios='[\"static\"]'" in run_script
+    assert 'scenarios=\'["static","queue"]\'' in run_script
+    assert "scenarios" in workflow["jobs"]["setup"]["outputs"]
 
 
 def test_setup_matrix_step_branches_on_event_name(workflow: dict) -> None:

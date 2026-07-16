@@ -70,7 +70,7 @@ docs:
       - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
-        covers: "Lightning callback behavior: R2 checkpoint durability; ValAudioProbe metrics harvested one validation late"
+        covers: "Lightning callback behavior: R2 checkpoint durability, one-validation-late ValAudioProbe harvest"
 
   # ── W&B artifact & provenance reference ─────────────────────────
   - doc: docs/reference/artifact-provenance-reference.md
@@ -96,7 +96,9 @@ docs:
       - pattern: "src/synth_setter/configs/experiment/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
-        covers: "Dataset-generation orchestration and format-specific resume behavior"
+        covers: "Dataset-generation orchestration: static or claim-table shard dispatch, format-specific resume"
+      - pattern: "src/synth_setter/pipeline/shard_claims.py"
+        covers: "Lance shard-claims table for dynamic shard distribution"
       - pattern: "src/synth_setter/configs/finalize_dataset.yaml"
         covers: "Finalize @hydra.main entry config; required `dataset_root_uri` (run prefix) loads the persisted DatasetSpec from `input_spec.json` under it (file://, r2://, or bare path); overrides `hydra.run.dir` (task_name/run_name absent here); composes `logger: wandb` for best-effort dataset-artifact logging"
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
@@ -457,22 +459,22 @@ docs:
 
   # ── PR review fan-out (roles, model pinning, cross-model pass) ──
   - doc: AGENTS.md
-    description: Code-review section — review fan-out worker roles, per-provider model pinning, cross-model opencode pass
+    description: Code-review section — review fan-out worker configuration
     sources:
       - pattern: "agent/_shared/run_codex_review_agent.*"
-        covers: "Codex review launcher: role resolution from .codex/agents TOMLs, codex exec invocation, agent_message extraction"
+        covers: "Codex review launcher from role resolution through agent_message extraction"
       - pattern: "agent/_shared/run_opencode_review_agent.*"
-        covers: "OpenCode review launcher: role resolution from .opencode/agents TOMLs, read-only pr-reviewer agent, watchdog timeout, exit-3 degrade signal"
+        covers: "OpenCode review launcher from role resolution through the exit-3 degrade signal"
       - pattern: ".claude/agents/pr-review-*.md"
-        covers: "Claude-side pinned review roles (model/effort frontmatter) and worker briefs incl. the opencode-launcher carve-out"
+        covers: "Claude-side pinned review roles with their worker briefs"
       - pattern: ".codex/agents/*.toml"
-        covers: "Codex-side pinned review roles (model/model_reasoning_effort) and developer instructions"
+        covers: "Codex-side pinned review roles with their developer instructions"
       - pattern: ".opencode/agents/*.toml"
         covers: "OpenCode-side pinned review models/variants for the worker roles"
       - pattern: "opencode.json"
-        covers: "Read-only pr-reviewer opencode agent: edit/task deny, read-only bash allowlist"
+        covers: "Read-only pr-reviewer opencode agent permission profile"
       - pattern: "agent/skills/_shared/repo-review-full-analysis.md"
-        covers: "Shared fan-out pipeline: skill selection, worker prompts, cross-model opencode pass, aggregation and sentinel contract"
+        covers: "Shared fan-out pipeline from skill selection through the sentinel contract"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
@@ -600,6 +602,6 @@ docs:
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row and Anthropic rotation/verification procedure (review run posting findings)"
+        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row with its rotation/verification procedure"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

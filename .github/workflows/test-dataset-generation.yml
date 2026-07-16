@@ -22,7 +22,7 @@ name: Test Dataset Generation
 # Stage handoff is via R2: each generate cell writes the canonical
 # under-prefix copy at `r2://<bucket>/<prefix>input_spec.json`. The validate
 # job below indexes `needs.setup.outputs.spec_uris` — a JSON map keyed by
-# `<provider>-<output_format>` that the `setup` job populates by calling
+# `<provider>-<output_format>-<scenario>` that the `setup` job populates by calling
 # `synth-setter-spec-uri --from-experiment ... --run-id-override ...` once
 # per cell. Routing through the non-matrix `setup` output sidesteps the
 # `needs.<matrix-job>.outputs.<x>` scalar collapse (#1154). The run-metadata
@@ -36,7 +36,8 @@ name: Test Dataset Generation
 #                                        this workflow is now schedule +
 #                                        dispatch only.
 #   * schedule (weekly `0 7 * * 0`)    → all providers (skypilot-local +
-#                                        runpod + oci) × {lance} —
+#                                        runpod + oci) × {lance} ×
+#                                        {static, queue} —
 #                                        the only paid-capacity coverage
 #                                        outside manual dispatch.
 #   * workflow_dispatch                → respect `inputs.provider`
@@ -118,6 +119,7 @@ jobs:
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
       output_formats: ${{ steps.matrix.outputs.output_formats }}
+      scenarios: ${{ steps.matrix.outputs.scenarios }}
       r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
       spec_uris: ${{ steps.spec_uris.outputs.spec_uris }}
     steps:
@@ -165,8 +167,14 @@ jobs:
           fi
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
+            scenarios='[]'
           elif [[ "${EVENT_NAME}" == "schedule" ]]; then
             output_formats='["lance"]'
+            if [[ "${SCHEDULE_CRON}" == "0 7 * * 0" ]]; then
+              scenarios='["static","queue"]'
+            else
+              scenarios='["static"]'
+            fi
           else
             DISPATCH_STDERR=$(mktemp)
             if ! DISPATCH_FORMAT=$(python3 -c "
@@ -187,11 +195,14 @@ jobs:
             fi
             rm -f "${DISPATCH_STDERR}"
             output_formats="[\"${DISPATCH_FORMAT}\"]"
+            scenarios='["static","queue"]'
           fi
           echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
           echo "output_formats=${output_formats}" >> "${GITHUB_OUTPUT}"
+          echo "scenarios=${scenarios}" >> "${GITHUB_OUTPUT}"
           echo "providers: ${providers}"
           echo "output_formats: ${output_formats}"
+          echo "scenarios: ${scenarios}"
 
       # Compose the dataset config so this uses the launcher's R2 bucket.
       - id: bucket
@@ -218,7 +229,7 @@ jobs:
           echo "r2_bucket: ${R2_BUCKET}"
 
       # Precompute spec_uri for every (provider, output_format) cell, keyed
-      # `<provider>-<output_format>`. Routing the URI through this non-matrix
+      # `<provider>-<output_format>-<scenario>`. Routing the URI through this non-matrix
       # output dodges the `needs.<matrix-job>.outputs.<x>` scalar collapse —
       # see #1154. The per-cell `run_id` formula matches the one
       # `generate-launcher` passes (#1154 fix is bi-directional). The temp
@@ -230,6 +241,7 @@ jobs:
         env:
           PROVIDERS_JSON: ${{ steps.matrix.outputs.providers }}
           FORMATS_JSON: ${{ steps.matrix.outputs.output_formats }}
+          SCENARIOS_JSON: ${{ steps.matrix.outputs.scenarios }}
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
           RUN_ID_BASE: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -237,7 +249,8 @@ jobs:
           set -euo pipefail
           providers_n=$(printf '%s' "$PROVIDERS_JSON" | jq 'length')
           formats_n=$(printf '%s' "$FORMATS_JSON" | jq 'length')
-          if [[ "$providers_n" -eq 0 || "$formats_n" -eq 0 ]]; then
+          scenarios_n=$(printf '%s' "$SCENARIOS_JSON" | jq 'length')
+          if [[ "$providers_n" -eq 0 || "$formats_n" -eq 0 || "$scenarios_n" -eq 0 ]]; then
             echo "spec_uris={}" >> "$GITHUB_OUTPUT"
             echo "spec_uris: {}"
             exit 0
@@ -246,26 +259,28 @@ jobs:
           trap 'rm -f "$rows"' EXIT
           while read -r prov; do
             while read -r fmt; do
-              if [[ "$EVENT_NAME" == "schedule" ]]; then
-                exp="generate_dataset/smoke-shard-lance"
-              else
-                exp="$DISPATCH_DATASET_CONFIG"
-              fi
-              rid="${RUN_ID_BASE}-${prov}-${fmt}"
-              if ! uri=$(synth-setter-spec-uri --from-experiment "$exp" --run-id-override "$rid"); then
-                echo "::error::synth-setter-spec-uri failed for experiment=${exp} run_id=${rid}"
-                exit 1
-              fi
-              if [[ -z "$uri" ]]; then
-                echo "::error::synth-setter-spec-uri returned empty URI for experiment=${exp} run_id=${rid}"
-                exit 1
-              fi
-              jq -nc --arg k "${prov}-${fmt}" --arg v "$uri" '{($k): $v}' >> "$rows"
+              while read -r scenario; do
+                if [[ "$EVENT_NAME" == "schedule" ]]; then
+                  exp="generate_dataset/smoke-shard-lance"
+                else
+                  exp="$DISPATCH_DATASET_CONFIG"
+                fi
+                rid="${RUN_ID_BASE}-${prov}-${fmt}-${scenario}"
+                if ! uri=$(synth-setter-spec-uri --from-experiment "$exp" --run-id-override "$rid"); then
+                  echo "::error::synth-setter-spec-uri failed for experiment=${exp} run_id=${rid}"
+                  exit 1
+                fi
+                if [[ -z "$uri" ]]; then
+                  echo "::error::synth-setter-spec-uri returned empty URI for experiment=${exp} run_id=${rid}"
+                  exit 1
+                fi
+                jq -nc --arg k "${prov}-${fmt}-${scenario}" --arg v "$uri" '{($k): $v}' >> "$rows"
+              done < <(printf '%s' "$SCENARIOS_JSON" | jq -r '.[]')
             done < <(printf '%s' "$FORMATS_JSON" | jq -r '.[]')
           done < <(printf '%s' "$PROVIDERS_JSON" | jq -r '.[]')
           json=$(jq -sc 'add // {}' < "$rows")
           actual_n=$(printf '%s' "$json" | jq 'length')
-          expected_n=$(( providers_n * formats_n ))
+          expected_n=$(( providers_n * formats_n * scenarios_n ))
           if [[ "$actual_n" -ne "$expected_n" ]]; then
             echo "::error::spec_uris cardinality mismatch: expected ${expected_n}, got ${actual_n}"
             exit 1
@@ -279,7 +294,7 @@ jobs:
   # `--num-workers 1` override for skypilot-local mirrors today's hardcoded
   # behavior — the single-node kind cluster can't host parallel workers (#843).
   generate-launcher:
-    name: Run generate_dataset (${{ matrix.provider }} / ${{ matrix.output_format }})
+    name: Run generate_dataset (${{ matrix.provider }} / ${{ matrix.output_format }} / ${{ matrix.scenario }})
     needs: setup
     if: ${{ needs.setup.outputs.providers != '[]' && needs.setup.outputs.output_formats != '[]' }}
     strategy:
@@ -287,6 +302,7 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
         output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
+        scenario: ${{ fromJSON(needs.setup.outputs.scenarios) }}
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
       provider: ${{ matrix.provider }}
@@ -297,16 +313,17 @@ jobs:
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}
-      num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || '' }}
+      cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
+      num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || (matrix.scenario == 'queue' && '2' || '') }}
       tail: true
       local: ${{ matrix.provider == 'skypilot-local' }}
-      artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
-      run_id: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}-${{ matrix.output_format }}
+      artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}-${{ matrix.scenario }}
+      hydra_overrides: ${{ matrix.scenario == 'queue' && 'use_shard_queue=true' || '' }}
+      run_id: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}-${{ matrix.output_format }}-${{ matrix.scenario }}
     secrets: inherit
 
   # Each validate cell reads its own spec_uri from `needs.setup.outputs.spec_uris`
-  # — a non-matrix JSON map indexed by `<provider>-<output_format>`, populated
+  # — a non-matrix JSON map indexed by `<provider>-<output_format>-<scenario>`, populated
   # by the setup job via `synth-setter-spec-uri --from-experiment ...
   # --run-id-override ...`. Routing through `needs.setup` (a single non-matrix
   # job) instead of `needs.generate-launcher` (matrix) sidesteps GHA's
@@ -315,7 +332,7 @@ jobs:
   # formula. `if: !cancelled()` decouples each cell from the OTHER cells'
   # generate outcomes — RunPod transients won't skip OCI validation.
   validate:
-    name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
+    name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} / ${{ matrix.scenario }} dataset
     needs: [setup, generate-launcher]
     if: ${{ !cancelled() && needs.setup.outputs.providers != '[]' && needs.setup.outputs.output_formats != '[]' }}
     strategy:
@@ -323,8 +340,9 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
         output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
+        scenario: ${{ fromJSON(needs.setup.outputs.scenarios) }}
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      spec_uri: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}', matrix.provider, matrix.output_format)] }}
+      spec_uri: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}-{2}', matrix.provider, matrix.output_format, matrix.scenario)] }}
     secrets: inherit

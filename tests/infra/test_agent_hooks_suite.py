@@ -60,19 +60,29 @@ def _simulate_codex_skill_layout(home: Path) -> None:
     (skill_dir / "SKILL.md").write_text("---\nname: simplify\n---\n")
 
 
-def test_agent_hooks_bash_suite_passes_under_codex_skill_layout(tmp_path: Path) -> None:
+def test_agent_hooks_bash_suite_passes_under_codex_skill_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`agent/hooks/test.sh` reports zero failures when a Codex skill install is present.
 
     :param tmp_path: Per-test scratch directory used as the simulated ``$HOME``.
+    :param monkeypatch: Environment isolation fixture.
     """
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     _simulate_codex_skill_layout(fake_home)
+    interpreter_bin = str(Path(sys.executable).parent)
+    monkeypatch.setenv("PATH", os.defpath)
+    assert interpreter_bin not in os.environ["PATH"].split(os.pathsep)
 
     result = subprocess.run(  # noqa: S603 — fixed argv, no shell
         ["bash", "agent/hooks/test.sh"],  # noqa: S607 — bash on PATH, repo-relative script
         cwd=PROJECT_ROOT,
-        env={**os.environ, "HOME": str(fake_home)},
+        env={
+            **os.environ,
+            "HOME": str(fake_home),
+            "PATH": os.pathsep.join((interpreter_bin, os.environ["PATH"])),
+        },
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_S,

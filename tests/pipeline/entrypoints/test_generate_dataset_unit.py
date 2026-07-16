@@ -47,6 +47,7 @@ from synth_setter.cli.generate_dataset import (
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
@@ -634,25 +635,8 @@ class TestRunFromSpecUri:
                 run_from_spec_uri("r2://bucket/never-fetched/input_spec.json")
 
 
-class TestRun:
-    """Render → upload, per owned shard.
-
-    No spec upload — ``main()`` writes it once.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Pin rank=0/world=1 explicitly so partition-agnostic tests are insulated from host env.
-
-        ``read_rank_world_from_env`` defaults to ``(0, 1)`` when both vars are
-        absent, but this fixture also overwrites any value the developer's shell
-        may have exported (e.g. an in-flight multi-worker debugging session) so
-        the partition-agnostic tests in this class stay deterministic. Tests
-        that probe multi-worker partitioning override via ``monkeypatch.setenv``;
-        the default-fallback test overrides via ``monkeypatch.delenv``.
-        """
-        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+class RenderSeamFixtures:
+    """Shared render/rclone-seam fixtures for ``generate()`` dispatch test classes."""
 
     @pytest.fixture(autouse=True)
     def _default_shard_absent_in_r2(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -662,6 +646,8 @@ class TestRun:
         ``shard_has_complete_attempt`` to ``False`` insulates the render-path
         tests from any host state. Tests that exercise the skip-existing path
         override this with their own ``monkeypatch.setattr``.
+
+        :param monkeypatch: Pytest fixture used to patch the completion probe.
         """
         monkeypatch.setattr(
             "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
@@ -691,6 +677,29 @@ class TestRun:
             side_effect=stub_renderer(spec),
         ) as mock_check_call:
             yield mock_check_call
+
+
+class TestRun(RenderSeamFixtures):
+    """Render → upload, per owned shard.
+
+    No spec upload — ``main()`` writes it once.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin rank=0/world=1 explicitly so partition-agnostic tests are insulated from host env.
+
+        ``read_rank_world_from_env`` defaults to ``(0, 1)`` when both vars are
+        absent, but this fixture also overwrites any value the developer's shell
+        may have exported (e.g. an in-flight multi-worker debugging session) so
+        the partition-agnostic tests in this class stay deterministic. Tests
+        that probe multi-worker partitioning override via ``monkeypatch.setenv``;
+        the default-fallback test overrides via ``monkeypatch.delenv``.
+
+        :param monkeypatch: Pytest fixture used to set env vars.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
     def test_invokes_generate_vst_dataset_with_spec_derived_args(
         self,
@@ -1300,11 +1309,14 @@ class TestRun:
 
         generate(spec, tmp_path, [])
 
-        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
-        summary_lines = [m for m in info_messages if "rendered=" in m and "skipped=" in m]
-        assert len(summary_lines) == 1, f"expected exactly one summary line, got: {info_messages}"
-        assert "rendered=2" in summary_lines[0]
-        assert "skipped=1" in summary_lines[0]
+        info_calls = mock_logger.info.call_args_list
+        summary_calls = [
+            c for c in info_calls if "rendered=" in str(c.args[0]) and "skipped=" in str(c.args[0])
+        ]
+        assert len(summary_calls) == 1, f"expected exactly one summary line, got: {info_calls}"
+        assert summary_calls[0].kwargs["rendered"] == 2
+        assert summary_calls[0].kwargs["skipped"] == 1
+        assert "of 3 assigned" in summary_calls[0].kwargs["assignment"]
 
     @patch("synth_setter.cli.generate_dataset.logger")
     def test_run_logs_generation_speed_from_rendered_samples(
@@ -1334,12 +1346,11 @@ class TestRun:
 
         generate(spec, tmp_path, [])
 
-        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
-        speed_lines = [m for m in info_messages if "generation speed:" in m]
-        assert len(speed_lines) == 1, f"expected one speed line, got: {info_messages}"
-        expected_samples = 2 * spec.render.samples_per_shard
-        assert f"{expected_samples} samples" in speed_lines[0]
-        assert "samples/s" in speed_lines[0]
+        info_calls = mock_logger.info.call_args_list
+        speed_calls = [c for c in info_calls if "generation speed:" in str(c.args[0])]
+        assert len(speed_calls) == 1, f"expected one speed line, got: {info_calls}"
+        assert speed_calls[0].kwargs["samples"] == 2 * spec.render.samples_per_shard
+        assert "samples/s" in str(speed_calls[0].args[0])
 
     def test_run_probe_failure_propagates(
         self,
@@ -1593,6 +1604,266 @@ class TestRun:
         generate(spec, tmp_path, [])
 
         provenance.assert_not_called()
+
+
+# generate() with use_shard_queue — dynamic claim-table dispatch
+
+
+def _claims_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
+    """Return an ``n``-shard DatasetSpec that opts into dynamic claims.
+
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param n: Number of train shards (10000 samples each).
+    :returns: Validated spec with ``use_shard_queue=True``.
+    """
+    kwargs = _base_spec_kwargs(
+        tmp_path,
+        train_val_test_sizes=[2 * n, 0, 0],
+        use_shard_queue=True,
+    )
+    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+
+def test_shard_claims_for_spec_targets_s3_table_under_run_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claims seam binds env storage credentials to the run's table URI.
+
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param monkeypatch: Injects the canonical ``SYNTH_SETTER_STORAGE_*`` env.
+    """
+    from synth_setter.cli.generate_dataset import _shard_claims_for_spec
+
+    monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://endpoint.example")
+    spec = _claims_spec(tmp_path)
+
+    claims = _shard_claims_for_spec(spec)
+
+    assert claims.uri == f"s3://{spec.r2.bucket}/{spec.r2.prefix}metadata/shard-claims.lance"
+    assert claims.storage_options is not None
+    assert claims.storage_options["endpoint"] == "https://endpoint.example"
+    assert claims.storage_options["access_key_id"] == "ak"
+
+
+def test_shard_claims_for_spec_local_remote_resolves_under_cwd(
+    tmp_path: Path,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+) -> None:
+    """With the local-typed ``r2:`` remote, the table sits inside the fake R2 root.
+
+    :param tmp_path: Per-test dir used for the spec's plugin/preset paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (fixture-activation only — referenced via the ARG001 noqa).
+    """
+    from synth_setter.cli.generate_dataset import _shard_claims_for_spec
+
+    spec = _claims_spec(tmp_path)
+
+    claims = _shard_claims_for_spec(spec)
+
+    expected = Path.cwd() / spec.r2.bucket / spec.r2.prefix / "metadata/shard-claims.lance"
+    assert claims.uri == str(expected)
+    assert claims.storage_options is None
+
+
+class TestRunWithShardClaims(RenderSeamFixtures):
+    """``generate()`` with ``use_shard_queue=True`` claims shards from the run table.
+
+    No seam is patched: ``_shard_claims_for_spec`` resolves through the real
+    ``lance_target`` against the local-typed remote the ``patched_subprocess``
+    fixture activates, so the worker and these tests read one real Lance
+    table inside the fake R2 root.
+    """
+
+    def _populate(self, spec: DatasetSpec, shard_ids: list[int]) -> ShardClaims:
+        """Seed the run's claims table the way the operator does.
+
+        :param spec: Spec locating the table under the fake R2 root.
+        :param shard_ids: Rows to seed.
+        :returns: A peer claims handle over the same table, for assertions.
+        """
+        from synth_setter.cli.generate_dataset import _shard_claims_for_spec
+
+        claims = _shard_claims_for_spec(spec)
+        claims.populate(shard_ids)
+        return claims
+
+    def test_generate_renders_every_claimed_shard_and_completes_all(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """All populated shards render, upload, and are marked done.
+
+        :param patched_subprocess: Renderer stub; the real rclone upload runs.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _claims_spec(tmp_path, n=3)
+        claims = self._populate(spec, [shard.shard_id for shard in spec.shards])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        generate(spec, tmp_path, [])
+
+        for shard in spec.shards:
+            assert shard_has_complete_attempt(spec, shard.shard_id)
+        assert claims.claim() is None
+        assert claims.status_counts() == {"done": 3}
+
+    def test_generate_renders_only_claimed_shards_not_full_spec_range(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """The claims table, not the spec's shard range, decides the assignment.
+
+        :param patched_subprocess: Renderer stub; the real rclone upload runs.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _claims_spec(tmp_path, n=3)
+        self._populate(spec, [1])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        generate(spec, tmp_path, [])
+
+        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert not shard_has_complete_attempt(spec, spec.shards[2].shard_id)
+
+    @pytest.mark.parametrize("invalid_shard_id", [-1, 3, 10_000])
+    def test_generate_out_of_range_claimed_shard_id_fails_before_rendering(
+        self,
+        invalid_shard_id: int,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Persisted claim rows outside the spec range fail before rendering.
+
+        :param invalid_shard_id: Negative, upper-bound, or far-out shard ID.
+        :param patched_subprocess: Renderer spy that must remain unused.
+        :param tmp_path: Per-test work directory.
+        """
+        spec = _claims_spec(tmp_path, n=3)
+        self._populate(spec, [invalid_shard_id])
+
+        with pytest.raises(
+            ValueError,
+            match=rf"shard_id {invalid_shard_id}.*outside.*\[0, 3\)",
+        ):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
+
+    def test_generate_render_failure_leaves_claim_held_and_propagates(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A failed render fails the run with its claim still held.
+
+        Holding the claim (rather than releasing it) keeps a deterministically
+        failing shard from cascading across the live fleet: peers cannot
+        re-claim it until the lease lapses.
+
+        :param patched_subprocess: Overridden to raise on the renderer call.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
+        patched_subprocess.side_effect = subprocess.CalledProcessError(
+            1, "generate_vst_dataset.py"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path, [])
+
+        assert claims.status_counts() == {"claimed": 1}
+        assert claims.claim() is None  # live lease shields the poison shard
+
+    def test_generate_keyboard_interrupt_leaves_claim_held_and_propagates(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Ctrl-C mid-render propagates; the held claim recovers via lease lapse.
+
+        :param patched_subprocess: Overridden to raise ``KeyboardInterrupt``.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
+        patched_subprocess.side_effect = KeyboardInterrupt()
+
+        with pytest.raises(KeyboardInterrupt):
+            generate(spec, tmp_path, [])
+
+        assert claims.status_counts() == {"claimed": 1}
+
+    def test_generate_claims_mode_ignores_render_parallel_with_warning(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``render.parallel=true`` + claims mode warns and never enters the thread pool.
+
+        :param patched_subprocess: Renderer stub; renders succeed.
+        :param monkeypatch: Guards the parallel dispatcher against being called.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        base = _claims_spec(tmp_path, n=2)
+        spec = base.model_copy(
+            update={"render": base.render.model_copy(update={"parallel": True})}
+        )
+        claims = self._populate(spec, [0, 1])
+        patched_subprocess.side_effect = stub_renderer(spec)
+
+        def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
+            raise AssertionError("_dispatch_shards_parallel must not run in claims mode")
+
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
+            _parallel_must_not_fire,
+        )
+        from loguru import logger as loguru_logger
+
+        warnings: list[str] = []
+        sink_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING")
+        try:
+            generate(spec, tmp_path, [])
+        finally:
+            loguru_logger.remove(sink_id)
+
+        assert any("render.parallel=true is ignored" in w for w in warnings)
+        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
+        assert claims.status_counts() == {"done": 2}
+
+    def test_generate_shard_already_in_r2_completes_without_render(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The R2 skip-probe stays authoritative in claims mode: present → done, no render.
+
+        :param patched_subprocess: Introspected to assert no renderer call ran.
+        :param monkeypatch: Marks the shard present in R2.
+        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_a, **_k: True,
+        )
+        spec = _claims_spec(tmp_path, n=1)
+        claims = self._populate(spec, [0])
+
+        generate(spec, tmp_path, [])
+
+        assert _renderer_argv_lists(patched_subprocess) == []
+        assert claims.status_counts() == {"done": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -1956,6 +2227,95 @@ class TestMainDispatchBranches:
             path = output_dir / artifact
             assert path.is_file(), f"extras did not write {artifact}"
             assert path.stat().st_size > 0, f"{artifact} is empty"
+
+    def test_use_shard_queue_local_run_populates_claims_before_generate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``use_shard_queue=true`` seeds every claim row before generating.
+
+        :param monkeypatch: Pytest fixture used to patch argv and module functions.
+        :param tmp_path: Hosts the run's local claims table.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "use_shard_queue=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        claims = ShardClaims.for_run(str(tmp_path / "shard-claims.lance"), None)
+        monkeypatch.setattr(gd, "_shard_claims_for_spec", lambda _spec: claims)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_run(spec: DatasetSpec, _work_dir: object, _loggers: object) -> None:
+            recorded["spec"] = spec
+            recorded["claim_during_generate"] = claims.claim()
+
+        monkeypatch.setattr(gd, "generate", _fake_run)
+
+        _call_hydra_main(gd.main)
+
+        spec = recorded["spec"]
+        assert isinstance(spec, DatasetSpec)
+        assert recorded["claim_during_generate"] is not None, (
+            "claims must be populated before generate runs"
+        )
+        drained = 0
+        while claims.claim() is not None:
+            drained += 1
+        assert drained == spec.num_shards - 1
+
+    def test_use_shard_queue_dispatch_branch_populates_claims_before_launch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The SkyPilot branch seeds the claims table before any worker is launched.
+
+        :param monkeypatch: Pytest fixture used to patch argv and module functions.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+            "use_shard_queue=true",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        claims = ShardClaims.for_run(str(tmp_path / "shard-claims.lance"), None)
+        monkeypatch.setattr(gd, "_shard_claims_for_spec", lambda _spec: claims)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_dispatch(_sky_cfg: object) -> None:
+            recorded["claim_at_dispatch"] = claims.claim()
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+
+        _call_hydra_main(gd.main)
+
+        assert recorded["claim_at_dispatch"] is not None, (
+            "claims must be populated before workers are dispatched"
+        )
+        uploaded_spec = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
+        drained = 0
+        while claims.claim() is not None:
+            drained += 1
+        assert drained == uploaded_spec.num_shards - 1
 
     def test_compute_template_set_calls_dispatch_via_skypilot(
         self,

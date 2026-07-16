@@ -11,11 +11,13 @@ this file is the imperative rule sheet.
   not by metadata files, reports, or a coordination database. If R2 disagrees
   with anything else, R2 wins.
 - **Worker / finalize write boundary.** Workers only write under
-  `metadata/workers/`, with one deliberate Lance exception: workers write
-  *uncommitted* fragment data files into the split dataset `data/` directories
-  (a fragment is only readable from the dataset whose `data/` dir physically
-  holds its file — design doc §7.1). Finalize remains the only writer of Lance
-  manifests, transactions, `stats.npz`, and `dataset.{json,complete}`.
+  `metadata/workers/`, plus conditional claim/complete updates to the one
+  shared Lance claims table `metadata/shard-claims.lance` (`pipeline/shard_claims.py`),
+  with one deliberate Lance exception: workers write *uncommitted* fragment
+  data files into the split dataset `data/` directories (a fragment is only
+  readable from the dataset whose `data/` dir physically holds its file —
+  design doc §7.1). Finalize remains the only writer of Lance manifests,
+  transactions, `stats.npz`, and `dataset.{json,complete}`.
 - **Never write to `data/shards/` outside finalize.** Workers stage shards
   under `metadata/workers/<worker-id>/` and finalize moves them.
 - **Shard IDs are logical and deterministic.** `shard-000042` is computed

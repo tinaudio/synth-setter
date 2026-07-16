@@ -7,7 +7,8 @@ name: Test Dataset Finalization
 # exercise the chain before merge instead of waiting for the cron tick.
 #
 # Matrix:
-#   * { output_format: lance, config_path: generate_dataset/smoke-shard-lance }
+#   * Lance with static rank/world shard ownership.
+#   * Lance with dynamic shard claims (Lance claims table).
 #
 # Each row calls `generate-dataset-shards.yaml` (which itself chains
 # `finalize-dataset.yaml`), then a follow-up `verify-artifacts` job runs
@@ -34,6 +35,7 @@ on:
       - "src/synth_setter/pipeline/data/lance_shard.py"
       - "src/synth_setter/pipeline/schemas/r2_location.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/shard_claims.py"
       - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/finalize-dataset.yaml"
       - ".github/workflows/generate-dataset-shards.yaml"
@@ -50,7 +52,7 @@ concurrency:
 
 jobs:
   smoke-pipeline:
-    name: Generate + finalize smoke (${{ matrix.output_format }})
+    name: Generate + finalize smoke (${{ matrix.output_format }} / ${{ matrix.scenario }})
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     strategy:
       fail-fast: false
@@ -58,6 +60,11 @@ jobs:
       matrix:
         include:
           - output_format: lance
+            scenario: static
+            config_path: generate_dataset/smoke-shard-lance
+            task_name: smoke-shard-lance
+          - output_format: lance
+            scenario: queue
             config_path: generate_dataset/smoke-shard-lance
             task_name: smoke-shard-lance
     uses: ./.github/workflows/generate-dataset-shards.yaml
@@ -65,15 +72,17 @@ jobs:
       provider: skypilot-local
       dataset_config: ${{ matrix.config_path }}
       image_tag: dev-snapshot
-      cluster_name: synth-setter-finalize-pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.output_format }}-${{ github.run_attempt }}
+      cluster_name: synth-setter-finalize-pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.output_format }}-${{ matrix.scenario }}-${{ github.run_attempt }}
       num_workers: "1"
       tail: true
       local: true
-      artifact_name: finalize-presubmit-${{ matrix.output_format }}
+      artifact_name: finalize-presubmit-${{ matrix.output_format }}-${{ matrix.scenario }}
+      hydra_overrides: ${{ matrix.scenario == 'queue' && 'use_shard_queue=true' || '' }}
+      run_id: finalize-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}-${{ matrix.scenario }}
     secrets: inherit
 
   verify-artifacts:
-    name: Verify finalize artifacts (${{ matrix.output_format }})
+    name: Verify finalize artifacts (${{ matrix.output_format }} / ${{ matrix.scenario }})
     needs: smoke-pipeline
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
@@ -84,6 +93,11 @@ jobs:
       matrix:
         include:
           - output_format: lance
+            scenario: static
+            config_path: generate_dataset/smoke-shard-lance
+            task_name: smoke-shard-lance
+          - output_format: lance
+            scenario: queue
             config_path: generate_dataset/smoke-shard-lance
             task_name: smoke-shard-lance
     env:
@@ -117,7 +131,7 @@ jobs:
       - name: Download smoke-pipeline run metadata for this matrix cell
         uses: actions/download-artifact@v4
         with:
-          name: finalize-presubmit-${{ matrix.output_format }}
+          name: finalize-presubmit-${{ matrix.output_format }}-${{ matrix.scenario }}
           path: cell-meta/
 
       - name: Parse run_id from this matrix cell's input_spec.json

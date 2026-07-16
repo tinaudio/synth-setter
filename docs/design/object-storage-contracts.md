@@ -1,7 +1,7 @@
 # Design Note: Provider-Neutral Object Storage Contracts
 
 > **Status**: Draft
-> **Last Updated**: 2026-07-11
+> **Last Updated**: 2026-07-16
 
 ## Context
 
@@ -34,7 +34,10 @@ tool details from dataset, training, evaluation, and CLI logic.
 
 - Do not remove rclone from bulk sync in the first migration.
 - Do not add a new object-store client until call sites are hidden behind the
-  facade.
+  facade. Documented exception: the shard-claims table (`pipeline/shard_claims.py`)
+  talks to R2 through Lance's object-store client because it needs the
+  conditional-put commit protocol rclone cannot express; it resolves its
+  target through the same centralized `r2_io.lance_target` seam.
 - Do not support arbitrary generic S3 buckets in places that need the configured
   synth-setter object store. A bare `s3://` URI means "this configured
   S3-compatible store" unless a future API explicitly accepts external stores.
@@ -162,6 +165,7 @@ class DatasetStorageLayout(BaseModel):
     def shard(self, shard: ShardSpec) -> ObjectLocation: ...
     def split_lance(self, split: Split) -> ObjectLocation: ...
     def stats(self) -> ObjectLocation: ...
+    def shard_claims(self) -> ObjectLocation: ...
     def lance_versions(self, shard: ShardSpec) -> ObjectLocation: ...
 ```
 

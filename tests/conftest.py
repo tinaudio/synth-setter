@@ -426,6 +426,36 @@ def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_default_cadence(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with an experiment that sets no cadence keys.
+
+    The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
+    so that module stays free of the imports banned by
+    ``tests/_meta/test_entrypoint_e2e_only.py`` while still carrying the
+    default-cadence entrypoint test ``synth-setter-project-standards`` P31 requires.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: No-cadence-override cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/ci-materialize-test"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_dawdreamer(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose the DawDreamer smoke experiment with temporary local paths.
 

@@ -485,7 +485,7 @@ def test_make_renderer_torchsynth_backend_builds_in_process_renderer() -> None:
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``plugin_reload_cadence="render"`` (default) leaves the plugin to be loaded per call.
+    """Explicit ``plugin_reload_cadence="render"`` (non-default, #1999) loads the plugin per call.
 
     :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
     """

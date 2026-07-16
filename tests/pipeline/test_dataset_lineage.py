@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -149,11 +150,14 @@ def test_dataset_artifact_ref_remote_failure_falls_back_to_local_spec(
     )
     write_spec_to_path(local_spec, tmp_path / "input_spec.json")
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", MagicMock())
+    download = MagicMock(side_effect=subprocess.CalledProcessError(1, ["rclone", "copyto"]))
+    monkeypatch.setattr(r2_io, "download_to_path", download)
 
     assert dataset_artifact_ref(tmp_path, "r2://intermediate-data/missing") == (
         "data-local-lineage",
         "local-lineage-20260713T160000000Z",
     )
+    download.assert_called_once_with("r2://intermediate-data/missing/input_spec.json", ANY)
 
 
 def test_dataset_artifact_ref_credential_failure_falls_back_to_local_spec(
