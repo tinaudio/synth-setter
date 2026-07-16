@@ -70,7 +70,7 @@ docs:
       - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
       - pattern: "src/synth_setter/utils/callbacks.py"
-        covers: "Lightning callback behavior: R2 checkpoint durability; ValAudioProbe metrics harvested one validation late"
+        covers: "Lightning callback behavior: R2 checkpoint durability, and ValAudioProbe metrics harvested one validation late"
 
   # ── W&B artifact & provenance reference ─────────────────────────
   - doc: docs/reference/artifact-provenance-reference.md

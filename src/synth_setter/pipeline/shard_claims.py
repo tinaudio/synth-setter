@@ -53,12 +53,12 @@ _STATUS_AVAILABLE: Final = "available"
 _STATUS_CLAIMED: Final = "claimed"
 _STATUS_DONE: Final = "done"
 
-# Lance signals both cases below as plain OSError with no structured type, so
-# the messages are matched as substrings; the storm-injection tests pin them.
-# Raised when a commit exhausts Lance's internal conflict retries.
+# Lance raises both cases as plain OSError (no structured type), so they are
+# matched as substrings; the storm-injection tests pin the messages.
 _CONTENTION_ERROR: Final = "Too many concurrent writers"
-# Raised by ``write_dataset(mode="create")`` when the table already exists.
 _ALREADY_EXISTS_ERROR: Final = "Dataset already exists"
+# Flat jitter suffices: claims are minutes apart in production, so storms are
+# short-lived and exponential growth would only delay recovery.
 _CONTENTION_BACKOFF_RANGE_S: Final = (0.05, 0.25)
 
 # Jitter/shard picks are load-spreading, not security; SystemRandom only
@@ -89,7 +89,8 @@ def _available_rows(shard_ids: list[int]) -> pa.Table:
     """Build unclaimed rows for ``shard_ids``.
 
     :param shard_ids: Logical shard IDs to seed.
-    :returns: Table of ``available`` rows with zeroed lease/attempt counters.
+    :returns: Table shaped per ``_claims_schema()`` of ``available`` rows with
+        zeroed lease/attempt counters.
     """
     import pyarrow as pa
 
