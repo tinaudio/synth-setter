@@ -76,6 +76,8 @@ trap cleanup EXIT
 XVFB_BOOTSTRAP_ATTEMPTS="${XVFB_BOOTSTRAP_ATTEMPTS:-3}"
 # Readiness probes per attempt, 0.1 s apart; widen on congested hosts.
 XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
+# Max retry jitter in deciseconds; 0 disables (deterministic tests).
+XVFB_RETRY_JITTER_MAX="${XVFB_RETRY_JITTER_MAX:-9}"
 
 # Start Xvfb and wait until it accepts connections; returns non-zero on any
 # startup fault, leaving XVFB_PID for reap_failed_xvfb to collect.
@@ -87,30 +89,30 @@ start_xvfb_attempt() {
     </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
   XVFB_PID=$!
 
+  # Check for death before sleeping: a lost display-lock race kills Xvfb
+  # within milliseconds, and instant detection keeps failed attempts cheap.
   local count=0
   while [ ! -s "$DISPLAY_FILE" ]; do
-    sleep 0.1
-    count=$((count+1))
-    if [ "$count" -ge 100 ]; then
-      echo "Timeout waiting for Xvfb to start" >&2
-      return 1
-    fi
     if ! kill -0 "$XVFB_PID" 2>/dev/null; then
       echo "Xvfb died unexpectedly" >&2
       return 1
     fi
+    count=$((count+1))
+    if [ "$count" -gt 100 ]; then
+      echo "Timeout waiting for Xvfb to start" >&2
+      return 1
+    fi
+    sleep 0.1
   done
 
-  DISPLAY_NUM=$(cat "$DISPLAY_FILE")
-  export DISPLAY=:${DISPLAY_NUM}
+  DISPLAY=":$(cat "$DISPLAY_FILE")"
+  export DISPLAY
 
-  local probe=0
-  while [ "$probe" -lt "$XVFB_READY_PROBES" ]; do
+  for _ in $(seq "$XVFB_READY_PROBES"); do
     if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
-    probe=$((probe+1))
   done
   echo "Xvfb did not become ready on $DISPLAY" >&2
   return 1
@@ -119,10 +121,8 @@ start_xvfb_attempt() {
 # Kill and reap a failed attempt's Xvfb (a readiness timeout leaves it
 # running) so retries never stack servers, then surface its log.
 reap_failed_xvfb() {
-  if [ -n "${XVFB_PID-}" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
-    kill "$XVFB_PID" 2>/dev/null || true
-    wait "$XVFB_PID" 2>/dev/null || true
-  fi
+  kill "$XVFB_PID" 2>/dev/null || true
+  wait "$XVFB_PID" 2>/dev/null || true
   XVFB_PID=""
   cat "$TMP_DIR/xvfb.log" >&2 || true
 }
@@ -137,7 +137,9 @@ until start_xvfb_attempt; do
   attempt=$((attempt+1))
   # Sub-second jitter decorrelates concurrent bootstraps racing the same
   # display locks.
-  sleep "0.$((RANDOM % 9 + 1))"
+  if [ "$XVFB_RETRY_JITTER_MAX" -gt 0 ]; then
+    sleep "0.$((RANDOM % XVFB_RETRY_JITTER_MAX + 1))"
+  fi
   echo "[wrapper] retrying Xvfb bootstrap (attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
 done
 

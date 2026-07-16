@@ -16,9 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from synth_setter.resources import vst_headless_wrapper
-
-WRAPPER = str(vst_headless_wrapper())
+from tests.conftest import VST_HEADLESS_WRAPPER
 
 # The wrapper always passes ``-displayfd 3``; stubs write the display there.
 _XVFB_STUB = """\
@@ -81,6 +79,8 @@ def stub_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["XVFB_STUB_DIR"] = str(state_dir)
+    # Stubs fail deterministically; jitter only slows the suite down.
+    env["XVFB_RETRY_JITTER_MAX"] = "0"
     return env
 
 
@@ -90,8 +90,8 @@ def _run_wrapper(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     :param env: Environment prepared by the ``stub_env`` fixture.
     :returns: Completed process with captured stdout/stderr.
     """
-    return subprocess.run(
-        [WRAPPER, "bash", "-c", 'echo "ran-ok DISPLAY=$DISPLAY"'],
+    return subprocess.run(  # noqa: S603 — argv is a fixed list of test-owned paths
+        [VST_HEADLESS_WRAPPER, "bash", "-c", 'echo "ran-ok DISPLAY=$DISPLAY"'],
         env=env,
         capture_output=True,
         text=True,
@@ -123,6 +123,10 @@ def _assert_stub_xvfb_pids_dead(env: dict[str, str]) -> None:
 def test_bootstrap_first_attempt_succeeds_runs_command_under_display(
     stub_env: dict[str, str],
 ) -> None:
+    """Happy path: one Xvfb, command runs under the exported DISPLAY.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
     result = _run_wrapper(stub_env)
     assert result.returncode == 0, result.stderr
     assert "ran-ok DISPLAY=:99" in result.stdout
@@ -132,6 +136,10 @@ def test_bootstrap_first_attempt_succeeds_runs_command_under_display(
 def test_bootstrap_xvfb_dies_once_retries_and_runs_command(
     stub_env: dict[str, str],
 ) -> None:
+    """A single startup death is retried and the command still runs.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
     stub_env["XVFB_STUB_FAILS"] = "1"
     result = _run_wrapper(stub_env)
     assert result.returncode == 0, result.stderr
@@ -142,6 +150,10 @@ def test_bootstrap_xvfb_dies_once_retries_and_runs_command(
 def test_bootstrap_xvfb_dies_every_attempt_fails_without_running_command(
     stub_env: dict[str, str],
 ) -> None:
+    """Exhausting the retry budget fails loudly without running the command.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
     stub_env["XVFB_STUB_FAILS"] = "99"
     result = _run_wrapper(stub_env)
     assert result.returncode != 0
@@ -153,6 +165,10 @@ def test_bootstrap_xvfb_dies_every_attempt_fails_without_running_command(
 def test_bootstrap_attempts_env_overrides_retry_budget(
     stub_env: dict[str, str],
 ) -> None:
+    """XVFB_BOOTSTRAP_ATTEMPTS=1 restores single-attempt fail-fast.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
     stub_env["XVFB_STUB_FAILS"] = "99"
     stub_env["XVFB_BOOTSTRAP_ATTEMPTS"] = "1"
     result = _run_wrapper(stub_env)
@@ -163,6 +179,10 @@ def test_bootstrap_attempts_env_overrides_retry_budget(
 def test_bootstrap_readiness_timeout_retries_and_reaps_stale_xvfb(
     stub_env: dict[str, str],
 ) -> None:
+    """A readiness timeout retries and kills the stale first-attempt Xvfb.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
     stub_env["XDPYINFO_STUB_MIN_XVFB_CALLS"] = "2"
     stub_env["XVFB_READY_PROBES"] = "3"
     result = _run_wrapper(stub_env)
