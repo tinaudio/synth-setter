@@ -174,9 +174,9 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
-    """Run the Python launcher directly through the production execution path.
+    """Protect direct-entrypoint execution parity with the shell wrapper.
 
-    :param tmp_path: Temporary directory containing the fake Codex executable.
+    :param tmp_path: Directory for the fake Codex executable.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
@@ -305,9 +305,9 @@ def test_codex_review_shell_launcher_withholds_caller_stdin(tmp_path: Path) -> N
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> None:
-    """Bound a hung Codex run and report the configured deadline.
+    """Ensure timeout diagnostics include the active deadline.
 
-    :param tmp_path: Temporary directory containing the fake Codex executable.
+    :param tmp_path: Directory for the fake Codex executable.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
@@ -335,9 +335,9 @@ def test_codex_review_shell_launcher_timeout_kills_hung_run(tmp_path: Path) -> N
 def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
     tmp_path: Path,
 ) -> None:
-    """Reject a disabled deadline without starting Codex.
+    """Ensure invalid deadlines prevent subprocess startup.
 
-    :param tmp_path: Temporary directory containing the fake Codex executable.
+    :param tmp_path: Directory for the fake Codex executable.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
@@ -364,9 +364,9 @@ def test_codex_review_shell_launcher_invalid_timeout_rejected_before_launch(
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_shell_launcher_success_starts_no_watchdog_timer(tmp_path: Path) -> None:
-    """A fast review does not start an external deadline timer.
+    """Guard against reintroducing an external watchdog process.
 
-    :param tmp_path: Temporary directory containing fake Codex and sleep executables.
+    :param tmp_path: Directory for the fake Codex and sleep executables.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
@@ -407,10 +407,10 @@ def test_codex_review_shell_launcher_timeout_force_kills_process_group(
     tmp_path: Path,
     parent_term_trap: str,
 ) -> None:
-    """Escalate a timed-out review and remove its signal-ignoring child.
+    """Ensure cleanup reaches descendants that ignore SIGTERM.
 
-    :param tmp_path: Temporary directory containing the fake Codex executable.
-    :param parent_term_trap: Whether the process-group leader also ignores SIGTERM.
+    :param tmp_path: Directory for the fake Codex executable.
+    :param parent_term_trap: Whether the process-group leader ignores SIGTERM.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
