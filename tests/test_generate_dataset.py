@@ -881,7 +881,10 @@ def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> Non
     filesystem. Three real OS processes hammer two rows under an
     always-expired lease; if R2 commits ever let two workers win the same
     ``(shard_id, claim_gen)``, or dropped a committed win, this fails.
-    Auto-skips without R2; purges the unique prefix in ``finally``.
+    Auto-skips without R2; a fresh-prefix guard catches leftovers from a
+    crashed prior run before any worker starts, and the unique prefix is
+    purged in ``finally``. Worker results carry a 600s budget — generous
+    against R2 latency spikes for ~26 tiny commits.
     """
     from synth_setter.pipeline.r2_io import lance_target
     from synth_setter.pipeline.schemas.r2_location import R2Location
@@ -894,6 +897,9 @@ def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> Non
     location = R2Location(bucket="intermediate-data", prefix=unique_prefix)
     uri, storage_options = lance_target(location.shard_claims_uri())
     assert storage_options is not None, "contention run must target real R2, not local mode"
+    assert not r2_io.list_entries(f"r2://{location.bucket}/{unique_prefix}", recursive=True), (
+        "unique prefix must start empty; a leftover here means a prior run leaked"
+    )
     try:
         ShardClaims(uri=uri, storage_options=storage_options, owner="operator").populate(range(2))
 

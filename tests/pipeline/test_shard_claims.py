@@ -477,6 +477,10 @@ class TestConcurrentClaims:
     def test_concurrent_drain_renders_every_shard_exactly_once(self, tmp_path: Path) -> None:
         """Racing workers partition a real shared table with no double-grant.
 
+        OS process scheduling makes each run's interleaving unique and unreproducible by design;
+        the assertions are schedule-independent invariants (every shard done exactly once, at
+        generation 1), so any interleaving that violates them is a real protocol bug.
+
         :param tmp_path: Hosts the per-test claims table.
         """
         uri = str(tmp_path / "shard-claims.lance")
@@ -496,7 +500,9 @@ class TestConcurrentClaims:
         Every claim is instantly reclaimable (negative lease), so all workers
         fight over two rows continuously. If Lance re-applied a conflicting
         update without re-evaluating its predicate, two workers would win the
-        same ``(shard_id, claim_gen)`` or generations would be lost.
+        same ``(shard_id, claim_gen)`` or generations would be lost. The
+        interleaving is nondeterministic by design; the exactly-one-owner and
+        no-lost-generation assertions hold for every possible schedule.
 
         :param tmp_path: Hosts the per-test claims table.
         """
