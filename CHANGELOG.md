@@ -1,6 +1,58 @@
 # CHANGELOG
 
 
+## v9.3.0 (2026-07-16)
+
+### Features
+
+- **data-pipeline**: Log finalize history to W&B
+  ([#1847](https://github.com/tinaudio/synth-setter/pull/1847),
+  [`27d887f`](https://github.com/tinaudio/synth-setter/commit/27d887f5e50c86603047c6f8376f68a258e1cae6))
+
+* feat(data-pipeline): log finalize progress to W&B
+
+Emit best-effort W&B history rows as finalize advances: one shards_processed row per source shard
+  the format consumes and one artifacts_uploaded row per finalized R2 object, plus a terminal
+  summary carrying the totals. Steps continue after the producer run's zero-based generation shard
+  history so finalize extends it rather than overwriting.
+
+The Lance branch now finalizes staged winner fragments (#1784), so progress threads through
+  finalize_lance_fragments: shard_processed per checked winner, artifact_uploaded per committed
+  split plus the stats and card uploads. A shared finalize_progress module holds the lance-free
+  event contract both the entrypoint and the fragment finalize import.
+
+Live logging stays best-effort: R2 outputs and dataset.complete remain authoritative if telemetry
+  fails.
+
+Fixes #1843
+
+* fix(data-pipeline): stop forcing a W&B step that log_metrics ignores
+
+Round-2 review caught a real API misuse. WandbLogger.log_metrics(m, step=s) forwards step only as a
+  trainer/global_step field and calls run.log() with no step, so W&B auto-advances the real history
+  step regardless (verified: log(step=99) still lands run.step at 3). The manual initial_step /
+  _resume_history_step apparatus therefore never controlled history ordering.
+
+Drop it and rely on W&B's per-log auto-increment, which already keeps finalize rows monotonic and
+  after the resumed generation history — across a retry too, since a resumed run's step counter
+  persists. This removes the whole step-collision failure class the earlier rounds chased.
+
+Also add entrypoint-dispatch progress tests for the lance and hdf5 branches (through
+  finalize_from_spec) and pin the no-explicit-step call shape.
+
+Refs #1843
+
+* docs(data-pipeline): address review comment-hygiene and docstring findings
+
+Drop or tighten test comments that only restated the assertions' literal shard/artifact counts
+  (comment-hygiene C4), and give finalize_progress a usage example plus a note that shard_processed
+  is a per-format progress signal, not a completion guarantee.
+
+* fix(data-pipeline): align finalize progress with Lance-only flow
+
+* test(data-pipeline): cover real finalize progress reporting
+
+
 ## v9.2.0 (2026-07-16)
 
 ### Automation
