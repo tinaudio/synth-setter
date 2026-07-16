@@ -916,9 +916,19 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
 
     HydraConfig().set_config(cfg)
     try:
-        metric_dict, _ = evaluate(cfg)
+        metric_dict, object_dict = evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
+
+    from synth_setter.utils.callbacks import LogPerParamMSE
+
+    mse_callbacks = [
+        callback
+        for callback in object_dict["trainer"].callbacks
+        if isinstance(callback, LogPerParamMSE)
+    ]
+    assert len(mse_callbacks) == 1
+    assert mse_callbacks[0].param_spec is param_specs["surge_4"]
 
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)

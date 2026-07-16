@@ -255,6 +255,21 @@ def test_vst_callback_group_composes(callbacks_name: str, expected_callback: str
     assert expected_callback in cfg.callbacks
 
 
+def test_eval_surge_callback_alias_composes_prediction_writer() -> None:
+    """The Surge launch-script alias resolves the canonical VST callbacks."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            "callbacks=eval_surge",
+            "trainer=cpu",
+        ],
+    )
+
+    assert "prediction_writer" in cfg.callbacks
+
+
 def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
     """The generic per-parameter callback resolves the active datamodule spec."""
     cfg = _compose(

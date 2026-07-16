@@ -25,7 +25,7 @@ python -m synth_setter.cli.eval \
     experiment=surge/wandb_checkpoint/ffn_full \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/ffn_fsd/ \
     datamodule=fsd \
-    callbacks=eval_vst \
+    callbacks=eval_surge \
     mode=predict \
     datamodule.batch_size=1024 \
     datamodule.num_workers=11

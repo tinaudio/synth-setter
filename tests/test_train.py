@@ -350,6 +350,14 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
+    from synth_setter.utils.callbacks import LogPerParamMSE
+
+    mse_callbacks = [
+        callback for callback in trainer.callbacks if isinstance(callback, LogPerParamMSE)
+    ]
+    assert len(mse_callbacks) == 1
+    assert mse_callbacks[0].param_spec is param_specs["surge_simple"]
+
     datamodule = object_dict["datamodule"]
     assert datamodule.train_dataset.num_params == expected_width
     sample = datamodule.train_dataset[0]

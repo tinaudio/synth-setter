@@ -1,0 +1,4 @@
+# Surge launch scripts keep their stable callbacks=eval_surge CLI contract.
+defaults:
+  - eval_vst
+  - _self_
