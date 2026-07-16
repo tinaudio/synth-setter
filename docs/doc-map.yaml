@@ -464,7 +464,7 @@ docs:
       - pattern: "agent/_shared/run_codex_review_agent.*"
         covers: "Codex review launcher from role resolution through agent_message extraction"
       - pattern: "agent/_shared/pi_review_routing.py"
-        covers: "Pi model availability, risk allocation, provenance, and worker-report validation"
+        covers: "Pi PR-review routing policy"
       - pattern: "agent/_shared/run_opencode_review_agent.*"
         covers: "OpenCode review launcher from role resolution through the exit-3 degrade signal"
       - pattern: ".claude/agents/pr-review-*.md"

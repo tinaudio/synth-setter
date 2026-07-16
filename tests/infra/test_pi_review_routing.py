@@ -295,6 +295,35 @@ def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path
     )
 
 
+def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Path) -> None:
+    """Exercise the documented transcript-to-validation command path.
+
+    :param tmp_path: Temporary location for transcript and report files.
+    """
+    transcript = tmp_path / "worker.jsonl"
+    report = tmp_path / "worker.md"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":[{"type":"text","text":'
+        '"## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n'
+        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}]}}\n'
+    )
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+    python = sh.Command(sys.executable)
+
+    python(script, "extract-report", transcript, "--output", report)
+    python(
+        script,
+        "validate-report",
+        report,
+        "--skill",
+        "code-health",
+        "--target",
+        "smoke",
+    )
+
+    assert report.read_text().startswith("## code-health review — smoke")
+
+
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     """Exercise the user-facing planner with a deterministic Pi executable.
 
