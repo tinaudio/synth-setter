@@ -97,13 +97,24 @@ skip `lance-review`.
 ### Pi + Tintin
 
 Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
-with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"` and
-`run_in_background: true`. Tintin removes `Agent` from subagents, so do not
-spawn a Pi orchestrator and then ask it to nest workers. Launch all independent
-passes in one message, capture each start result's `Agent ID` and `Output file`,
-then collect them with `get_subagent_result(wait: true)`. Every pass receives
-the same complete worker prompt and must not modify the checkout or GitHub
-state.
+with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
+`run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
+helper output. Tintin removes `Agent` from
+subagents, so do not spawn a Pi orchestrator and then ask it to nest workers.
+Launch all independent passes in one message, capture each start result's
+`Agent ID` and `Output file`, then collect them with
+`get_subagent_result(wait: true)`. Every pass receives the same complete worker
+prompt and must not modify the checkout or GitHub state.
+
+Give every worker the exact base SHA, head SHA, and changed paths. Require it to
+inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
+paths. It must never recursively discover files or checklists, search above the
+current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
+assigned `tdd-refactor` pass may search tracked files with `git grep` and
+`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool
+call has a 60-second timeout. A command timeout or
+turn budget exhausted result is a failed attempt, never a partial success; add
+its exact diagnostic to the audit and retry through the candidate sequence.
 
 Run two model passes for every selected skill, then merge their reports using
 the existing union and near-duplicate rules in **Cross-model opencode pass**
@@ -111,8 +122,19 @@ below. Pi does not run the opencode launcher; it derives provenance from each
 successful effective model as specified below. Record each attempt's skill,
 pass, exact model, thinking level, Tintin agent id, status, and
 the exact transcript path from the result's `Output file:` field in a
-`## Pi review audit` section of `review_body`. This audit section does not
-change the findings JSON shape or inline-comment contract.
+`## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
+contract. Render it as this table so the sentinel caller never has to inspect a
+process tree or transcript to understand execution:
+
+| Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
+| ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
+
+Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
+`authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
+exact failure diagnostic or allocation reason,
+not a generic summary. Include one row per attempt, including retries and
+verification passes. Precede the table with one sentence counting successful,
+failed, retried, and rejected attempts. If the pipeline must fail closed, print the audit table before stopping even though no sentinel is written.
 
 Use the tested routing helper as the single source of model candidates,
 availability filtering, thinking levels, and allocation reasons. Count changed
@@ -148,7 +170,12 @@ python3 agent/_shared/pi_review_routing.py extract-report \
   <output-file> --output <report-path>
 python3 agent/_shared/pi_review_routing.py validate-report \
   <report-path> --skill <skill-name> --target <PR-or-branch-label>
+python3 agent/_shared/pi_review_routing.py transcript-stats <output-file>
 ```
+
+Use `transcript-stats` for the audit's elapsed, turns, and cumulative-token
+columns. The token number is explicitly cumulative processed context across
+turns, not generated output, so label it exactly as the table does.
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
 directly to `validate-report`. If extraction or validation fails, record
@@ -157,6 +184,12 @@ is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If any pass exhausts its
 candidates without a parseable report, stop before aggregation or delivery;
 never write a PASS sentinel after silently dropping a model pass.
+
+CI cannot exercise authenticated Tintin providers. Before opening a PR that
+changes this flow, run `repo-review-full-no-comments` from a real Pi session and
+verify the sentinel audit contains every planned Codex/OpenRouter pass, bounded
+turn/runtime/token columns, and an existing transcript path for each launched
+attempt. This live smoke is mandatory in addition to helper CLI tests.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after cross-provider fallback:

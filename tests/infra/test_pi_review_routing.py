@@ -17,6 +17,7 @@ from agent._shared.pi_review_routing import (
     parse_available_models,
     provenance_for_model,
     report_is_parseable,
+    transcript_stats,
 )
 
 AVAILABLE_MODELS = """\
@@ -54,6 +55,7 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         ("comment-hygiene", "codex", "low"),
         ("comment-hygiene", "openrouter", "low"),
     ]
+    assert all(item.max_turns == 12 for item in plan)
     assert plan[1].candidates[0] == "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
     assert plan[3].candidates[0] == "openrouter/cohere/north-mini-code:free"
     assert all(
@@ -61,6 +63,19 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         for item in plan
         for model in item.candidates
     )
+
+
+def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> None:
+    """Keep style checklists below high thinking even when the diff is risky."""
+    plan = build_review_plan(
+        ["python-style"],
+        changed_lines=1_000,
+        risk_reasons=("concurrency", "authentication"),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert [item.thinking for item in plan] == ["medium", "medium"]
+    assert all(item.reason == "mechanical checklist on diff of 200+ lines" for item in plan)
 
 
 def test_build_review_plan_promotes_risky_standard_passes() -> None:
@@ -74,6 +89,34 @@ def test_build_review_plan_promotes_risky_standard_passes() -> None:
 
     assert [item.thinking for item in plan] == ["high", "high"]
     assert [item.reason for item in plan] == ["risk: concurrency", "risk: concurrency"]
+
+
+@pytest.mark.parametrize(
+    ("skill", "changed_lines", "expected_thinking"),
+    [
+        ("python-style", 199, "low"),
+        ("python-style", 200, "medium"),
+        ("code-health", 800, "medium"),
+        ("code-health", 801, "high"),
+    ],
+)
+def test_build_review_plan_pins_line_count_boundaries(
+    skill: str, changed_lines: int, expected_thinking: str
+) -> None:
+    """Pin exact thinking-allocation thresholds.
+
+    :param skill: Checklist whose threshold is exercised.
+    :param changed_lines: Total diff lines at the boundary.
+    :param expected_thinking: Expected allocation at that boundary.
+    """
+    plan = build_review_plan(
+        [skill],
+        changed_lines=changed_lines,
+        risk_reasons=(),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
 def test_build_review_plan_skips_unavailable_candidate() -> None:
@@ -237,6 +280,44 @@ def test_report_is_parseable_rejects_wrong_skill_or_target() -> None:
     )
 
 
+def test_transcript_stats_summarizes_runtime_budget(tmp_path: Path) -> None:
+    """Expose turns, elapsed time, and cumulative tokens for the audit.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"type":"assistant","message":{"role":"assistant","content":"draft",'
+        '"usage":{"input":10,"output":2,"reasoning":1,"totalTokens":12}},'
+        '"timestamp":"2026-07-16T20:00:00Z"}\n'
+        '{"type":"toolResult","message":{"role":"toolResult","content":"noise"},'
+        '"timestamp":"2026-07-16T20:00:02Z"}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":"final",'
+        '"usage":{"input":20,"output":3,"reasoning":2,"totalTokens":23}},'
+        '"timestamp":"2026-07-16T20:00:05Z"}\n'
+    )
+
+    stats = transcript_stats(transcript)
+
+    assert stats.turns == 2
+    assert stats.elapsed_seconds == 5
+    assert stats.cumulative_tokens == 35
+
+
+def test_transcript_stats_marks_unavailable_telemetry_unknown(tmp_path: Path) -> None:
+    """Distinguish absent telemetry from genuine zero usage.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text('{"message":{"role":"assistant","content":"final"}}\n')
+
+    stats = transcript_stats(transcript)
+
+    assert stats.elapsed_seconds is None
+    assert stats.cumulative_tokens is None
+
+
 def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     """Extract only final assistant text from Tintin JSONL.
 
@@ -322,6 +403,30 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     )
 
     assert report.read_text().startswith("## code-health review — smoke")
+
+
+def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:
+    """Return actionable diagnostics when Pi cannot list models.
+
+    :param tmp_path: Temporary location for the failing executable.
+    """
+    pi = tmp_path / "pi"
+    pi.write_text("#!/bin/sh\necho registry unavailable >&2\nexit 7\n")
+    pi.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    with pytest.raises(sh.ErrorReturnCode) as error:
+        sh.Command(sys.executable)(
+            script,
+            "plan",
+            "--skill",
+            "code-health",
+            "--changed-lines",
+            "20",
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+
+    assert b"pi --list-models failed: registry unavailable" in error.value.stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:

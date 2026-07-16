@@ -204,13 +204,17 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
 
     assert worker["description"]
     assert worker["prompt_mode"] == "append"
-    assert set(worker["tools"].split(", ")) == {"bash", "find", "grep", "ls", "read"}
+    assert set(worker["tools"].split(", ")) == {"bash", "grep", "read"}
+    assert "max_turns" not in worker
     assert "model" not in worker
     assert "thinking" not in worker
     assert "structured report" in prompt.lower()
     assert "### BLOCK findings" in prompt
     assert "### WARN findings" in prompt
     assert "### What looks good" in prompt
+    assert "Never run `find`" in prompt
+    assert "60-second timeout" in prompt
+    assert "changed paths" in prompt
 
 
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
@@ -222,11 +226,16 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py plan" in text
     assert "pi_review_routing.py extract-report" in text
     assert "pi_review_routing.py validate-report" in text
+    assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
     assert "OpenRouter-only findings never enter aggregation directly" in text
+    assert "max_turns: <plan.max_turns>" in text
+    assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
+    assert "turn budget exhausted" in text
+    assert re.search(r"print\s+the audit table before stopping", text)
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:

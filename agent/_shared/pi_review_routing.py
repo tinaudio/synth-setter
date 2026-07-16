@@ -9,6 +9,7 @@ import shutil
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 import sh
@@ -32,6 +33,7 @@ SUPPORTED_SKILLS = frozenset(
         "tdd-refactor",
     }
 )
+PI_REVIEW_MAX_TURNS = 12
 REQUIRED_PROVIDERS = {
     "openai-codex": "authenticate with `/login openai-codex`",
     "openrouter": "set OPENROUTER_API_KEY before starting Pi or use `/login openrouter`",
@@ -88,6 +90,18 @@ class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
     text: str | None = None
 
 
+class _TranscriptUsage(BaseModel, strict=True, extra="ignore"):
+    """Token accounting attached to one assistant turn.
+
+    .. attribute :: totalTokens
+        :type: int
+
+        Provider-reported processed tokens for the turn.
+    """
+
+    totalTokens: int = 0
+
+
 class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
     """Message payload from one Tintin transcript entry.
 
@@ -100,10 +114,16 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
         :type: str | list[_TranscriptContentBlock]
 
         Raw string or structured content blocks.
+
+    .. attribute :: usage
+        :type: _TranscriptUsage | None
+
+        Optional provider token accounting.
     """
 
     role: str
     content: str | list[_TranscriptContentBlock]
+    usage: _TranscriptUsage | None = None
 
 
 class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
@@ -113,9 +133,15 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
         :type: _TranscriptMessage
 
         Conversation message stored in the row.
+
+    .. attribute :: timestamp
+        :type: str | None
+
+        Optional ISO-8601 event timestamp.
     """
 
     message: _TranscriptMessage
+    timestamp: str | None = None
 
 
 class _WorkerReport(BaseModel, strict=True, extra="forbid"):
@@ -155,6 +181,31 @@ class _WorkerReport(BaseModel, strict=True, extra="forbid"):
 
 
 @dataclass(frozen=True, slots=True)
+class TranscriptStats:
+    """Audit statistics derived from one Tintin transcript.
+
+    .. attribute :: turns
+        :type: int
+
+        Assistant turns recorded in the transcript.
+
+    .. attribute :: elapsed_seconds
+        :type: int | None
+
+        Wall-clock span, or ``None`` when timestamps are unavailable.
+
+    .. attribute :: cumulative_tokens
+        :type: int | None
+
+        Sum of per-turn counters, or ``None`` when usage is unavailable.
+    """
+
+    turns: int
+    elapsed_seconds: int | None
+    cumulative_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewPass:
     """One skill/model-family pass and its available candidate sequence.
 
@@ -187,6 +238,11 @@ class ReviewPass:
         :type: str
 
         Auditable explanation for the thinking allocation.
+
+    .. attribute :: max_turns
+        :type: int
+
+        Hard turn budget passed to Tintin for every attempt.
     """
 
     skill: str
@@ -195,6 +251,7 @@ class ReviewPass:
     unavailable: tuple[str, ...]
     thinking: str
     reason: str
+    max_turns: int
 
 
 def parse_available_models(output: str) -> set[str]:
@@ -211,6 +268,19 @@ def parse_available_models(output: str) -> set[str]:
     return models
 
 
+def _transcript_entries(transcript: Path) -> list[_TranscriptEntry]:
+    """Read validated non-empty transcript rows.
+
+    :param transcript: Tintin JSONL output path containing worker events.
+    :returns: Validated transcript rows in file order.
+    """
+    return [
+        _TranscriptEntry.model_validate_json(raw_line)
+        for raw_line in transcript.read_text().splitlines()
+        if raw_line.strip()
+    ]
+
+
 def extract_report(transcript: Path) -> str:
     """Extract the final assistant Markdown from a Tintin transcript.
 
@@ -219,10 +289,7 @@ def extract_report(transcript: Path) -> str:
     :raises ValueError: If no assistant report text exists.
     """
     latest = ""
-    for raw_line in transcript.read_text().splitlines():
-        if not raw_line.strip():
-            continue
-        entry = _TranscriptEntry.model_validate_json(raw_line)
+    for entry in _transcript_entries(transcript):
         if entry.message.role != "assistant":
             continue
         content = entry.message.content
@@ -235,6 +302,35 @@ def extract_report(transcript: Path) -> str:
     if not latest:
         raise ValueError(f"Transcript has no assistant text: {transcript}")
     return latest
+
+
+def transcript_stats(transcript: Path) -> TranscriptStats:
+    """Summarize a Tintin transcript for the sentinel audit.
+
+    :param transcript: Tintin JSONL output path returned by ``Agent``.
+    :returns: Assistant turns, elapsed seconds, and cumulative processed tokens.
+    """
+    timestamps: list[datetime] = []
+    turns = 0
+    cumulative_tokens = 0
+    usage_available = False
+    for entry in _transcript_entries(transcript):
+        if entry.timestamp is not None:
+            timestamps.append(datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00")))
+        if entry.message.role != "assistant":
+            continue
+        turns += 1
+        if entry.message.usage is not None:
+            usage_available = True
+            cumulative_tokens += entry.message.usage.totalTokens
+    elapsed_seconds = None
+    if len(timestamps) >= 2:
+        elapsed_seconds = int((timestamps[-1] - timestamps[0]).total_seconds())
+    return TranscriptStats(
+        turns=turns,
+        elapsed_seconds=elapsed_seconds,
+        cumulative_tokens=cumulative_tokens if usage_available else None,
+    )
 
 
 def provenance_for_model(model: str) -> str:
@@ -352,6 +448,7 @@ def build_review_plan(
                     unavailable=unavailable,
                     thinking=thinking,
                     reason=reason,
+                    max_turns=PI_REVIEW_MAX_TURNS,
                 )
             )
     return plan
@@ -373,19 +470,17 @@ def _thinking_for(
     if skill in DEEP_SKILLS:
         return "high", "deep checklist"
 
-    thinking = "medium"
-    reason = "standard checklist"
-    if skill in MECHANICAL_SKILLS and changed_lines < 200:
-        thinking = "low"
-        reason = "mechanical checklist on diff under 200 lines"
+    if skill in MECHANICAL_SKILLS:
+        if changed_lines < 200:
+            return "low", "mechanical checklist on diff under 200 lines"
+        return "medium", "mechanical checklist on diff of 200+ lines"
 
     risks = list(risk_reasons)
     if changed_lines > 800:
         risks.insert(0, "diff over 800 lines")
     if risks:
-        thinking = {"low": "medium", "medium": "high", "high": "high"}[thinking]
-        reason = f"risk: {', '.join(risks)}"
-    return thinking, reason
+        return "high", f"risk: {', '.join(risks)}"
+    return "medium", "standard checklist"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -406,6 +501,10 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("path", type=Path)
     validate.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
     validate.add_argument("--target", required=True)
+    stats = subparsers.add_parser(
+        "transcript-stats", help="print Tintin runtime-budget statistics as JSON"
+    )
+    stats.add_argument("transcript", type=Path)
     provenance = subparsers.add_parser(
         "provenance", help="print provenance for an effective model"
     )
@@ -429,7 +528,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             model_output = str(sh.Command(pi_executable)("--list-models"))
         except sh.ErrorReturnCode as error:
-            raise RuntimeError(f"pi --list-models failed: {error.stderr.strip()}") from error
+            stderr = error.stderr.decode(errors="replace").strip()
+            raise RuntimeError(f"pi --list-models failed: {stderr}") from error
         plan = build_review_plan(
             args.skill,
             changed_lines=args.changed_lines,
@@ -451,6 +551,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             else 1
         )
+    if args.command == "transcript-stats":
+        sys.stdout.write(f"{json.dumps(asdict(transcript_stats(args.transcript)), indent=2)}\n")
+        return 0
     if args.command == "provenance":
         sys.stdout.write(f"{provenance_for_model(args.model)}\n")
         return 0
