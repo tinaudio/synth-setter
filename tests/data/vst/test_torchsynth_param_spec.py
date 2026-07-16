@@ -10,6 +10,7 @@ import pytest
 
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_ROW,
     DEFAULT_PATCH,
     INFERABLE_SPEC,
     NUM_PARAMS,
@@ -17,7 +18,6 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     TORCHSYNTH_ADSR_PARAM_SPEC,
     TORCHSYNTH_FULL_PARAM_SPEC,
     TORCHSYNTH_SIMPLE_PARAM_SPEC,
-    default_normalized_row,
 )
 
 _ALL_SPECS = {
@@ -145,9 +145,8 @@ def test_default_patch_covers_exactly_the_inferable_params_within_range() -> Non
 
 def test_default_normalized_row_round_trips_the_default_patch() -> None:
     """The precomputed normalized row denormalizes back to the human baseline patch."""
-    row = default_normalized_row()
-    assert len(row) == NUM_PARAMS
-    for normalized, param in zip(row, INFERABLE_SPEC, strict=True):
+    assert len(DEFAULT_NORMALIZED_ROW) == NUM_PARAMS
+    for normalized, param in zip(DEFAULT_NORMALIZED_ROW, INFERABLE_SPEC, strict=True):
         assert 0.0 <= normalized <= 1.0
         expected = DEFAULT_PATCH[f"{param.module}.{param.name}"]
         assert param.from_0to1(normalized) == pytest.approx(expected, abs=1e-6)

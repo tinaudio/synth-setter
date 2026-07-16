@@ -23,6 +23,11 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 import numpy as np
 
 from synth_setter.data.vst.param_map import SynthParamMap
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_ROW,
+    KEYBOARD_DURATION_BOUNDS,
+    PARAM_INDEX,
+)
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -219,20 +224,15 @@ class TorchSynthRenderer(AudioRenderer):
     audio, and the voice's mono output is repeated across requested channels.
     """
 
-    _param_indices: dict[str, int] = field(init=False, repr=False)
-
     def __post_init__(self) -> None:
-        """Verify the live voice against the pinned spec (``ValueError`` on drift), build the key index."""
+        """Verify the live voice against the pinned spec (``ValueError`` on drift)."""
+        # Lazy: pulls torch + lightning, which this module must not import eagerly.
         from synth_setter.data.torchsynth_datamodule import _make_renderer
-        from synth_setter.data.vst.torchsynth_param_spec import (
-            INFERABLE_SPEC,
-            verify_voice_matches_spec,
-        )
+        from synth_setter.data.vst.torchsynth_param_spec import verify_voice_matches_spec
 
         verify_voice_matches_spec(
             _make_renderer(int(self.sample_rate), self._signal_length()).voice
         )
-        self._param_indices = {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
 
     def _signal_length(self) -> int:
         """Return the render length in samples.
@@ -267,20 +267,16 @@ class TorchSynthRenderer(AudioRenderer):
         import torch
 
         from synth_setter.data.torchsynth_datamodule import render_torchsynth
-        from synth_setter.data.vst.torchsynth_param_spec import (
-            PARAM_SPEC,
-            default_normalized_row,
-        )
 
-        unknown = sorted(params.keys() - self._param_indices.keys())
+        unknown = sorted(params.keys() - PARAM_INDEX.keys())
         if unknown:
             raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
-        row = list(default_normalized_row())
+        row = list(DEFAULT_NORMALIZED_ROW)
         for key, value in params.items():
-            row[self._param_indices[key]] = value
+            row[PARAM_INDEX[key]] = value
         start, end = note_start_and_end
-        duration_range = next(p for p in PARAM_SPEC if p.key == "keyboard.duration")
-        duration = min(max(end - start, duration_range.minimum), duration_range.maximum)
+        minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
+        duration = min(max(end - start, minimum_duration), maximum_duration)
         samples = self._signal_length()
         audio = render_torchsynth(
             torch.tensor([row], dtype=torch.float32),

@@ -24,20 +24,10 @@ from synth_setter.data.ot import regular_collate_fn
 # pure-Python param-spec module so the pedalboard-free registry can host it.
 from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC as INFERABLE_SPEC,
-)
-from synth_setter.data.vst.torchsynth_param_spec import (
     NUM_PARAMS as NUM_PARAMS,
-)
-from synth_setter.data.vst.torchsynth_param_spec import (
     PARAM_SPEC as PARAM_SPEC,
-)
-from synth_setter.data.vst.torchsynth_param_spec import (
     TorchSynthParam as TorchSynthParam,
-)
-from synth_setter.data.vst.torchsynth_param_spec import (
     spec_from_voice as _spec_from_voice,
-)
-from synth_setter.data.vst.torchsynth_param_spec import (
     verify_voice_matches_spec as _verify_voice_matches_spec,
 )
 

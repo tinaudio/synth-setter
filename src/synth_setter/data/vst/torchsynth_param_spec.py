@@ -336,17 +336,16 @@ DEFAULT_PATCH: dict[str, float] = {
     "vco_2.shape": 0.0,
 }
 
-_DEFAULT_NORMALIZED_ROW: tuple[float, ...] = tuple(
+# The baseline patch as machine-range values in ``INFERABLE_SPEC`` order.
+DEFAULT_NORMALIZED_ROW: tuple[float, ...] = tuple(
     param.to_0to1(DEFAULT_PATCH[param.key]) for param in INFERABLE_SPEC
 )
-
-
-def default_normalized_row() -> tuple[float, ...]:
-    """Return the baseline patch as machine-range values in ``INFERABLE_SPEC`` order.
-
-    :returns: One normalized value per inferable param.
-    """
-    return _DEFAULT_NORMALIZED_ROW
+# Renderer lookups: dotted key -> positional slot, and the keyboard's pinned
+# human duration range (torchsynth asserts on out-of-range note durations).
+PARAM_INDEX: dict[str, int] = {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
+KEYBOARD_DURATION_BOUNDS: tuple[float, float] = next(
+    (param.minimum, param.maximum) for param in PARAM_SPEC if param.key == "keyboard.duration"
+)
 
 
 def _note_params() -> list[Parameter]:
