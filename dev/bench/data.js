@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784236457739,
+  "lastUpdate": 1784239244749,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8730,6 +8730,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.033850014209747314,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "218bbcd0674ee39c48b25471c67f4f25493da9e2",
+          "message": "fix(data-pipeline): resample clipped renders instead of killing the shard (#2030)\n\nsurge_xt full-spec draws intermittently render audio outside [-1, 1]\n(~0.4% per draw); _validate_rendered_audio raised a shard-fatal\nValueError, so at 500 samples/shard the retry budget was statistically\ncertain to exhaust and no non-trivial surge_xt run could finalize.\n\nSplit the amplitude violation into AudioAmplitudeError (ValueError\nsubclass) and treat it in generate_sample as sampled-data rejection,\nmirroring the min_loudness gate: reject the draw and retry with the\nnext attempt seed. Fixed-param paths (eval/replay) still raise, and\nshape/finiteness violations stay fatal on every path.\n\nRefs #2001",
+          "timestamp": "2026-07-16T17:32:15-04:00",
+          "tree_id": "07e6936951594335dbbfed137917145ee4cd1d98",
+          "url": "https://github.com/tinaudio/synth-setter/commit/218bbcd0674ee39c48b25471c67f4f25493da9e2"
+        },
+        "date": 1784239243934,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9966766834259033,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.49113921637414,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.028274955227971077,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.0293349027633667,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6992621421813965,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.302619617083328,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 5.1397528648376465,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.961840152926743,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.04340929538011551,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05345332622528076,
             "unit": "1-cos"
           },
           {
