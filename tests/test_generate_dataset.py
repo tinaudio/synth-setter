@@ -923,7 +923,10 @@ def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> Non
             .to_table(columns=["shard_id", "claim_gen"])
             .to_pylist()
         )
-        assert sum(row["claim_gen"] for row in rows) == len(all_wins), "a won generation was lost"
+        # >= not ==: a verify-read racing a steal burns an unrecorded generation.
+        assert sum(row["claim_gen"] for row in rows) >= len(all_wins), (
+            "more wins recorded than generations"
+        )
     finally:
         r2_io.purge_prefix(location.bucket, location.prefix)
 

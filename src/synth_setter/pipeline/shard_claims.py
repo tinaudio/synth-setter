@@ -57,8 +57,9 @@ _STATUS_DONE: Final = "done"
 # matched as substrings; the storm-injection tests pin the messages.
 _CONTENTION_ERROR: Final = "Too many concurrent writers"
 _ALREADY_EXISTS_ERROR: Final = "Dataset already exists"
-# Flat jitter suffices: claims are minutes apart in production, so storms are
-# short-lived and exponential growth would only delay recovery.
+# Applied to every lost race before the next scan. Flat jitter suffices:
+# claims are minutes apart in production, so contention is short-lived and
+# exponential growth would only delay recovery.
 _CONTENTION_BACKOFF_RANGE_S: Final = (0.05, 0.25)
 
 # Jitter/shard picks are load-spreading, not security; SystemRandom only
@@ -272,6 +273,10 @@ class ShardClaims:
             won = self._attempt_claim(_rng.choice(candidates), now_s)
             if won is not None:
                 return won
+            # Any lost race backs off before rescanning: on R2 each scan is a
+            # manifest read, so an un-delayed fleet racing for the last few
+            # rows would burst O(workers) scans per transition.
+            time.sleep(_rng.uniform(*_CONTENTION_BACKOFF_RANGE_S))
 
     def _attempt_claim(self, shard_id: int, now_s: int) -> ClaimedShard | None:
         """Run one conditional-update attempt on ``shard_id`` and confirm ownership.
@@ -298,9 +303,8 @@ class ShardClaims:
             if _CONTENTION_ERROR not in str(exc):
                 raise
             # A whole fleet colliding can exhaust Lance's internal commit
-            # retries; back off with jitter and re-scan instead of dying.
+            # retries; treat it as one more lost race instead of dying.
             _logger.info("claim_contention_backoff", shard_id=shard_id, owner=self.owner)
-            time.sleep(_rng.uniform(*_CONTENTION_BACKOFF_RANGE_S))
             return None
         if updated["num_rows_updated"] == 0:
             return None
