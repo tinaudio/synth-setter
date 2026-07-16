@@ -750,6 +750,8 @@ class TestLanceVSTDataModule:
             item = next(iter(module.val_dataloader()))
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_xt"]))
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.parametrize(
         ("loader_name", "expected_batches"),
         (
@@ -801,6 +803,8 @@ class TestLanceVSTDataModule:
                     _AUDIO_SAMPLES,
                 )
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     def test_dataloaders_multi_worker_use_spawn_context(self, dataset_root: Path) -> None:
         """Every multi-worker Lance loader starts a clean interpreter per worker.
 

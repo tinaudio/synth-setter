@@ -117,17 +117,20 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     """Run 1 train, val, and test step on CPU with `fast_dev_run`.
 
     Dataset/batch size constraints come from the shared `cfg_train` fixture
-    (`batch_size=1`, `train_val_test_sizes=[2, 2, 2]`). This test only adds
-    `fast_dev_run=True` to cap the loops at one batch each.
+    (`batch_size=1`, `train_val_test_sizes=[2, 2, 2]`). This test uses two
+    DataLoader workers to cover spawn integration and caps each loop at one batch.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
     """
     HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
+        cfg_train.datamodule.num_workers = 2
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
 
