@@ -199,13 +199,13 @@ def _extract_report(output: str) -> str:
     return reports[-1]
 
 
-def _run_agent(command: list[str], prompt: str, timeout_s: int) -> int:
-    """Run Codex with bounded process-group cleanup.
+def _execute_agent(command: list[str], prompt: str, timeout_s: int) -> tuple[int | None, str, str]:
+    """Execute Codex and capture output with bounded process-group cleanup.
 
     :param command: Pinned ``codex exec`` command arguments.
     :param prompt: Fully resolved agent prompt.
     :param timeout_s: Positive execution deadline in seconds.
-    :returns: Zero after printing a final report, otherwise one.
+    :returns: Exit status (``None`` on timeout), standard output, and standard error.
     """
     argv = [*command, "--json", prompt]
     with (
@@ -225,14 +225,25 @@ def _run_agent(command: list[str], prompt: str, timeout_s: int) -> int:
             setpgroup=0,
         )
         status = _wait_for_pid(pid, time.monotonic() + timeout_s)
-        timed_out = status is None
-        if timed_out:
+        if status is None:
             _terminate_process_group(pid)
         output_file.seek(0)
         error_file.seek(0)
         output = output_file.read()
         errors = error_file.read()
-    if timed_out:
+    return status, output, errors
+
+
+def _run_agent(command: list[str], prompt: str, timeout_s: int) -> int:
+    """Print the final report from one bounded Codex execution.
+
+    :param command: Pinned ``codex exec`` command arguments.
+    :param prompt: Fully resolved agent prompt.
+    :param timeout_s: Positive execution deadline in seconds.
+    :returns: Zero after printing a final report, otherwise one.
+    """
+    status, output, errors = _execute_agent(command, prompt, timeout_s)
+    if status is None:
         sys.stderr.write(errors)
         sys.stderr.write(f"codex exec timed out after {timeout_s}s\n")
         return 1
