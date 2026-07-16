@@ -21,14 +21,12 @@ def _run_pytest(args: list[str]) -> NoReturn:
     raise SystemExit(pytest.main(args))
 
 
-def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Path) -> None:
-    """Launch nested pytest and verify grouped probes share one xdist worker.
+def _write_group_probe(probe: Path, worker_log: Path) -> None:
+    """Write grouped tests that record their assigned xdist worker.
 
-    :param tmp_path: Holds the generated probe and worker observations.
-    :param project_root: Repository root containing the pytest configuration.
+    :param probe: Destination for the generated pytest module.
+    :param worker_log: Shared output path embedded in each generated test.
     """
-    worker_log = tmp_path / "workers.txt"
-    probe = tmp_path / "test_group_probe.py"
     tests = "\n\n".join(
         f"def test_group_member_{index}() -> None:\n"
         f"    with open({str(worker_log)!r}, 'a') as stream:\n"
@@ -41,6 +39,17 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         "pytestmark = pytest.mark.xdist_group(name='shared-resource')\n\n"
         f"{tests}\n"
     )
+
+
+def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Path) -> None:
+    """Launch nested pytest and verify grouped probes share one xdist worker.
+
+    :param tmp_path: Holds the generated probe and worker observations.
+    :param project_root: Repository root containing the pytest configuration.
+    """
+    worker_log = tmp_path / "workers.txt"
+    probe = tmp_path / "test_group_probe.py"
+    _write_group_probe(probe, worker_log)
 
     context = multiprocessing.get_context("spawn")
     process = context.Process(

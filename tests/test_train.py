@@ -600,6 +600,8 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     )
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.parametrize("loader", ["legacy", "map"])
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader: str) -> None:
     """Run one spawned-worker train, val, and test step from Lance shards.
