@@ -274,7 +274,7 @@ class PlotLossPerTimestep(Callback):
 
     def _compute_losses(self, trainer, pl_module):
         batch = self._get_val_batch(trainer)
-        signal, params, _ = batch
+        signal, params, *_ = batch
 
         # Get conditioning vector
         conditioning = pl_module.encoder(signal)
