@@ -1024,8 +1024,10 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
     """``render.param_sample_cadence="shard"`` makes every sample in a shard share one patch.
 
     Drives the real ``generate_dataset`` entrypoint (``from_hydra``) end-to-end
-    under shard cadence, then downloads each shard and asserts its ``param_array``
-    rows are all identical — the one-patch-per-shard invariant the #489 variance
+    under shard cadence, then reads each shard's row range from its finalized
+    split dataset in R2 (winner fragments commit in shard order, so a shard's
+    rows sit at a spec-derived offset) and asserts its ``param_array`` rows
+    are all identical — the one-patch-per-shard invariant the #489 variance
     probe relies on. Auto-skips without R2; purges the unique prefix in
     ``finally`` so a failure can't leak shards.
 
@@ -1047,14 +1049,23 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
         from_hydra(cfg_dataset)
         with tempfile.TemporaryDirectory() as raw_work_dir:
             finalize_lance(spec, Path(raw_work_dir))
+        split_of = {
+            shard_id: split
+            for split, (lo, hi) in spec.split_shard_ranges.items()
+            for shard_id in range(lo, hi)
+        }
         for shard in spec.shards:
-            s3_uri = r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-            params = np.stack(
+            split = split_of[shard.shard_id]
+            first_shard_in_split = spec.split_shard_ranges[split][0]
+            offset = (shard.shard_id - first_shard_in_split) * spec.render.samples_per_shard
+            s3_uri = r2_io.to_s3_uri(spec.r2.split_lance_uri(split))
+            rows = (
                 lance.dataset(s3_uri, storage_options=storage_options)
                 .to_table(columns=["param_array"])
                 .column("param_array")
                 .to_numpy(zero_copy_only=False)
             )
+            params = np.stack(rows[offset : offset + spec.render.samples_per_shard])
             assert params.shape[0] == spec.render.samples_per_shard
             assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
                 f"shard {shard.filename} has non-identical param rows under shard cadence"
