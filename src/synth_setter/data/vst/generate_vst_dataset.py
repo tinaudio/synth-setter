@@ -9,7 +9,7 @@ from pyloudnorm import Meter
 
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     MEL_N_MELS,
@@ -126,7 +126,10 @@ def generate_sample(
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
-    :raises RuntimeError: The sampling path stayed silent for the whole attempt budget.
+    :raises AudioAmplitudeError: A ``fixed_synth_params`` render clipped outside
+        [-1, 1]; on the sampling path clipping rejects the draw and retries.
+    :raises RuntimeError: The sampling path produced no accepted render (silent
+        or clipped) for the whole attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
     if max_attempts < 1:
@@ -146,13 +149,23 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
-        output = renderer.render(
-            synth_params,
-            note_params["pitch"],
-            velocity,
-            note_params["note_start_and_end"],
-            warmup=warmup,
-        )
+        try:
+            output = renderer.render(
+                synth_params,
+                note_params["pitch"],
+                velocity,
+                note_params["note_start_and_end"],
+                warmup=warmup,
+            )
+        except AudioAmplitudeError:
+            # Clipping is a property of the sampled patch: reject the draw like
+            # the loudness gate instead of killing the shard (#2001). With fixed
+            # synth params the patch cannot change, so retrying is futile.
+            if fixed_synth_params is not None:
+                raise
+            warmup = False
+            logger.debug("rendered audio clipped outside [-1, 1], skipping")
+            continue
         warmup = False
 
         meter = Meter(renderer.sample_rate)
@@ -192,8 +205,9 @@ def generate_sample(
         else ""
     )
     raise RuntimeError(
-        f"sample {failed_idx} stayed below min_loudness {min_loudness:.2f} dB "
-        f"after {max_attempts} attempts. {seed_hint}Raise the per-sample attempt budget "
+        f"sample {failed_idx} produced no accepted render (below min_loudness "
+        f"{min_loudness:.2f} dB or clipped outside [-1, 1]) after {max_attempts} "
+        f"attempts. {seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 
