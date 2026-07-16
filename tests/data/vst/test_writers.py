@@ -460,6 +460,28 @@ def test_make_renderer_maps_dawdreamer_reload_cadence(
     assert captured["reload_plugin_each_render"] is reload_each_render
 
 
+def test_make_renderer_torchsynth_backend_builds_in_process_renderer() -> None:
+    """The torchsynth backend dispatches to the in-process renderer with the audio geometry."""
+    from synth_setter.data.vst.renderers import TorchSynthRenderer
+
+    render_cfg = _smoke_render_cfg(
+        renderer_backend="torchsynth",
+        plugin_path="torchsynth",
+        plugin_state_path="",
+        param_spec_name="torchsynth_adsr",
+        renderer_version="1.0.2",
+        sample_rate=22050,
+        signal_duration_seconds=0.5,
+        gui_toggle_cadence="never",
+    )
+
+    renderer = writers._make_renderer(render_cfg)
+
+    assert isinstance(renderer, TorchSynthRenderer)
+    assert (renderer.sample_rate, renderer.channels) == (22050, 2)
+    assert renderer.signal_duration_seconds == 0.5
+
+
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

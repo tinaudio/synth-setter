@@ -23,6 +23,11 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 import numpy as np
 
 from synth_setter.data.vst.param_map import SynthParamMap
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_ROW,
+    KEYBOARD_DURATION_BOUNDS,
+    PARAM_INDEX,
+)
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -203,6 +208,95 @@ class PedalboardRenderer(AudioRenderer):
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),
         )
+
+
+@dataclass(kw_only=True)
+class TorchSynthRenderer(AudioRenderer):
+    """Render through the in-process torchsynth ``Voice`` (no plugin host).
+
+    Shares the online datamodule's cached voice and render path
+    (``render_torchsynth``): sampled params (normalized ``[0, 1]`` values keyed
+    ``module.name``) override the spec module's baseline patch, so every
+    un-sampled knob is pinned. ``plugin_path`` is the bare backend name
+    (``"torchsynth"``) and ``plugin_state_path`` is unused. MIDI velocity is
+    ignored — the voice has no velocity input, and production configs hold it
+    constant per run. The note-on offset is emulated by delaying the rendered
+    audio, and the voice's mono output is repeated across requested channels.
+    """
+
+    def __post_init__(self) -> None:
+        """Verify the live voice against the pinned spec (``ValueError`` on drift)."""
+        # Lazy: pulls torch + lightning, which this module must not import eagerly.
+        from synth_setter.data.torchsynth_datamodule import _make_renderer
+        from synth_setter.data.vst.torchsynth_param_spec import verify_voice_matches_spec
+
+        verify_voice_matches_spec(
+            _make_renderer(int(self.sample_rate), self._signal_length()).voice
+        )
+
+    def _signal_length(self) -> int:
+        """Return the render length in samples.
+
+        :returns: Configured duration at the configured sample rate.
+        """
+        return int(self.sample_rate * self.signal_duration_seconds)
+
+    def render(
+        self,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Write params over the baseline patch and render one note in-process.
+
+        :param params: Normalized values keyed ``module.name``, overriding the
+            baseline patch; keys outside the pinned voice spec are rejected.
+        :param midi_note: MIDI pitch of the note.
+        :param velocity: Ignored; torchsynth's voice has no velocity input.
+        :param note_start_and_end: Note start and end times in seconds. The
+            note-on length clamps into the keyboard's pinned duration range and
+            the start offset delays the audio with a zero-filled head.
+        :param warmup: Unused; there is no plugin editor to warm up.
+        :returns: Rendered audio with channels on the first axis.
+        :raises KeyError: A requested key has no matching voice parameter.
+        """
+        del velocity, warmup
+        # Lazy: pulls torch + lightning, which this module must not import eagerly.
+        import torch
+
+        from synth_setter.data.torchsynth_datamodule import render_torchsynth
+
+        unknown = sorted(params.keys() - PARAM_INDEX.keys())
+        if unknown:
+            raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
+        row = list(DEFAULT_NORMALIZED_ROW)
+        for key, value in params.items():
+            row[PARAM_INDEX[key]] = value
+        start, end = note_start_and_end
+        minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
+        duration = min(max(end - start, minimum_duration), maximum_duration)
+        samples = self._signal_length()
+        audio = render_torchsynth(
+            torch.tensor([row], dtype=torch.float32),
+            sample_rate=int(self.sample_rate),
+            signal_length=samples,
+            midi_pitch=midi_note,
+            note_duration_seconds=duration,
+        ).numpy()
+        # Clamp: a note starting at/after the buffer end is silence (matching a VST
+        # host), not a negative-slice shape error; the loudness gate rejects it.
+        offset = min(int(round(start * self.sample_rate)), samples)
+        if offset:
+            delayed = np.zeros_like(audio)
+            delayed[:, offset:] = audio[:, : samples - offset]
+            audio = delayed
+        # Independent of the delay above: the mono voice fans out to the requested channels.
+        if self.channels > 1:
+            audio = np.repeat(audio, self.channels, axis=0)
+        return _validate_rendered_audio(audio, channels=self.channels, samples=samples)
 
 
 @dataclass(kw_only=True)

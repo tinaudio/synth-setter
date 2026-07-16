@@ -222,6 +222,36 @@ class TestRenderConfig:
         )
         assert cfg.gui_toggle_cadence == "never"
 
+    @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
+    def test_torchsynth_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:
+        """The in-process torchsynth backend has no plugin editor to toggle.
+
+        :param cadence: Unsupported editor cadence under test.
+        """
+        with pytest.raises(
+            ValidationError,
+            match='torchsynth requires gui_toggle_cadence="never"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "torchsynth",
+                    "gui_toggle_cadence": cadence,
+                    "plugin_reload_cadence": "once",
+                }
+            )
+
+    def test_torchsynth_backend_accepted_with_gui_toggle_never(self) -> None:
+        """``renderer_backend="torchsynth"`` validates with the editor disabled."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "renderer_backend": "torchsynth",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.renderer_backend == "torchsynth"
+
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
 

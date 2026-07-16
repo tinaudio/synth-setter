@@ -6,7 +6,6 @@ audio batch on the training machine without materializing an audio dataset.
 
 from __future__ import annotations
 
-import math
 import sys
 import threading
 import types
@@ -20,6 +19,20 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.data.ot import regular_collate_fn
+
+# Re-exported for backward compat: training code imports these names from this module.
+from synth_setter.data.vst.torchsynth_param_spec import (
+    INFERABLE_SPEC as INFERABLE_SPEC,
+    NUM_PARAMS as NUM_PARAMS,
+    PARAM_SPEC as PARAM_SPEC,
+    TorchSynthParam as TorchSynthParam,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
+    KEYBOARD_DURATION_BOUNDS,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
+    verify_voice_matches_spec as _verify_voice_matches_spec,
+)
 
 if TYPE_CHECKING:
     from torchsynth.synth import Voice
@@ -35,193 +48,6 @@ _SEED_MIXER = 0x9E3779B97F4A7C15
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
-
-
-@dataclass(frozen=True)
-class TorchSynthParam:
-    """Identity and human range of one voice parameter, pinned to detect torchsynth drift.
-
-    .. attribute :: module
-
-       Owning synth module name (e.g. ``adsr_1``).
-
-    .. attribute :: name
-
-       Parameter name within the module (e.g. ``attack``).
-
-    .. attribute :: minimum
-
-       Human-unit range minimum ``from_0to1`` maps onto.
-
-    .. attribute :: maximum
-
-       Human-unit range maximum ``from_0to1`` maps onto.
-
-    .. attribute :: curve
-
-       Normalization curve exponent (1 is linear).
-
-    .. attribute :: symmetric
-
-       Whether the curve is mirrored around the range midpoint.
-    """
-
-    module: str
-    name: str
-    minimum: float
-    maximum: float
-    curve: float
-    symmetric: bool
-
-
-# Snapshot of torchsynth 1.0.2 Voice parameters in ``get_parameters()`` order.
-# Targets map positionally, so rename/reorder/range drift must fail loudly (see ``setup()``).
-PARAM_SPEC: tuple[TorchSynthParam, ...] = (
-    TorchSynthParam("adsr_1", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_1", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_1", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("adsr_1", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("adsr_1", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("adsr_2", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_2", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("adsr_2", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("adsr_2", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("adsr_2", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("keyboard", "midi_f0", 0.0, 127.0, 1.0, False),
-    TorchSynthParam("keyboard", "duration", 0.01, 4.0, 0.5, False),
-    TorchSynthParam("lfo_1", "frequency", 0.0, 20.0, 0.25, False),
-    TorchSynthParam("lfo_1", "mod_depth", -10.0, 20.0, 0.5, True),
-    TorchSynthParam("lfo_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
-    TorchSynthParam("lfo_1", "sin", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1", "tri", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1", "saw", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1", "rsaw", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1", "sqr", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1_amp_adsr", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_amp_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_amp_adsr", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1_amp_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_1_amp_adsr", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("lfo_1_rate_adsr", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_rate_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_1_rate_adsr", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_1_rate_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_1_rate_adsr", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("lfo_2", "frequency", 0.0, 20.0, 0.25, False),
-    TorchSynthParam("lfo_2", "mod_depth", -10.0, 20.0, 0.5, True),
-    TorchSynthParam("lfo_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
-    TorchSynthParam("lfo_2", "sin", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2", "tri", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2", "saw", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2", "rsaw", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2", "sqr", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2_amp_adsr", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_amp_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_amp_adsr", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2_amp_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_2_amp_adsr", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("lfo_2_rate_adsr", "attack", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_rate_adsr", "decay", 0.0, 2.0, 0.5, False),
-    TorchSynthParam("lfo_2_rate_adsr", "sustain", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("lfo_2_rate_adsr", "release", 0.0, 5.0, 0.5, False),
-    TorchSynthParam("lfo_2_rate_adsr", "alpha", 0.1, 6.0, 1.0, False),
-    TorchSynthParam("mixer", "vco_1", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("mixer", "vco_2", 0.0, 1.0, 1.0, False),
-    TorchSynthParam("mixer", "noise", 0.0, 1.0, 0.025, False),
-    TorchSynthParam("mod_matrix", "adsr_1->vco_1_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_1->vco_1_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_1->vco_2_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_1->vco_2_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_1->noise_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_2->vco_1_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_2->vco_1_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_2->vco_2_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_2->vco_2_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "adsr_2->noise_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_1->vco_1_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_1->vco_1_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_1->vco_2_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_1->vco_2_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_1->noise_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_2->vco_1_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_2->vco_1_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_2->vco_2_pitch", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_2->vco_2_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("mod_matrix", "lfo_2->noise_amp", 0.0, 1.0, 0.5, False),
-    TorchSynthParam("vco_1", "tuning", -24.0, 24.0, 1.0, False),
-    TorchSynthParam("vco_1", "mod_depth", -96.0, 96.0, 0.2, True),
-    TorchSynthParam("vco_1", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
-    TorchSynthParam("vco_2", "tuning", -24.0, 24.0, 1.0, False),
-    TorchSynthParam("vco_2", "mod_depth", -96.0, 96.0, 0.2, True),
-    TorchSynthParam("vco_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
-    TorchSynthParam("vco_2", "shape", 0.0, 1.0, 1.0, False),
-)
-# The keyboard's midi_f0 and duration are fixed by the renderer (constants of the
-# task), so they are excluded from the model's positional prediction targets.
-_FIXED_MODULES = frozenset({"keyboard"})
-INFERABLE_SPEC: tuple[TorchSynthParam, ...] = tuple(
-    param for param in PARAM_SPEC if param.module not in _FIXED_MODULES
-)
-NUM_PARAMS = len(INFERABLE_SPEC)
-
-
-def _spec_from_voice(voice: Voice) -> tuple[TorchSynthParam, ...]:
-    """Extract the live voice's parameter spec in ``get_parameters()`` order.
-
-    :param voice: Live torchsynth voice to snapshot.
-    :returns: One ``TorchSynthParam`` per voice parameter, in native order.
-    """
-    spec = []
-    for (module, name), parameter in voice.get_parameters().items():
-        # TorchSynth sets parameter_range dynamically in __new__, beyond pyright's stub.
-        parameter_range = parameter.parameter_range  # type: ignore[attr-defined]
-        spec.append(
-            TorchSynthParam(
-                module,
-                name,
-                float(parameter_range.minimum),
-                float(parameter_range.maximum),
-                float(parameter_range.curve),
-                bool(parameter_range.symmetric),
-            )
-        )
-    return tuple(spec)
-
-
-def _verify_voice_matches_spec(
-    voice: Voice, spec: tuple[TorchSynthParam, ...] = PARAM_SPEC
-) -> None:
-    """Raise unless the live voice's parameters match the pinned spec.
-
-    Identity fields compare exactly; range floats compare via ``math.isclose`` so an
-    upstream float-precision wobble does not masquerade as drift.
-
-    :param voice: Live torchsynth voice to check.
-    :param spec: Expected parameter snapshot, defaulting to the checked-in ``PARAM_SPEC``.
-    :raises ValueError: The live voice's parameter set drifts from the spec.
-    """
-    live = _spec_from_voice(voice)
-    if len(live) != len(spec):
-        raise ValueError(f"TorchSynth exposes {len(live)} parameters, spec pins {len(spec)}")
-    for index, (actual, expected) in enumerate(zip(live, spec, strict=True)):
-        identity_matches = (actual.module, actual.name, actual.symmetric) == (
-            expected.module,
-            expected.name,
-            expected.symmetric,
-        )
-        range_matches = all(
-            math.isclose(actual_value, expected_value, rel_tol=1e-6, abs_tol=1e-9)
-            for actual_value, expected_value in (
-                (actual.minimum, expected.minimum),
-                (actual.maximum, expected.maximum),
-                (actual.curve, expected.curve),
-            )
-        )
-        if not (identity_matches and range_matches):
-            raise ValueError(
-                f"TorchSynth parameter {index} drifted from PARAM_SPEC:"
-                f" expected {expected}, got {actual}"
-            )
 
 
 @cache
@@ -293,7 +119,12 @@ def _make_renderer(
 
 
 def render_torchsynth(
-    params: torch.Tensor, *, sample_rate: int, signal_length: int, midi_pitch: int
+    params: torch.Tensor,
+    *,
+    sample_rate: int,
+    signal_length: int,
+    midi_pitch: int,
+    note_duration_seconds: float | None = None,
 ) -> torch.Tensor:
     """Render normalized TorchSynth parameters into a mono audio batch.
 
@@ -302,14 +133,31 @@ def render_torchsynth(
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
+    :param note_duration_seconds: Note-on length before the release stage; ``None``
+        holds the note for the whole buffer. Must lie within the keyboard
+        parameter's pinned human range (``KEYBOARD_DURATION_BOUNDS``).
     :returns: Float32 audio shaped ``(batch, signal_length)``.
-    :raises ValueError: The parameter width, a non-finite parameter, or the rendered
-        audio violates the data contract.
+    :raises ValueError: The parameter width, a non-finite parameter, an
+        out-of-range note duration, or the rendered audio violates the data
+        contract.
     """
     if not torch.isfinite(params).all():
         raise ValueError("TorchSynth params must be finite")
     if params.shape[1] != NUM_PARAMS:
         raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
+    duration = (
+        note_duration_seconds
+        if note_duration_seconds is not None
+        else signal_length / sample_rate
+    )
+    minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
+    if not minimum_duration <= duration <= maximum_duration:
+        # Validate here (not via torchsynth's bare asserts, stripped under -O) so
+        # out-of-range durations fail the documented ValueError contract.
+        raise ValueError(
+            f"note duration {duration}s outside the keyboard's pinned range "
+            f"[{minimum_duration}, {maximum_duration}]s"
+        )
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
     with renderer.lock:
@@ -319,7 +167,7 @@ def render_torchsynth(
             parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
         for name, value in (
             ("midi_f0", float(midi_pitch)),
-            ("duration", signal_length / sample_rate),
+            ("duration", duration),
         ):
             keyboard = all_parameters[("keyboard", name)]
             keyboard.to_0to1(torch.full((len(params),), value, device=params.device))

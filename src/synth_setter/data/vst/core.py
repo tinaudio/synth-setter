@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import plistlib
 import threading
@@ -10,6 +11,8 @@ import numpy as np
 from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
+
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -35,15 +38,17 @@ class RenderWorkerLeaked(RuntimeError):
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
-    """Extract the version string from a VST3 plugin bundle.
+    """Extract the version string from a VST3 plugin bundle or Python backend.
 
-    Tries the static-metadata files first (`Contents/moduleinfo.json` on Linux,
-    `Contents/Info.plist` on macOS), then falls back to loading the plugin via
-    pedalboard and reading `plugin.version`. The fallback requires a usable
-    X11 display, so callers in interpreter-only contexts (the SkyPilot
-    launcher) must avoid it — they pin `renderer_version` in the dataset
-    config that produces the spec and let the worker compare against this
-    function's output before rendering (see
+    The bare Python-backend name (``torchsynth``) resolves to the installed
+    package version (propagating ``importlib.metadata.PackageNotFoundError``
+    when the package is missing). Otherwise, tries the static-metadata files first
+    (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
+    falls back to loading the plugin via pedalboard and reading
+    `plugin.version`. The fallback requires a usable X11 display, so callers in
+    interpreter-only contexts (the SkyPilot launcher) must avoid it — they pin
+    `renderer_version` in the dataset config that produces the spec and let the
+    worker compare against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
     :raises FileNotFoundError: plugin_path does not exist.
@@ -51,6 +56,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
+    if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
+        return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 

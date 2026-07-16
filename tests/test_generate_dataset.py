@@ -618,6 +618,59 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
+def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composed torchsynth smoke experiment reaches renderer argv and fake R2.
+
+    No plugin-path or version monkeypatching is needed: the bare ``torchsynth``
+    plugin path resolves its version from the installed package.
+
+    :param cfg_dataset_torchsynth: Hydra cfg composed from the torchsynth smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.r2.prefix = "fake-r2/torchsynth-run/"
+        cfg_dataset_torchsynth.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_torchsynth)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_torchsynth)
+
+    assert spec.render.renderer_backend == "torchsynth"
+    assert spec.render.plugin_path == "torchsynth"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "torchsynth"
+    shard = spec.shards[0]
+    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
     cfg_dataset: DictConfig,
     monkeypatch: pytest.MonkeyPatch,

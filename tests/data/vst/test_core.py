@@ -69,6 +69,14 @@ class TestExtractRendererVersion:
         with pytest.raises(KeyError):
             extract_renderer_version(plugin)
 
+    def test_torchsynth_backend_name_reads_installed_package_version(self) -> None:
+        """The bare ``torchsynth`` name resolves to the installed package version, not a file."""
+        import importlib.metadata
+
+        version = extract_renderer_version(Path("torchsynth"))
+
+        assert version == importlib.metadata.version("torchsynth")
+
 
 class TestLoadPluginNoWarmup:
     """``load_plugin`` is a pure loader — never calls ``show_editor`` by itself."""

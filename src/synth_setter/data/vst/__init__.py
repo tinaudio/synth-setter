@@ -10,7 +10,12 @@ re-exported here for backward compat.
 from synth_setter.data.vst.param_map import DawDreamerParamRef, SynthParamMap
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
-from synth_setter.data.vst.renderers import AudioRenderer, DawDreamerRenderer, PedalboardRenderer
+from synth_setter.data.vst.renderers import (
+    AudioRenderer,
+    DawDreamerRenderer,
+    PedalboardRenderer,
+    TorchSynthRenderer,
+)
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
@@ -24,6 +29,7 @@ __all__ = [
     "DawDreamerParamRef",
     "SynthParamMap",
     "PedalboardRenderer",
+    "TorchSynthRenderer",
     "SURGE_4_PARAM_SPEC",
     "SURGE_SIMPLE_PARAM_SPEC",
     "SURGE_XT_PARAM_SPEC",

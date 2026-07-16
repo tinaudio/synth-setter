@@ -401,6 +401,31 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the torchsynth smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: torchsynth smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/torchsynth-smoke"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_default_cadence(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose ``dataset.yaml`` with an experiment that sets no cadence keys.
 
