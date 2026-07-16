@@ -363,9 +363,9 @@ Resolution behavior:
 
 A `make resume` target resolves the W&B artifact from experiment and run ID to avoid manual path assembly.
 
-### 6.4 Validation Audio Probe (opt-in)
+### 6.4 Validation Audio Probe
 
-`training.val_audio_probe=true` (default off; misconfiguration — no `render` group, a render spec the model's predictions cannot decode, or disabled validation — fails fast at configure time; see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
+`training.val_audio_probe` (default `"auto"`: wired whenever a `render` group is composed, validation runs, and R2 is reachable, with an INFO reason when it stays unwired; `true` requires those and fails fast when they don't hold — see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`; `false` disables) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
 
 ### 6.5 W&B Lineage
 

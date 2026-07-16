@@ -1021,6 +1021,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     from synth_setter.utils.callbacks import ValAudioProbe
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    assert cfg_surge_real_train.training.val_audio_probe == "auto"
 
     # fake_r2_remote chdirs into tmp_path, so the render config's repo-relative
     # plugin/preset paths must be absolutized before they are handed to the renderer.
@@ -1041,7 +1042,6 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
-        cfg_surge_real_train.training.val_audio_probe = True
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
         # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
         # forces a real validation after step 1 (the sanity check never stages a probe).
@@ -1052,7 +1052,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     _, object_dict = train(cfg_surge_real_train)
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
-    assert len(probes) == 1, "val_audio_probe=true did not wire exactly one ValAudioProbe"
+    assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
     probe = probes[0]
     assert probe._future is not None, "validation ran but no probe was launched"
     concurrent.futures.wait([probe._future], timeout=600)

@@ -441,8 +441,8 @@ def _compose_fake_oracle_eval_cfg(
         # surge/base enables the wandb logger; null it so the fast loop never hits
         # wandb init/network/login (these tests don't assert on logging).
         cfg.logger = None
-        # surge/base disables validation (limit_val_batches=0) since fake_oracle is
-        # a predict-mode experiment; re-enable it so mode=val/validate actually runs.
+        # Pin the full split because surge/base bounds validation by batch count.
+        # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
         # Render group is null on fake_oracle; set it inline to the dataset's spec
         # so render_vst has a config and the per-param-MSE labels line up.

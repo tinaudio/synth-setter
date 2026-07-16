@@ -201,6 +201,14 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
+def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
+    """The surge family validates a bounded sample and enables the probe when usable."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple"])
+
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.training.val_audio_probe == "auto"
+
+
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 

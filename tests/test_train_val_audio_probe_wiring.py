@@ -1,4 +1,4 @@
-"""Tests for ``_configure_val_audio_probe``'s opt-in gating and URI derivation.
+"""Tests for ``_configure_val_audio_probe`` mode gating and URI derivation.
 
 ``ensure_r2_env_loaded`` is stubbed out throughout: the probe calls it to fail fast
 on absent R2 credentials, but it pings the live remote, which these tests neither
@@ -30,7 +30,7 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _cfg(
     *,
-    enabled: bool,
+    enabled: object,
     with_render: bool = True,
     output_dir: str = "/runs/out",
     datamodule: dict[str, str | None] | None = None,
@@ -180,8 +180,7 @@ def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
 def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
     """Probe on + `trainer.limit_val_batches=0` fails loudly instead of silently never firing.
 
-    The surge experiment base disables validation outright; a validation-hooked probe wired into
-    such a run would stage nothing forever.
+    A validation-hooked probe wired into a validation-disabled run would stage nothing forever.
     """
     cfg = _cfg(enabled=True)
     with open_dict(cfg):
@@ -189,3 +188,92 @@ def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
 
     with pytest.raises(ValueError, match="limit_val_batches"):
         _configure_val_audio_probe(cfg, [])
+
+
+def test_configure_val_audio_probe_auto_wires_probe_with_render_group() -> None:
+    """``auto`` behaves like ``true`` when a render group is composed."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], ValAudioProbe)
+
+
+def test_configure_val_audio_probe_auto_skips_without_render_group() -> None:
+    """``auto`` with no render group skips the probe instead of failing the launch."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), callbacks)
+
+    assert callbacks == []
+
+
+def test_configure_val_audio_probe_auto_skips_when_validation_disabled() -> None:
+    """``auto`` with ``limit_val_batches=0`` skips the probe instead of failing."""
+    callbacks: list[Callback] = []
+    cfg = _cfg(enabled="auto")
+    with open_dict(cfg):
+        cfg.trainer = {"limit_val_batches": 0}
+
+    _configure_val_audio_probe(cfg, callbacks)
+
+    assert callbacks == []
+
+
+def test_configure_val_audio_probe_auto_rejects_spec_mismatch() -> None:
+    """``auto`` still fails fast on a decode mismatch — a composed render group is intent."""
+    cfg = _cfg(enabled="auto", datamodule={"param_spec_name": "surge_simple"})
+
+    with pytest.raises(ValueError, match="param_spec_name"):
+        _configure_val_audio_probe(cfg, [])
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [None, "", 0, 1, "yes"],
+    ids=["null", "empty", "zero", "one", "unknown-string"],
+)
+def test_configure_val_audio_probe_rejects_unknown_mode(mode: object) -> None:
+    """A value outside true/false/auto fails with a directed error.
+
+    :param mode: Unsupported probe-mode value.
+    """
+    with pytest.raises(ValueError, match="auto"):
+        _configure_val_audio_probe(_cfg(enabled=mode), [])
+
+
+def _no_r2() -> None:
+    """Raise like ``ensure_r2_env_loaded`` on a credential-less host.
+
+    :raises RuntimeError: Always.
+    """
+    raise RuntimeError("R2 credentials missing")
+
+
+def test_configure_val_audio_probe_auto_skips_when_r2_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``auto`` on a host without R2 credentials skips the probe instead of failing.
+
+    :param monkeypatch: Makes the R2 pre-flight raise like a credential-less host.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+
+    assert callbacks == []
+
+
+def test_configure_val_audio_probe_true_propagates_r2_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit ``true`` keeps the R2 pre-flight fatal.
+
+    :param monkeypatch: Makes the R2 pre-flight raise like a credential-less host.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
+
+    with pytest.raises(RuntimeError, match="R2 credentials missing"):
+        _configure_val_audio_probe(_cfg(enabled=True), [])
