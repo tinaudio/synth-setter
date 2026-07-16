@@ -118,6 +118,55 @@ class TestPopulate:
         )
         assert lance.dataset(claims.uri).schema.equals(expected)
 
+    def test_fresh_and_claimed_rows_hold_expected_value_ranges(self, tmp_path: Path) -> None:
+        """Seeded rows zero their counters; a claim moves them into valid ranges.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        import lance
+
+        claims = _claims(tmp_path)
+        claims.populate(range(2))
+        fresh = lance.dataset(claims.uri).to_table().to_pylist()
+        assert all(
+            row["status"] == "available"
+            and row["lease_expiry_s"] == 0
+            and row["attempts"] == 0
+            and row["claim_gen"] == 0
+            for row in fresh
+        )
+
+        claimed = claims.claim()
+        assert claimed is not None
+
+        rows = {row["shard_id"]: row for row in lance.dataset(claims.uri).to_table().to_pylist()}
+        won = rows[claimed.shard_id]
+        assert won["status"] == "claimed"
+        assert won["lease_expiry_s"] > 0
+        assert won["attempts"] == 1
+        assert won["claim_gen"] == 1
+
+    def test_status_counts_keys_are_valid_statuses_with_positive_counts(
+        self, tmp_path: Path
+    ) -> None:
+        """Counts only ever carry the three claim statuses, each with a positive tally.
+
+        :param tmp_path: Hosts the per-test claims table.
+        """
+        claims = _claims(tmp_path)
+        claims.populate(range(3))
+        first = claims.claim()
+        assert first is not None
+        claims.complete(first)
+        second = claims.claim()
+        assert second is not None
+
+        counts = claims.status_counts()
+
+        assert set(counts) <= {"available", "claimed", "done"}
+        assert all(isinstance(count, int) and count > 0 for count in counts.values())
+        assert sum(counts.values()) == 3
+
     def test_claim_and_complete_preserve_the_claim_schema(self, tmp_path: Path) -> None:
         """Conditional updates never alter the table's columns or dtypes.
 
