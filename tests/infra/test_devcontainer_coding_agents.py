@@ -33,6 +33,28 @@ def test_devcontainer_tools_installs_hermes_and_pi(project_root: Path) -> None:
 
 
 @pytest.mark.infra
+def test_devcontainer_tools_installs_pinned_infisical_cli(project_root: Path) -> None:
+    """Verify the devcontainer image installs a verified Infisical CLI package.
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+
+    assert "ARG INFISICAL_VERSION=0.38.0" in dockerfile
+    assert (
+        "ARG INFISICAL_SHA256_AMD64="
+        "b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f"
+    ) in dockerfile
+    assert (
+        "ARG INFISICAL_SHA256_ARM64="
+        "503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7"
+    ) in dockerfile
+    assert "infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" in dockerfile
+    assert 'echo "${infisical_sha}  /tmp/${package}" | sha256sum -c -' in dockerfile
+    assert "infisical --version" in dockerfile
+
+
+@pytest.mark.infra
 def test_hermes_installer_does_not_inherit_the_root_owned_uv_python_dir(
     project_root: Path,
 ) -> None:
