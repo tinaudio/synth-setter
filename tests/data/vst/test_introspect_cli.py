@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -393,16 +394,18 @@ def test_cli_multi_class_bundle_reports_available_names_without_traceback(
     assert "Traceback" not in result.output
 
 
-def test_slow_plugin_load_echoes_elapsed_heartbeat(
+def test_slow_plugin_load_runs_on_main_thread_and_echoes_elapsed_heartbeat(
     fake_plugin: IntrospectFakePlugin, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A load outlasting the heartbeat interval reports elapsed time to stderr.
+    """A slow load keeps heartbeats useful without moving ``loader`` off the main thread.
 
     :param fake_plugin: Returned by the slow fake loader.
     :param capsys: Captures the heartbeat lines click writes to stderr.
     """
+    loader_threads: list[threading.Thread] = []
 
     def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        loader_threads.append(threading.current_thread())
         time.sleep(0.3)
         return fake_plugin
 
@@ -411,20 +414,36 @@ def test_slow_plugin_load_echoes_elapsed_heartbeat(
     )
 
     assert plugin is fake_plugin
+    assert loader_threads == [threading.main_thread()]
     assert "still loading fake.vst3" in capsys.readouterr().err
 
 
 def test_plugin_load_timeout_fails_loudly_with_elapsed_time() -> None:
     """A load exceeding the timeout raises a usage error naming the remedy flags."""
+    release_loader = threading.Event()
+    timeout_messages: list[str] = []
 
-    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(5.0)
+    def blocks_until_timed_out(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        while not release_loader.wait(timeout=0.01):
+            pass
         return IntrospectFakePlugin({})
+
+    def release_after_timeout(message: str) -> None:
+        timeout_messages.append(message)
+        release_loader.set()
 
     with pytest.raises(click.UsageError, match="--load-timeout"):
         _load_plugin_loudly(
-            "fake.vst3", None, never_returns, timeout_seconds=0.1, heartbeat_seconds=0.02
+            "fake.vst3",
+            None,
+            blocks_until_timed_out,
+            timeout_seconds=0.1,
+            heartbeat_seconds=0.02,
+            hard_timeout_grace_seconds=0.0,
+            hard_timeout_handler=release_after_timeout,
         )
+
+    assert len(timeout_messages) == 1
 
 
 def test_plugin_load_value_error_surfaces_as_usage_error() -> None:
@@ -462,7 +481,7 @@ def test_cli_load_timeout_option_fails_the_run(
     """
 
     def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(2.0)
+        time.sleep(0.2)
         return IntrospectFakePlugin({})
 
     monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", slow_load)
@@ -481,16 +500,24 @@ def test_cli_load_timeout_option_fails_the_run(
 
 def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None:
     """The timeout binds even when a heartbeat interval would reach past it."""
+    release_loader = threading.Event()
 
-    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(5.0)
+    def blocks_until_timed_out(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        while not release_loader.wait(timeout=0.01):
+            pass
         return IntrospectFakePlugin({})
 
     started = time.monotonic()
     with pytest.raises(click.UsageError):
         _load_plugin_loudly(
-            "fake.vst3", None, never_returns, timeout_seconds=0.3, heartbeat_seconds=0.25
+            "fake.vst3",
+            None,
+            blocks_until_timed_out,
+            timeout_seconds=0.3,
+            heartbeat_seconds=0.25,
+            hard_timeout_grace_seconds=0.0,
+            hard_timeout_handler=lambda _message: release_loader.set(),
         )
 
-    # Two 0.25s joins would take 0.5s; remaining-aware joins stop at ~0.3s.
+    # Two 0.25s waits would take 0.5s; remaining-aware waits stop at ~0.3s.
     assert time.monotonic() - started < 0.45
