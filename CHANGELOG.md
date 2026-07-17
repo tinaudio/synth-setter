@@ -1,6 +1,15 @@
 # CHANGELOG
 
 
+## v9.6.1 (2026-07-17)
+
+### Bug Fixes
+
+- **testing**: Use storage env in eval artifact e2e
+  ([#2103](https://github.com/tinaudio/synth-setter/pull/2103),
+  [`a7d3bf0`](https://github.com/tinaudio/synth-setter/commit/a7d3bf0894c6e1905f1cc5118d417a72885d4676))
+
+
 ## v9.6.0 (2026-07-17)
 
 ### Features
