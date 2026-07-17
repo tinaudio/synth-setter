@@ -267,6 +267,17 @@ def test_legacy_surge_model_group_resolves_vst_target(
     assert cfg.model._target_.endswith(target_suffix)
 
 
+def test_legacy_surge_flowvae_group_composes_with_concrete_defaults() -> None:
+    """The historical Flow-VAE selection retains its Surge XT defaults."""
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", "model=surge_flowvae", "trainer=cpu"],
+    )
+
+    assert cfg.model.param_spec == "surge_xt"
+    assert cfg.model.net.latent_dim == 92
+
+
 @pytest.mark.parametrize(
     ("callbacks_name", "expected_callback"),
     [("default_vst", "model_checkpoint"), ("eval_vst", "prediction_writer")],

@@ -2,3 +2,7 @@
 defaults:
   - vst_flowvae
   - _self_
+
+net:
+  latent_dim: 92
+param_spec: surge_xt
