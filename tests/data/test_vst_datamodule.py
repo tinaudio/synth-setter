@@ -221,10 +221,6 @@ class TestVSTDatasetFakeMode:
     """``fake=True`` skips the shard entirely and returns randomly-generated tensors."""
 
     def test_fake_mode_does_not_open_shard_file(self, tmp_path: Path) -> None:
-        """``fake=True`` accepts a nonexistent path because ``__init__`` never reads it.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         missing = tmp_path / "does-not-exist.lance"
         dataset = VSTDataset(missing, batch_size=4, fake=True, num_params=_FAKE_PARAM_WIDTH)
         assert dataset.dataset_file is None
@@ -338,18 +334,10 @@ class TestVSTDatasetLanceMode:
     """Lance-backed path: indexing, type conversion, OT routing, normalization."""
 
     def test_len_equals_num_rows_floor_divided_by_batch_size(self, single_lance: Path) -> None:
-        """``__len__`` uses integer division — 8 rows / batch_size 3 == 2 batches.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(single_lance, batch_size=3, ot=False)
         assert len(dataset) == 8 // 3
 
     def test_len_counts_param_array_rows_without_audio_column(self, tmp_path: Path) -> None:
-        """``__len__`` counts rows off ``param_array`` so an audio-less shard still works.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         lance_path = tmp_path / "train.lance"
         _write_lance_shard(lance_path, num_rows=8, include_audio=False)
         dataset = LanceVSTDataset(
@@ -358,10 +346,6 @@ class TestVSTDatasetLanceMode:
         assert len(dataset) == 8 // 3
 
     def test_getitem_int_returns_batch_size_slice(self, single_lance: Path) -> None:
-        """Integer index ``i`` reads rows ``[i*B : i*B+B]`` from each dataset.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -370,10 +354,6 @@ class TestVSTDatasetLanceMode:
         assert _unwrap(item["mel_spec"]).shape[0] == 2
 
     def test_getitem_tuple_returns_explicit_slice(self, single_lance: Path) -> None:
-        """A 2-tuple index ``(lo, hi)`` selects rows ``[lo:hi]`` directly.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -381,10 +361,6 @@ class TestVSTDatasetLanceMode:
         assert _unwrap(item["params"]).shape[0] == 4
 
     def test_getitem_sequence_falls_through_to_ds_fancy_indexing(self, single_lance: Path) -> None:
-        """A non-int / non-2-tuple index falls through to ``ds[idx]`` fancy indexing.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -392,10 +368,6 @@ class TestVSTDatasetLanceMode:
         assert _unwrap(item["params"]).shape[0] == 3
 
     def test_repeat_first_batch_ignores_idx(self, single_lance: Path) -> None:
-        """``repeat_first_batch=True`` always returns the first ``batch_size`` rows.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance,
             batch_size=3,
@@ -408,10 +380,6 @@ class TestVSTDatasetLanceMode:
         assert torch.equal(_unwrap(first["params"]), _unwrap(later["params"]))
 
     def test_returned_tensors_are_float32(self, single_lance: Path) -> None:
-        """All numeric tensors come back as ``torch.float32`` for AMP compatibility.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance,
             batch_size=2,
@@ -426,10 +394,6 @@ class TestVSTDatasetLanceMode:
             assert _unwrap(item[key]).dtype == torch.float32, key
 
     def test_returned_tensors_are_contiguous(self, single_lance: Path) -> None:
-        """Every populated tensor is ``.contiguous()`` so downstream cuda copies are cheap.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance,
             batch_size=2,
@@ -444,10 +408,6 @@ class TestVSTDatasetLanceMode:
             assert _unwrap(item[key]).is_contiguous(), f"{key} not contiguous"
 
     def test_read_audio_false_returns_none_audio(self, single_lance: Path) -> None:
-        """``read_audio=False`` (default) leaves the ``audio`` slot at ``None``.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -455,19 +415,11 @@ class TestVSTDatasetLanceMode:
         assert item["audio"] is None
 
     def test_read_mel_false_returns_none_mel(self, single_lance: Path) -> None:
-        """``read_mel=False`` drops the ``mel_spec`` slot, even with stats on disk.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(single_lance, batch_size=2, ot=False, read_mel=False)
         item = dataset[0]
         assert item["mel_spec"] is None
 
     def test_read_m2l_true_returns_m2l_tensor(self, single_lance: Path) -> None:
-        """``read_m2l=True`` reads the ``music2latent`` dataset under the ``m2l`` key.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance,
             batch_size=2,
@@ -478,10 +430,6 @@ class TestVSTDatasetLanceMode:
         assert _unwrap(dataset[0]["m2l"]).shape == (2, _M2L_DIM_1, _M2L_DIM_2)
 
     def test_rescale_params_centers_to_minus_one_to_one(self, single_lance: Path) -> None:
-        """``rescale_params=True`` applies ``p * 2 - 1`` element-wise before tensor conversion.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset_raw = LanceVSTDataset(
             single_lance,
             batch_size=2,
@@ -501,10 +449,6 @@ class TestVSTDatasetLanceMode:
         assert torch.allclose(rescaled, raw * 2 - 1)
 
     def test_mel_spec_normalized_with_loaded_stats(self, tmp_path: Path) -> None:
-        """When ``stats.npz`` is loaded, mel is returned as ``(mel - mean) / std``.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         lance_path = tmp_path / "train.lance"
         _write_lance_shard(lance_path, num_rows=4, mel_fill=3.0)
         _write_stats(tmp_path, mean=1.0, std=2.0)
@@ -519,10 +463,6 @@ class TestVSTDatasetLanceMode:
         assert torch.allclose(mel, torch.full_like(mel, expected))
 
     def test_no_stats_load_when_disabled(self, tmp_path: Path) -> None:
-        """``use_saved_mean_and_variance=False`` skips the npz read, even if it's missing.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         lance_path = tmp_path / "train.lance"
         _write_lance_shard(lance_path, num_rows=4)
         dataset = LanceVSTDataset(
@@ -535,20 +475,12 @@ class TestVSTDatasetLanceMode:
         assert dataset.std is None
 
     def test_missing_stats_file_raises_file_not_found(self, tmp_path: Path) -> None:
-        """``use_saved_mean_and_variance=True`` with no sibling ``stats.npz`` errors clearly.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         lance_path = tmp_path / "train.lance"
         _write_lance_shard(lance_path, num_rows=4)
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             LanceVSTDataset(lance_path, batch_size=2, ot=False, use_saved_mean_and_variance=True)
 
     def test_get_stats_file_path_is_sibling_of_dataset(self, tmp_path: Path) -> None:
-        """The static helper returns ``parent_dir / 'stats.npz'`` for any input layout.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         # str input
         assert VSTDataset.get_stats_file_path(str(tmp_path / "train.lance")) == (
             tmp_path / "stats.npz"
@@ -560,10 +492,6 @@ class TestVSTDatasetLanceMode:
         assert VSTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
 
     def test_no_ot_does_not_call_hungarian_match(self, single_lance: Path) -> None:
-        """``ot=False`` short-circuits before ``_hungarian_match`` is invoked.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         with patch("synth_setter.data.vst_datamodule._hungarian_match") as mock_match:
             dataset = LanceVSTDataset(
                 single_lance,
@@ -575,10 +503,6 @@ class TestVSTDatasetLanceMode:
         mock_match.assert_not_called()
 
     def test_ot_with_disabled_modalities_passes_none_through(self, single_lance: Path) -> None:
-        """``_hungarian_match`` still receives ``None`` placeholders when modalities are off.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         with patch(
             "synth_setter.data.vst_datamodule._hungarian_match",
             side_effect=lambda noise, params, *args: (noise, params, *args),
@@ -603,10 +527,6 @@ class TestVSTDatasetLanceMode:
         assert item["audio"] is None
 
     def test_returned_dict_always_exposes_full_key_set(self, single_lance: Path) -> None:
-        """Every ``__getitem__`` return dict exposes the same five-key contract.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         dataset = LanceVSTDataset(
             single_lance,
             batch_size=2,
@@ -685,13 +605,6 @@ class TestGetitemNoOpAfterExtraction:
     def test_getitem_unchanged_after_extraction(
         self, single_lance: Path, idx: int | list[int] | tuple[int, int]
     ) -> None:
-        """Seeding ``dataset.generator`` reproduces the golden at each index form.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        :param idx: Batch index, row list, or ``(start, stop)`` pair — every
-            index shape ``_index_dataset`` documents, so a regression in any
-            slicing branch (or an off-by-one past the first batch) surfaces.
-        """
         seed = 0
         dataset = LanceVSTDataset(
             single_lance,
@@ -718,14 +631,6 @@ class TestNoiseGeneratorSeeding:
     """Production seeding contract: the global seed governs the noise generator."""
 
     def test_getitem_noise_same_global_seed_reproduces(self, single_lance: Path) -> None:
-        """Datasets built under the same global seed draw identical batch noise.
-
-        Pins that ``seed_everything(cfg.seed)`` governs the production noise
-        path (via the constructor's global-RNG draw) exactly as the
-        pre-refactor global-RNG ``randn_like`` did.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         draws = []
         for _ in range(2):
             with torch.random.fork_rng():
@@ -753,13 +658,6 @@ class TestNoiseGeneratorSeeding:
         torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
 
     def test_generator_unseeded_constructions_get_distinct_seeds(self, single_lance: Path) -> None:
-        """Back-to-back real datasets without any seeding must not share a noise stream.
-
-        Guards the constructor against regressing to a bare ``torch.Generator()``,
-        whose fixed default seed would silently make every run's noise identical.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
         first = LanceVSTDataset(
             single_lance, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
@@ -776,16 +674,6 @@ class TestNoiseGeneratorSeeding:
     def test_dataloader_two_workers_reproduce_and_decorrelate_noise(
         self, single_lance: Path
     ) -> None:
-        """Real forked workers draw seed-reproducible yet per-worker-distinct noise.
-
-        Two epochs under one global seed must yield a bit-identical noise stream (the DataLoader
-        base seed derives from the global RNG), while batches from different workers must differ —
-        without the per-worker re-seed, every fork would inherit identical generator state and the
-        first batch of worker 0 and worker 1 would be bit-equal.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        """
-
         def collect_noise() -> list[torch.Tensor]:
             with torch.random.fork_rng():
                 torch.manual_seed(11)
@@ -811,15 +699,6 @@ class TestNoiseGeneratorSeeding:
     def test_parent_read_before_fork_does_not_disarm_worker_reseed(
         self, single_lance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A parent-process read must not latch the once-per-worker re-seed flag.
-
-        If it did, workers forked afterwards would inherit the latched flag, skip re-seeding, and
-        draw correlated noise — e.g. after a debugging or preflight batch read in the parent before
-        the DataLoader forks.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        :param monkeypatch: Pytest monkeypatch fixture.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=4, ot=False, use_saved_mean_and_variance=False
         )
@@ -834,16 +713,6 @@ class TestNoiseGeneratorSeeding:
     def test_getitem_in_worker_reseeds_generator_once_from_worker_seed(
         self, single_lance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Inside a dataloader worker, the first read re-seeds the forked generator.
-
-        ``DataLoader`` hands each worker a distinct ``seed`` (``base_seed +
-        worker_id``); re-seeding from it on first access decorrelates the noise
-        the forked generator copies would otherwise draw identically. Later
-        reads must continue that stream, not re-pin it per batch.
-
-        :param single_lance: Fixture-provided single-shard Lance path.
-        :param monkeypatch: Pytest monkeypatch fixture.
-        """
         dataset = LanceVSTDataset(
             single_lance, batch_size=4, ot=False, use_saved_mean_and_variance=False
         )
@@ -1016,10 +885,6 @@ class TestVSTDataModule:
     """Lightning datamodule: setup / dataloaders / teardown wiring."""
 
     def test_init_stores_dataset_root_as_path(self, tmp_path: Path) -> None:
-        """``dataset_root`` is normalized to ``pathlib.Path`` even when passed as a str.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         module = LanceVSTDataModule(
             dataset_root=str(tmp_path), param_spec_name=ParamSpecName("surge_xt")
         )
@@ -1070,20 +935,12 @@ class TestVSTDataModule:
         assert list(dataset_root.iterdir()) == []
 
     def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:
-        """``setup()`` opens the three required splits and exposes them as attrs.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert isinstance(module.train_dataset, VSTDataset)
             assert isinstance(module.val_dataset, VSTDataset)
             assert isinstance(module.test_dataset, VSTDataset)
 
     def test_setup_without_predict_file_defaults_to_test_split(self, dataset_root: Path) -> None:
-        """No ``predict_file``: ``predict_dataset`` defaults to the ``test.lance`` split.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             assert module.predict_file == dataset_root / "test.lance"
             assert isinstance(module.predict_dataset, VSTDataset)
@@ -1091,10 +948,6 @@ class TestVSTDataModule:
     def test_setup_with_predict_file_builds_predict_dataset_with_audio(
         self, dataset_root: Path
     ) -> None:
-        """``predict_file`` set: predict-split dataset opens with ``read_audio=True``.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1105,10 +958,6 @@ class TestVSTDataModule:
             assert module.predict_dataset.read_audio is True
 
     def test_setup_val_and_test_force_ot_false(self, dataset_root: Path) -> None:
-        """``setup`` hard-codes ``ot=False`` on val/test even when the module is ``ot=True``.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(dataset_root=dataset_root, batch_size=2, ot=True) as module:
             assert isinstance(module.train_dataset, VSTDataset)
             assert isinstance(module.val_dataset, VSTDataset)
@@ -1118,10 +967,6 @@ class TestVSTDataModule:
             assert module.test_dataset.ot is False
 
     def test_conditioning_mel_routes_to_mel_reads(self, dataset_root: Path) -> None:
-        """``conditioning='mel'`` toggles ``read_mel=True`` / ``read_m2l=False`` on every split.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning="mel"
         ) as module:
@@ -1131,10 +976,6 @@ class TestVSTDataModule:
                 assert split.read_m2l is False
 
     def test_conditioning_m2l_routes_to_m2l_reads(self, dataset_root: Path) -> None:
-        """``conditioning='m2l'`` flips the read flags to the music2latent channel.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
         ) as module:
@@ -1144,10 +985,6 @@ class TestVSTDataModule:
                 assert split.read_m2l is True
 
     def test_conditioning_m2l_also_routes_predict_split(self, dataset_root: Path) -> None:
-        """``predict_dataset`` follows the same conditioning routing as train/val/test.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1160,10 +997,6 @@ class TestVSTDataModule:
             assert module.predict_dataset.read_m2l is True
 
     def test_train_dataloader_uses_shifted_batch_sampler(self, dataset_root: Path) -> None:
-        """``train_dataloader`` wires the ``ShiftedBatchSampler`` (not the global random one).
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1178,10 +1011,6 @@ class TestVSTDataModule:
             assert loader.pin_memory is False
 
     def test_val_test_dataloaders_have_no_shuffle_sampler(self, dataset_root: Path) -> None:
-        """Val/test loaders use the default no-shuffle ``SequentialSampler``.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1195,10 +1024,6 @@ class TestVSTDataModule:
             assert isinstance(test_loader.sampler, torch.utils.data.SequentialSampler)
 
     def test_dataloader_num_workers_and_pin_memory_propagate(self, dataset_root: Path) -> None:
-        """``num_workers`` / ``pin_memory`` kwargs are passed verbatim to every DataLoader.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1217,16 +1042,6 @@ class TestVSTDataModule:
     def test_dataloaders_leave_worker_init_fn_unset_for_lightning(
         self, dataset_root: Path
     ) -> None:
-        """No split's DataLoader installs a custom ``worker_init_fn``.
-
-        Lightning's ``seed_everything(workers=True)`` auto-adds
-        ``pl_worker_init_function`` only while ``worker_init_fn is None``; a
-        custom hook here would silently displace it and de-seed worker global
-        RNGs (fake mode's noise). The dataset re-seeds its own generator lazily
-        in ``__getitem__`` instead.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1244,10 +1059,6 @@ class TestVSTDataModule:
     def test_predict_dataloader_returns_dataloader_when_predict_file_set(
         self, dataset_root: Path
     ) -> None:
-        """``predict_dataloader`` wraps the predict split in a no-shuffle loader.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1261,10 +1072,6 @@ class TestVSTDataModule:
     def test_predict_dataloader_propagates_num_workers_and_pin_memory(
         self, dataset_root: Path
     ) -> None:
-        """``num_workers`` / ``pin_memory`` reach the separately constructed predict loader too.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         with _set_up_module(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1278,10 +1085,6 @@ class TestVSTDataModule:
             assert loader.pin_memory is True
 
     def test_teardown_closes_open_shard_handles(self, dataset_root: Path) -> None:
-        """``teardown`` closes every split file so the next setup can reopen them.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
             batch_size=2,
@@ -1301,10 +1104,6 @@ class TestVSTDataModule:
         assert not module.predict_dataset.dataset_file
 
     def test_fake_mode_setup_does_not_require_dataset_files(self, tmp_path: Path) -> None:
-        """``fake=True`` setup never touches the dataset_root, so a fresh dir is enough.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         with _set_up_module(
             dataset_root=tmp_path,
             batch_size=2,
@@ -1320,10 +1119,6 @@ class TestVSTDataModule:
             assert module.test_dataset.fake is True
 
     def test_fake_mode_train_dataloader_yields_well_shaped_items(self, tmp_path: Path) -> None:
-        """End-to-end smoke: fake-mode train loader iterates and produces sane shapes.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         with _set_up_module(
             dataset_root=tmp_path,
             batch_size=2,
@@ -1339,10 +1134,6 @@ class TestVSTDataModule:
             assert _unwrap(item["mel_spec"]).shape == (2, 2, 128, 401)
 
     def test_fake_mode_param_spec_name_sizes_param_width(self, tmp_path: Path) -> None:
-        """``param_spec_name`` selects the registry spec that sizes fake param width.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         with _set_up_module(
             dataset_root=tmp_path,
             batch_size=2,
@@ -1357,10 +1148,6 @@ class TestVSTDataModule:
             assert _unwrap(item["params"]).shape == (2, len(param_specs["surge_simple"]))
 
     def test_setup_unknown_param_spec_name_raises_key_error(self, tmp_path: Path) -> None:
-        """An unregistered ``param_spec_name`` fails fast at ``setup()`` with ``KeyError``.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
         module = LanceVSTDataModule(
             dataset_root=tmp_path,
             batch_size=2,
