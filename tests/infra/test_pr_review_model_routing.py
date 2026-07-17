@@ -183,6 +183,9 @@ def test_full_review_skills_route_external_harnesses_through_pi() -> None:
         assert "run_codex_review_agent.sh" not in text
         assert "Claude Code" in text
         assert "Codex" in text
+        assert "foreground Bash" in text
+        assert "600000" in text
+        assert "not use background execution" in text
 
 
 def test_review_fanout_promotes_deep_checklists() -> None:

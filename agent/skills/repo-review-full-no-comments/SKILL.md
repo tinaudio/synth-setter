@@ -25,16 +25,18 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
 
-2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, invoke the shared launcher. Claude
-   Code and Codex use this same command; neither launches its native review
-   agents:
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, invoke the shared launcher with a
+   foreground Bash tool call and a `600000` ms timeout. Claude Code and Codex
+   use this same command; neither launches its native review agents:
 
    ```bash
    agent/_shared/run_pi_review.sh repo-review-full-no-comments
    ```
 
-   Append `--target <N>` only when the caller supplied an explicit target.
-   Relay its output verbatim and stop; the child Pi session owns the review.
+   Append `--target <N>` only when the caller supplied an explicit target. Do
+   not use background execution, `&`, task output, or a detached process. Wait
+   for the command to exit, relay its output verbatim, and stop; the child Pi
+   session owns the review.
 
 3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
    orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
