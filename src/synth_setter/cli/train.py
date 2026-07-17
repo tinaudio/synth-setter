@@ -1,5 +1,6 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
+import signal
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,8 @@ operator_workspace()
 register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+_SHELL_SIGNAL_EXIT_OFFSET = 128
 
 
 def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
@@ -432,6 +435,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
+    :raises SystemExit: With status 143 after Lightning handles SIGTERM during fit.
     """
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
@@ -487,12 +491,17 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.get("ckpt_path"),
-            weights_only=False,
-        )
+        try:
+            trainer.fit(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=cfg.get("ckpt_path"),
+                weights_only=False,
+            )
+        except SystemExit:
+            if trainer.received_sigterm:
+                raise SystemExit(_SHELL_SIGNAL_EXIT_OFFSET + signal.SIGTERM) from None
+            raise
 
     train_metrics = trainer.callback_metrics
 
