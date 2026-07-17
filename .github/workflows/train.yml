@@ -2,8 +2,8 @@ name: Train
 
 # Manually-dispatched training: submits a SkyPilot managed job that runs
 # synth-setter-train on the provider named in the launch config (RunPod by
-# default). The launch config is the single input — experiment, compute
-# template, worker image tag, and worker cmd are all baked there. See
+# default). The launch config selects the compute and worker command; an
+# optional experiment input overrides that command's baked default. See
 # src/synth_setter/configs/launch/train-runpod.yaml and
 # storage-provenance-spec.md §8.
 #
@@ -15,6 +15,11 @@ name: Train
 on:
   workflow_dispatch:
     inputs:
+      experiment:
+        description: "Hydra experiment override (empty uses the launch config default)"
+        required: false
+        type: string
+        default: ""
       launch_config:
         description: "Repo-relative path to the SkyPilot launch config (see src/synth_setter/configs/launch/)"
         required: true
@@ -54,6 +59,7 @@ jobs:
       # passes through step env so a stray token cannot break out.
       - name: Dispatch via SkyPilot
         env:
+          EXPERIMENT: ${{ inputs.experiment }}
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
@@ -75,12 +81,15 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e WANDB_API_KEY \
             -e WORKER_GIT_REF \
+            -e EXPERIMENT \
             -e LAUNCH_CONFIG \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
-              python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG"
+              python -m synth_setter.pipeline.skypilot_launch \
+                --extra-env EXPERIMENT "$EXPERIMENT" \
+                "$LAUNCH_CONFIG"
             ' 2>&1 | tee train-dispatch.log
 
       - name: Upload dispatch log

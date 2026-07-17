@@ -1,9 +1,9 @@
 # Smoke variant of train-runpod.yaml: a 10-step junk run that exercises the
 # full dispatch path (workflow → launcher → SkyPilot worker → checkpoint
-# upload → model-ffn_simple W&B artifact) at minimal GPU cost.
+# upload → W&B model artifact) at minimal GPU cost.
 #
 # every_n_train_steps=5 guarantees a checkpoint file exists at step 10 even
-# though no epoch completes; the published model-ffn_simple:latest is junk —
+# though no epoch completes; the published model artifact is junk —
 # do not evaluate it for quality.
 #
 # A fresh pod has no local dataset, so the cmd pins a small finalized R2 root
@@ -19,7 +19,7 @@ cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
-  experiment=surge/ffn_simple
+  "experiment=${EXPERIMENT:-surge/ffn_simple}"
   datamodule=surge_lance_map
   datamodule.param_spec_name=surge_simple
   datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/

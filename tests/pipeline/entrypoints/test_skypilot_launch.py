@@ -1585,6 +1585,36 @@ class TestSkypilotLaunchCli:
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert task_doc["run"] == cmd
 
+    def test_extra_env_option_forwards_value_to_worker(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A CLI extra-env override reaches the submitted worker environment.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd='echo "experiment=${EXPERIMENT:-surge/ffn_simple}"',
+            env_file=str(env_file),
+            extra_envs={"EXPERIMENT": "surge/ffn_simple"},
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--extra-env", "EXPERIMENT", "surge/flow_simple", str(cfg_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert injected["EXPERIMENT"] == "surge/flow_simple"
+
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.
 
@@ -1643,7 +1673,7 @@ class TestCheckedInLaunchConfigs:
 
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
-        assert "experiment=surge/flow_simple" in tokens
+        assert "experiment=${EXPERIMENT:-surge/flow_simple}" in tokens
         assert "datamodule=surge_lance_map" in tokens
         assert "datamodule.param_spec_name=surge_simple" in tokens
         assert (

@@ -9,7 +9,7 @@ cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
-  experiment=surge/flow_simple
+  "experiment=${EXPERIMENT:-surge/flow_simple}"
   datamodule=surge_lance_map
   datamodule.param_spec_name=surge_simple
   datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/

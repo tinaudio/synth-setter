@@ -1,9 +1,8 @@
 # SkyPilot launch config for a manually-dispatched training run on RunPod.
 #
-# Consumed by `synth-setter-skypilot-launch <this file>` — the only input
-# .github/workflows/train.yml takes. Fields mirror SkypilotLaunchConfig;
-# relative paths resolve against the working directory (run from the repo
-# root). Copy this file to train a different experiment.
+# The .github/workflows/train.yml launch_config input points here. Fields
+# mirror SkypilotLaunchConfig; relative paths resolve from the repo root.
+# The workflow's experiment input overrides the default below.
 #
 # Worker provenance (storage-provenance-spec.md §12): sync_worker_checkout.sh
 # moves the baked checkout to the launcher-forwarded WORKER_GIT_REF so
@@ -19,7 +18,7 @@ cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
-  experiment=surge/ffn_simple
+  "experiment=${EXPERIMENT:-surge/ffn_simple}"
   datamodule=surge_lance_map
   datamodule.param_spec_name=surge_simple
   datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
