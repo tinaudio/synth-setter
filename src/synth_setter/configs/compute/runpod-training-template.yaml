@@ -1,0 +1,22 @@
+# Full-dataset RunPod template; the launcher injects commands, credentials, and provenance.
+
+resources:
+  cloud: runpod
+  accelerators: { RTX3090:1, RTX4090:1, A40:1 }
+  use_spot: false
+  # Pre-staging the 480k-example Lance dataset requires substantially more than the smoke default.
+  disk_size: 750
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_GIT_REF: ""
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter worker ready (host: $(hostname))"
