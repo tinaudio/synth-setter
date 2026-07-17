@@ -35,13 +35,17 @@ HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
 	./.venv/bin/pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
-# test-full-* split per hardware. test-full-cpu can parallelize; test-full-gpu and
-# test-full-mps run serially because GPU/MPS tests need exclusive device access.
-# test-full-cpu/test-full-gpu include requires_vst, so HEADLESS_WRAPPER is
-# prepended on Linux. test-full-mps is guarded to macOS Apple Silicon, where
-# the wrapper is always empty, so it's omitted from that recipe.
-test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb.
-	$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"
+# Darwin VST editors share AppKit state, so requires_vst tests stay serial.
+# GPU/MPS tests run serially because accelerators need exclusive access.
+test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb; Darwin: serial VST lane.
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		status=0; \
+		pytest -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
+		pytest -m "requires_vst and not gpu and not mps" || status=1; \
+		exit $$status; \
+	else \
+		$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"; \
+	fi
 
 test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.
 	$(HEADLESS_WRAPPER) pytest -m "not mps"

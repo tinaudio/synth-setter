@@ -265,6 +265,8 @@ def test_phase_1_and_2_cli_emits_run_id_plus_shard_and_summary_history(
     for r in shard_rows:
         assert json.loads(r["shard/bytes"]) > 0, r
         assert json.loads(r["shard/render_seconds"]) >= 0.0, r
+        assert json.loads(r["shard/samples_rejected_clipped"]) >= 0, r
+        assert json.loads(r["shard/samples_rejected_silent"]) >= 0, r
 
     summary_rows = [r for r in rows if "shards/rendered" in r]
     assert len(summary_rows) == 1, (
@@ -278,6 +280,8 @@ def test_phase_1_and_2_cli_emits_run_id_plus_shard_and_summary_history(
         "generation/elapsed_seconds",
         "generation/samples",
         "generation/samples_per_second",
+        "generation/samples_rejected_clipped",
+        "generation/samples_rejected_silent",
     ):
         assert required_key in summary, f"summary row missing {required_key!r}: {summary}"
     # The run completed without raising, so the summary should report all 3

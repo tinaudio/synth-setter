@@ -41,7 +41,11 @@ from synth_setter.pipeline.data.finalize_progress import (
     FinalizeProgressCallback,
     report_finalize_progress,
 )
-from synth_setter.pipeline.data.lance_shard import commit_lance_dataset, lance_schema
+from synth_setter.pipeline.data.lance_shard import (
+    commit_lance_dataset,
+    lance_schema,
+    schema_mismatch_detail,
+)
 from synth_setter.pipeline.data.lance_staging import (
     complete_attempt_names,
     invalidate_staged_attempt,
@@ -303,7 +307,8 @@ def _validate_fragment_files(
         if not physical_schema.equals(expected_schema, check_metadata=True):
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment physical schema "
-                "does not match spec-derived shard schema"
+                "does not match spec-derived shard schema: "
+                f"{schema_mismatch_detail(physical_schema, expected_schema)}"
             )
 
 

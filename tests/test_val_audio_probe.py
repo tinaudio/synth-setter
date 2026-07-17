@@ -93,7 +93,7 @@ def _module() -> LightningModule:
 
 
 def _batch(rows: int = 8) -> dict[str, torch.Tensor | None]:
-    """Return a val batch shaped like ``VSTDataset``'s, with ``rows`` samples.
+    """Return a VST model batch with ``rows`` samples.
 
     ``audio`` is ``None`` as in real training val batches (``read_audio`` is a
     predict-only flag) — the probe must not touch it.

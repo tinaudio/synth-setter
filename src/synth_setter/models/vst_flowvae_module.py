@@ -6,8 +6,6 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from synth_setter.models.components.vae import compute_flowvae_loss
-
 
 class VSTFlowVAEModule(LightningModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
@@ -31,7 +29,7 @@ class VSTFlowVAEModule(LightningModule):
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param param_spec: Registry key naming the param spec the loss decodes against.
-        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param compile: Whether to ``torch.compile`` the net during fit setup.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param beta_max: Final KL weight after beta warmup.
         :param beta_start: Initial KL weight at step 0.
@@ -47,6 +45,9 @@ class VSTFlowVAEModule(LightningModule):
         pass
 
     def model_step(self, batch: dict[str, torch.Tensor]):
+        # Imported at use: the optional nflows dep (#1664) must not block importing this module.
+        from synth_setter.models.components.vae import compute_flowvae_loss  # pragma: no cover
+
         target_params = batch["params"]
 
         mel_spec = batch["mel_spec"]
@@ -116,10 +117,8 @@ class VSTFlowVAEModule(LightningModule):
         )
 
     def setup(self, stage: str) -> None:
-        if not self.hparams.compile:
-            return
-
-        self.net = torch.compile(self.net)
+        if self.hparams.compile and stage == "fit":
+            self.net = torch.compile(self.net)
 
     def on_before_optimizer_step(self, optimizer) -> None:
         norms = grad_norm(self.net, 2.0)

@@ -401,6 +401,14 @@ def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
         OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
 
 
+def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
+    """The surge family validates a bounded sample and enables the probe when usable."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple"])
+
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.training.val_audio_probe == "auto"
+
+
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 
@@ -457,37 +465,6 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
     # eval_vst callbacks: the prediction writer must be present.
     assert "prediction_writer" in cfg.callbacks
-
-
-def test_lance_map_train_experiment_composes_with_map_loader() -> None:
-    """``surge/ffn_4_lance_map`` keeps the ffn_4 train contract on the map loader.
-
-    Pins that the datamodule group swap changes only the loader: the surge_4
-    spec wiring and output width are inherited from ``ffn_4`` untouched.
-    """
-    cfg = _compose("train.yaml", ["experiment=surge/ffn_4_lance_map"])
-
-    assert cfg.datamodule.loader == "map"
-    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
-    assert cfg.datamodule.param_spec_name == "surge_4"
-    assert cfg.model.net.d_out == 7
-    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
-
-
-def test_lance_map_eval_experiment_composes_with_map_loader() -> None:
-    """``surge/eval_ffn_4_lance_map`` keeps the eval_ffn_4 contract on the map loader.
-
-    Pins that the datamodule group swap changes only the loader: predict mode,
-    the surge_4 render group, and the eval evaluation flags survive.
-    """
-    cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4_lance_map", "ckpt_path=dummy.ckpt"])
-
-    assert cfg.mode == "predict"
-    assert cfg.datamodule.loader == "map"
-    assert cfg.datamodule.param_spec_name == "surge_4"
-    assert cfg.render.param_spec_name == "surge_4"
-    assert cfg.evaluation.render_vst is True
-    assert cfg.evaluation.compute_metrics is True
 
 
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:

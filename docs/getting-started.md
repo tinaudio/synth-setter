@@ -592,7 +592,9 @@ journalctl --since "1 hour ago" | grep -E "earlyoom.*(SIGTERM|SIGKILL)"
 ```
 
 The usual cause is dataloader workers. `num_workers` applies to *each*
-dataloader, so enabling validation doubles the live worker count — a run that
+dataloader, and the VST config keeps positive worker pools persistent between
+epochs. Setting `num_workers=0` automatically disables persistence. Enabling
+validation doubles the live worker count — a run that
 fits with `limit_val_batches: 0` can be killed once validation is on. Lance
 workers are heavy, so the count matters more than it looks: a measured
 `surge_lance` train pool alone is ~6 GB at 2 workers and ~19 GB at 11, and a

@@ -271,18 +271,25 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} --plugin_path {vst} --plugin_state_path {preset}` |
 | **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                                                   |
 | **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`                                 |
-| **Compute**  | CPU — VST audio rendering via pedalboard                                                                                       |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                                       |
+| **Compute**  | CPU — VST audio rendering via pedalboard (or in-process torchsynth, see below)                                                 |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                                             |
 
-The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
+The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison. When `--plugin_path` is the `torchsynth` sentinel (`renderer_backend.TORCHSYNTH_PLUGIN_NAME`), `_make_render_fn` in `predict_vst_audio.py` dispatches to `TorchSynthRenderer` instead — in-process, with no plugin host or display-server requirement.
 
 **Key behaviors:**
 
+- When `--plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer` — no `renderscript.sh`/Xvfb wrapper is involved and no plugin bundle is loaded
+
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
+
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
+
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
+
 - Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
+
 - Preset path default: the registry preset for the selected spec, `plugin_state_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--plugin_state_path`)
+
 - Parameters are denormalized from the model-output range via `decode_model_output` before rendering
 
 ### 5.3 Metrics
@@ -318,11 +325,12 @@ When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI over
 
 ```yaml
 # src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
-_target_: synth_setter.data.vst_datamodule.VSTDataModule
+_target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
 num_workers: 4  # per dataloader — validation doubles the live worker count
+persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
 `surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
@@ -920,9 +928,9 @@ ______________________________________________________________________
 - `src/synth_setter/data/vst_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
 - Data configs carry an explicit `download_dataset_root_uri: null` opt-in line; set via CLI or experiment config
 
-**Files to create:**
+**Verification:**
 
-- `tests/data/test_surge_datamodule.py` — mock rclone, verify copy logic
+- `tests/data/test_lance_map_datamodule.py` runs the real rclone copy against a local-backed remote.
 
 **Key behaviors:**
 

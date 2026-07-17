@@ -230,7 +230,7 @@ def cfg_train_global() -> DictConfig:
         # set defaults for all tests
         with open_dict(cfg):
             _apply_common_train_eval_overrides(cfg)
-            cfg.datamodule.num_workers = 4
+            cfg.datamodule.num_workers = 0
             cfg.callbacks.model_checkpoint.save_top_k = -1
             cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")
@@ -608,7 +608,7 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
-    datamodule_group: Literal["surge", "surge_lance", "surge_lance_map"] = "surge",
+    datamodule_group: Literal["surge", "surge_lance"] = "surge",
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
@@ -658,10 +658,7 @@ def _build_surge_xt_smoke_cfg(
                 cfg.model.compile = True
                 cfg.trainer.precision = "16-mixed"
 
-            # batch_size=1 is forced: ShiftedBatchSampler (used in the
-            # VSTDataModule's train_dataloader) drops one batch per epoch,
-            # so any batch_size > dataset_size // 2 leaves the dataloader empty
-            # and Lightning aborts with "Trainer.fit stopped: No training batches."
+            # The smoke fixture writes one sample, so use a one-row training batch.
             cfg.datamodule.batch_size = 1
             cfg.datamodule.pin_memory = False
             cfg.datamodule.ot = False
@@ -1035,25 +1032,17 @@ def cfg_surge_xt(
 # (no public docstring) matching the sibling ``_FakeOracleDataset`` in test_eval.py.
 class _SurgeSmokeVariant(NamedTuple):
     dataset_fixture: str  # conftest fixture yielding the dataset root dir
-    datamodule_group: str  # Hydra ``datamodule=`` group: "surge_lance" | "surge_lance_map"
+    datamodule_group: str  # Hydra ``datamodule=`` group: "surge_lance"
     split_ext: str  # split file suffix: ".lance"
     plugin_path: str  # render plugin for eval postprocessing: real PLUGIN_PATH | fake.vst3
 
 
-# Datamodule arms of the Lance smoke parity matrix, shared by the train and eval
-# entrypoint tests as ``surge_smoke_variant`` parametrize values. The real-VST arms render
-# through the Surge XT subprocess (slow); the fake arms render in-process via the fake
-# plugin (CPU inner loop). Both feed the same test bodies so an iterable/map datamodule
-# regression cannot hide behind single-datamodule coverage.
+# Real- and fake-plugin Lance smoke fixtures share the same map-style datamodule.
 REAL_VST_VARIANTS = [
     pytest.param(
         _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge_lance", ".lance", PLUGIN_PATH),
         id="lance",
-    ),
-    pytest.param(
-        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge_lance_map", ".lance", PLUGIN_PATH),
-        id="lance_map",
-    ),
+    )
 ]
 FAKE_VST_VARIANTS = [
     pytest.param(
@@ -1061,13 +1050,7 @@ FAKE_VST_VARIANTS = [
             "fake_surge_smoke_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
         ),
         id="lance",
-    ),
-    pytest.param(
-        _SurgeSmokeVariant(
-            "fake_surge_smoke_datasets", "surge_lance_map", ".lance", "plugins/fake.vst3"
-        ),
-        id="lance_map",
-    ),
+    )
 ]
 
 

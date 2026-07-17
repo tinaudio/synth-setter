@@ -38,19 +38,24 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
 import lance
 import numpy as np
 import pytest
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests._vst import (
@@ -58,6 +63,7 @@ from tests._vst import (
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.subprocess_args import find_script_index
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -130,8 +136,8 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
 
     Pins #1999 through the ``spec_from_cfg`` entrypoint path: the composed
-    ``surge_simple`` render group (inheriting ``render/surge_xt.yaml``'s surfaced
-    value) resolves ``"once"`` when neither experiment nor CLI overrides it. The
+    ``surge_simple`` render group (inheriting ``render/vst.yaml``'s surfaced value)
+    resolves ``"once"`` when neither experiment nor CLI overrides it. The
     schema-level Field default is pinned separately in
     ``tests/pipeline/schemas/test_dataset_spec.py::test_cadence_defaults_off_darwin``.
 
@@ -185,11 +191,39 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
-        side_effect=render_shard,
+    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
+    recording_logger = SimpleNamespace(
+        finalize=lambda _status: None,
+        log_hyperparams=lambda _payload: None,
+        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
+    )
+
+    def _render_with_rejections(args: list[str]) -> None:
+        render_shard(args)
+        if args and args[0] != "rclone":
+            shard_path = Path(args[find_script_index(args) + 1])
+            render_metrics_path(shard_path).write_text(
+                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+            )
+
+    with (
+        patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=_render_with_rejections,
+        ),
+        patch(
+            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
+            return_value=[recording_logger],
+        ),
     ):
         from_hydra(cfg_dataset)
+
+    shard_rows = [payload for step, payload in metrics_rows if step is not None]
+    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
+    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
+    summary = next(payload for step, payload in metrics_rows if step is None)
+    assert summary["generation/samples_rejected_clipped"] == 6
+    assert summary["generation/samples_rejected_silent"] == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -411,6 +445,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
             for field, shape in shapes.items()
         }
         write_lance_dataset(output_file, schema, [record_batch_from_arrays(arrays, schema)])
+        render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
 
     with patch(
         "synth_setter.cli.generate_dataset._check_call_streamed",
@@ -1209,6 +1244,15 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
+
+        eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
+        assert len(eval_configs) == 3
+        for config_path in eval_configs:
+            eval_cfg = OmegaConf.load(config_path)
+            assert eval_cfg.render.param_spec_name == "surge_simple"
+            assert eval_cfg.render.plugin_state_path == "presets/surge-simple.vstpreset"
+            assert eval_cfg.render.renderer_version == "1.3.4"
+            assert eval_cfg.render.sample_rate == 44100
 
         # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))

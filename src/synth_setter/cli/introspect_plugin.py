@@ -10,6 +10,7 @@ renderable via ``generate_dataset`` (issue #1596).
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -42,6 +43,10 @@ from synth_setter.data.vst.verification import registered_artifacts, verify_regi
 # Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
 # this cadence keep a slow load distinguishable from a hang.
 _LOAD_HEARTBEAT_SECONDS = 30.0
+# After the soft timeout fires, give the main-thread load a short window to
+# unwind before the watchdog terminates the hung process.
+_LOAD_TIMEOUT_EXIT_GRACE_SECONDS = 5.0
+_LOAD_TIMEOUT_EXIT_CODE = 124
 
 
 @dataclass(frozen=True)
@@ -304,8 +309,8 @@ def _resolve_register_target(
                 "not inside a synth-setter checkout; pass --repo-root <checkout>."
             )
         root = found
-    paths = registration_paths(root, spec_name)
     try:
+        paths = registration_paths(root, spec_name)
         updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
@@ -347,6 +352,31 @@ def _write_register_wiring(
     )
 
 
+def _plugin_load_timeout_message(plugin_path: str, timeout_seconds: float, elapsed: float) -> str:
+    """Return the operator-facing plugin-load timeout message.
+
+    :param plugin_path: Path of the ``.vst3`` bundle being loaded.
+    :param timeout_seconds: Declared soft timeout in seconds.
+    :param elapsed: Elapsed wall time when the timeout fired.
+    :returns: Human-readable timeout guidance.
+    """
+    return (
+        f"{plugin_path} did not finish loading within {timeout_seconds:g}s "
+        f"(elapsed {elapsed:.1f}s). Multi-minute initialization is normal for some "
+        "synths — raise --load-timeout, and run GUI-heavy plugins under "
+        "src/synth_setter/scripts/run-linux-vst-headless.sh."
+    )
+
+
+def _exit_due_to_plugin_load_timeout(message: str) -> None:
+    """Print the timeout and terminate a process stuck in native plugin init.
+
+    :param message: Operator-facing timeout guidance.
+    """
+    click.echo(message, err=True)
+    os._exit(_LOAD_TIMEOUT_EXIT_CODE)
+
+
 def _load_plugin_loudly[PluginT](
     plugin_path: str,
     plugin_name: str | None,
@@ -354,59 +384,71 @@ def _load_plugin_loudly[PluginT](
     *,
     timeout_seconds: float,
     heartbeat_seconds: float = _LOAD_HEARTBEAT_SECONDS,
+    hard_timeout_grace_seconds: float = _LOAD_TIMEOUT_EXIT_GRACE_SECONDS,
+    hard_timeout_handler: Callable[[str], None] = _exit_due_to_plugin_load_timeout,
 ) -> PluginT:
-    """Run ``loader`` on a daemon thread, echoing elapsed-time heartbeats until it returns.
+    """Run ``loader`` on the caller thread while a daemon watchdog reports progress.
 
-    Native VST3 init can block for minutes with no output, indistinguishable
-    from a hang — the operator's natural move is Ctrl-C (issue #1676). The
-    heartbeat reports progress to stderr; on timeout the load fails loudly
-    with the elapsed time, and the daemon thread cannot block process exit.
+    Pedalboard requires ``VST3Plugin`` reloads on the process main thread, so
+    the real load happens synchronously in the caller. A daemon watchdog emits
+    elapsed-time heartbeats from the side, marks a soft timeout once the budget
+    expires, and hard-exits the process if native init still has not unwound by
+    the end of the grace window.
 
     :param plugin_path: Path of the ``.vst3`` bundle, echoed in heartbeats.
     :param plugin_name: Factory class forwarded to ``loader``.
     :param loader: The blocking load call (``load_plugin``; injectable in tests).
     :param timeout_seconds: Give up after this long.
     :param heartbeat_seconds: Interval between elapsed-time echoes.
+    :param hard_timeout_grace_seconds: Extra unwind time after the soft timeout fires.
+    :param hard_timeout_handler: Called when the soft timeout + grace window both expire.
     :returns: The loaded plugin.
-    :raises click.UsageError: The load outlasted ``timeout_seconds``, or the
-        loader rejected the bundle with a ``ValueError`` (pedalboard lists the
-        factory classes of a multi-class bundle this way when ``--plugin-name``
-        is absent).
+    :raises click.UsageError: The load outlasted ``timeout_seconds`` but still unwound before
+        the watchdog's hard-exit path, or the loader rejected the bundle with a
+        ``ValueError`` (pedalboard lists the factory classes of a multi-class bundle this way
+        when ``--plugin-name`` is absent).
     :raises RuntimeError: Any other load failure, chained to the original.
     """
     outcome: dict[str, Any] = {}
+    finished = threading.Event()
+    timed_out = threading.Event()
+    timeout_messages: list[str] = []
 
-    def _run() -> None:
-        """Capture the loader's plugin or exception for the main thread."""
-        # Broad catch: the exception is re-raised on the main thread below.
-        try:
-            outcome["plugin"] = loader(plugin_path, plugin_name)
-        except BaseException as exc:  # noqa: BLE001
-            outcome["error"] = exc
-
-    thread = threading.Thread(target=_run, name="plugin-load", daemon=True)
-    started = time.monotonic()
-    thread.start()
-    while True:
-        # Join on the remaining budget so a heartbeat interval cannot block
-        # past the declared timeout.
-        remaining = timeout_seconds - (time.monotonic() - started)
-        thread.join(min(heartbeat_seconds, max(remaining, 0.0)))
-        if not thread.is_alive():
-            break
-        elapsed = time.monotonic() - started
-        if elapsed >= timeout_seconds:
-            raise click.UsageError(
-                f"{plugin_path} did not finish loading within {timeout_seconds:g}s "
-                f"(elapsed {elapsed:.0f}s). Multi-minute initialization is normal for "
-                "some synths — raise --load-timeout, and run GUI-heavy plugins under "
-                "src/synth_setter/scripts/run-linux-vst-headless.sh."
+    def _watchdog() -> None:
+        """Emit heartbeats until ``loader`` finishes or the timeout path wins."""
+        started = time.monotonic()
+        while True:
+            elapsed = time.monotonic() - started
+            remaining = timeout_seconds - elapsed
+            if remaining <= 0.0:
+                message = _plugin_load_timeout_message(plugin_path, timeout_seconds, elapsed)
+                timeout_messages.append(message)
+                timed_out.set()
+                if not finished.wait(timeout=hard_timeout_grace_seconds):
+                    hard_timeout_handler(message)
+                return
+            if finished.wait(timeout=min(heartbeat_seconds, remaining)):
+                return
+            elapsed = time.monotonic() - started
+            if elapsed >= timeout_seconds:
+                continue
+            click.echo(
+                f"still loading {plugin_path}… {elapsed:.0f}s elapsed "
+                "(some plugins take minutes to initialize)",
+                err=True,
             )
-        click.echo(
-            f"still loading {plugin_path}… {elapsed:.0f}s elapsed "
-            "(some plugins take minutes to initialize)",
-            err=True,
-        )
+
+    watchdog = threading.Thread(target=_watchdog, name="plugin-load-watchdog", daemon=True)
+    watchdog.start()
+    try:
+        outcome["plugin"] = loader(plugin_path, plugin_name)
+    except BaseException as exc:  # noqa: BLE001
+        outcome["error"] = exc
+    finally:
+        finished.set()
+        watchdog.join(timeout=max(heartbeat_seconds, hard_timeout_grace_seconds))
+    if timed_out.is_set():
+        raise click.UsageError(timeout_messages[0])
     error = outcome.get("error")
     if isinstance(error, ValueError):
         raise click.UsageError(str(error)) from error

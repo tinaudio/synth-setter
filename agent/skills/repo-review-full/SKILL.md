@@ -1,43 +1,42 @@
 ---
 name: repo-review-full
 description: |-
-  Full multi-skill PR review. Spawns one orchestrator agent that fans out a
-  parallel agent per applicable plugin checklist (selection rules in the shared
-  analysis file) and posts every diff-anchored BLOCK/WARN as an individual
-  unresolved inline PR review comment; non-diff findings (merge conflicts,
-  failing checks) go in a `## PR health` section in the review body. Requires
-  the tinaudio-synth-setter-skills plugin.
+  Full multi-skill PR review. Routes every host harness through Pi, fans out a
+  parallel Tintin worker per applicable checklist, and posts every diff-anchored
+  BLOCK/WARN as an unresolved inline comment. Requires the
+  tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full — Multi-Skill Parallel PR Review
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result — you do NOT resolve the PR,
-fan out the reviews, aggregate findings, or call `post_review.py` yourself.
+The review implementation is Pi-native. Claude Code and Codex invoke the same
+headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## What you (the main agent) do
 
 1. Capture the PR argument: if the command was invoked with an explicit `<N>`,
    keep it; otherwise the orchestrator resolves the PR from the current branch.
-2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
-   unset. If it is set, stop and explain that it overrides the project
-   review-agent models; do not run a gate with an overridden model policy.
-3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
-   the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
-   may not expose a custom-role selector, run
-   `agent/_shared/run_codex_review_agent.sh pr-review-orchestrator --skill-brief agent/skills/repo-review-full/SKILL.md` (append `--target <N>`
-   only when an explicit target was passed). The launcher reads the project
-   agent file and supplies its pinned model, reasoning effort, and developer
-   instructions directly to `codex exec`. The prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute an explicit
-   `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
-   is unavailable, stop with a configuration error; do not fall back to an
-   inherited or anonymous agent.
-4. Relay the agent's returned `html_url` and one-line summary to the user
-   verbatim. Do not re-run or second-guess the pipeline.
 
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, invoke the shared launcher with a
+   foreground Bash tool call and a `600000` ms timeout. Claude Code and Codex
+   use this same command; neither launches its native review agents:
+
+   ```bash
+   agent/_shared/run_pi_review.sh repo-review-full
+   ```
+
+   Append `--target <N>` only when the caller supplied an explicit target. Do
+   not use background execution, `&`, task output, or a detached process. Wait
+   for the command to exit, relay its output verbatim, and stop; the child Pi
+   session owns the review.
+
+3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
+   orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
+   Agent for the flat Step 4 fan-out. Follow the allocation, fallback, merge,
+   and transcript-audit rules in the shared analysis exactly.
+
+4. Relay the returned `html_url` and one-line summary to the user
+   verbatim. Do not re-run or second-guess the pipeline.
 
 ## Orchestrator agent brief
 

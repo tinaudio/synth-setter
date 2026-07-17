@@ -1,6 +1,6 @@
-# Synth-identity overrides for OB-Xf; generic render knobs inherit from surge_xt.
+# Pin OB-Xf identity while generic knobs come from ``vst``.
 defaults:
-  - surge_xt
+  - vst
 
 plugin_path: "plugins/OB-Xf.vst3"
 plugin_state_path: "presets/obxf-base.vstpreset"

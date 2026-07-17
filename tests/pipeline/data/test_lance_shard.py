@@ -8,6 +8,7 @@ tensor decode cannot corrupt both sides identically and pass.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import lance
 import numpy as np
@@ -21,6 +22,7 @@ from synth_setter.data.vst.shapes import (
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
+import synth_setter.pipeline.data.lance_shard as lance_shard
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
     LANCE_MAX_BYTES_PER_FILE,
@@ -210,6 +212,30 @@ def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Pat
     np.testing.assert_array_equal(decoded, expected)
 
 
+def test_lance_fragment_into_stale_dataset_fails_instead_of_inheriting_schema(
+    tmp_path: Path,
+) -> None:
+    """A fragment written into a schema-drifted dataset fails loudly at write time.
+
+    Reproduces #2084: Lance append-mode silently stamps an existing committed dataset's schema
+    metadata onto new data files, so a reused prefix holding a stale dataset turns correct worker
+    output into stale-schema fragments.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    stale_metadata = dict(schema.metadata)
+    stale_metadata[b"synth_setter.shard_metadata"] = b'{"stale": true}'
+    shard = tmp_path / "shard-000000.lance"
+    stale_table = pa.Table.from_batches(
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+    ).replace_schema_metadata(stale_metadata)
+    lance.write_dataset(stale_table, shard, data_storage_version=LANCE_DATA_STORAGE_VERSION)
+
+    with pytest.raises(ValueError, match="existing dataset's schema"):
+        lance_fragment(shard, schema, record_batch_from_arrays(_arange_arrays(offset=1000), schema))
+
+
 def test_lance_fragment_forwards_native_file_bound_and_storage_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -219,14 +245,16 @@ def test_lance_fragment_forwards_native_file_bound_and_storage_version(
     :param monkeypatch: Captures the Lance distributed-writer arguments.
     """
     captured: dict[str, object] = {}
-    sentinel = object()
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    sentinel = SimpleNamespace(files=[SimpleNamespace(path="stub.lance")])
 
     def _capture(*args: object, **kwargs: object) -> list[object]:
         captured.update(kwargs)
         return [sentinel]
 
+    reader = SimpleNamespace(metadata=lambda: SimpleNamespace(schema=schema))
     monkeypatch.setattr(lance.fragment, "write_fragments", _capture)
-    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    monkeypatch.setattr(lance_shard, "LanceFileReader", lambda *a, **k: reader)
 
     fragment = lance_fragment(
         tmp_path / "shard-000000.lance",

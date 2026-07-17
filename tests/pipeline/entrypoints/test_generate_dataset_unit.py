@@ -41,11 +41,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _dispatch_shards,
+    _dispatch_shards_from_claims,
+    _dispatch_shards_parallel,
+    _load_render_rejections,
+    _render_one_owned_shard,
     build_generate_args,
     generate,
 )
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
@@ -81,7 +90,9 @@ def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
     :param args: argv list passed to the patched ``_check_call_streamed``.
     :param spec: Dataset spec whose render shape/dtypes define the shard contract.
     """
-    write_minimal_lance_shard(Path(args[find_script_index(args) + 1]), spec)
+    shard_path = Path(args[find_script_index(args) + 1])
+    write_minimal_lance_shard(shard_path, spec)
+    render_metrics_path(shard_path).write_text(RenderRejectionMetrics().model_dump_json())
 
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
@@ -1047,6 +1058,45 @@ class TestRun(RenderSeamFixtures):
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
+    @pytest.mark.parametrize(
+        "report",
+        [None, '{"clipped":"two","silent":3}', b"\xff"],
+    )
+    def test_renderer_invalid_rejection_report_raises_with_shard_context(
+        self,
+        fake_r2_remote: Path,  # noqa: ARG002
+        spec: DatasetSpec,
+        tmp_path: Path,
+        report: str | bytes | None,
+    ) -> None:
+        """Reject missing and malformed renderer reports before shard staging.
+
+        :param fake_r2_remote: Activates the local staging remote.
+        :param spec: Fixture-provided dataset specification.
+        :param tmp_path: Per-test shard work directory.
+        :param report: Invalid text/bytes, or ``None`` for a missing sidecar.
+        """
+
+        def _render_with_invalid_report(args: list[str]) -> None:
+            _render_valid_shard(args, spec)
+            shard_path = Path(args[find_script_index(args) + 1])
+            metrics_path = render_metrics_path(shard_path)
+            if report is None:
+                metrics_path.unlink()
+            elif isinstance(report, bytes):
+                metrics_path.write_bytes(report)
+            else:
+                metrics_path.write_text(report)
+
+        with patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=_render_with_invalid_report,
+        ):
+            with pytest.raises(RuntimeError, match="invalid render metrics for shard 0"):
+                generate(spec, tmp_path, [])
+
+        assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+
     def test_renderer_version_mismatch_raises_before_uploads(
         self,
         patched_subprocess: MagicMock,
@@ -1422,11 +1472,16 @@ class TestRun(RenderSeamFixtures):
         kwargs["render"] = {**kwargs["render"], "max_retries": 1}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
+        sidecar_exists_at_attempt_start: list[bool] = []
 
         def _flaky_dispatcher(args: list[str]) -> None:
             nonlocal renderer_calls
             renderer_calls += 1
+            shard_path = Path(args[find_script_index(args) + 1])
+            metrics_path = render_metrics_path(shard_path)
+            sidecar_exists_at_attempt_start.append(metrics_path.exists())
             if renderer_calls == 1:
+                metrics_path.write_text("partial")
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
             _render_valid_shard(args, spec)
 
@@ -1437,6 +1492,7 @@ class TestRun(RenderSeamFixtures):
             generate(spec, tmp_path, [])
 
         assert renderer_calls == 2
+        assert sidecar_exists_at_attempt_start == [False, False]
         assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_parallel_render_uses_thread_pool_and_uploads_all_shards(
@@ -2687,7 +2743,7 @@ class TestMainDispatchBranches:
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
         ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the
         wandb-resume trio that routes the eval's ``audio/*`` metrics onto the
-        generate run, and every render field passed through from the generation
+        generate run, and each postprocessing render field copied from the generation
         ``RenderConfig`` so the eval re-renders identically (here a surge_xt spec).
         Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
@@ -2745,13 +2801,13 @@ class TestMainDispatchBranches:
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
-        # render_vst=true re-renders predicted params; surge_simple supplies the
-        # group structure, while every render field predict_vst_audio renders with
-        # is overridden from the generation RenderConfig so the re-render matches it.
-        assert "render=surge_simple" in called_argv
-        assert "render.param_spec_name=surge_xt" in called_argv
-        assert "render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
-        assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        # render_vst=true re-renders predicted params; the generic VST group supplies
+        # the structure while synth identity comes from the generation RenderConfig.
+        assert "render=vst" in called_argv
+        assert "+render.param_spec_name=surge_xt" in called_argv
+        assert "+render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
+        assert "+render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert f"+render.renderer_version={render.renderer_version}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv
         assert f"render.velocity={render.velocity}" in called_argv
@@ -3016,7 +3072,7 @@ class TestMainDispatchBranches:
     ) -> None:
         """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
 
-        ``VSTDataModule.setup()`` opens train/val/test ``.lance`` unconditionally
+        ``LanceVSTDataModule.setup()`` opens train/val/test ``.lance`` unconditionally
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
@@ -3485,6 +3541,167 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     monkeypatch.setattr(generate_dataset.platform, "node", lambda: "pod@host:1/x")
 
     assert generate_dataset._worker_id() == "pod-host-1-x"
+
+
+def test_claims_dispatch_aggregates_rejections_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Claims dispatch returns exact totals from completed claim reports.
+
+    :param monkeypatch: Replaces the renderer boundary.
+    :param tmp_path: Builds the claims spec and receives the dispatcher work path.
+    """
+    spec = _claims_spec(tmp_path, n=3)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        SimpleNamespace(shard_id=0, claim_gen=1),
+        SimpleNamespace(shard_id=1, claim_gen=1),
+        None,
+    ]
+    outcomes = {
+        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
+        1: (True, False, RenderRejectionMetrics(clipped=3, silent=5)),
+    }
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_from_claims(
+        claims,
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped) == (2, 0)
+    assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
+    assert claims.complete.call_count == 2
+
+
+def test_dispatch_shards_claims_mode_relays_rejections_and_claim_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Claims dispatch returns renderer totals and the worker's won-claim count.
+
+    :param monkeypatch: Replaces the claims-table and rendering boundaries.
+    :param tmp_path: Builds the claims-mode dataset specification.
+    """
+    spec = _claims_spec(tmp_path, n=3)
+    claims = object()
+    expected = RenderRejectionMetrics(clipped=4, silent=7)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._shard_claims_for_spec",
+        lambda _spec: claims,
+    )
+
+    def _dispatch_from_claims(
+        actual_claims: object, *_args: object, **_kwargs: object
+    ) -> tuple[int, int, RenderRejectionMetrics]:
+        assert actual_claims is claims
+        return 2, 1, expected
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._dispatch_shards_from_claims",
+        _dispatch_from_claims,
+    )
+
+    rendered, skipped, assigned, rejections = _dispatch_shards(
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped, assigned) == (2, 1, 3)
+    assert rejections == expected
+
+
+def test_parallel_dispatch_aggregates_rejections_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """Parallel dispatch returns exact totals from completed shard reports.
+
+    :param monkeypatch: Replaces the renderer boundary and pins two workers.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Unused work directory passed through the dispatcher.
+    """
+    outcomes = {
+        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
+        1: (False, True, RenderRejectionMetrics(clipped=3, silent=4)),
+        2: (True, False, RenderRejectionMetrics(clipped=5, silent=6)),
+    }
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_parallel(
+        spec,
+        range(3),
+        tmp_path,
+        [],
+    )
+
+    assert (rendered, skipped) == (2, 1)
+    assert rejections == RenderRejectionMetrics(clipped=9, silent=12)
+
+
+def test_load_render_rejections_valid_sidecar_returns_strict_report(tmp_path: Path) -> None:
+    """A valid renderer sidecar round-trips through launcher validation.
+
+    :param tmp_path: Per-test sidecar directory.
+    """
+    metrics_path = tmp_path / "shard.render-metrics.json"
+    metrics_path.write_text('{"clipped":2,"silent":3}')
+
+    assert _load_render_rejections(metrics_path, shard_id=7) == RenderRejectionMetrics(
+        clipped=2,
+        silent=3,
+    )
+
+
+def test_load_render_rejections_invalid_sidecar_names_shard(tmp_path: Path) -> None:
+    """An invalid renderer sidecar fails with its logical shard ID.
+
+    :param tmp_path: Per-test sidecar directory.
+    """
+    metrics_path = tmp_path / "shard.render-metrics.json"
+    metrics_path.write_text('{"clipped":"2","silent":3}')
+
+    with pytest.raises(RuntimeError, match="invalid render metrics for shard 7"):
+        _load_render_rejections(metrics_path, shard_id=7)
+
+
+def test_render_one_owned_shard_relays_rejection_report_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """A rendered shard returns the validated report supplied by its renderer.
+
+    :param monkeypatch: Replaces staging and the renderer boundary.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Unused work directory passed through the renderer boundary.
+    """
+    expected = RenderRejectionMetrics(clipped=2, silent=3)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_and_upload_shard",
+        lambda _spec, _shard, _work_dir: (123, expected),
+    )
+
+    rendered, skipped, rejections = _render_one_owned_shard(spec, 0, tmp_path, [])
+
+    assert (rendered, skipped) == (True, False)
+    assert rejections == expected
 
 
 def test_worker_id_empty_hostname_falls_back_to_worker(

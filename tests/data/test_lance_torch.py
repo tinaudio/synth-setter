@@ -21,7 +21,6 @@ import torch.distributed as dist
 from torch.multiprocessing.spawn import spawn
 from torch.utils.data import DataLoader
 
-from synth_setter.data.lance_datamodule import LanceShardFile
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
     _batch_to_shaped_tensors,
@@ -186,12 +185,12 @@ class TestMapDataloader:
 
         assert len(loader.dataset) == ROWS  # type: ignore[arg-type]
 
-    def test_getitems_matches_legacy_projected_reads_in_one_take(
+    def test_getitems_preserves_projected_unsorted_duplicate_rows_in_one_take(
         self,
         lance_dataset: tuple[Path, dict[str, np.ndarray]],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One projected read preserves duplicate, out-of-order legacy values.
+        """One projected read preserves duplicate, out-of-order source values.
 
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         :param monkeypatch: Fixture installing a recorder over the real dataset.
@@ -203,16 +202,12 @@ class TestMapDataloader:
         recorder = _TakeRecorder(lance.dataset(dest))
         monkeypatch.setattr(dataset, "_ds", recorder)
         monkeypatch.setattr(dataset, "_opening_pid", os.getpid())
-        legacy = LanceShardFile(dest)
-        try:
-            batch = dataset.__getitems__(indices)
-            for column in columns:
-                expected = legacy[column][indices]
-                np.testing.assert_array_equal(batch[column].numpy(), expected)
-                assert batch[column].numpy().dtype == expected.dtype
-                assert batch[column].shape == expected.shape
-        finally:
-            legacy.close()
+        batch = dataset.__getitems__(indices)
+        for column in columns:
+            expected = arrays[column][indices]
+            np.testing.assert_array_equal(batch[column].numpy(), expected)
+            assert batch[column].numpy().dtype == expected.dtype
+            assert batch[column].shape == expected.shape
 
         assert recorder.calls == [(indices, columns)]
 
@@ -295,22 +290,24 @@ class TestMapDataloader:
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
 
-    def test_persistent_workers_without_workers_raises_value_error(
+    def test_persistent_workers_without_workers_is_effectively_disabled(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
     ) -> None:
-        """Worker persistence requires at least one worker process.
+        """In-process loaders safely disable configured worker persistence.
 
         :param lance_dataset: Module-shared dataset used to construct the loader.
         """
         dest, _ = lance_dataset
 
-        with pytest.raises(ValueError, match="persistent_workers requires num_workers > 0"):
-            map_dataloader_over(
-                LanceMapDataset(dest),
-                batch_size=BATCH_SIZE,
-                num_workers=0,
-                persistent_workers=True,
-            )
+        loader = map_dataloader_over(
+            LanceMapDataset(dest),
+            batch_size=BATCH_SIZE,
+            num_workers=0,
+            persistent_workers=True,
+        )
+
+        assert loader.persistent_workers is False
+        assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
 
     def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
         """A row count not divisible by ``batch_size`` yields a ragged final batch.
@@ -342,6 +339,8 @@ class TestMapDataloader:
 
         np.testing.assert_array_equal(rows, arrays["param_array"])
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.slow
     def test_spawn_workers_cover_all_rows(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]

@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, cast
+from typing import Literal, NamedTuple, cast
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +25,6 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import seed_everything
-from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -40,6 +39,7 @@ from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
+from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -51,25 +51,6 @@ class _FakeOracleDataset(NamedTuple):
 
 
 _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
-
-
-class _RecordingWandbLogger(WandbLogger):
-    """A W&B logger boundary fake that records consumed artifact references."""
-
-    def __init__(self) -> None:
-        self.used_artifacts: list[str] = []
-
-    @property
-    def experiment(self) -> Any:  # type: ignore[override]
-        """Return the recorder without initializing an external W&B run."""
-        return self
-
-    def use_artifact(self, name_alias: str) -> None:
-        """Record the artifact reference the evaluation entrypoint consumes.
-
-        :param name_alias: W&B artifact name with its alias.
-        """
-        self.used_artifacts.append(name_alias)
 
 
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
@@ -212,11 +193,7 @@ _FAKE_ORACLE_DATASETS = [
     pytest.param(
         _FakeOracleDataset("lance", "fake_surge_smoke_datasets", "surge_lance"),
         id="lance",
-    ),
-    pytest.param(
-        _FakeOracleDataset("lance_map", "fake_surge_smoke_datasets", "surge_lance_map"),
-        id="lance_map",
-    ),
+    )
 ]
 
 
@@ -286,6 +263,8 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert param_mse.dtype.is_floating_point
     assert torch.isfinite(param_mse), f"oracle test/param_mse must be finite; got {param_mse!r}"
     assert param_mse.item() == 0.0
+    assert logger.experiment.config["ckpt_path"] is None
+    assert logger.experiment.config.allow_val_change_calls == [True]
     assert logger.used_artifacts == ["data-lineage-eval:lineage-eval-20260520T000000000Z"]
 
 
@@ -441,8 +420,8 @@ def _compose_fake_oracle_eval_cfg(
         # surge/base enables the wandb logger; null it so the fast loop never hits
         # wandb init/network/login (these tests don't assert on logging).
         cfg.logger = None
-        # surge/base disables validation (limit_val_batches=0) since fake_oracle is
-        # a predict-mode experiment; re-enable it so mode=val/validate actually runs.
+        # Pin the full split because surge/base bounds validation by batch count.
+        # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
         # Render group is null on fake_oracle; set it inline to the dataset's spec
         # so render_vst has a config and the per-param-MSE labels line up.
@@ -715,7 +694,7 @@ def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
 ) -> None:
     """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
 
-    ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
+    ``LanceVSTDataModule.setup`` resolves ``param_spec_name`` to derive the
     fake/real param width; an unknown spec must surface as a ``KeyError`` at the
     ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
     registry-lookup contract is wired through the real eval entrypoint. The lookup

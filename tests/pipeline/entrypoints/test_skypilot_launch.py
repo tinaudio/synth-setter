@@ -1585,6 +1585,45 @@ class TestSkypilotLaunchCli:
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert task_doc["run"] == cmd
 
+    def test_extra_env_options_forward_values_to_worker(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Repeated CLI extra-env overrides reach the submitted worker environment.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd='echo "experiment=${EXPERIMENT:-surge/ffn_simple}"',
+            env_file=str(env_file),
+            extra_envs={"EXPERIMENT": "surge/ffn_simple"},
+        )
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "--extra-env",
+                "DATASET_ROOT_URI",
+                "r2://experiments/data/custom/",
+                "--extra-env",
+                "EXPERIMENT",
+                "surge/flow_simple",
+                str(cfg_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
+        assert injected["EXPERIMENT"] == "surge/flow_simple"
+
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.
 
@@ -1637,7 +1676,53 @@ class TestCheckedInLaunchConfigs:
         assert (self._LAUNCH_DIR / "train-runpod.yaml").is_file()
         assert (self._LAUNCH_DIR / "eval-runpod.yaml").is_file()
 
-    @pytest.mark.parametrize("name", ["train-runpod.yaml", "train-runpod-smoke.yaml"])
+    def test_flow_simple_440k_config_pins_training_contract(self) -> None:
+        """The dedicated RunPod launch uses flow matching with the finalized 440k dataset."""
+        cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod-flow-simple-440k.yaml")
+
+        assert cfg.cmd is not None
+        tokens = shlex.split(cfg.cmd)
+        assert "experiment=${EXPERIMENT:-surge/flow_simple}" in tokens
+        assert "datamodule=surge_lance_map" in tokens
+        assert "datamodule.param_spec_name=surge_simple" in tokens
+        assert (
+            "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-"
+            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
+            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/}"
+        ) in tokens
+        assert "render=surge_simple" in tokens
+        assert "training.val_audio_probe=true" in tokens
+        assert "training.upload_checkpoints_during_training=true" in tokens
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+        ],
+    )
+    def test_shipped_train_config_pins_remote_dataset_source(self, name: str) -> None:
+        """A fresh pod has no local dataset, so every train cmd must download one (#2095).
+
+        :param name: Shipped training launch config under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+        assert cfg.cmd is not None
+        assert any(
+            token.startswith("datamodule.download_dataset_root_uri=")
+            and "DATASET_ROOT_URI:-r2://" in token
+            for token in shlex.split(cfg.cmd)
+        ), "worker cmd must default to a remote dataset root; fresh pods have no local dataset"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+        ],
+    )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
         """Single-GPU RunPod training opts into crash-recovery checkpoints.
 
@@ -1648,7 +1733,14 @@ class TestCheckedInLaunchConfigs:
         assert "training.upload_checkpoints_during_training=true" in shlex.split(cfg.cmd)
 
     @pytest.mark.parametrize(
-        "name", ["train-runpod.yaml", "eval-runpod.yaml"], ids=["train", "eval"]
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+            "eval-runpod.yaml",
+        ],
+        ids=["flow-simple-440k", "smoke", "train", "eval"],
     )
     def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
         """A shipped config validates, names a real template, and its cmd injects cleanly.

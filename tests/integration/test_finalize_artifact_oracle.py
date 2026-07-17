@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from contextlib import closing
 from pathlib import Path
 
+import lance
 import numpy as np
 import pytest
 import torch
@@ -96,17 +96,20 @@ def _maybe_skip_when_no_r2() -> None:
 def _load_param_array_from_lance(local_lance: Path) -> np.ndarray:
     """Read the ``param_array`` column out of a finalized Lance split.
 
-    Reads through ``LanceShardFile`` — the adapter the train/eval dataloader
-    uses — so the bytes match what a model would consume.
+    Reads the finalized dataset through Lance's native projected table API.
 
     :param local_lance: ``train.lance`` split as a downloaded Lance dataset directory.
     :returns: Float32 ``param_array`` of shape ``(N, P)``, rows in shard order.
     """
-    from synth_setter.data.lance_datamodule import LanceShardFile
     from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 
-    with closing(LanceShardFile(local_lance)) as shard:
-        return np.asarray(shard[PARAM_ARRAY_FIELD][:], dtype=np.float32)
+    column = (
+        lance.dataset(local_lance)
+        .to_table(columns=[PARAM_ARRAY_FIELD])
+        .column(PARAM_ARRAY_FIELD)
+        .combine_chunks()
+    )
+    return np.asarray(column.to_numpy_ndarray(), dtype=np.float32)
 
 
 def _download_first_train_artifact(prefix: str, work_dir: Path) -> Path:
