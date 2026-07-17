@@ -9,6 +9,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.pipeline import r2_io
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import resume
 from synth_setter.utils.resume import (
@@ -318,7 +319,6 @@ def test_discover_resume_checkpoint_unreachable_r2_returns_none(
     :param monkeypatch: Pytest fixture used to break the R2 tier.
     :param tmp_path: Empty run-dir family.
     """
-    from synth_setter.pipeline import r2_io
 
     def _no_creds(*args: object, **kwargs: object) -> None:
         raise RuntimeError("no creds")
