@@ -32,7 +32,6 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
-from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._vst import PLUGIN_PATH
@@ -45,6 +44,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_log_per_param_mse_wired,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
 )
@@ -351,16 +351,30 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    mse_callbacks = [
-        callback for callback in trainer.callbacks if isinstance(callback, LogPerParamMSE)
-    ]
-    assert len(mse_callbacks) == 1
-    assert mse_callbacks[0].param_spec is param_specs["surge_simple"]
+    assert_log_per_param_mse_wired(trainer, "surge_simple")
 
     datamodule = object_dict["datamodule"]
     assert datamodule.train_dataset.num_params == expected_width
     sample = datamodule.train_dataset[0]
     assert sample["params"].shape == (2, expected_width)
+
+
+def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None:
+    """Legacy model and callback aliases run through the train entrypoint.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="surge_simple",
+        model_group="surge_fake_oracle",
+        callbacks_group="default_surge",
+    )
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
 
 
 def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:

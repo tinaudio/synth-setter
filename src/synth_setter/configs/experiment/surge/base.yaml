@@ -34,7 +34,7 @@ trainer:
   gradient_clip_val: 0.5
   limit_val_batches: 0
   precision: bf16-mixed
-  # VST schedulers interpolate max_steps into T_max; use Surge defaults.
+  # VST schedulers use trainer.max_steps for CosineAnnealingLR.T_max.
   min_steps: 1_000_000
   max_steps: 1_000_000
   log_every_n_steps: 100

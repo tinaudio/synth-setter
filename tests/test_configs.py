@@ -9,6 +9,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import InterpolationToMissingValueError
 
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -242,40 +243,83 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
 
 
 @pytest.mark.parametrize(
-    ("legacy_name", "target_suffix"),
+    (
+        "legacy_name",
+        "target_suffix",
+        "expected_path",
+        "expected_value",
+        "expected_param_spec",
+        "expected_compile",
+        "expected_learning_rate",
+    ),
     [
-        ("surge_fake_oracle", "vst_fake_oracle_module.VSTFakeOracleModule"),
-        ("surge_ffn", "vst_ff_module.VSTFeedForwardModule"),
-        ("surge_flow", "vst_flow_matching_module.VSTFlowMatchingModule"),
-        ("surge_flowmlp", "vst_flow_matching_module.VSTFlowMatchingModule"),
-        ("surge_flowvae", "vst_flowvae_module.VSTFlowVAEModule"),
+        (
+            "surge_fake_oracle",
+            "vst_fake_oracle_module.VSTFakeOracleModule",
+            "net.d_out",
+            92,
+            None,
+            False,
+            1e-4,
+        ),
+        ("surge_ffn", "vst_ff_module.VSTFeedForwardModule", "net.d_out", 92, None, True, 1e-4),
+        (
+            "surge_flow",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            90,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowmlp",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            90,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowvae",
+            "vst_flowvae_module.VSTFlowVAEModule",
+            "net.latent_dim",
+            92,
+            "surge_xt",
+            True,
+            2e-4,
+        ),
     ],
 )
-def test_legacy_surge_model_group_resolves_vst_target(
-    legacy_name: str, target_suffix: str
+def test_legacy_surge_model_group_preserves_concrete_defaults(
+    legacy_name: str,
+    target_suffix: str,
+    expected_path: str,
+    expected_value: int,
+    expected_param_spec: str | None,
+    expected_compile: bool,
+    expected_learning_rate: float,
 ) -> None:
-    """Archived model selections compose through canonical VST groups.
+    """Each archived model selection preserves its concrete defaults.
 
     :param legacy_name: Historical Hydra model-group name.
-    :param target_suffix: Canonical target suffix expected after composition.
+    :param target_suffix: Canonical VST target expected after composition.
+    :param expected_path: Config field preserving the historical concrete default.
+    :param expected_value: Historical concrete default.
+    :param expected_param_spec: Historical ParamSpec default, when applicable.
+    :param expected_compile: Historical torch.compile default.
+    :param expected_learning_rate: Historical optimizer learning-rate default.
     """
-    cfg = _compose(
+    legacy_cfg = _compose(
         "train.yaml",
         ["datamodule=surge_simple", f"model={legacy_name}", "trainer=cpu"],
     )
-
-    assert cfg.model._target_.endswith(target_suffix)
-
-
-def test_legacy_surge_flowvae_group_composes_with_concrete_defaults() -> None:
-    """The historical Flow-VAE selection retains its Surge XT defaults."""
-    cfg = _compose(
-        "train.yaml",
-        ["datamodule=surge_simple", "model=surge_flowvae", "trainer=cpu"],
-    )
-
-    assert cfg.model.param_spec == "surge_xt"
-    assert cfg.model.net.latent_dim == 92
+    assert legacy_cfg.model._target_.endswith(target_suffix)
+    assert OmegaConf.select(legacy_cfg.model, expected_path) == expected_value
+    assert legacy_cfg.model.compile is expected_compile
+    assert legacy_cfg.model.optimizer.lr == expected_learning_rate
+    assert OmegaConf.select(legacy_cfg.model, "param_spec") == expected_param_spec
 
 
 @pytest.mark.parametrize(
@@ -327,7 +371,7 @@ def test_legacy_surge_callback_alias_composes_vst_callbacks(
 
 
 def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
-    """The generic per-parameter callback resolves the active datamodule spec."""
+    """The VST per-parameter callback resolves the active datamodule spec."""
     cfg = _compose(
         "train.yaml",
         [
@@ -339,6 +383,22 @@ def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
     )
 
     assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+
+
+def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
+    """The VST per-parameter callback rejects an unset ParamSpec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=vst",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    with pytest.raises(InterpolationToMissingValueError, match="param_spec_name"):
+        OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
 
 
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:

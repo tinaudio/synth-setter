@@ -1,8 +1,6 @@
 # @package _global_
 
-# Sibling of test-mps-fake-oracle.yaml for the surge/ffn_full experiment — see that file's
-# header for the lockstep contract with cfg_surge_xt_global; this variant targets vst_ffn
-# instead of vst_fake_oracle.
+# MPS FFN counterpart to test-mps-fake-oracle with shared smoke-config wiring.
 
 defaults:
   - surge/base

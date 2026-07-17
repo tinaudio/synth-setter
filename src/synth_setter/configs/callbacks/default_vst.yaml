@@ -1,12 +1,8 @@
 defaults:
   - model_checkpoint
   - lr_monitor
-  # - early_stopping
   - model_summary
   - rich_progress_bar
-  # - plot_loss
-  # - plot_pos_enc
-  # - plot_proj
   - plot_projii
   - _self_
 
@@ -18,11 +14,6 @@ model_checkpoint:
   save_last: True
   auto_insert_metric_name: False
   every_n_train_steps: 5_000
-
-# early_stopping:
-#   monitor: "val/chamfer"
-#   patience: 50
-#   mode: "min"
 
 plot_proj_ii:
   after_val: false

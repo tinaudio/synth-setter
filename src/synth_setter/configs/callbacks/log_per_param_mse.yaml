@@ -1,3 +1,4 @@
+# Requires a VST datamodule declaring param_spec_name.
 log_per_param_mse:
   _target_: synth_setter.utils.callbacks.LogPerParamMSE
   param_spec: ${datamodule.param_spec_name}

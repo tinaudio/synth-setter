@@ -33,10 +33,9 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
-from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests.conftest import REAL_VST_VARIANTS
+from tests.conftest import REAL_VST_VARIANTS, assert_log_per_param_mse_wired
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
@@ -921,13 +920,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     finally:
         GlobalHydra.instance().clear()
 
-    mse_callbacks = [
-        callback
-        for callback in object_dict["trainer"].callbacks
-        if isinstance(callback, LogPerParamMSE)
-    ]
-    assert len(mse_callbacks) == 1
-    assert mse_callbacks[0].param_spec is param_specs["surge_4"]
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_4")
 
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
