@@ -51,6 +51,7 @@ def test_train_sigterm_after_fit_starts_exits_nonzero_after_cleanup(tmp_path: Pa
     logger_marker = tmp_path / "logger.txt"
     os.mkfifo(ready_fifo)
     ready_fd = os.open(ready_fifo, os.O_RDONLY | os.O_NONBLOCK)
+    ready_writer_fd = os.open(ready_fifo, os.O_WRONLY | os.O_NONBLOCK)
     train_executable = Path(sys.executable).with_name("synth-setter-train")
     repo_root = Path(__file__).parents[1]
     env = {
@@ -102,6 +103,7 @@ def test_train_sigterm_after_fit_starts_exits_nonzero_after_cleanup(tmp_path: Pa
         remaining_output, _ = process.communicate(timeout=60)
         output += remaining_output
     finally:
+        os.close(ready_writer_fd)
         os.close(ready_fd)
         if process.poll() is None:
             process.kill()
