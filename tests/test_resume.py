@@ -330,7 +330,15 @@ def test_discover_resume_checkpoint_unreachable_r2_returns_none(
         {"paths": {"output_dir": str(current)}, "r2": {"bucket": "test-bucket"}}
     )
 
-    assert resume.discover_resume_checkpoint(cfg, config_id="ffn_simple") is None
+    diagnostics: list[str] = []
+
+    assert (
+        resume.discover_resume_checkpoint(cfg, config_id="ffn_simple", diagnostics=diagnostics)
+        is None
+    )
+    assert diagnostics == [
+        "R2 resume discovery under r2://test-bucket/checkpoints/ffn_simple degraded: no creds"
+    ]
 
 
 def test_run_id_from_run_dir_ignores_malformed_newer_wandb_dir(tmp_path: Path) -> None:
@@ -462,6 +470,30 @@ def test_discover_local_prefix_related_config_id_cannot_cross_match(tmp_path: Pa
     current.mkdir()
 
     assert discover_local_checkpoint(current, config_id="flow") is None
+
+
+def test_discover_local_checkpoint_rotated_during_scan_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A checkpoint removed between discovery and stat does not abort the scan.
+
+    :param monkeypatch: Pytest fixture used to simulate a concurrent rotation.
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior", hydra_experiment="surge/ffn_simple")
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    path_stat = Path.stat
+
+    def _rotated_stat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if path == checkpoint:
+            raise OSError("rotated")
+        return path_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _rotated_stat)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
 
 
 def test_discover_local_equal_mtime_tie_breaks_on_path_string(tmp_path: Path) -> None:

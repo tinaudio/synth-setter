@@ -280,13 +280,19 @@ def test_discover_r2_download_failure_degrades_to_none(
 
     monkeypatch.setattr(r2_io, "download_to_path", _broken_download)
 
+    diagnostics: list[str] = []
     decision = discover_r2_checkpoint(
         prefix="r2://test-bucket/checkpoints/ffn_simple",
         config_id="ffn_simple",
         dest_dir=tmp_path / "dest",
+        diagnostics=diagnostics,
     )
 
     assert decision is None
+    assert diagnostics == [
+        "R2 resume checkpoint download "
+        f"ffn_simple-20260715T225004231Z-{_UUID_A}/last.ckpt degraded: disk full"
+    ]
 
 
 def test_discover_r2_non_degradable_error_propagates(
