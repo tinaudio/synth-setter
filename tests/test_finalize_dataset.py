@@ -497,9 +497,11 @@ def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
 
     run_binary = next((tmp_path / "wandb").glob("offline-run-*/run-*.wandb"))
-    summary_rows = [
-        row for row in read_history_rows(run_binary) if "finalize/elapsed_seconds" in row
-    ]
+    rows = read_history_rows(
+        run_binary,
+        until=lambda scanned: any("finalize/elapsed_seconds" in row for row in scanned),
+    )
+    summary_rows = [row for row in rows if "finalize/elapsed_seconds" in row]
     assert len(summary_rows) == 1
     # ``boom`` emits one event of each kind, so these pin callback forwarding.
     assert json.loads(summary_rows[0]["finalize/shards_processed"]) == 1
