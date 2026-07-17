@@ -12,6 +12,7 @@ usage() {
     >&2
 }
 
+# Validate the host request before replacing it with the shared Pi process.
 main() {
   if [[ "${SYNTH_SETTER_PI_REVIEW:-}" == "1" ]]; then
     echo "run_pi_review.sh cannot be nested inside its Pi review session" >&2

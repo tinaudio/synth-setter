@@ -433,8 +433,7 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
         "## code-health review — smoke\n\n"
         "### BLOCK findings\nNone.\n\n"
         "### WARN findings\n"
-        "1. **src/example.py:10** — [reported range 10-12] Defect. "
-        "1. **src/fake.py:99-100** — Example.\n"
+        "1. **src/example.py:10** — [reported range 10-12] Defect.\n"
         "2. **src/bullet.py:20** — [reported range 20-22] Bullet.\n\n"
         "### What looks good\n- Clear."
     )

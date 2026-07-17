@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -253,8 +254,8 @@ class ReviewPass:
     .. attribute :: fallback_candidates
         :type: tuple[str, ...]
 
-        Codex models used only after an OpenRouter pass exhausts its candidates,
-        ordered to prefer a model distinct from the primary Codex pass.
+        Codex models used only after an OpenRouter pass exhausts its candidates.
+        The orchestrator reorders them around the effective Codex-pass model.
 
     .. attribute :: thinking
         :type: str
@@ -357,8 +358,6 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
             in_fence = not in_fence
             continue
         if in_fence:
-            if normalized and normalized[-1] != "None.":
-                normalized[-1] = f"{normalized[-1]} {stripped}"
             continue
         if not stripped:
             continue
@@ -552,7 +551,7 @@ def build_review_plan(
     *,
     changed_lines: int,
     risk_reasons: Sequence[str],
-    available_models: set[str],
+    available_models: AbstractSet[str],
 ) -> list[ReviewPass]:
     """Allocate model candidates and thinking to selected review skills.
 
@@ -606,7 +605,7 @@ def build_review_plan(
     return plan
 
 
-def _require_codex(available_models: set[str]) -> None:
+def _require_codex(available_models: AbstractSet[str]) -> None:
     """Require a registered Codex model for the always-available fallback.
 
     :param available_models: Canonical selectors returned by Pi's model registry.

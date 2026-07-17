@@ -160,9 +160,11 @@ Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 the failure and launch a fresh worker with the next same-provider candidate.
 Codex-pass candidates are always `openai-codex/*`; OpenRouter-pass candidates
 are always `openrouter/*`. If an OpenRouter pass has no candidates, or every
-candidate exhausts quota/capacity, launch a fresh worker with the first
-available `fallback_candidates` model. Continue through that bounded Codex
-sequence only for the same availability failures. Record each launch as
+candidate exhausts quota/capacity, move the successful Codex pass's effective
+model to the end of `fallback_candidates`, then launch a fresh worker with the
+first model. This prefers a distinct fallback even when the Codex pass reached
+its own fallback. Continue through that bounded Codex sequence only for the
+same availability failures. Record each launch as
 `Codex fallback` in the audit detail. Never resume a failed session under a
 different model. Authentication, tool/checklist, malformed-report, timeout,
 and turn-budget failures do not trigger the cross-provider fallback.
@@ -193,10 +195,21 @@ candidates, or an OpenRouter pass exhausts both its candidates and
 sentinel after silently dropping a logical pass.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
-changes this flow, run `repo-review-full-no-comments` from a real Pi session and
-verify the sentinel audit contains every planned Codex/OpenRouter pass, bounded
-turn/runtime/token columns, and an existing transcript path for each launched
-attempt. This live smoke is mandatory in addition to helper CLI tests.
+changes this flow, run both host harnesses against the PR from the worktree:
+
+```bash
+claude -p --dangerously-skip-permissions --no-session-persistence --model haiku \
+  --effort low --output-format text \
+  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+codex exec --dangerously-bypass-approvals-and-sandbox \
+  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+```
+
+After each command, verify the sentinel audit contains every planned
+Codex/OpenRouter pass, bounded turn/runtime/token columns, an existing
+transcript path for each launched attempt, and the current full HEAD from
+`review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
+helper CLI tests.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after same-provider fallback:

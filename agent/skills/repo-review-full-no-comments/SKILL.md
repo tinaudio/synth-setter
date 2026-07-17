@@ -275,8 +275,9 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >   attempt, agent-id, or transcript evidence. The fixed short form below is
 >   only for zero-diff reviews, which skip worker allocation and audit rows.
 >
-> - **PASS short form.** If the JSON has no findings AND no PR-health flags,
->   still write the sentinel file. The gate's size guard rejects files under
+> - **PASS short form.** If `is_zero_diff == true`, still write the sentinel
+>   file. A non-zero diff with no findings keeps the complete Pi audit above
+>   instead of using this short form. The gate's size guard rejects files under
 >   200 bytes, and the header + `PASS` line + `Reviewed at:` line are
 >   ~130 bytes — pad with a one-line context summary so the total is ≥200
 >   bytes. Use this exact template (substitute `<target>` and `<sha>`):

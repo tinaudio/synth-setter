@@ -242,6 +242,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"print\s+the audit table before stopping", text)
     assert "fallback_candidates" in text
     assert "Codex fallback" in text
+    assert re.search(r"successful Codex pass's effective\s+model to the end", text)
+    assert "claude -p --dangerously-skip-permissions" in text
+    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -294,6 +297,14 @@ def test_no_comments_review_uses_isolated_findings_path() -> None:
     assert str(fixed_findings_path) not in text
     assert "exact printed path" in text
     assert "remove the findings file" in text
+
+
+def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
+    """Keep non-empty reviews from discarding the Pi audit on PASS."""
+    text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
+
+    assert "If `is_zero_diff == true`" in text
+    assert "A non-zero diff with no findings" in text
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:

@@ -457,7 +457,6 @@ docs:
       - pattern: "tests/infra/test_agent_hooks_suite.py"
         covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
 
-  # ── PR review fan-out (Pi routing plus legacy role launchers) ──
   - doc: AGENTS.md
     description: Code-review section — review fan-out worker configuration
     sources:
