@@ -678,18 +678,32 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
 
 
 @click.command()
+@click.option(
+    "--extra-env",
+    nargs=2,
+    multiple=True,
+    metavar="KEY VALUE",
+    help="Worker environment entry; repeat to set multiple values.",
+)
 @click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(launch_config: Path) -> None:
+def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
     """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
 
     Relative paths inside the config (``compute_template``, ``env_file``) are
     resolved against the working directory, so run from the repo root.
 
     :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
-    :raises click.ClickException: the config fails to parse, load, or validate.
+    :param extra_env: Worker environment entries that override config ``extra_envs``.
+    :raises click.ClickException: The config or worker environment fails validation.
     """
     try:
         sky_cfg = load_launch_config(launch_config)
+        sky_cfg = SkypilotLaunchConfig.model_validate(
+            {
+                **sky_cfg.model_dump(),
+                "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
+            }
+        )
     except (ValueError, yaml.YAMLError) as exc:
         raise click.ClickException(str(exc)) from exc
     dispatch_via_skypilot(sky_cfg)
