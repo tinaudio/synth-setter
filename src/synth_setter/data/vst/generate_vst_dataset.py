@@ -63,8 +63,9 @@ class VSTDataSample:
     audio: np.ndarray
     mel_spec: np.ndarray
     param_array: np.ndarray = field(init=False)
-    # Attempt provenance stays with the accepted row so shard writers can aggregate it.
+    # Loudness-gate attempt the accepted draw came from (#884).
     attempt: int = 0
+    # Per-draw rejection counts carried to the shard writer for aggregation.
     clipped_rejections: int = 0
     silent_rejections: int = 0
 
