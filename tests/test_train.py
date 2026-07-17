@@ -27,6 +27,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -43,6 +44,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
@@ -373,6 +375,23 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
     HydraConfig().set_config(cfg)
     with pytest.raises(ValueError, match="param_spec_name"):
         train(cfg)
+
+
+def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
+    """Train one real flow step through the offline pretrained-AST config.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    encoder = object_dict["model"].encoder
+    assert isinstance(encoder, PretrainedASTEncoder)
 
 
 @pytest.mark.requires_vst
