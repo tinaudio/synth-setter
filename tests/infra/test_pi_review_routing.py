@@ -412,6 +412,31 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
     )
 
 
+def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
+    tmp_path: Path,
+) -> None:
+    """Produce a valid contract after a narrated mixed-style findings section.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        "### WARN findings\\nThe following were observed.\\n"
+        "- **src/first.py:10** — First finding.\\n"
+        "2. **src/second.py:20** — Second finding.\\n\\n"
+        '### What looks good\\n- Clear."}}\n'
+    )
+
+    report = extract_report(transcript)
+
+    assert report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
+    assert "The following were observed." not in report
+    assert "1. **src/first.py:10** — First finding." in report
+    assert "2. **src/second.py:20** — Second finding." in report
+
+
 def test_extract_report_rejects_duplicate_heading_after_good_section(
     tmp_path: Path,
 ) -> None:

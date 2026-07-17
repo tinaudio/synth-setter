@@ -358,8 +358,6 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
         if in_fence:
             if normalized and normalized[-1] != "None.":
                 normalized[-1] = f"{normalized[-1]} {stripped}"
-            else:
-                normalized.append(stripped)
             continue
         if not stripped:
             continue
@@ -386,9 +384,10 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
             continue
         if normalized and normalized[-1] != "None.":
             normalized[-1] = f"{normalized[-1]} {stripped}"
-        else:
-            normalized.append(stripped)
-    return normalized
+    return [
+        re.sub(r"^\d+\.", f"{index}.", finding) if _FINDING.fullmatch(finding) else finding
+        for index, finding in enumerate(normalized, start=1)
+    ]
 
 
 def extract_report(transcript: Path) -> str:
@@ -533,6 +532,11 @@ def report_is_parseable(report: str, *, expected_skill: str, expected_target: st
 
 
 def _findings_section_is_valid(lines: Sequence[str]) -> bool:
+    """Return whether a findings section satisfies the worker-report contract.
+
+    :param lines: Raw non-heading lines from one findings section.
+    :returns: Whether the section is empty-free and contains valid finding rows.
+    """
     content = [line for line in lines if line.strip()]
     if content in (["None."], ["None"], ["- None."], ["- None"]):
         return True
@@ -597,6 +601,11 @@ def build_review_plan(
 
 
 def _require_providers(available_models: set[str]) -> None:
+    """Require at least one registered model for every review provider.
+
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :raises ValueError: If either required provider has no available model.
+    """
     for provider, setup in _REQUIRED_PROVIDER_SETUP:
         prefix = f"{provider}/"
         if not any(model.startswith(prefix) for model in available_models):
@@ -609,6 +618,13 @@ def _thinking_for(
     changed_lines: int,
     risk_reasons: Sequence[str],
 ) -> tuple[str, str]:
+    """Choose a thinking level and auditable reason for one review pass.
+
+    :param skill: Authoritative checklist name.
+    :param changed_lines: Total added and deleted lines in the diff.
+    :param risk_reasons: Named risk signals detected in the diff.
+    :returns: Selected thinking level and its allocation rationale.
+    """
     if skill in DEEP_SKILLS:
         return "high", "deep checklist"
 
@@ -626,6 +642,10 @@ def _thinking_for(
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the routing command-line parser.
+
+    :returns: Parser for planning, report, audit, and provenance commands.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     plan = subparsers.add_parser("plan", help="print the available review plan as JSON")
