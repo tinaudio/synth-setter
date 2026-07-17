@@ -48,6 +48,7 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "samples_per_shard": 32,
             "max_retries": 0,
             "base_seed": 0,
+            "sample_offset": 0,
             "attempts_per_sample": 100,
             "parallel": False,
             "plugin_reload_cadence": "render",
@@ -55,7 +56,13 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "param_sample_cadence": "sample",
         },
         "shards": [
-            {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
+            {
+                "shard_id": i,
+                "filename": f"shard-{i:06d}{ext}",
+                "seed": 42 + i,
+                "sample_offset": 0,
+            }
+            for i in range(3)
         ],
         # Computed field; mirrors DatasetSpec.split_shard_ranges output for
         # train_val_test_sizes=[32, 32, 32] and samples_per_shard=32.
@@ -144,24 +151,16 @@ class TestValidateTestValues:
 
     def test_wrong_shard_count_returns_error(self) -> None:
         """Spec with 2 shards instead of 3 returns a shard count error."""
-        spec = _make_valid_spec(
-            shards=[
-                {"shard_id": 0, "filename": "shard-000000.lance", "seed": 42},
-                {"shard_id": 1, "filename": "shard-000001.lance", "seed": 43},
-            ]
-        )
+        spec = _make_valid_spec()
+        spec["shards"] = spec["shards"][:2]
         errors = validate_test_values(spec)
         assert any("3 shards" in e for e in errors)
 
     def test_wrong_seeds_returns_error(self) -> None:
         """Spec with wrong seeds returns a seed error."""
-        spec = _make_valid_spec(
-            shards=[
-                {"shard_id": 0, "filename": "shard-000000.lance", "seed": 1},
-                {"shard_id": 1, "filename": "shard-000001.lance", "seed": 2},
-                {"shard_id": 2, "filename": "shard-000002.lance", "seed": 3},
-            ]
-        )
+        spec = _make_valid_spec()
+        for shard, seed in zip(spec["shards"], (1, 2, 3), strict=True):
+            shard["seed"] = seed
         errors = validate_test_values(spec)
         assert any("seed" in e for e in errors)
 
