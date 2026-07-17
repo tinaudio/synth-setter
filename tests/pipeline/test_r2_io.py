@@ -14,6 +14,7 @@ import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -622,6 +623,24 @@ class TestIsR2Reachable:
         env = captured["env"]
         assert isinstance(env, dict)
         assert env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "id-from-default"
+        assert captured["timeout"] == r2_io._AUTH_PING_TIMEOUT_SECONDS  # noqa: SLF001
+
+    def test_returns_false_when_auth_ping_times_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A hung auth ping does not let the integration-test gate pass.
+
+        :param monkeypatch: Pytest fixture used to stub PATH + env + the timed-out probe.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
+        )
+        for key in STORAGE_REQUIRED_ENV_KEYS:
+            monkeypatch.setenv(key, "stub")
+
+        def _timeout(*_args: object, **_kwargs: object) -> NoReturn:
+            raise subprocess.TimeoutExpired(cmd=["rclone", "lsd", "r2:"], timeout=45)
+
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.subprocess.run", _timeout)
+        assert r2_io.is_r2_reachable() is False
 
     def test_returns_false_when_secret_env_keys_are_blank(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1464,6 +1483,42 @@ class TestEnsureR2EnvLoaded:
 
         args = mock_run.call_args[0][0]
         assert args[:3] == ["rclone", "lsd", "r2:"]
+
+    def test_auth_ping_has_python_wall_clock_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The auth ping caps wall-clock time at the Python subprocess boundary.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+        captured: dict[str, object] = {}
+
+        def _capture(*_a: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch.object(r2_io.subprocess, "run", side_effect=_capture):
+            r2_io.ensure_r2_env_loaded(env_file=None)
+
+        assert captured["timeout"] == r2_io._AUTH_PING_TIMEOUT_SECONDS  # noqa: SLF001
+
+    def test_auth_ping_timeout_raises_actionable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung auth ping raises a timeout-specific RuntimeError.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+
+        with patch.object(
+            r2_io.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["rclone", "lsd", "r2:"], timeout=45),
+        ):
+            with pytest.raises(RuntimeError, match="timed out"):
+                r2_io.ensure_r2_env_loaded(env_file=None)
 
     def test_no_env_file_uses_process_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``env_file=None`` skips dotenv; succeeds when os.environ already has the keys.
