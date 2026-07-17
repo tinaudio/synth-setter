@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v10.0.3 (2026-07-17)
+
+### Bug Fixes
+
+- **evaluation**: Create explicit output dir before enforcing tags
+  ([#2117](https://github.com/tinaudio/synth-setter/pull/2117),
+  [`ebd86c4`](https://github.com/tinaudio/synth-setter/commit/ebd86c4d5ebbae921f0db88240af1d7fa1f9cc59))
+
+An explicit paths.output_dir override naming a nonexistent nested directory crashed
+  synth-setter-eval at extras() with FileNotFoundError writing tags.log, before model setup — this
+  cost all nine common-holdout mode=test legs their param-MSE tables. Create the directory first.
+
+### Chores
+
+- **config**: Align RunPod launch override interfaces
+  ([#2114](https://github.com/tinaudio/synth-setter/pull/2114),
+  [`343d48f`](https://github.com/tinaudio/synth-setter/commit/343d48f2cfe4c9530d848171e54e90be08a6018b))
+
+
 ## v10.0.2 (2026-07-17)
 
 ### Bug Fixes
