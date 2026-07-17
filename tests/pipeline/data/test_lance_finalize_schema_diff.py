@@ -1,4 +1,4 @@
-"""Pure-function coverage of finalize's schema-mismatch rendering.
+"""Pure-function coverage of the shared schema-mismatch rendering.
 
 Runs without the ``fake_r2_remote`` fixture so plugin-less CI (no rclone)
 still exercises every diff branch; the e2e drift scenarios live in
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from synth_setter.pipeline.data.lance_finalize import _schema_mismatch_detail
+from synth_setter.pipeline.data.lance_shard import schema_mismatch_detail
 
 
 def test_schema_diff_field_set_drift_names_each_side() -> None:
@@ -17,7 +17,7 @@ def test_schema_diff_field_set_drift_names_each_side() -> None:
     physical = pa.schema([pa.field("wrong", pa.int64())])
     expected = pa.schema([pa.field("audio", pa.float32()), pa.field("mel_spec", pa.float32())])
 
-    detail = _schema_mismatch_detail(physical, expected)
+    detail = schema_mismatch_detail(physical, expected)
 
     assert "fields only in fragment: ['wrong']" in detail
     assert "fields only in expected: ['audio', 'mel_spec']" in detail
@@ -28,7 +28,7 @@ def test_schema_diff_dtype_drift_on_common_field_shows_both_types() -> None:
     physical = pa.schema([pa.field("audio", pa.float16())])
     expected = pa.schema([pa.field("audio", pa.float32())])
 
-    detail = _schema_mismatch_detail(physical, expected)
+    detail = schema_mismatch_detail(physical, expected)
 
     assert "field types differ: audio fragment halffloat vs expected float" in detail
 
@@ -39,7 +39,7 @@ def test_schema_diff_metadata_only_drift_appends_skew_hint() -> None:
     physical = pa.schema([field], metadata={b"k": b"writer-value"})
     expected = pa.schema([field], metadata={b"k": b"validator-value"})
 
-    detail = _schema_mismatch_detail(physical, expected)
+    detail = schema_mismatch_detail(physical, expected)
 
     assert "metadata 'k': fragment=writer-value expected=validator-value" in detail
     assert "code-version skew" in detail
@@ -52,7 +52,7 @@ def test_schema_diff_metadata_key_missing_on_one_side_renders_absent() -> None:
     physical = pa.schema([field], metadata={b"k": b"v"})
     expected = pa.schema([field])
 
-    detail = _schema_mismatch_detail(physical, expected)
+    detail = schema_mismatch_detail(physical, expected)
 
     assert "metadata 'k': fragment=v expected=<absent>" in detail
 
@@ -62,7 +62,7 @@ def test_schema_diff_field_drift_suppresses_skew_hint() -> None:
     physical = pa.schema([pa.field("wrong", pa.int64())], metadata={b"k": b"a"})
     expected = pa.schema([pa.field("audio", pa.float32())], metadata={b"k": b"b"})
 
-    detail = _schema_mismatch_detail(physical, expected)
+    detail = schema_mismatch_detail(physical, expected)
 
     assert "code-version skew" not in detail
 
@@ -72,7 +72,7 @@ def test_schema_diff_nullability_only_drift_reports_field_flags() -> None:
     nullable = pa.schema([pa.field("audio", pa.int64(), nullable=True)])
     required = pa.schema([pa.field("audio", pa.int64(), nullable=False)])
 
-    detail = _schema_mismatch_detail(nullable, required)
+    detail = schema_mismatch_detail(nullable, required)
 
     assert "order or nullability" in detail
     assert "audio" in detail

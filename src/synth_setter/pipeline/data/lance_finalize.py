@@ -41,7 +41,11 @@ from synth_setter.pipeline.data.finalize_progress import (
     FinalizeProgressCallback,
     report_finalize_progress,
 )
-from synth_setter.pipeline.data.lance_shard import commit_lance_dataset, lance_schema
+from synth_setter.pipeline.data.lance_shard import (
+    commit_lance_dataset,
+    lance_schema,
+    schema_mismatch_detail,
+)
 from synth_setter.pipeline.data.lance_staging import (
     complete_attempt_names,
     invalidate_staged_attempt,
@@ -304,70 +308,8 @@ def _validate_fragment_files(
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment physical schema "
                 "does not match spec-derived shard schema: "
-                f"{_schema_mismatch_detail(physical_schema, expected_schema)}"
+                f"{schema_mismatch_detail(physical_schema, expected_schema)}"
             )
-
-
-def _decode_metadata_value(value: bytes | None) -> str:
-    """Render one schema-metadata value for a mismatch message.
-
-    :param value: Raw metadata bytes, or ``None`` when the key is absent on one side.
-    :returns: Decoded text, or ``<absent>`` for a missing key.
-    """
-    return "<absent>" if value is None else value.decode("utf-8", errors="replace")
-
-
-def _schema_mismatch_detail(physical: pa.Schema, expected: pa.Schema) -> str:
-    """Describe how a fragment's physical schema diverges from the spec-derived one.
-
-    :param physical: Schema read from the staged fragment's data file.
-    :param expected: Schema this checkout derives from the dataset spec.
-    :returns: Field and metadata differences; when the fields agree and only spec-derived schema
-        metadata diverges, ends with a code-version-skew hint (the #2084 signature: writer image
-        and validator checkout on different code).
-    """
-    parts: list[str] = []
-    physical_fields = {field.name: field.type for field in physical}
-    expected_fields = {field.name: field.type for field in expected}
-    only_physical = sorted(set(physical_fields) - set(expected_fields))
-    only_expected = sorted(set(expected_fields) - set(physical_fields))
-    if only_physical:
-        parts.append(f"fields only in fragment: {only_physical}")
-    if only_expected:
-        parts.append(f"fields only in expected: {only_expected}")
-    type_diffs = [
-        f"{name} fragment {physical_fields[name]} vs expected {expected_fields[name]}"
-        for name in sorted(set(physical_fields) & set(expected_fields))
-        if physical_fields[name] != expected_fields[name]
-    ]
-    if type_diffs:
-        parts.append("field types differ: " + "; ".join(type_diffs))
-    physical_meta = dict(physical.metadata or {})
-    expected_meta = dict(expected.metadata or {})
-    for key in sorted(set(physical_meta) | set(expected_meta)):
-        physical_value, expected_value = physical_meta.get(key), expected_meta.get(key)
-        if physical_value != expected_value:
-            parts.append(
-                f"metadata {key.decode('utf-8', errors='replace')!r}: "
-                f"fragment={_decode_metadata_value(physical_value)} "
-                f"expected={_decode_metadata_value(expected_value)}"
-            )
-    if not (only_physical or only_expected or type_diffs) and physical_meta != expected_meta:
-        parts.append(
-            "fields agree and only spec-derived schema metadata differs — likely "
-            "writer/validator code-version skew (fragments staged by a different code "
-            "version than this checkout, e.g. CI's shared dev-snapshot writer image vs "
-            "a stale PR branch); rebase onto current main or regenerate the fragments"
-        )
-    # Name/type/metadata diffs above are order-insensitive and ignore field
-    # flags, so an order- or nullability-only drift needs its own rendering.
-    if not parts:
-        parts.append(
-            "fields differ in order or nullability: "
-            f"fragment [{', '.join(str(field) for field in physical)}] vs "
-            f"expected [{', '.join(str(field) for field in expected)}]"
-        )
-    return "; ".join(parts)
 
 
 def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> CheckedLanceWinner:
