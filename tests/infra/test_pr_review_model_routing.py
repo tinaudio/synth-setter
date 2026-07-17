@@ -204,6 +204,7 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
 
     assert worker["description"]
     assert worker["prompt_mode"] == "append"
+    assert isinstance(worker["tools"], str), "Pi worker tools must use comma-separated syntax"
     assert set(worker["tools"].split(", ")) == {"bash", "grep", "read"}
     assert "max_turns" not in worker
     assert "model" not in worker

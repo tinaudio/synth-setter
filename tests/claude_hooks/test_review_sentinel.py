@@ -219,6 +219,27 @@ def test_cli_findings_subcommand_emits_unique_path(tmp_path: Path) -> None:
     assert findings_path.is_file()
 
 
+def test_cli_findings_subcommand_invalid_directory_exits_2_without_traceback(
+    tmp_path: Path,
+) -> None:
+    """``findings`` reports filesystem errors through the CLI contract.
+
+    :param tmp_path: Temporary parent for a nonexistent directory.
+    """
+    missing_dir = tmp_path / "missing"
+
+    result = subprocess.run(  # noqa: S603
+        ["python3", str(_HELPER_PATH), "findings", str(missing_dir)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "No such file or directory" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_cli_path_subcommand_emits_review_dir_filename() -> None:
     """``path <sha>`` prints ``<REVIEW_DIR>/<filename>`` — the form SKILL.md uses."""
     sha = "b" * 40

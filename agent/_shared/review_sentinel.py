@@ -95,7 +95,7 @@ def _main(argv: Sequence[str]) -> int:
     unique findings JSON path.
 
     :param argv: Argument list, normally ``sys.argv``.
-    :returns: Process exit code (0 success; 1 parse no-match; 2 usage/ValueError).
+    :returns: Process exit code (0 success; 1 parse no-match; 2 invalid input).
     """
     if len(argv) < 3 or argv[1] not in _SUBCOMMANDS:
         sys.stderr.write(f"{_USAGE}\n")
@@ -113,7 +113,7 @@ def _main(argv: Sequence[str]) -> int:
             if sha is None:
                 return 1
             sys.stdout.write(sha + "\n")
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
     return 0

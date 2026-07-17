@@ -556,8 +556,11 @@ def build_review_plan(
     :param risk_reasons: Named risk signals detected in the diff.
     :param available_models: Canonical selectors from Pi's model registry.
     :returns: Two ordered passes per skill, preserving the supplied skill order.
-    :raises ValueError: If provider authentication or all candidates are unavailable.
+    :raises ValueError: If no skills are selected, inputs are invalid, provider authentication is
+        missing, or all candidates are unavailable.
     """
+    if not skills:
+        raise ValueError("skills must be non-empty")
     if changed_lines < 0:
         raise ValueError("changed_lines must be non-negative")
     unknown = sorted(set(skills) - SUPPORTED_SKILLS)

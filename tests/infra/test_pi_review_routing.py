@@ -135,6 +135,17 @@ def test_build_review_plan_skips_unavailable_candidate() -> None:
     assert plan[1].unavailable == ("openrouter/cohere/north-mini-code:free",)
 
 
+def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
+    """Reject an empty review before provider or worker selection."""
+    with pytest.raises(ValueError, match="skills must be non-empty"):
+        build_review_plan(
+            [],
+            changed_lines=10,
+            risk_reasons=(),
+            available_models=parse_available_models(AVAILABLE_MODELS),
+        )
+
+
 def test_build_review_plan_missing_provider_raises_actionable_error() -> None:
     """Reject missing provider authentication before launching workers."""
     available = {
