@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 _REPO_ROOT = Path(__file__).parents[2]
 _LAUNCH_CONFIG_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/train.yml"
@@ -13,9 +12,10 @@ _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/train.yml"
 
 def test_train_workflow_experiment_input_reaches_launcher_extra_env() -> None:
     """The dispatch experiment input is forwarded to the SkyPilot worker."""
-    workflow = yaml.load(_WORKFLOW_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    workflow = yaml.safe_load(_WORKFLOW_PATH.read_text(encoding="utf-8"))
 
-    experiment = workflow["on"]["workflow_dispatch"]["inputs"]["experiment"]
+    # PyYAML's YAML 1.1 resolver interprets the unquoted GitHub key `on` as True.
+    experiment = workflow[True]["workflow_dispatch"]["inputs"]["experiment"]
     steps_by_name = {step["name"]: step for step in workflow["jobs"]["train"]["steps"]}
     dispatch_step = steps_by_name["Dispatch via SkyPilot"]
 
