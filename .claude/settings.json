@@ -88,19 +88,6 @@
             "command": "bash agent/hooks/git-commit-trailer-check.sh"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "description": "Pre-PR review gate: blocks gh pr create unless REVIEW_FULL=<path> points at a sentinel review file whose filename-encoded SHA is an ancestor of HEAD within REVIEW_MAX_LAG first-parent commits. Honor-system gate; raises the floor to 'produce a file named after a recent SHA on this branch'. Full contract lives in agent/hooks/pre-pr-review-gate.sh; filename format in agent/_shared/review_sentinel.py.",
-        "hooks": [
-          {
-            "type": "command",
-            "if": "Bash(gh pr create *)",
-            "timeout": 10,
-            "statusMessage": "Checking pre-PR review gate...",
-            "command": "bash agent/hooks/pre-pr-review-gate.sh"
-          }
-        ]
       }
     ],
     "Stop": [

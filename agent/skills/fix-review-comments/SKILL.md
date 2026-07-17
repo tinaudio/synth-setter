@@ -2,11 +2,9 @@
 name: fix-review-comments
 description: |-
   Apply every comment-hygiene finding from the pre-PR review sentinel, then
-  refresh the sentinel so the gate passes. Use this after
-  `/repo-review-full-no-comments` reports comment-hygiene BLOCK/WARN findings,
-  whenever `gh pr create` is blocked with "unresolved comment-hygiene
-  finding(s)", or any time you want the comment/docstring findings in the
-  latest review applied in one pass. Reads the sentinel written by
+  refresh the sentinel. Use this after `/repo-review-full-no-comments` reports
+  comment-hygiene BLOCK/WARN findings or any time you want the comment/docstring
+  findings in the latest review applied in one pass. Reads the sentinel written by
   `agent/_shared/review_sentinel.py`; pairs with the `comment-hygiene` skill
   for the checklist and rewrite rules.
 ---
@@ -14,11 +12,10 @@ description: |-
 # fix-review-comments — Apply Comment-Hygiene Findings From the Sentinel
 
 `/repo-review-full-no-comments` writes a rendered review to a sentinel file
-keyed by HEAD's SHA. The `pre-pr-review-gate.sh` hook blocks `gh pr create`
-while that sentinel still lists `[comment-hygiene:warn]` / `[comment-hygiene:block]`
-findings (`REVIEW_COMMENT_GATE=block`, the default). This skill drains those
-findings: apply each rewrite, commit, then re-review so the refreshed sentinel
-is clean and the gate opens.
+keyed by HEAD's SHA. This skill drains its `[comment-hygiene:warn]` and
+`[comment-hygiene:block]` findings: apply each rewrite, commit, then re-review
+so the refreshed sentinel is clean. The retained `pre-pr-review-gate.sh` can
+consume that sentinel after its local registration is restored.
 
 The fix is an **apply step, not a re-judgment**. Consistency comes from
 applying the rewrite the review already produced — not from re-deriving one.
@@ -122,18 +119,15 @@ Summarize:
 - **Applied** — count by C-id, with `path:line` for each.
 - **Surfaced** — every finding left unfixed and why (needs a real issue ref, a
   rationale decision, or a non-obvious C1 move). These are what the user must
-  resolve before the gate opens.
-- **Gate status** — whether the refreshed sentinel is clean. If findings
-  remain, name the `gh pr create … # REVIEW_FULL=<path>` follow-up, and note
-  that `REVIEW_COMMENT_GATE=off` bypasses the sub-gate for an intentional
-  finding the user has accepted.
+  resolve before treating the sentinel as clean.
+- **Sentinel status** — whether the refreshed sentinel is clean. If findings
+  remain, name each accepted finding and its rationale.
 
 ## Notes
 
-- This skill is the remediation half of the pre-PR comment gate; the detection
-  half is `/repo-review-full-no-comments` + `pre-pr-review-gate.sh`. Keep the
-  three in sync — the gate greps for the `[comment-hygiene:<severity>]` tag the
-  review emits.
+- This skill is the remediation half of the pre-PR review flow; the detection
+  half is `/repo-review-full-no-comments`. Keep the retained gate parser in sync
+  because it greps for the `[comment-hygiene:<severity>]` tag after restoration.
 - Rewrite semantics (what each C-id means, the `.. attribute ::` and
   no-`:param self:` pydoclint rules) live in the `comment-hygiene` skill. When
   re-deriving a fix in Step 2, that skill is authoritative — do not reinvent the

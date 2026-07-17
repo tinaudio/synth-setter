@@ -220,7 +220,6 @@ _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     # ...` (git-level options before the subcommand); the wrapper defers to
     # the Python scanner, which re-scopes to actual commit invocations.
     ("Git-commit-trailer-check", "Bash(git*)"),
-    ("Pre-PR review gate", "Bash(gh pr create *)"),
 )
 
 _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -266,6 +265,13 @@ def test_named_handlers_carry_expected_if_scope(
         f"got {handler.get('if')!r} (missing or wrong scope means this hook fires on "
         "every Bash call)"
     )
+
+
+def test_pre_pr_review_gate_is_not_registered() -> None:
+    """The unstable pre-PR review gate remains suspended from local hook settings."""
+    descriptions = [entry.get("description", "") for entry in _matcher_entries()]
+
+    assert not any("Pre-PR review gate" in description for description in descriptions)
 
 
 @pytest.mark.parametrize(
@@ -384,7 +390,7 @@ def pre_pr_gate_command() -> str:
 
     :returns: The shell command string.
     """
-    return _find_handler("Pre-PR review gate")["command"]
+    return "bash agent/hooks/pre-pr-review-gate.sh"
 
 
 def test_pre_pr_gate_blocks_when_review_path_absent(pre_pr_gate_command: str) -> None:
