@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784239247234,
+  "lastUpdate": 1784248233996,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -8814,6 +8814,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05345332622528076,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4eeac14acd645342e4d7a19d480cc59bfda67fdf",
+          "message": "chore(data-pipeline): harden torchsynth render contracts (#2037)\n\n* internal-fix(data-pipeline): harden torchsynth render contracts\n\nReject renderer/backend name mismatches before the version gate and add behavioral coverage for package absence, spec-width drift, and real CLI-to-Lance rendering.\n\nRefs #1757\n\n* internal-fix(data-pipeline): address contract-coverage review warnings\n\nShare the torchsynth plugin-path sentinel via renderer_backend.py (spec.py\nvalidator and the vst package now use one constant), document the sentinel on\nthe plugin_path field, slow-mark the CLI subprocess e2e, and derive the\nwidth-drift test's expected counts from the live voice.\n\nRefs #1757\n\n* docs: note the torchsynth plugin-path sentinel in RenderConfig references\n\nThe data-pipeline doc's verbatim RenderConfig body and the doc-map entry for\nrenderer_backend.py now carry the plugin_path/renderer_backend agreement\ninvariant introduced by _validate_torchsynth_backend.\n\nRefs #1757",
+          "timestamp": "2026-07-16T18:23:08-04:00",
+          "tree_id": "70f8446874e100829fe35d8eac35aa73d5f44728",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4eeac14acd645342e4d7a19d480cc59bfda67fdf"
+        },
+        "date": 1784248232294,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.870767593383789,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.016899857260287,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.028585784137248993,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.0309220552444458,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.916606903076172,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.360241689750003,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.696374416351318,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.5042476093769075,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03353016451001167,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05476564168930054,
             "unit": "1-cos"
           },
           {
