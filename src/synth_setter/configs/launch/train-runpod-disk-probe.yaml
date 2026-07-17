@@ -1,0 +1,14 @@
+# Throwaway diagnostic for #2111: prints the pod's real mount layout on the
+# 750 GB training template — no training, no dataset. Dispatch from this
+# branch only; never merge.
+
+compute_template: src/synth_setter/configs/compute/runpod-training-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+tail: true
+cmd: >-
+  echo PROBE-DISK-LAYOUT &&
+  df -h &&
+  (lsblk || true) &&
+  (findmnt -no TARGET,SOURCE,FSTYPE,SIZE,AVAIL / /root /home/build || true) &&
+  echo PROBE-DONE
