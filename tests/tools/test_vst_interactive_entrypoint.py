@@ -5,12 +5,12 @@ import subprocess
 import sys
 
 
-def test_old_surge_module_name_is_removed() -> None:
+def test_surge_xt_interactive_module_when_imported_is_not_found() -> None:
     """The tool has no compatibility shim because no serialized import path depends on it."""
     assert importlib.util.find_spec("synth_setter.tools.surge_xt_interactive") is None
 
 
-def test_help_from_vst_module_uses_synth_neutral_summary() -> None:
+def test_vst_interactive_help_when_invoked_uses_synth_neutral_summary() -> None:
     """The canonical module runs and describes a VST3 plugin rather than one synth."""
     result = subprocess.run(  # noqa: S603 — fixed module entrypoint
         [sys.executable, "-m", "synth_setter.tools.vst_interactive", "--help"],
