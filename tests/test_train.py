@@ -7,12 +7,12 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import logging
 import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
 import numpy as np
@@ -20,13 +20,14 @@ import pandas as pd
 import pytest
 import torch
 from hydra.core.hydra_config import HydraConfig
-from lightning.pytorch.loggers.wandb import WandbLogger
+from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -43,6 +44,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
@@ -52,6 +54,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.noise_capture import NoiseCaptureCallback
+from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -61,25 +64,6 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
-
-
-class _RecordingWandbLogger(WandbLogger):
-    """A W&B logger boundary fake that records consumed artifact references."""
-
-    def __init__(self) -> None:
-        self.used_artifacts: list[str] = []
-
-    @property
-    def experiment(self) -> Any:  # type: ignore[override]
-        """Return the recorder without initializing an external W&B run."""
-        return self
-
-    def use_artifact(self, name_alias: str) -> None:
-        """Record the artifact reference the training entrypoint consumes.
-
-        :param name_alias: W&B artifact name with its alias.
-        """
-        self.used_artifacts.append(name_alias)
 
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
@@ -133,6 +117,37 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
         cfg_train.datamodule.num_workers = 2
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+@pytest.mark.parametrize(
+    ("received_sigterm", "expected_exit_code"),
+    [(True, 143), (False, 7)],
+)
+def test_train_fit_system_exit_uses_signal_status_only_for_sigterm(
+    cfg_train: DictConfig,
+    received_sigterm: bool,
+    expected_exit_code: int,
+) -> None:
+    """Translate Lightning's handled SIGTERM without masking other exits.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param received_sigterm: Whether Lightning recorded a SIGTERM.
+    :param expected_exit_code: Exit code expected from the training entrypoint.
+    """
+    HydraConfig().set_config(cfg_train)
+    with (
+        patch.object(Trainer, "fit", side_effect=SystemExit(7)),
+        patch.object(
+            Trainer,
+            "received_sigterm",
+            new_callable=PropertyMock,
+            return_value=received_sigterm,
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        train(cfg_train)
+
+    assert exc_info.value.code == expected_exit_code
 
 
 def test_train_torchsynth_experiment_renders_audio_online(
@@ -376,6 +391,23 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
     HydraConfig().set_config(cfg)
     with pytest.raises(ValueError, match="param_spec_name"):
         train(cfg)
+
+
+def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
+    """Train one real flow step through the offline pretrained-AST config.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    encoder = object_dict["model"].encoder
+    assert isinstance(encoder, PretrainedASTEncoder)
 
 
 @pytest.mark.requires_vst
@@ -669,7 +701,7 @@ def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig, lo
     both governed by ``seed_everything(cfg.seed, workers=True)``. Runs
     ``num_workers=0`` because forking workers over Lance deadlocks on the
     parent's tokio threadpool; the forked-worker re-seed is covered over Lance
-    by ``tests/data/test_surge_datamodule.py::TestNoiseGeneratorSeeding``.
+    by ``tests/data/test_vst_datamodule.py::TestNoiseGeneratorSeeding``.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     :param loader: Datamodule read path under test (``legacy`` or ``map``).
@@ -1009,6 +1041,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     from synth_setter.utils.callbacks import ValAudioProbe
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    assert cfg_surge_real_train.training.val_audio_probe == "auto"
 
     # fake_r2_remote chdirs into tmp_path, so the render config's repo-relative
     # plugin/preset paths must be absolutized before they are handed to the renderer.
@@ -1029,7 +1062,6 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
-        cfg_surge_real_train.training.val_audio_probe = True
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
         # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
         # forces a real validation after step 1 (the sanity check never stages a probe).
@@ -1040,7 +1072,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     _, object_dict = train(cfg_surge_real_train)
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
-    assert len(probes) == 1, "val_audio_probe=true did not wire exactly one ValAudioProbe"
+    assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
     probe = probes[0]
     assert probe._future is not None, "validation ran but no probe was launched"
     concurrent.futures.wait([probe._future], timeout=600)
@@ -1079,3 +1111,356 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert not [p for p in landed if p.endswith(".pt")], (
         f"raw prediction tensors must stay local, but reached R2: {landed}"
     )
+
+
+@pytest.mark.slow
+def test_train_resume_auto_continues_from_newest_sibling_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """A second launch with ``training.resume=auto`` loads the first run's ``last.ckpt``.
+
+    Both runs share ``max_epochs=1``: the resumed launch restores the completed
+    epoch and trains zero additional steps, so its final weights must equal the
+    first run's — proving the discovered checkpoint was actually loaded, not
+    merely located.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of both sibling run output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    first_cfg = cfg_train.copy()
+    with open_dict(first_cfg):
+        first_cfg.paths.output_dir = str(tmp_path / "run-first")
+        first_cfg.test = False
+    _, first_objects = train(first_cfg)
+    # Parameters only: the state dict also holds ``_d``, an *uninitialized*
+    # device-tracker buffer whose bytes are garbage and never restored-to-equal.
+    first_weights = {
+        name: param.detach().clone() for name, param in first_objects["model"].named_parameters()
+    }
+    first_ckpt = tmp_path / "run-first" / "checkpoints" / "last.ckpt"
+    assert first_ckpt.is_file()
+    # In-process test runs write no wandb/.hydra state, so plant the identity
+    # evidence a real launch leaves behind (config_id falls back to task_name).
+    config_id = resolve_run_config_id(first_cfg)
+    run_dir_name = f"run-20260716_000000-{config_id}-20260716T000000000Z"
+    (tmp_path / "run-first" / "wandb" / run_dir_name).mkdir(parents=True)
+    (tmp_path / "run-first" / ".hydra").mkdir()
+
+    second_cfg = cfg_train.copy()
+    with open_dict(second_cfg):
+        second_cfg.paths.output_dir = str(tmp_path / "run-second")
+        second_cfg.test = False
+        second_cfg.training.resume = "auto"
+        # A _target_-less wandb stub: instantiate_loggers skips it, but the
+        # continuity wiring must still pin the recovered id and resume=allow.
+        second_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+    _, second_objects = train(second_cfg)
+
+    assert second_objects["cfg"].ckpt_path == str(first_ckpt)
+    second_logger_cfg = second_objects["cfg"].logger.wandb
+    assert second_logger_cfg.id == f"{config_id}-20260716T000000000Z"
+    assert second_logger_cfg.resume == "allow"
+    second_weights = dict(second_objects["model"].named_parameters())
+    assert set(second_weights) == set(first_weights)
+    for name, first_param in first_weights.items():
+        assert torch.equal(second_weights[name], first_param), f"{name} diverged"
+
+
+@pytest.mark.slow
+def test_train_resume_require_from_r2_continues_wandb_run(
+    cfg_train: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``require`` loads an R2 mirror and continues its recovered W&B run.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Pytest fixture used to bypass the R2 credential probe.
+    :param tmp_path: Parent of distinct source and recovery output families.
+    """
+    HydraConfig().set_config(cfg_train)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    source_cfg = cfg_train.copy()
+    with open_dict(source_cfg):
+        source_cfg.paths.output_dir = str(tmp_path / "source-runs" / "run-first")
+        source_cfg.test = False
+    _, source_objects = train(source_cfg)
+    source_ckpt = tmp_path / "source-runs" / "run-first" / "checkpoints" / "last.ckpt"
+    assert source_ckpt.is_file()
+    config_id = resolve_run_config_id(source_cfg)
+    run_id = f"{config_id}-20260716T000000000Z"
+    mirror = (
+        fake_r2_remote
+        / "test-bucket"
+        / "checkpoints"
+        / config_id
+        / f"{run_id}-{'a' * 32}"
+        / "last.ckpt"
+    )
+    mirror.parent.mkdir(parents=True)
+    mirror.write_bytes(source_ckpt.read_bytes())
+
+    recovery_cfg = cfg_train.copy()
+    with open_dict(recovery_cfg):
+        recovery_cfg.paths.output_dir = str(tmp_path / "recovery-runs" / "run-second")
+        recovery_cfg.test = False
+        recovery_cfg.r2.bucket = "test-bucket"
+        recovery_cfg.training.resume = "require"
+        recovery_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+    _, recovered_objects = train(recovery_cfg)
+
+    recovered_cfg = recovered_objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(
+        tmp_path / "recovery-runs" / "run-second" / "resume" / "last.ckpt"
+    )
+    assert recovered_cfg.logger.wandb.id == run_id
+    assert recovered_cfg.logger.wandb.resume == "allow"
+    source_weights = dict(source_objects["model"].named_parameters())
+    recovered_weights = dict(recovered_objects["model"].named_parameters())
+    assert set(recovered_weights) == set(source_weights)
+    for name, source_param in source_weights.items():
+        assert torch.equal(recovered_weights[name], source_param), f"{name} diverged"
+
+
+def test_train_resume_require_without_checkpoint_raises(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``training.resume=require`` refuses to silently start fresh.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+
+    with pytest.raises(
+        RuntimeError, match=r"training.resume=require found no checkpoint for config_id 'train'"
+    ):
+        train(cfg_train)
+
+
+def test_train_resume_rejects_explicit_empty_checkpoint_before_instantiation(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """An empty manual checkpoint override fails before the training graph is built.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Output directory that remains unpopulated on validation failure.
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.ckpt_path = ""
+
+    with pytest.raises(ValueError, match="ckpt_path"):
+        train(cfg_train)
+
+    assert not (tmp_path / "run-only").exists()
+
+
+def test_train_resume_require_reports_r2_degradation(
+    cfg_train: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``require`` reports why R2 discovery degraded instead of finding nothing.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    :param monkeypatch: Pytest fixture used to make the R2 tier unavailable.
+    """
+    HydraConfig().set_config(cfg_train)
+
+    def _unavailable() -> None:
+        raise RuntimeError("no R2 credentials")
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+        cfg_train.r2.bucket = "test-bucket"
+
+    with pytest.raises(RuntimeError, match="no R2 credentials"):
+        train(cfg_train)
+
+
+def test_train_resume_require_without_r2_reports_no_degradation(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``require`` distinguishes no configured R2 tier from a degraded one.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+        cfg_train.r2.bucket = None
+
+    with pytest.raises(RuntimeError, match="found no checkpoint") as exc_info:
+        train(cfg_train)
+
+    assert "degraded" not in str(exc_info.value)
+
+
+def test_train_resume_auto_without_checkpoint_initializes_fresh_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``auto`` initializes normally when neither local nor R2 recovery exists.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+
+    _, objects = train(cfg_train)
+
+    assert objects["cfg"].ckpt_path is None
+
+
+def test_train_resume_auto_local_checkpoint_continues_wandb_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``auto`` selects a verified local checkpoint and preserves W&B continuity.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of the prior and current Hydra output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    prior = tmp_path / "run-prior"
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    (prior / ".hydra").mkdir()
+    (prior / "wandb" / "run-20260716_000000-train-20260716T000000000Z").mkdir(parents=True)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-current")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+        cfg_train.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+
+    _, objects = train(cfg_train)
+
+    recovered_cfg = objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(checkpoint)
+    assert recovered_cfg.logger.wandb.id == "train-20260716T000000000Z"
+    assert recovered_cfg.logger.wandb.resume == "allow"
+
+
+def test_train_resume_auto_hydra_only_checkpoint_uses_fresh_wandb_run(
+    cfg_train: DictConfig, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Hydra-verified checkpoint without a run ID starts a fresh W&B run.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of the prior and current Hydra output dirs.
+    :param caplog: Pytest log capture fixture enabling the resume diagnostic.
+    """
+    HydraConfig().set_config(cfg_train)
+    prior = tmp_path / "run-prior"
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    hydra_dir = prior / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text("task_name: train\n")
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-current")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+        cfg_train.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+
+    with caplog.at_level(logging.INFO, logger="synth_setter.cli.train"):
+        _, objects = train(cfg_train)
+
+    recovered_cfg = objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(checkpoint)
+    assert recovered_cfg.logger.wandb.id.startswith("train-")
+    assert recovered_cfg.logger.wandb.resume is None
+
+
+@pytest.mark.slow
+def test_train_resume_auto_without_checkpoint_starts_fresh(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``training.resume=auto`` with nothing to resume trains from scratch.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+
+    metric_dict, object_dict = train(cfg_train)
+
+    assert "train/loss" in metric_dict
+    assert object_dict["cfg"].ckpt_path is None
+
+
+@pytest.mark.slow
+def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """A wandb-less sibling proven by ``.hydra`` state resumes without id reuse.
+
+    Covers the ``decision.wandb_run_id is None`` branch through the real
+    entrypoint: ``ckpt_path`` is set, but no wandb continuity is pinned.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of both sibling run output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    first_cfg = cfg_train.copy()
+    with open_dict(first_cfg):
+        first_cfg.paths.output_dir = str(tmp_path / "run-first")
+        first_cfg.test = False
+    train(first_cfg)
+    first_ckpt = tmp_path / "run-first" / "checkpoints" / "last.ckpt"
+    assert first_ckpt.is_file()
+    # Identity via recorded Hydra state only (no wandb dir): config_id falls
+    # back to task_name for this experiment-less composition.
+    hydra_dir = tmp_path / "run-first" / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text(f"task_name: {resolve_run_config_id(first_cfg)}\n")
+
+    second_cfg = cfg_train.copy()
+    with open_dict(second_cfg):
+        second_cfg.paths.output_dir = str(tmp_path / "run-second")
+        second_cfg.test = False
+        second_cfg.training.resume = "auto"
+        second_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+    _, second_objects = train(second_cfg)
+
+    assert second_objects["cfg"].ckpt_path == str(first_ckpt)
+    second_logger_cfg = second_objects["cfg"].logger.wandb
+    # A fresh id is minted (no recovered one) and continuity is NOT pinned.
+    assert second_logger_cfg.id is not None
+    assert second_logger_cfg.resume is None

@@ -107,6 +107,22 @@ def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
             np.testing.assert_array_equal(decoded[field], expected)
 
 
+def test_finalize_accepts_split_local_sample_offset_metadata(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Finalize validates every split-stream shard against its own offset.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec((101, 202, 303))
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    assert lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train"))).count_rows() == 4
+
+
 def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:

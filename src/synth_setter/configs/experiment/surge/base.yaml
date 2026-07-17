@@ -32,7 +32,8 @@ callbacks:
 
 trainer:
   gradient_clip_val: 0.5
-  limit_val_batches: 0
+  # The batch limit applies per rank; row count depends on world size and batch size.
+  limit_val_batches: 20
   precision: bf16-mixed
   # Surge model configs interpolate ${trainer.max_steps} into the
   # CosineAnnealingLR scheduler's T_max, so max_steps must be set for any

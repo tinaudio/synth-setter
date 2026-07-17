@@ -1199,6 +1199,39 @@ T_session_start_banner_in_linked_worktree() {
 }
 it "session-start-banner: in linked worktree → stdout reports 'isolated worktree (OK)'" T_session_start_banner_in_linked_worktree
 
+T_session_start_banner_self_heals_missing_worktree_links() {
+  local out wt make_log
+  reset_sandbox
+  mkdir -p "$SANDBOX/plugins" "$SANDBOX/thoughts"
+  wt="$TEST_DIR/banner-heal-wt"
+  git worktree add -q -b banner-heal-branch "$wt" >/dev/null 2>&1
+  make_log="$TEST_DIR/banner-make-calls-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+echo "ARGS=\$*" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  out=$(cd "$wt" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected EXIT:0, got: $out"; return 1
+  }
+  grep -q "CWD=$wt" "$make_log" 2>/dev/null || {
+    echo "session-start should self-heal in $wt; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-plugins" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-plugins; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-thoughts" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-thoughts; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-skills" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-skills; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+}
+it "session-start-banner: linked worktree missing plugins/thoughts → self-heals with make link-*" T_session_start_banner_self_heals_missing_worktree_links
+
 T_session_start_banner_silent_outside_repo() {
   local out scratch
   scratch=$(mktemp -d "$TEST_DIR/banner-no-git-XXXX")

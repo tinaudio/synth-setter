@@ -9,18 +9,20 @@ class. VST DSP output can still vary across CPU architectures.
 ## Seed Flow
 
 The frozen `DatasetSpec` is the reproducibility unit. Human-authored Hydra
-config supplies `base_seed`; materialization derives each `ShardSpec.seed` as:
+config supplies distinct `train_val_test_seeds`. Materialization assigns each
+shard its split master and split-local starting row:
 
 ```text
-shard_seed = base_seed + shard_id
+ShardSpec.seed = train_val_test_seeds[split]
+ShardSpec.sample_offset = split_local_shard_id * samples_per_shard
 ```
 
-The launcher passes each shard seed into `RenderConfig.base_seed` for the
-renderer process. Inside the writer loop, every row receives a `SampleSeed`:
+The launcher passes both values into `RenderConfig`. Inside the writer loop,
+every row receives a `SampleSeed`:
 
 ```text
 master_seed = RenderConfig.base_seed
-sample_idx = absolute row index within the shard
+sample_idx = RenderConfig.sample_offset + shard_row_index
 max_attempts = RenderConfig.attempts_per_sample
 ```
 
@@ -38,7 +40,7 @@ silent row from advancing any global RNG stream.
 
 ## Implementation Status
 
-Implemented in [#1713](https://github.com/tinaudio/synth-setter/pull/1713):
+The current implementation includes:
 
 - `src/synth_setter/data/vst/seeding.py` owns `seed_for_sample()` and
   `rng_for_sample()`. The encoding is golden-tested because changing it reseeds
@@ -46,8 +48,8 @@ Implemented in [#1713](https://github.com/tinaudio/synth-setter/pull/1713):
 - VST parameter sampling accepts an explicit `numpy.random.Generator`; it no
   longer depends on process-global `random` or `numpy.random` streams for seeded
   dataset rows.
-- The Lance writer projects render provenance through
-  `ShardMetadata`: `base_seed` and `attempts_per_sample`.
+- The Lance writer projects `base_seed`, `sample_offset`, and
+  `attempts_per_sample` through `ShardMetadata`.
 - Shard validation rejects seed-provenance mismatches in Lance schema metadata.
   Sidecars without seed fields still validate structurally.
 - Tests cover same-seed repeatability, different-seed divergence, worker-count
@@ -57,21 +59,32 @@ Implemented in [#1713](https://github.com/tinaudio/synth-setter/pull/1713):
 ## Guarantees
 
 - Same frozen spec plus same renderer environment produces the same parameter
-  rows for each logical shard row.
+  rows for each split-local row.
+- Training rows form a stable prefix as the training split grows; validation
+  and test rows stay fixed when training or shard sizes change.
 - A row's parameter draw is independent of worker count, shard dispatch order,
-  and previous rows' retry counts.
-- Re-rendering the same shard with the same `base_seed`,
+  shard boundaries, and previous rows' retry counts.
+- Re-rendering the same shard with the same `base_seed`, `sample_offset`,
   `attempts_per_sample`, and loudness threshold gives the same accepted attempt
   and parameter row.
 - Validation catches a shard whose stored seed provenance disagrees with the
   spec-derived expected values.
 
+These row-level guarantees apply to `param_sample_cadence="sample"`. Shard
+cadence intentionally reuses one patch within each shard, so changing shard
+boundaries changes that probe's grouping.
+
+## Legacy Specs
+
+`train_val_test_seeds=None` preserves the original `base_seed + shard_id`
+derivation. This keeps materialized specs and shard metadata from older runs
+replayable. New Hydra-composed datasets provide explicit split masters.
+
 ## Out Of Scope
 
-- Per-split independent RNG streams are still reserved. `train_val_test_seeds`
-  remains rejected until a design needs separate train/val/test seed families.
 - Per-row accepted attempt is not stored as a dataset column. The current
-  provenance records the shard seed and attempt budget, not each accepted retry.
+  provenance records the split master, sample offset, and attempt budget, not
+  each accepted retry.
 - Restart/idempotency tests for partially written shards belong to the writer
   resume design, not the seed derivation contract.
 - Full audio bit identity for real VST renders is not asserted. The current
@@ -82,7 +95,5 @@ Implemented in [#1713](https://github.com/tinaudio/synth-setter/pull/1713):
 
 - [#884](https://github.com/tinaudio/synth-setter/issues/884): deterministic
   per-sample seeding and dataset row reproducibility.
-- [#943](https://github.com/tinaudio/synth-setter/issues/943): reserved
-  `train_val_test_seeds` behavior and future split-stream design.
 - [#489](https://github.com/tinaudio/synth-setter/issues/489): plugin/render
   state cadence effects that can affect audio even when parameter rows match.

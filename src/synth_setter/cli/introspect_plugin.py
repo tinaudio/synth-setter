@@ -304,8 +304,8 @@ def _resolve_register_target(
                 "not inside a synth-setter checkout; pass --repo-root <checkout>."
             )
         root = found
-    paths = registration_paths(root, spec_name)
     try:
+        paths = registration_paths(root, spec_name)
         updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc

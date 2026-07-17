@@ -1637,7 +1637,32 @@ class TestCheckedInLaunchConfigs:
         assert (self._LAUNCH_DIR / "train-runpod.yaml").is_file()
         assert (self._LAUNCH_DIR / "eval-runpod.yaml").is_file()
 
-    @pytest.mark.parametrize("name", ["train-runpod.yaml", "train-runpod-smoke.yaml"])
+    def test_flow_simple_440k_config_pins_training_contract(self) -> None:
+        """The dedicated RunPod launch uses flow matching with the finalized 440k dataset."""
+        cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod-flow-simple-440k.yaml")
+
+        assert cfg.cmd is not None
+        tokens = shlex.split(cfg.cmd)
+        assert "experiment=surge/flow_simple" in tokens
+        assert "datamodule=surge_lance_map" in tokens
+        assert "datamodule.param_spec_name=surge_simple" in tokens
+        assert (
+            "datamodule.download_dataset_root_uri="
+            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
+            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
+        ) in tokens
+        assert "render=surge_simple" in tokens
+        assert "training.val_audio_probe=true" in tokens
+        assert "training.upload_checkpoints_during_training=true" in tokens
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+        ],
+    )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
         """Single-GPU RunPod training opts into crash-recovery checkpoints.
 
@@ -1648,7 +1673,13 @@ class TestCheckedInLaunchConfigs:
         assert "training.upload_checkpoints_during_training=true" in shlex.split(cfg.cmd)
 
     @pytest.mark.parametrize(
-        "name", ["train-runpod.yaml", "eval-runpod.yaml"], ids=["train", "eval"]
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod.yaml",
+            "eval-runpod.yaml",
+        ],
+        ids=["flow-simple-440k", "train", "eval"],
     )
     def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
         """A shipped config validates, names a real template, and its cmd injects cleanly.

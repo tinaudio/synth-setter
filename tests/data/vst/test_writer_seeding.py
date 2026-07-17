@@ -20,7 +20,7 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRA
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
 from synth_setter.pipeline.partitioning import get_my_shards
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.data.vst.test_fake_plugin_e2e import _fake_render_cfg
 from tests.data.vst.test_generate_vst_dataset import _SPEC_NAME
@@ -30,7 +30,9 @@ _BASE_SEED = 20260615
 
 
 def _multishard_lance_spec(
-    train_val_test_sizes: tuple[int, int, int], samples_per_shard: int
+    train_val_test_sizes: tuple[int, int, int],
+    samples_per_shard: int,
+    train_val_test_seeds: tuple[int, int, int] | None = None,
 ) -> DatasetSpec:
     """Build a lance ``DatasetSpec`` split into shards of ``samples_per_shard`` rows.
 
@@ -39,6 +41,7 @@ def _multishard_lance_spec(
 
     :param train_val_test_sizes: Three-tuple of sample counts across splits.
     :param samples_per_shard: Per-shard row count driving shard-count derivation.
+    :param train_val_test_seeds: Optional independent split master seeds.
     :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     render = {
@@ -46,7 +49,11 @@ def _multishard_lance_spec(
         "samples_per_shard": samples_per_shard,
         "samples_per_render_batch": samples_per_shard,
     }
-    return build_lance_smoke_spec(train_val_test_sizes=train_val_test_sizes, render=render)
+    return build_lance_smoke_spec(
+        train_val_test_sizes=train_val_test_sizes,
+        render=render,
+        train_val_test_seeds=train_val_test_seeds,
+    )
 
 
 def _read_column(out: Path, field: str) -> np.ndarray:
@@ -72,9 +79,8 @@ def _read_param_array(out: Path) -> np.ndarray:
 def _read_seed_metadata(out: Path) -> dict[str, int]:
     """Read seed provenance from a rendered Lance shard's schema metadata.
 
-    Reads the raw metadata JSON so the two integer provenance fields are
-    recoverable even when ``min_loudness`` is ``-inf`` (which serializes to
-    JSON ``null`` and would trip the strict ``ShardMetadata`` float parse).
+    Raw JSON preserves seed positions when ``min_loudness=-inf`` serializes to
+    ``null`` and cannot pass strict ``ShardMetadata`` validation.
 
     :param out: Rendered Lance shard path.
     :returns: Seed provenance attrs relevant to repeat-run determinism.
@@ -83,6 +89,7 @@ def _read_seed_metadata(out: Path) -> dict[str, int]:
     data = json.loads(payload)
     return {
         "base_seed": data["base_seed"],
+        "sample_offset": data["sample_offset"],
         "attempts_per_sample": data["attempts_per_sample"],
     }
 
@@ -104,6 +111,30 @@ def _render_param_array(out: Path, *, base_seed: int, num_samples: int) -> np.nd
     return _read_param_array(out)
 
 
+def _render_split_params(out_dir: Path, spec: DatasetSpec, split: Split) -> np.ndarray:
+    """Render and concatenate one split's parameter rows in logical order.
+
+    :param out_dir: Directory receiving the split's Lance shards.
+    :param spec: Dataset spec defining split-local seed streams.
+    :param split: Split whose rows are rendered.
+    :returns: Concatenated encoded parameter rows.
+    """
+    lo, hi = spec.split_shard_ranges[split]
+    rows: list[np.ndarray] = []
+    for shard in spec.shards[lo:hi]:
+        shard_path = out_dir / shard.filename
+        # Fake-plugin fields replace spec.render, so inject the shard's seed position directly.
+        render_cfg = _fake_render_cfg(
+            num_samples=spec.render.samples_per_shard,
+            min_loudness=float("-inf"),
+        ).model_copy(
+            update={"base_seed": shard.seed, "sample_offset": shard.sample_offset}
+        )
+        make_lance_dataset(shard_path, render_cfg)
+        rows.append(_read_param_array(shard_path))
+    return np.concatenate(rows)
+
+
 def _render_worker_layout(
     out_dir: Path, spec: DatasetSpec, *, world: int
 ) -> dict[int, dict[str, np.ndarray]]:
@@ -121,10 +152,13 @@ def _render_worker_layout(
             shard = spec.shards[shard_id]
             shard_path = out_dir / f"worker-{rank}" / shard.filename
             shard_path.parent.mkdir(parents=True, exist_ok=True)
+            # Fake-plugin fields replace spec.render, so inject the shard's seed position directly.
             render_cfg = _fake_render_cfg(
                 num_samples=spec.render.samples_per_shard,
                 min_loudness=float("-inf"),
-            ).model_copy(update={"base_seed": shard.seed})
+            ).model_copy(
+                update={"base_seed": shard.seed, "sample_offset": shard.sample_offset}
+            )
             make_lance_dataset(shard_path, render_cfg)
             columns = {field: _read_column(shard_path, field) for field in fields}
             for local_idx in range(spec.render.samples_per_shard):
@@ -159,7 +193,7 @@ def test_same_render_config_yields_identical_params_and_seed_metadata(
     first = tmp_path / "first.lance"
     second = tmp_path / "second.lance"
     cfg = _fake_render_cfg(num_samples=4, min_loudness=float("-inf")).model_copy(
-        update={"base_seed": _BASE_SEED, "attempts_per_sample": 3}
+        update={"base_seed": _BASE_SEED, "sample_offset": 12, "attempts_per_sample": 3}
     )
 
     make_lance_dataset(first, cfg)
@@ -171,6 +205,7 @@ def test_same_render_config_yields_identical_params_and_seed_metadata(
         == _read_seed_metadata(second)
         == {
             "base_seed": _BASE_SEED,
+            "sample_offset": 12,
             "attempts_per_sample": 3,
         }
     )
@@ -204,6 +239,29 @@ def test_prefix_rows_independent_of_shard_size(
     small = _render_param_array(tmp_path / "small.lance", base_seed=_BASE_SEED, num_samples=2)
     large = _render_param_array(tmp_path / "large.lance", base_seed=_BASE_SEED, num_samples=4)
     assert np.array_equal(small, large[:2])
+
+
+@pytest.mark.fake_vst
+def test_split_rows_stable_across_train_and_shard_sizes(
+    tmp_path: Path, install_fake_plugin: FakeVST3Plugin
+) -> None:
+    """Train rows nest and held-out rows stay fixed across dataset scaling.
+
+    :param tmp_path: Pytest fixture providing output directories for both layouts.
+    :param install_fake_plugin: Swaps the VST loader for a deterministic fake plugin.
+    """
+    split_seeds = (101, 202, 303)
+    small = _multishard_lance_spec((4, 4, 4), 2, split_seeds)
+    large = _multishard_lance_spec((8, 4, 4), 4, split_seeds)
+
+    small_train = _render_split_params(tmp_path / "small-train", small, "train")
+    large_train = _render_split_params(tmp_path / "large-train", large, "train")
+    assert np.array_equal(small_train, large_train[:4])
+    for split in ("val", "test"):
+        assert np.array_equal(
+            _render_split_params(tmp_path / f"small-{split}", small, split),
+            _render_split_params(tmp_path / f"large-{split}", large, split),
+        )
 
 
 @pytest.mark.fake_vst

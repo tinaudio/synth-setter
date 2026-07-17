@@ -720,6 +720,51 @@ def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
     return cfg
 
 
+def build_fake_flow_ast_pretrained_train_cfg(output_dir: Path) -> DictConfig:
+    """Compose an offline one-step config through the production Hydra selection.
+
+    :param output_dir: Hydra output and log directory.
+    :returns: Resolved fake-mode flow training config.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_simple",
+                "model/encoder=ast_pretrained",
+                "trainer=cpu",
+            ],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(output_dir)
+            cfg.paths.log_dir = str(output_dir)
+            cfg.datamodule.fake = True
+            cfg.datamodule.batch_size = 2
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.use_saved_mean_and_variance = False
+            cfg.trainer.min_steps = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_val_batches = 0
+            # ODE sampling dominates this encoder-wiring test even with a tiny backbone.
+            cfg.test = False
+            cfg.logger = None
+            if "lr_monitor" in (cfg.get("callbacks") or {}):
+                del cfg.callbacks.lr_monitor
+            cfg.model.compile = False
+            cfg.model.encoder.pretrained = False
+            cfg.model.encoder.d_model = 32
+            cfg.model.encoder.n_pool_heads = 2
+            cfg.model.encoder.backbone_config = {
+                "hidden_size": 32,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "intermediate_size": 64,
+            }
+    return cfg
+
+
 @pytest.fixture(scope="function")
 def cfg_surge_xt_global(
     accelerator: str, param_spec_name: str, experiment_name: str

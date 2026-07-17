@@ -69,7 +69,7 @@ def checkout(tmp_path: Path) -> Path:
     shutil.copy(_REAL_PKG_DIR / "data/vst/param_spec_registry.py", vst_dir)
     render_dir = root / "src/synth_setter/configs/render"
     render_dir.mkdir(parents=True)
-    shutil.copy(_REAL_PKG_DIR / "configs/render/surge_xt.yaml", render_dir)
+    shutil.copy(_REAL_PKG_DIR / "configs/render/vst.yaml", render_dir)
     bundle = root / "plugins/fake.vst3/Contents"
     bundle.mkdir(parents=True)
     (bundle / "moduleinfo.json").write_text('{"Version": "9.9.9"}')
@@ -254,6 +254,21 @@ def test_register_conflicting_spec_name_fails_before_plugin_load(checkout: Path)
 
     assert result.exit_code != 0
     assert "surge_xt" in result.output
+
+
+@pytest.mark.parametrize("spec_name", ["vst", "VST"])
+def test_register_reserved_render_group_fails_before_plugin_load(
+    checkout: Path, spec_name: str
+) -> None:
+    """The generic ``vst`` render-group name cannot be registered as a synth.
+
+    :param checkout: Skeleton checkout fixture.
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    result = _register(checkout, spec_name=spec_name)
+
+    assert result.exit_code != 0
+    assert "reserved for a render config" in result.output
 
 
 def test_register_rejects_explicit_out_paths(checkout: Path) -> None:

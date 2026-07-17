@@ -218,24 +218,34 @@ the single binding point: re-running with the same `spec` resumes the same W&B r
 
 ### 5b. Per-shard metrics (one history row per shard, `step=shard_id`)
 
-| Key                    | What                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `shard/bytes`          | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
-| `shard/render_seconds` | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| Key                              | What                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `shard/bytes`                    | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
+| `shard/render_seconds`           | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| `shard/samples_rejected_clipped` | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
+| `shard/samples_rejected_silent`  | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
 
 Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
-serial and parallel dispatchers.
+serial and parallel dispatchers. A renderer that exits successfully without a
+valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 
-### 5c. Run summary (one terminal row)
+### 5c. Per-worker summary (one terminal row per worker invocation)
 
-| Key                             | What                                              |
-| ------------------------------- | ------------------------------------------------- |
-| `shards/rendered`               | Shards this rank actually rendered                |
-| `shards/skipped`                | Shards short-circuited by the R2-skip probe       |
-| `shards/total`                  | `len(my_range)` — owned shard count for this rank |
-| `generation/elapsed_seconds`    | Wall-clock dispatcher duration (mirrors #1304)    |
-| `generation/samples`            | `rendered * spec.render.samples_per_shard`        |
-| `generation/samples_per_second` | `samples / elapsed_s` (0.0 when `elapsed_s == 0`) |
+| Key                                   | What                                                         |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `shards/rendered`                     | Shards this rank actually rendered                           |
+| `shards/skipped`                      | Shards short-circuited by the R2-skip probe                  |
+| `shards/total`                        | `len(my_range)` — owned shard count for this rank            |
+| `generation/elapsed_seconds`          | Wall-clock dispatcher duration (mirrors #1304)               |
+| `generation/samples`                  | `rendered * spec.render.samples_per_shard`                   |
+| `generation/samples_per_second`       | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)            |
+| `generation/samples_rejected_clipped` | Clipped sampled renders rejected across this worker's shards |
+| `generation/samples_rejected_silent`  | Silent sampled renders rejected across this worker's shards  |
+
+Generation rejection totals are worker-local, not distributed-run totals. They
+sum only shards rendered by this invocation; in claims mode, those are claims
+won and rendered by this worker. R2-skipped shards contribute zero because their
+prior local sidecars are unavailable.
 
 Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast — there
 is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
@@ -249,6 +259,7 @@ in the `finally`.
 | Issue                                                         | Topic                                                                                                                   |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
+| [#2032](https://github.com/tinaudio/synth-setter/issues/2032) | Separate per-shard counts for silent and clipped sampled-render rejections                                              |
 
 ### 5e. Sweeps
 
@@ -275,8 +286,8 @@ Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
 When `oracle_eval_inline=true`, the local-run path shells out to
 `synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
-re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=surge_simple` to
-re-render the predicted params, and deposits audio-similarity metrics onto the
+re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=vst`, and appends the generation render's absent identity fields with `+render.<field>=...` to
+re-render the predicted params. Generic knobs already in `vst` use plain `render.<field>=...` overrides; the eval deposits audio-similarity metrics onto the
 generate run — a `wandb sync` then merges both phases under one run id. Because
 all three splits resume the **same** run, the metric keys are namespaced per
 split so they don't overwrite each other's run summary: `test` keeps the bare
@@ -293,13 +304,13 @@ ______________________________________________________________________
 
 ## 6. Known Gaps
 
-| #   | Gap                                                                                                                                                                                                                                                                           | Impact                                                                                              | Tracking |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------- |
-| 1   | ~~**Entity/project hardcoded** to `benhayes`/`synth-permutations`~~ **RESOLVED** — env-var driven (`WANDB_ENTITY`/`WANDB_PROJECT`); entity defaults to `null` (user's W&B default entity), project defaults to `synth-setter`                                                 | ~~Runs log to wrong account~~                                                                       | #133     |
-| 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`.                                                                                          | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
-| 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                                                                                                              | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
-| 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                                                                                                                | Manual lookup to match runs to issues                                                               | #263     |
-| 5   | ~~**`log_model` checkpoint upload to W&B**~~ **RESOLVED** — set to `log_model: False`; no checkpoint files go to W&B (5 GB budget). The best ckpt is uploaded to R2 and referenced by the `model-{config_id}` artifact                                                        | —                                                                                                   | #92      |
-| 6   | ~~**Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction~~ **RESOLVED** — callbacks now dispatch through `_log_figure` to whichever Lightning loggers are attached (WandbLogger and/or TensorBoardLogger); CSV-only setups are silent | ~~Breaks if logger is swapped; step alignment relies on `trainer.global_step`~~                     | #614     |
-| 7   | **`torch.compile` crashes test-stage `setup()`** — eval after training fails                                                                                                                                                                                                  | Post-training test metrics never logged to W&B                                                      | #248     |
-| 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                                                                                                               | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |
+| #   | Gap                                                                                                                                                                                                                                                                                                                                                | Impact                                                                                              | Tracking |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------- |
+| 1   | ~~**Entity/project hardcoded** to `benhayes`/`synth-permutations`~~ **RESOLVED** — env-var driven (`WANDB_ENTITY`/`WANDB_PROJECT`); entity defaults to `null` (user's W&B default entity), project defaults to `synth-setter`                                                                                                                      | ~~Runs log to wrong account~~                                                                       | #133     |
+| 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`.                                                                                                                                                               | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
+| 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                                                                                                                                                                                   | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
+| 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                                                                                                                                                                                     | Manual lookup to match runs to issues                                                               | #263     |
+| 5   | ~~**`log_model` checkpoint upload to W&B**~~ **RESOLVED** — set to `log_model: False`; no checkpoint files go to W&B (5 GB budget). The best ckpt is uploaded to R2 and referenced by the `model-{config_id}` artifact                                                                                                                             | —                                                                                                   | #92      |
+| 6   | ~~**Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction~~ **RESOLVED** — callbacks now dispatch through `_log_figure` to whichever Lightning loggers are attached (WandbLogger and/or TensorBoardLogger); CSV-only setups are silent                                                                      | ~~Breaks if logger is swapped; step alignment relies on `trainer.global_step`~~                     | #614     |
+| 7   | ~~**`torch.compile` crashes test-stage `setup()`** — eval after training fails~~ **RESOLVED** — every VST Lightning module (`vst_ff_module`, `vst_flow_matching_module`, `vst_fake_oracle_module`, `vst_flowvae_module`) guards the compile call with `stage == "fit"`, so later-stage `setup()` calls no longer recompile an already-compiled net | ~~Post-training test metrics never logged to W&B~~                                                  | #248     |
+| 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                                                                                                                                                                                    | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |

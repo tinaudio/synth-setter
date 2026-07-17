@@ -44,7 +44,7 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 
 - Input is mutable, human-authored YAML under `src/synth_setter/configs/experiment/generate_dataset/`
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
-- Runtime state (git SHA, renderer version, per-shard seeds) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator). See [Deterministic Dataset Seeding](../design/deterministic-seeding.md) for the seed contract.
+- Runtime state (git SHA, renderer version, and split seed positions) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator). See [Deterministic Dataset Seeding](../design/deterministic-seeding.md) for the seed contract.
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
@@ -88,7 +88,8 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   doubles the live worker count — size it against host RAM, not core count
   (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
 - `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
-  `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement
+  `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
+  under the default `val_audio_probe: auto` the probe just stays off without one
 
 Reference: `training-pipeline.md` §4–5
 

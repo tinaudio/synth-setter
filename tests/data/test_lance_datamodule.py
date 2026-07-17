@@ -14,7 +14,7 @@ Covers the public symbols exposed by the module:
 
 Lance fixtures are tiny (a handful of rows, ~10-element mel/audio axes) — the
 goal is contract coverage on shapes, flags, and call routing, not numerical
-ML behavior, mirroring ``tests/data/test_surge_datamodule.py``.
+ML behavior, mirroring ``tests/data/test_vst_datamodule.py``.
 """
 
 from __future__ import annotations

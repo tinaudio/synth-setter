@@ -5,6 +5,36 @@
 # Exits 0 outside a git repo (no banner; silent).
 set -euo pipefail
 
+maybe_self_heal_worktree_links() {
+  local primary_root repo_top in_primary
+  local needs_heal
+  primary_root="$1"
+  repo_top="$2"
+  in_primary="$3"
+  needs_heal=0
+
+  if [[ "$in_primary" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -e "${repo_top}/plugins" && -d "${primary_root}/plugins" ]]; then
+    needs_heal=1
+  fi
+  if [[ ! -e "${repo_top}/thoughts" && -d "${primary_root}/thoughts" ]]; then
+    needs_heal=1
+  fi
+  if (( needs_heal == 0 )); then
+    return 0
+  fi
+
+  printf '  self-heal: running make link-plugins && make link-thoughts && make link-skills\n'
+  (
+    cd "$repo_top"
+    make link-plugins && make link-thoughts && make link-skills
+  ) || {
+    printf '  WARNING: worktree self-heal failed; run make link-plugins && make link-thoughts && make link-skills\n'
+  }
+}
+
 main() {
   # Drain stdin to avoid SIGPIPE when the harness pipes event JSON.
   cat >/dev/null 2>&1 || true
@@ -32,6 +62,11 @@ main() {
 
   local in_primary=0
   [[ "$abs_git_dir" == "$abs_common_dir" ]] && in_primary=1
+
+  local repo_top
+  repo_top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$repo_top" ]] || return 0
+  maybe_self_heal_worktree_links "$primary_root" "$repo_top" "$in_primary"
 
   local worktree_count
   worktree_count=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /' | wc -l | tr -d ' ')
@@ -63,9 +98,7 @@ main() {
 
   # Tool discovery paths are committed as symlinks into the canonical agent/
   # tree; unmaterialized or dangling links mean project assets disappear.
-  local repo_top asset_path
-  repo_top=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  [[ -n "$repo_top" ]] || return 0
+  local asset_path
   for asset_path in \
     "$repo_top/.agents/skills" \
     "$repo_top/.claude/hooks" \

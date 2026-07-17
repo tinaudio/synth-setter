@@ -351,6 +351,14 @@ uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt
 
 Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises upload, real rclone-backed download, Lightning restore, and continued training progress.
 
+**Auto-resume.** `training.resume=auto` automates this recovery (default off); `require` additionally errors when nothing is found, for unattended relaunch loops. At launch, discovery (`utils/resume.py`):
+
+- scans sibling local run dirs, then the launch-scoped R2 mirrors above (honoring a `training.upload_checkpoints_uri` override), and points `ckpt_path` at the newest `last.ckpt`;
+- requires identity evidence from every candidate: local runs need a canonical `{config_id}-{timestamp}` W&B run id (online or offline dir) or matching recorded `.hydra` state, while R2 mirror namespaces must embed that canonical run id;
+- reuses the recovered W&B run id (`resume=allow`) so one logical training stays on one run page.
+
+Boundaries: resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state) — which is also why the train-end `model-{config_id}` artifact is deliberately not a discovery tier: it only exists after a *completed* run and references the monitor-best checkpoint, so continuing from it is a warm start, served by the explicit `ckpt_path='${wandb:...}'` flow in §6.3. An explicit `ckpt_path` bypasses discovery, and combining it with an active `training.resume` is a fail-fast config error. Hydra **multirun** sweeps get a fresh sweep dir per invocation, so the local tier finds no siblings there — the R2 mirror tier is the recovery path for sweeps.
+
 ### 6.3 Resume From W&B
 
 Resume must work with the same `ckpt_path=` interface users already know.
@@ -363,9 +371,9 @@ Resolution behavior:
 
 A `make resume` target resolves the W&B artifact from experiment and run ID to avoid manual path assembly.
 
-### 6.4 Validation Audio Probe (opt-in)
+### 6.4 Validation Audio Probe
 
-`training.val_audio_probe=true` (default off; misconfiguration — no `render` group, a render spec the model's predictions cannot decode, or disabled validation — fails fast at configure time; see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
+`training.val_audio_probe` (default `"auto"`: wired whenever a `render` group is composed, validation runs, and R2 is reachable, with an INFO reason when it stays unwired; `true` requires those and fails fast when they don't hold — see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`; `false` disables) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
 
 ### 6.5 W&B Lineage
 

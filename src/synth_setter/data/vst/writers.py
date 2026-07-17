@@ -30,6 +30,7 @@ from synth_setter.data.vst.renderers import (
     TorchSynthRenderer,
 )
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
+from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
@@ -129,7 +130,7 @@ def _render_in_batches(
     fixed_synth_params_list: list[dict[str, float]] | None,
     fixed_note_params_list: list[NoteParams] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
-) -> None:
+) -> RenderRejectionMetrics:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
 
     The flush callback is invoked once per full ``samples_per_render_batch``
@@ -138,7 +139,7 @@ def _render_in_batches(
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
-    :param start_idx: First absolute row index this run renders (non-zero on resume).
+    :param start_idx: First shard-local row this run renders (non-zero on resume).
     :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
         Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
         callers pin ``start_idx=0`` for shard cadence, so that seed is row 0 and the
@@ -146,11 +147,14 @@ def _render_in_batches(
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
         shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
+    :returns: Counts of silent and clipped draws rejected across the shard.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
+    clipped_rejections = 0
+    silent_rejections = 0
 
     # "once" reuses one renderer per shard; "render" reloads for each attempt (see #705).
     cached_plugin: VST3Plugin | None = None
@@ -162,6 +166,7 @@ def _render_in_batches(
         cached_renderer = _make_renderer(render_cfg, cached_plugin)
 
     def _render_loop() -> None:
+        nonlocal clipped_rejections, silent_rejections
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
@@ -196,17 +201,18 @@ def _render_in_batches(
                 fixed_synth_params=fixed_synth,
                 fixed_note_params=fixed_note,
                 warmup=warmup_this_render,
-                # sample_idx is the absolute row index (the seed key); resumability
-                # must preserve it or per-row seed isolation breaks (#884).
+                # The split-local index stays stable across shard layouts and resumes (#884).
                 seed=SampleSeed(
                     master_seed=render_cfg.base_seed,
-                    sample_idx=i,
+                    sample_idx=render_cfg.sample_offset + i,
                     max_attempts=render_cfg.attempts_per_sample,
                 ),
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
                 shared_note = sample.note_params
+            clipped_rejections += sample.clipped_rejections
+            silent_rejections += sample.silent_rejections
             sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
                 warmup_done = True
@@ -233,6 +239,11 @@ def _render_in_batches(
     else:
         _render_loop()
 
+    return RenderRejectionMetrics(
+        clipped=clipped_rejections,
+        silent=silent_rejections,
+    )
+
 
 def make_lance_dataset(
     lance_dir: Path | str,
@@ -240,7 +251,7 @@ def make_lance_dataset(
     *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[NoteParams] | None = None,
-) -> None:
+) -> RenderRejectionMetrics:
     """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
     Not resumable: any dataset already at ``lance_dir`` is overwritten on each
@@ -257,6 +268,7 @@ def make_lance_dataset(
         shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
+    :returns: Counts of silent and clipped draws rejected across the shard.
     """
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
@@ -288,7 +300,7 @@ def make_lance_dataset(
 
     # Commit only after a clean render: orphaned fragment data files from a failed
     # run stay uncommitted (no dataset manifest references them).
-    _render_in_batches(
+    metrics = _render_in_batches(
         render_cfg=render_cfg,
         param_spec=param_spec,
         start_idx=start_idx,
@@ -297,3 +309,4 @@ def make_lance_dataset(
         flush_batch=_flush,
     )
     commit_lance_dataset(lance_dir, schema, fragments)
+    return metrics

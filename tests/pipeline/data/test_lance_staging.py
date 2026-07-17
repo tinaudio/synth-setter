@@ -41,9 +41,12 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 
 
-def tiny_lance_spec() -> DatasetSpec:
+def tiny_lance_spec(
+    train_val_test_seeds: tuple[int, int, int] | None = None,
+) -> DatasetSpec:
     """Build a tiny Lance spec with non-empty train, validation, and test splits.
 
+    :param train_val_test_seeds: Optional independent split master seeds.
     :returns: Frozen spec whose render config keeps every per-field array small.
     """
     return DatasetSpec.model_validate(
@@ -51,6 +54,7 @@ def tiny_lance_spec() -> DatasetSpec:
             "task_name": "lance-frag-test",
             "output_format": "lance",
             "train_val_test_sizes": [4, 2, 2],
+            "train_val_test_seeds": train_val_test_seeds,
             "base_seed": 42,
             "r2": {"bucket": "intermediate-data"},
             "render": {
@@ -109,7 +113,7 @@ def write_local_shard(
     :returns: Path of the written ``shard-NNNNNN.lance`` dataset directory.
     """
     shard = spec.shards[shard_id]
-    render = spec.render.model_copy(update={"base_seed": shard.seed})
+    render = spec.render_for_shard(shard)
     metadata = render.shard_metadata()
     schema = lance_schema(dataset_field_shapes(render, spec.num_params), metadata)
     batch = record_batch_from_arrays(shard_arrays(spec, shard_id, value_offset), schema)
@@ -288,6 +292,25 @@ def test_write_rendering_marker_records_attempt_start(fake_r2_remote: Path) -> N
     write_rendering_marker(spec, 1, worker_id="pod-a", attempt_uuid="a1b2")
 
     assert (staging_dir(fake_r2_remote, spec, 1) / "pod-a-a1b2.rendering").exists()
+
+
+def test_stage_split_seed_shard_accepts_sample_offset_metadata(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Staging validates a nonzero split-local sample offset end to end.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param tmp_path: Pytest fixture providing a fresh local shard directory.
+    """
+    spec = tiny_lance_spec((101, 202, 303))
+    shard = spec.shards[1]
+    local_shard = write_local_shard(spec, shard.shard_id, tmp_path)
+
+    stage_lance_shard_attempt(
+        spec, shard, local_shard, worker_id="pod-a", attempt_uuid="a1b2"
+    )
+
+    assert shard_has_complete_attempt(spec, shard.shard_id) is True
 
 
 def test_shard_has_complete_attempt_false_before_staging_true_after(

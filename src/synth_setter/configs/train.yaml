@@ -54,6 +54,9 @@ ckpt_path: null
 seed: null
 
 training:
+  # Auto-resume from the newest last.ckpt: null/"off" | "auto" | "require" (errors when
+  # none found); excludes explicit `ckpt_path`. See docs/design/training-pipeline.md §6.2.
+  resume: null
   # Optional `r2://bucket/key` override for the checkpoint upload target the model
   # W&B artifact references; null auto-derives
   # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
@@ -61,9 +64,8 @@ training:
   # Mirror each ModelCheckpoint write to R2 mid-run (synchronous on rank 0; best
   # for single-device runs) so a host crash before train-end can't strand it.
   upload_checkpoints_during_training: false
-  # Off-loop val audio probe: renders a few predictions per validation epoch, logs
-  # `val_audio/*` next validation, archives wavs to R2 probes/. Needs a `render`
-  # group and validation enabled (surge experiments ship limit_val_batches: 0).
-  val_audio_probe: false
+  # "auto" wires the off-loop probe when render, validation, and R2 are available;
+  # `true` requires them and `false` disables.
+  val_audio_probe: auto
   # Samples taken from the first val batch; each costs a plugin load plus a render.
   val_audio_probe_samples: 5

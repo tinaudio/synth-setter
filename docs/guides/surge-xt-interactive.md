@@ -177,7 +177,7 @@ The dataset has `N = len(synth_patches)` rows, `sample_rate = 44100`, and
 
 The rendering config is embedded in the Arrow schema metadata as a
 `ShardMetadata` payload: `velocity`, `signal_duration_seconds`,
-`sample_rate`, `channels`, `min_loudness`, `base_seed`,
+`sample_rate`, `channels`, `min_loudness`, `base_seed`, `sample_offset`,
 `attempts_per_sample`.
 
 When `--checkpoint-path` is set, the `val.lance`/`test.lance`/`predict.lance`

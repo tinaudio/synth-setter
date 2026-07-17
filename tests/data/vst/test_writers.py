@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,10 @@ from synth_setter.data.vst import writers
 from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.writers import _render_in_batches
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -153,13 +158,19 @@ def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> N
     """
     data_file = tmp_path / "shard-000000.lance"
 
-    with patch("synth_setter.data.vst.writers.make_lance_dataset") as mock_lance:
+    with patch(
+        "synth_setter.data.vst.writers.make_lance_dataset",
+        return_value=RenderRejectionMetrics(clipped=2, silent=3),
+    ) as mock_lance:
         _run_main_with_argv(_cli_argv(str(data_file)))
 
     mock_lance.assert_called_once()
     # First positional arg is the data_file path.
     lance_args, _lance_kwargs = mock_lance.call_args
     assert lance_args[0] == str(data_file)
+    assert RenderRejectionMetrics.model_validate_json(
+        render_metrics_path(data_file).read_text()
+    ) == RenderRejectionMetrics(clipped=2, silent=3)
 
 
 def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:
@@ -205,15 +216,13 @@ class _FakePlugin:
         return "_FakePlugin()"
 
 
-class _FakeVSTDataSample:
-    """Stand-in for the sample object returned by ``generate_sample``.
+def _stub_plugin_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep writer tests independent of an installed VST.
 
-    The writer loop only collects these into the flush batch; tests assert on batch length, so a
-    bare object suffices.
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
     """
-
-    def __repr__(self) -> str:
-        return "_FakeVSTDataSample()"
+    monkeypatch.setattr(writers, "load_plugin", lambda _path: _FakePlugin())
+    monkeypatch.setattr(writers, "load_preset", lambda _plugin, _preset: None)
 
 
 def _stub_plugin_load_seams(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,6 +240,8 @@ def _stub_render_dependencies(
     load_plugin_calls: list[dict[str, object]],
     load_preset_calls: list[dict[str, object]],
     cached_plugin_holder: list[object] | None = None,
+    clipped_rejections: int = 0,
+    silent_rejections: int = 0,
 ) -> list[dict[str, object]]:
     """Patch ``load_plugin``, ``load_preset``, and ``generate_sample`` for the writer loop.
 
@@ -242,8 +253,10 @@ def _stub_render_dependencies(
     :param monkeypatch: Pytest fixture used to patch module-level callables.
     :param load_plugin_calls: List receiving the path argument of each fake ``load_plugin`` call.
     :param load_preset_calls: List receiving the kwargs of each fake ``load_preset`` call.
-    :param cached_plugin_holder: When supplied, the fake plugin instance is appended to this list.
-    :return: List of kwargs dicts captured from each ``generate_sample`` invocation.
+    :param cached_plugin_holder: When supplied, receives the fake plugin instance.
+    :param clipped_rejections: Clipped count returned by each fake sample.
+    :param silent_rejections: Silent count returned by each fake sample.
+    :return: Kwargs captured from each ``generate_sample`` invocation.
     """
     captured: list[dict[str, object]] = []
 
@@ -257,9 +270,12 @@ def _stub_render_dependencies(
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
 
-    def _fake_generate_sample(**kwargs: object) -> _FakeVSTDataSample:
+    def _fake_generate_sample(**kwargs: object) -> SimpleNamespace:
         captured.append(dict(kwargs))
-        return _FakeVSTDataSample()
+        return SimpleNamespace(
+            clipped_rejections=clipped_rejections,
+            silent_rejections=silent_rejections,
+        )
 
     monkeypatch.setattr(writers, "load_plugin", _fake_load_plugin)
     monkeypatch.setattr(writers, "load_preset", _fake_load_preset)
@@ -291,9 +307,12 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
     def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(returned)}")
+        sample.clipped_rejections = 0
+        sample.silent_rejections = 0
         returned.append(sample)
         return sample
 
+    _stub_plugin_loading(monkeypatch)
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
     _stub_plugin_load_seams(monkeypatch)
 
@@ -363,12 +382,15 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
     def _fake_generate_sample(**kwargs: object) -> MagicMock:
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(captured)}")
+        sample.clipped_rejections = 0
+        sample.silent_rejections = 0
         # Mirror the real renderer: the sample reports the params it rendered with, so shard
         # cadence reuses concrete row-0 values rather than MagicMock placeholder attributes.
         sample.synth_params = kwargs["fixed_synth_params"]
         sample.note_params = kwargs["fixed_note_params"]
         return sample
 
+    _stub_plugin_loading(monkeypatch)
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
     _stub_plugin_load_seams(monkeypatch)
 
@@ -657,6 +679,8 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
         load_plugin_calls=[],
         load_preset_calls=[],
         cached_plugin_holder=cached_plugin_holder,
+        clipped_rejections=1,
+        silent_rejections=2,
     )
     held_open_plugins: list[object] = []
 
@@ -666,7 +690,7 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
 
     monkeypatch.setattr(writers, "run_with_editor_held_open", fake_run)
 
-    _render_in_batches(
+    metrics = _render_in_batches(
         render_cfg=render_cfg,
         param_spec=MagicMock(name="param_spec"),
         start_idx=0,
@@ -675,6 +699,7 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
         flush_batch=lambda _batch, _start: None,
     )
 
+    assert metrics == RenderRejectionMetrics(clipped=3, silent=6)
     assert len(held_open_plugins) == 1
     assert held_open_plugins[0] is cached_plugin_holder[0]
     assert len(captured) == n
@@ -854,7 +879,8 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
 # ``warmup = False`` reset that the writer-level kwarg checks would miss.
 
 
-_RENDERER_FAKE_AUDIO_SHAPE = (2, 44100 * 4)
+_RENDERER_FAKE_SAMPLE_RATE = 44100
+_RENDERER_FAKE_AUDIO_SHAPE = (2, _RENDERER_FAKE_SAMPLE_RATE * 4)
 
 
 def _silent_render() -> object:
@@ -877,7 +903,7 @@ def _loud_render() -> object:
     import numpy as np
 
     n = _RENDERER_FAKE_AUDIO_SHAPE[1]
-    t = np.arange(n) / 44100.0
+    t = np.arange(n) / _RENDERER_FAKE_SAMPLE_RATE
     sine = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
     return np.stack([sine, sine], axis=0)
 
@@ -910,6 +936,7 @@ def _install_writer_level_fakes(
 
     from synth_setter.data.vst import generate_vst_dataset
 
+    _stub_plugin_loading(monkeypatch)
     warmup_mock = MagicMock(name="warmup_plugin")
     silent_remaining = [retry_on_first_sample]
 
@@ -937,6 +964,29 @@ def _install_writer_level_fakes(
     )
     _stub_plugin_load_seams(monkeypatch)
     return warmup_mock, fake_spec
+
+
+def test_render_in_batches_aggregates_rejections_by_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shard rendering sums silent and clipped rejections independently.
+
+    :param monkeypatch: Pytest fixture used to patch renderer dependencies.
+    """
+    render_cfg = _smoke_render_cfg(samples_per_shard=2, samples_per_render_batch=1)
+    _, fake_spec = _install_writer_level_fakes(monkeypatch, retry_on_first_sample=2)
+
+    metrics = _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=fake_spec,
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert metrics.silent == 2
+    assert metrics.clipped == 0
 
 
 def test_render_in_batches_once_cadence_survives_intra_sample_retries(
