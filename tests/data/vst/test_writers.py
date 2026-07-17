@@ -205,6 +205,15 @@ class _FakePlugin:
         return "_FakePlugin()"
 
 
+def _stub_plugin_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep writer tests independent of an installed VST.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    """
+    monkeypatch.setattr(writers, "load_plugin", lambda _path: _FakePlugin())
+    monkeypatch.setattr(writers, "load_preset", lambda _plugin, _preset: None)
+
+
 class _FakeVSTDataSample:
     """Stand-in for the sample object returned by ``generate_sample``.
 
@@ -294,6 +303,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
         returned.append(sample)
         return sample
 
+    _stub_plugin_loading(monkeypatch)
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
     _stub_plugin_load_seams(monkeypatch)
 
@@ -369,6 +379,7 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
         sample.note_params = kwargs["fixed_note_params"]
         return sample
 
+    _stub_plugin_loading(monkeypatch)
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
     _stub_plugin_load_seams(monkeypatch)
 
@@ -854,7 +865,8 @@ def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(
 # ``warmup = False`` reset that the writer-level kwarg checks would miss.
 
 
-_RENDERER_FAKE_AUDIO_SHAPE = (2, 44100 * 4)
+_RENDERER_FAKE_SAMPLE_RATE = 44100
+_RENDERER_FAKE_AUDIO_SHAPE = (2, _RENDERER_FAKE_SAMPLE_RATE * 4)
 
 
 def _silent_render() -> object:
@@ -877,7 +889,7 @@ def _loud_render() -> object:
     import numpy as np
 
     n = _RENDERER_FAKE_AUDIO_SHAPE[1]
-    t = np.arange(n) / 44100.0
+    t = np.arange(n) / _RENDERER_FAKE_SAMPLE_RATE
     sine = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
     return np.stack([sine, sine], axis=0)
 
@@ -910,6 +922,7 @@ def _install_writer_level_fakes(
 
     from synth_setter.data.vst import generate_vst_dataset
 
+    _stub_plugin_loading(monkeypatch)
     warmup_mock = MagicMock(name="warmup_plugin")
     silent_remaining = [retry_on_first_sample]
 
