@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784249700259,
+  "lastUpdate": 1784249702330,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15479,6 +15479,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.586534623500006,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c279e858a0b1e5299ca33c4ff3cfec6139eb87fa",
+          "message": "chore(test): restore pluginless unit checks and coverage (#2038)\n\n* fix(testing): restore pluginless unit checks and coverage\n\nStub plugin loading at the writer-test boundary so parameter-cadence tests remain independent of installed VST bundles while still exercising the cached-plugin default. Upload partial CPU coverage after pytest failures to prevent stale Codecov carryforward reports.\n\nFixes #2014\n\n* test(testing): clarify missing coverage-step failures\n\nRaise an explicit assertion naming the missing workflow step and job instead of leaking StopIteration from the lookup.\n\nRefs #2014",
+          "timestamp": "2026-07-16T20:11:29-04:00",
+          "tree_id": "b424035b5fbdd7dfc7a8c81a7f4ebc897226f8fd",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c279e858a0b1e5299ca33c4ff3cfec6139eb87fa"
+        },
+        "date": 1784249702006,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.604251861572266,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.48650471135974,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.1004861444234848,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00184708833694458,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.256807804107666,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.330530653999995,
             "unit": "seconds"
           }
         ]
