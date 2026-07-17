@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v10.0.0 (2026-07-17)
+
+### Internal-Fix
+
+- **ci**: Run shard validation from the PR checkout
+  ([#2100](https://github.com/tinaudio/synth-setter/pull/2100),
+  [`37cd812`](https://github.com/tinaudio/synth-setter/commit/37cd8128483366897d93db253afcf8302aa74499))
+
+- **data-pipeline**: Keep introspection plugin loads on the main thread
+  ([#2107](https://github.com/tinaudio/synth-setter/pull/2107),
+  [`1f29280`](https://github.com/tinaudio/synth-setter/commit/1f29280e7e7fa99d1b8a4be8769e710f1d63ae2d))
+
+- **testing**: Serialize DataLoader process tests
+  ([#2057](https://github.com/tinaudio/synth-setter/pull/2057),
+  [`4323907`](https://github.com/tinaudio/synth-setter/commit/432390732d87b190f6249c01b88b6912fcca646e))
+
+* internal-fix(testing): serialize DataLoader process tests
+
+* chore(testing): satisfy scheduling test lint
+
+* internal-fix(testing): annotate grouped probe tests
+
+* internal-fix(testing): assert every grouped probe runs
+
+* internal-fix(testing): name nested pytest timeout
+
+* internal-fix(testing): group every DataLoader process test
+
+* internal-fix(testing): diagnose nested pytest timeouts
+
+Distinguish nested pytest timeouts from ordinary test failures while retaining the exit code in the
+  diagnostic.
+
+Addresses Greptile review comment #3599551465 on PR #2057.
+
+* internal-fix(testing): serialize remaining DataLoader test
+
+Group the remaining multiprocessing Lance training test and harden the nested xdist probe cleanup.
+
+Addresses review comments #3599958037, #3599958039, #3599958045, #3599958046, and #3599958047 on PR
+  #2057.
+
+### Refactoring
+
+- **training**: Remove the legacy Lance loader
+  ([#2075](https://github.com/tinaudio/synth-setter/pull/2075),
+  [`4c4d626`](https://github.com/tinaudio/synth-setter/commit/4c4d62601e701484e145031960be2067fcda5a95))
+
+* refactor(training)!: remove the legacy Lance loader
+
+Make the sample-indexed map dataloader the only VST training path and delete the HDF5-shaped
+  adapters, custom samplers, loader switch, and comparison harness.
+
+Refs #1742
+
+* refactor(training): address map-loader review findings
+
+Use explicit generic aliases and tighten configuration and doc-map prose flagged by the pre-PR
+  review.
+
+
 ## v9.6.3 (2026-07-17)
 
 ### Bug Fixes
