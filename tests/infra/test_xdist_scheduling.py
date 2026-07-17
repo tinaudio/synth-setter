@@ -1,4 +1,4 @@
-"""Behavioral coverage for xdist scheduling constraints."""
+"""Verify xdist scheduling with a generated nested pytest probe."""
 
 from __future__ import annotations
 
@@ -57,6 +57,7 @@ def _write_group_probe(probe: Path, worker_log: Path) -> None:
     :param probe: Destination for the generated pytest module.
     :param worker_log: Shared output path embedded in each generated test.
     """
+    # A generated module is required to observe worker IDs from a real nested xdist run.
     tests = "\n\n".join(
         f"def test_group_member_{index}() -> None:\n"
         f"    with open({str(worker_log)!r}, 'a') as stream:\n"
@@ -71,6 +72,7 @@ def _write_group_probe(probe: Path, worker_log: Path) -> None:
     )
 
 
+@pytest.mark.slow
 def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Path) -> None:
     """Launch nested pytest and verify grouped probes share one xdist worker.
 
@@ -96,13 +98,19 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
         ),
     )
     process.start()
-    process.join(timeout=_NESTED_PYTEST_TIMEOUT_SECONDS)
-    timed_out = process.is_alive()
-    if timed_out:
-        process.kill()
-        process.join()
+    try:
+        process.join(timeout=_NESTED_PYTEST_TIMEOUT_SECONDS)
+        timed_out = process.is_alive()
+        if timed_out:
+            process.kill()
+            process.join()
 
-    assert process.exitcode == 0, _nested_pytest_failure_message(timed_out, process.exitcode)
+        assert process.exitcode == 0, _nested_pytest_failure_message(timed_out, process.exitcode)
+    finally:
+        if process.is_alive():
+            process.kill()
+        process.join()
+        process.close()
     worker_ids = worker_log.read_text().splitlines()
     assert len(worker_ids) == _GROUP_PROBE_COUNT
     assert len(set(worker_ids)) == 1

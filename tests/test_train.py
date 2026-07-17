@@ -631,6 +631,8 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader
     assert train_split.is_dir()
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_lance_records_dataset_lineage_from_local_spec(
     cfg_train_lance: DictConfig,
     dataset_spec_factory: Callable[..., DatasetSpec],
