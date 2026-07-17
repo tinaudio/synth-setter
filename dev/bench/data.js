@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784255032119,
+  "lastUpdate": 1784302936924,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9066,6 +9066,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04305541515350342,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b546321b7e0fc93cb00dd4a5416f998efbeeba4f",
+          "message": "refactor(data-pipeline): extract generic VST render base (#2060)\n\n* refactor(data-pipeline): extract generic VST render base\n\n* fix(data-pipeline): harden generic VST render registration\n\nReserve the shared vst group from synth registration, pin the real oracle eval config, and tighten generated/config-map prose.\n\nRefs #2018\n\n* fix(data-pipeline): reserve VST render name case-insensitively\n\nPrevent case-variant synth registrations from aliasing and overwriting the generic render base on case-insensitive filesystems.\n\nRefs #2018\n\n* docs(data-pipeline): focus VST render map description\n\nKeep the render source-map entry scoped to the generic defaults and synth identity contract.\n\nRefs #2018\n\n* fix(data-pipeline): harden render config registration",
+          "timestamp": "2026-07-17T11:13:24-04:00",
+          "tree_id": "fdc2ac6dbf2c0a22c25e0fe1aba41e4502a621b4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b546321b7e0fc93cb00dd4a5416f998efbeeba4f"
+        },
+        "date": 1784302936045,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 2.712847948074341,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 4.4880601346492766,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.013902603648602962,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.004139900207519531,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.5040831565856934,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.676429542000001,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.398836851119995,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 5.954609586447478,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.019855951890349388,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.013431251049041748,
             "unit": "1-cos"
           },
           {
