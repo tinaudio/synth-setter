@@ -712,18 +712,21 @@ jobs:
       # row-count checks. Runs inside the dev-snapshot image (already pulled
       # above for runpod/oci, locally loaded into kind for skypilot-local) so
       # heavy deps need no host-side install. Re-pulling the image when only
-      # kind has it is a no-op against the docker cache. The image bakes deps
-      # from main, so `uv pip install --group data` first picks up data-group
-      # additions the PR introduces — same image-bake-lag workaround as
-      # scripts/sync_worker_checkout.sh; the mounted PR checkout sits at the
-      # image WORKDIR, so uv reads the PR's pyproject into /venv/main.
+      # kind has it is a no-op against the docker cache.
+      #
+      # Crucially, the validator must execute the checked-out PR code rather
+      # than the image-baked synth_setter package. Sync the mounted checkout
+      # into `/venv/main` before `uv run ...validate_shard`, or schema/staging
+      # contract changes can false-fail against stale main-branch code. The
+      # mount stays writable because building the local project updates
+      # `src/synth_setter.egg-info` during the sync.
       - name: Validate all shards from R2
         env:
           SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e SYNTH_SETTER_STORAGE_PROVIDER \
             -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
             -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
@@ -734,8 +737,9 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
+            -e UV_PROJECT_ENVIRONMENT=/venv/main \
             "${IMAGE}" \
-            bash -c 'uv pip install --group data && python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
+            bash -c 'cd /home/build/synth-setter && uv sync --frozen --no-default-groups --group data && uv run python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
 
       # Pull the canonical spec into the debug artifact alongside generate.log
       # / sky_logs so operators don't have to chase R2 to inspect the run.
