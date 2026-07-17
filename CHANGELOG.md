@@ -1,6 +1,15 @@
 # CHANGELOG
 
 
+## v9.6.2 (2026-07-17)
+
+### Bug Fixes
+
+- **testing**: Self-heal worktrees and bound r2 auth ping
+  ([#2104](https://github.com/tinaudio/synth-setter/pull/2104),
+  [`5bbf695`](https://github.com/tinaudio/synth-setter/commit/5bbf69570176388e58e78bd1631b74af8b24099c))
+
+
 ## v9.6.1 (2026-07-17)
 
 ### Bug Fixes
