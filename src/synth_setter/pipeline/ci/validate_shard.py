@@ -97,7 +97,7 @@ def _metadata_mismatch_errors(
     :returns: One error per mismatched field.
     """
     errors: list[str] = []
-    for field in ("base_seed", "attempts_per_sample"):
+    for field in ("base_seed", "sample_offset", "attempts_per_sample"):
         if field not in present_fields:
             continue
         observed = getattr(metadata, field)
@@ -107,25 +107,31 @@ def _metadata_mismatch_errors(
     return errors
 
 
-def _expected_base_seed_for_shard(shard_path: Path, spec: DatasetSpec) -> int:
-    """Return the seed the launcher injects for ``shard_path``.
+def _expected_seed_position(shard_path: Path, spec: DatasetSpec) -> tuple[int, int]:
+    """Return the seed and sample offset injected for ``shard_path``.
 
     :param shard_path: Local path being validated.
-    :param spec: Dataset spec whose ``shards`` define per-shard seeds.
-    :returns: Matching ``ShardSpec.seed``, or ``spec.render.base_seed`` for ad hoc paths.
+    :param spec: Dataset spec whose ``shards`` define seed positions.
+    :returns: Matching shard seed and offset, or render defaults for ad hoc paths.
     """
     for shard in spec.shards:
         if shard.filename == shard_path.name:
-            return shard.seed
-    return spec.render.base_seed
+            return shard.seed, shard.sample_offset
+    return spec.render.base_seed, spec.render.sample_offset
 
 
-def _expected_shard_metadata(spec: DatasetSpec, *, base_seed: int | None = None) -> ShardMetadata:
+def _expected_shard_metadata(
+    spec: DatasetSpec,
+    *,
+    base_seed: int | None = None,
+    sample_offset: int | None = None,
+) -> ShardMetadata:
     """Project the spec's render config onto the shard metadata contract.
 
     :param spec: Dataset spec whose render config the shard should match.
-    :param base_seed: Per-shard seed injected into the renderer; defaults to
-        ``spec.render.base_seed`` for ad hoc validation paths.
+    :param base_seed: Seed injected into the renderer; defaults to the render config.
+    :param sample_offset: Split-local offset injected into the renderer; defaults to the render
+        config.
     :returns: Strict shard metadata expected for rendered shards.
     """
     return ShardMetadata(
@@ -135,6 +141,7 @@ def _expected_shard_metadata(spec: DatasetSpec, *, base_seed: int | None = None)
         channels=spec.render.channels,
         min_loudness=spec.render.min_loudness,
         base_seed=spec.render.base_seed if base_seed is None else base_seed,
+        sample_offset=spec.render.sample_offset if sample_offset is None else sample_offset,
         attempts_per_sample=spec.render.attempts_per_sample,
     )
 
@@ -152,13 +159,21 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         dataset = lance.dataset(str(shard_path))
     except (OSError, ValueError, RuntimeError) as exc:
         return [f"path is not a valid Lance dataset: {shard_path}: {exc}"]
+    base_seed, sample_offset = _expected_seed_position(shard_path, spec)
     return _validate_lance_dataset(
-        dataset, spec, base_seed=_expected_base_seed_for_shard(shard_path, spec)
+        dataset,
+        spec,
+        base_seed=base_seed,
+        sample_offset=sample_offset,
     )
 
 
 def _validate_lance_dataset(
-    dataset: lance.LanceDataset, spec: DatasetSpec, *, base_seed: int | None = None
+    dataset: lance.LanceDataset,
+    spec: DatasetSpec,
+    *,
+    base_seed: int | None = None,
+    sample_offset: int | None = None,
 ) -> list[str]:
     """Validate an open Lance shard dataset's schema, metadata, and row count.
 
@@ -168,14 +183,17 @@ def _validate_lance_dataset(
 
     :param dataset: Open Lance dataset handle for one shard.
     :param spec: Dataset spec the shard is expected to conform to.
-    :param base_seed: Per-shard seed expected in schema metadata.
+    :param base_seed: Seed expected in schema metadata.
+    :param sample_offset: Split-local sample offset expected in schema metadata.
     :returns: List of error strings (empty = valid).
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     errors: list[str] = []
     schema = dataset.schema
-    expected_metadata = _expected_shard_metadata(spec, base_seed=base_seed)
+    expected_metadata = _expected_shard_metadata(
+        spec, base_seed=base_seed, sample_offset=sample_offset
+    )
     try:
         metadata = read_shard_metadata(schema)
     except ValueError as exc:

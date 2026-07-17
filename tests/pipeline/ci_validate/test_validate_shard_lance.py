@@ -68,6 +68,24 @@ def _first_shard_metadata(spec: DatasetSpec) -> ShardMetadata:
     return smoke_shard_metadata(render)
 
 
+def test_validate_lance_shard_accepts_split_local_sample_offset(tmp_path: Path) -> None:
+    """Validation matches nonzero split-local offset provenance.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    render = base.render.model_copy(update={"samples_per_shard": 2, "samples_per_render_batch": 2})
+    spec = build_lance_smoke_spec(
+        train_val_test_sizes=(4, 0, 0),
+        render=render,
+        train_val_test_seeds=(101, 202, 303),
+    )
+    shard = tmp_path / spec.shards[1].filename
+    write_minimal_lance_shard(shard, spec)
+
+    assert validate_shard(shard, spec) == []
+
+
 def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     """A structurally valid Lance shard returns no validation errors.
 
@@ -261,6 +279,23 @@ def test_validate_lance_shard_reports_base_seed_metadata_mismatch(tmp_path: Path
     errors = validate_shard(shard, spec)
 
     assert any("base_seed" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_sample_offset_metadata_mismatch(tmp_path: Path) -> None:
+    """A shard whose sample offset differs from the spec is rejected.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    metadata = _first_shard_metadata(spec).model_copy(update={"sample_offset": 1})
+    schema = lance_schema(shapes, metadata)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any("sample_offset" in error for error in errors)
 
 
 def test_validate_lance_shard_reports_attempt_budget_metadata_mismatch(tmp_path: Path) -> None:
