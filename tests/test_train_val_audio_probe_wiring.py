@@ -9,6 +9,7 @@ have nor need. The upload itself is exercised against a real rclone in
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from lightning import Callback
@@ -30,7 +31,7 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _cfg(
     *,
-    enabled: object,
+    enabled: bool | Literal["auto"],
     with_render: bool = True,
     output_dir: str = "/runs/out",
     datamodule: dict[str, str | None] | None = None,
@@ -251,8 +252,11 @@ def test_configure_val_audio_probe_rejects_unknown_mode(mode: object) -> None:
 
     :param mode: Unsupported probe-mode value.
     """
+    cfg = _cfg(enabled=False)
+    cfg.training.val_audio_probe = mode
+
     with pytest.raises(ValueError, match="auto"):
-        _configure_val_audio_probe(_cfg(enabled=mode), [])
+        _configure_val_audio_probe(cfg, [])
 
 
 def _no_r2() -> None:

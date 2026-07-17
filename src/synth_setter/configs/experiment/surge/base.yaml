@@ -32,8 +32,7 @@ callbacks:
 
 trainer:
   gradient_clip_val: 0.5
-  # The batch limit applies per rank, so aggregate validation volume scales with
-  # world size; single-rank defaults sample about 2,560 rows.
+  # The batch limit applies per rank; row count depends on world size and batch size.
   limit_val_batches: 20
   precision: bf16-mixed
   # Surge model configs interpolate ${trainer.max_steps} into the
