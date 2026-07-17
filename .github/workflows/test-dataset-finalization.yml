@@ -78,7 +78,10 @@ jobs:
       local: true
       artifact_name: finalize-presubmit-${{ matrix.output_format }}-${{ matrix.scenario }}
       hydra_overrides: ${{ matrix.scenario == 'queue' && 'use_shard_queue=true' || '' }}
-      run_id: finalize-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}-${{ matrix.scenario }}
+      # github.run_id keeps every push on a fresh R2 prefix — a new push resets
+      # run_attempt to 1, and reusing a prior push's prefix replays its stale
+      # claim state ("no staged-valid attempt", see #2084).
+      run_id: finalize-${{ github.event.pull_request.number || 'dispatch' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.scenario }}
     secrets: inherit
 
   verify-artifacts:
