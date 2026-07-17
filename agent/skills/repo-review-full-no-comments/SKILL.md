@@ -155,9 +155,9 @@ sub-agents; you never launch those directly.
 > Transform the JSON payload at
 > `/tmp/repo-review-full-no-comments-findings.json` into a Markdown report. The
 > report is **both** written to a sentinel file **and** returned as your final
-> message (the main agent prints it for the user). The `pre-pr-review-gate.sh`
-> PreToolUse hook validates the path supplied via `REVIEW_FULL=<path>` on
-> `gh pr create` by parsing this filename.
+> message (the main agent prints it for the user). The retained
+> `pre-pr-review-gate.sh` parser validates this filename after its local
+> PreToolUse registration is restored.
 >
 > **Compute the sentinel path** — the format is owned by
 > `agent/_shared/review_sentinel.py` (single source of truth shared with the
@@ -246,7 +246,7 @@ sub-agents; you never launch those directly.
 > placeholder):
 >
 > - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
-> - Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
+> - Local-branch mode: `Open a PR, then run /repo-review-full to post these as inline review comments if desired. Review sentinel: <REVIEW_PATH>.`
 > - If there are any findings or PR-health flags, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
 >
 > Rules for the rendering:

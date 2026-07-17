@@ -148,31 +148,13 @@ unintended shell expansion. A `PreToolUse` hook
 - **PR titles stand alone.** Name the specific subject, not just the action:
   reviewers and `git log` readers don't open the issue. `/github-taxonomy`
   has the canonical title rule and examples.
-- **Pre-PR review gate.** Before `gh pr create`, run
-  `/repo-review-full-no-comments` and address every BLOCK/WARN (fix code or
-  document why it's intentional). The skill writes the rendered report to
-  `.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md` — filename
-  format owned by `agent/_shared/review_sentinel.py`, shared with the gate
-  hook. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks
-  `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at
-  that file — recommended as a trailing comment so other gh-pr-create hooks
-  still fire:
-  `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`.
-  The encoded SHA must be an ancestor of HEAD and within `REVIEW_MAX_LAG`
-  (default 2) first-parent commits of it — merges from main count as one
-  commit, not the dozens they bring in. Set `REVIEW_MAX_LAG=N` for a
-  justified larger gap. The gate also **blocks while the sentinel still lists
-  `[comment-hygiene:warn|block]` findings** (`REVIEW_COMMENT_GATE`: `block` default /
-  `warn` / `off`) and **while it lists any `[<skill>:block]` finding**
-  (`REVIEW_BLOCK_GATE`: `block` default / `warn` / `off`). For comment-hygiene
-  findings, run `/fix-review-comments` to apply the rewrites, commit, and
-  re-review in one pass; other `[<skill>:block]` findings need the underlying
-  issue fixed and `/repo-review-full-no-comments` re-run to regenerate the
-  sentinel. Set `REVIEW_COMMENT_GATE=off` / `REVIEW_BLOCK_GATE=off` only for a
-  finding you've judged intentional. The gate also **blocks while the PR's
-  inline `--title` is not a conventional commit** (`PR_TITLE_GATE`: `block`
-  default / `warn` / `off`) — best-effort and fails open on any uvx/network
-  error, since the `pr-metadata-gate` workflow re-checks the title regardless.
+- **Pre-PR review is temporarily advisory.** Run
+  `/repo-review-full-no-comments` before `gh pr create` when the review
+  automation is healthy, and address every BLOCK/WARN. The local
+  `pre-pr-review-gate.sh` implementation and tests remain available for repair,
+  but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
+  is unresolved. Server-side tests, metadata checks, branch protection, and
+  Copilot review continue to gate merges.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.

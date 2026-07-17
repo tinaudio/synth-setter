@@ -234,7 +234,7 @@ class TestRenderConfig:
         ):
             RenderConfig(
                 **{
-                    **_valid_render_kwargs(),
+                    **_valid_render_kwargs(plugin_path="torchsynth"),
                     "renderer_backend": "torchsynth",
                     "gui_toggle_cadence": cadence,
                     "plugin_reload_cadence": "once",
@@ -242,15 +242,31 @@ class TestRenderConfig:
             )
 
     def test_torchsynth_backend_accepted_with_gui_toggle_never(self) -> None:
-        """``renderer_backend="torchsynth"`` validates with the editor disabled."""
+        """``renderer_backend="torchsynth"`` validates with its bare backend name."""
         cfg = RenderConfig(
             **{
-                **_valid_render_kwargs(),
+                **_valid_render_kwargs(plugin_path="torchsynth"),
                 "renderer_backend": "torchsynth",
                 "gui_toggle_cadence": "never",
             }
         )
         assert cfg.renderer_backend == "torchsynth"
+
+    def test_torchsynth_backend_rejects_vst_plugin_path(self) -> None:
+        """The in-process backend rejects a path that version dispatch would treat as VST3."""
+        with pytest.raises(ValidationError, match='requires plugin_path="torchsynth"'):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "torchsynth",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_torchsynth_plugin_path_requires_torchsynth_backend(self) -> None:
+        """The bare backend name cannot dispatch through the default VST3 renderer."""
+        with pytest.raises(ValidationError, match='requires renderer_backend="torchsynth"'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="torchsynth"))
 
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).

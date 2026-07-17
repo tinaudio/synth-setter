@@ -1247,6 +1247,108 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     assert sample.note_params == _HARDCODED_NOTE_PARAMS
 
 
+def _clipped_audio() -> np.ndarray:
+    """Return a stereo render exceeding [-1, 1]: a 440 Hz sine at 1.5× full scale.
+
+    :returns: Channel-leading stereo audio whose peak amplitude is 1.5.
+    """
+    n = int(_SAMPLE_RATE * _DURATION)
+    t = np.arange(n) / _SAMPLE_RATE
+    sine = (1.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    return np.stack([sine, sine], axis=0)
+
+
+def test_generate_sample_clipped_render_sampled_params_resamples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clipping draw on the sampling path is rejected and re-sampled, not shard-fatal.
+
+    surge_xt full-spec draws intermittently render outside [-1, 1] (~0.4% per draw); raising made
+    completion of a 500-sample shard statistically unreachable (#2001). Clipping must behave like
+    the loudness gate: reject the draw and continue with the next attempt seed.
+
+    :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+
+    render_outputs = iter([_clipped_audio(), _loud_audio()])
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
+    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * 2)
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_pedalboard_renderer(),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+    )
+    # Exhausted both render outputs ⇒ the clipped draw was retried exactly once.
+    assert next(render_outputs, None) is None
+    assert sample.attempt == 1
+
+
+def test_generate_sample_clipped_render_fixed_synth_params_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clipping render with ``fixed_synth_params`` raises — retrying cannot change it.
+
+    Eval/replay paths hold params constant, so the strict amplitude contract must keep surfacing
+    the failure instead of silently looping.
+
+    :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+    from synth_setter.data.vst.renderers import AudioAmplitudeError
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: _clipped_audio()
+    )
+
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        generate_vst_dataset.generate_sample(
+            renderer=_pedalboard_renderer(),
+            velocity=_VELOCITY,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
+            fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        )
+
+
+def test_generate_sample_wrong_shape_render_sampled_params_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong-shape render stays fatal on the sampling path — it is a backend bug.
+
+    Only the amplitude check is sampled-data rejection; shape/finiteness violations mean the
+    renderer broke its contract and must not be retried.
+
+    :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params",
+        lambda *a, **kw: _loud_audio()[:, :100],
+    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)])
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
+
+    with pytest.raises(ValueError, match="rendered audio shape"):
+        generate_vst_dataset.generate_sample(
+            renderer=_pedalboard_renderer(),
+            velocity=_VELOCITY,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+        )
+
+
 def _install_fake_render_params(
     monkeypatch: pytest.MonkeyPatch,
     spec: ParamSpec,

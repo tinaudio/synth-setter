@@ -459,19 +459,17 @@ RUN case "${TARGETARCH:-}" in \
 
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/data/vst/core.py /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
-    python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
+    python -X faulthandler load_vst3_check.py "/usr/lib/vst3/Surge XT.vst3"
 
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
 
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
 COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
-
 # Presence gate for the bundles the image must ship: Surge XT on every arch,
 # bundled plugin synths on amd64 only. Load-validation follows.
 RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
