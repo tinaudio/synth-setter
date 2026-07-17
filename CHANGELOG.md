@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v9.6.3 (2026-07-17)
+
+### Bug Fixes
+
+- **data-pipeline**: Diagnose schema skew in lance finalize rejections
+  ([#2097](https://github.com/tinaudio/synth-setter/pull/2097),
+  [`ec9beae`](https://github.com/tinaudio/synth-setter/commit/ec9beae8a73c5c48ffac6f6afa6520a6c59852a4))
+
+* fix(data-pipeline): explain lance finalize schema mismatches with field and skew diffs
+
+A bare "fragment physical schema does not match spec-derived shard schema" hides whether the drift
+  is corrupt data or writer/validator code-version skew. CI's smoke pairs a main-built dev-snapshot
+  writer image with a branch-checkout validator, so every schema-affecting main merge re-broke stale
+  PRs with that misleading message (#2084, keyed on #2069's metadata change).
+
+Finalize now renders the exact field, dtype, and schema-metadata differences, appends an explicit
+  code-version-skew hint with rebase guidance when only spec-derived metadata diverges, and falls
+  back to a field order/nullability rendering when the name/type/metadata diffs are blind to the
+  drift.
+
+Refs #2084
+
+* fix(ci-automation): give each smoke finalize push a fresh R2 run prefix
+
+The presubmit run_id used only PR number + run_attempt, so a new push started at attempt 1 and
+  reused the previous push's prefix — replaying its stale claim state as "no staged-valid attempt"
+  in the queue cell (#2084). Including github.run_id isolates every push.
+
+* ci(data-pipeline): trigger finalize smoke on finalize and staging module changes
+
+The smoke exists to guard the generate+finalize chain, but its path filters omitted
+  lance_finalize.py and lance_staging.py, so a PR touching only finalize logic never ran it before
+  merge.
+
+* test(data-pipeline): pin schema-diff rendering in a fixture-free unit module
+
+The e2e drift tests skip wherever rclone is absent — including both coverage-uploading CI jobs — so
+  the new diff branches reported zero patch coverage. A pure module now pins every branch (field
+  sets, dtype drift, metadata drift + skew-hint precision, absent keys, nullability fallback) and
+  runs on plugin-less CI.
+
+
 ## v9.6.2 (2026-07-17)
 
 ### Bug Fixes
