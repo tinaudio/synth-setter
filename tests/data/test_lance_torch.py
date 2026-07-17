@@ -342,6 +342,8 @@ class TestMapDataloader:
 
         np.testing.assert_array_equal(rows, arrays["param_array"])
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.slow
     def test_spawn_workers_cover_all_rows(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]

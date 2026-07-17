@@ -768,6 +768,8 @@ class TestNoiseGeneratorSeeding:
         )
         assert first.generator.initial_seed() != second.generator.initial_seed()
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.skipif(
         sys.platform != "linux",
         reason="needs forked workers: spawn (macOS default) would have to pickle the "

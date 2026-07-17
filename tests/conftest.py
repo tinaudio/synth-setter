@@ -216,7 +216,7 @@ def cfg_train_global() -> DictConfig:
         # set defaults for all tests
         with open_dict(cfg):
             _apply_common_train_eval_overrides(cfg)
-            cfg.datamodule.num_workers = 4
+            cfg.datamodule.num_workers = 0
             cfg.callbacks.model_checkpoint.save_top_k = -1
             cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")

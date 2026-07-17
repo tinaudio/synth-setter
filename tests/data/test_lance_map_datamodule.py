@@ -704,6 +704,8 @@ class TestLanceMapDataModuleModes:
                 _params_in_order(module.predict_dataloader()), test_source
             )
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.slow
     def test_val_loader_spawn_workers_match_in_process(self, dataset_root: Path) -> None:
         """Spawn workers read the same rows as in-process loading.
@@ -722,6 +724,8 @@ class TestLanceMapDataModuleModes:
 
         np.testing.assert_array_equal(collect(num_workers=2), collect(num_workers=0))
 
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.slow
     def test_val_loader_spawn_worker_noise_is_distinct_and_reproducible(
         self, dataset_root: Path
