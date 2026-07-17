@@ -572,7 +572,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# Install the pinned Infisical CLI package for the build architecture.
+# Secret injection needs Infisical; Cloudsmith's versioned .deb avoids an apt repo.
+# When bumping, download both packages, then run `sha256sum infisical_*.deb` to refresh pins.
 ARG TARGETARCH
 ARG INFISICAL_VERSION=0.38.0
 ARG INFISICAL_SHA256_AMD64=b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f

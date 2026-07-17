@@ -44,3 +44,13 @@ def test_codex_sandbox_prerequisites_available() -> None:
         str(user_codex),
         "--version",
     )
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_infisical_cli_installed_with_pinned_version() -> None:
+    """Validate the image runs the pinned Infisical CLI version."""
+    assert _run_text("infisical", "--version") == "infisical version 0.38.0"

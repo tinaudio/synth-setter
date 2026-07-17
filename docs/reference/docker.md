@@ -125,8 +125,9 @@ Node.js installed system-wide, the `@anthropic-ai/claude-code`,
 `@openai/codex`, and `@earendil-works/pi-coding-agent` (`pi`) CLIs installed
 for the `dev` user via a per-user npm prefix (`~/.npm-global`, on PATH) — so
 later `npm install -g` runs, including claude-code's in-app self-update, avoid
-EACCES on the root-owned tree and aren't shadowed by a system-wide copy. It also installs the pinned, SHA256-verified Infisical CLI for secret injection.
-It adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
+EACCES on the root-owned tree and aren't shadowed by a system-wide copy. It
+also installs the pinned, SHA256-verified Infisical CLI for secret injection.
+It also adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
 SHA256-pinned upstream `install.sh` installs into a dedicated per-user venv —
 run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
 doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the

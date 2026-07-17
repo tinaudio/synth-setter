@@ -33,8 +33,10 @@ def test_devcontainer_tools_installs_hermes_and_pi(project_root: Path) -> None:
 
 
 @pytest.mark.infra
-def test_devcontainer_tools_installs_pinned_infisical_cli(project_root: Path) -> None:
-    """Verify the devcontainer image installs a verified Infisical CLI package.
+def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) -> None:
+    """Verify the Dockerfile declares the Infisical source and integrity pins.
+
+    The built-image smoke test verifies this declaration installs and runs the CLI.
 
     :param project_root: Root path of the repository under test.
     """
