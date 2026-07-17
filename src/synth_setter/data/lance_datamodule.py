@@ -29,7 +29,7 @@ _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
 _FAKE_M2L_SHAPE = (128, 42)
 _FAKE_MEL_SHAPE = (2, 128, 401)
 
-ModelBatch = dict[str, torch.Tensor | None]
+type ModelBatch = dict[str, torch.Tensor | None]
 
 
 class PrepareBatchCollate:
@@ -107,7 +107,7 @@ class PrepareBatchCollate:
         )
 
 
-class _FakeMapDataset(torch.utils.data.Dataset):
+class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
     """Sample-indexed synthetic dataset retaining the historical fake batch contract."""
 
     def __init__(
@@ -192,7 +192,7 @@ def _model_batch_passthrough(batch: object) -> ModelBatch:
     return cast(ModelBatch, batch)
 
 
-class _RepeatFirstBatchDataset(torch.utils.data.Dataset):
+class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
     """Fold every requested sample index into the first full batch."""
 
     def __init__(
@@ -250,7 +250,7 @@ class _RepeatFirstBatchDataset(torch.utils.data.Dataset):
         return {name: value[0] if value is not None else None for name, value in batch.items()}
 
 
-_SplitDataset = LanceMapDataset | _FakeMapDataset
+type _SplitDataset = LanceMapDataset | _FakeMapDataset
 
 
 @dataclass(frozen=True)
