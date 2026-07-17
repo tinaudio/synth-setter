@@ -1694,6 +1694,29 @@ class TestCheckedInLaunchConfigs:
         assert "training.val_audio_probe=true" in tokens
         assert "training.upload_checkpoints_during_training=true" in tokens
 
+    def test_default_train_config_lets_experiment_select_datamodule(self) -> None:
+        """The generic train launcher leaves the datamodule contract to the experiment."""
+        cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod.yaml")
+
+        assert cfg.cmd is not None
+        tokens = shlex.split(cfg.cmd)
+        assert "experiment=${EXPERIMENT:-surge/ffn_simple}" in tokens
+        assert "datamodule=surge_lance_map" not in tokens
+        assert "datamodule.param_spec_name=surge_simple" not in tokens
+
+    def test_default_eval_config_matches_train_experiment_and_dataset_interface(self) -> None:
+        """The generic eval launcher accepts the same env overrides as training."""
+        cfg = load_launch_config(self._LAUNCH_DIR / "eval-runpod.yaml")
+
+        assert cfg.cmd is not None
+        tokens = shlex.split(cfg.cmd)
+        assert "experiment=${EXPERIMENT:-surge/wandb_checkpoint/ffn_simple}" in tokens
+        assert any(
+            token.startswith("datamodule.download_dataset_root_uri=")
+            and "DATASET_ROOT_URI:-r2://" in token
+            for token in tokens
+        )
+
     @pytest.mark.parametrize(
         "name",
         [

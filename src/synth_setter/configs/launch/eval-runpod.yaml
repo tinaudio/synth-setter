@@ -21,5 +21,6 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec src/synth_setter/scripts/run-linux-vst-headless.sh
   synth-setter-eval
-  experiment=surge/wandb_checkpoint/ffn_simple
+  "experiment=${EXPERIMENT:-surge/wandb_checkpoint/ffn_simple}"
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/}"
   hydra.run.dir=/home/build/synth-setter/eval-run
