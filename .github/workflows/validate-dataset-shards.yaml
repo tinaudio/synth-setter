@@ -115,13 +115,18 @@ jobs:
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
 
+      # Sync the mounted checkout into `/venv/main` before running the
+      # validator so this reusable always executes the caller's checked-out
+      # synth_setter code, not the package baked into dev-snapshot. The mount
+      # stays writable because building the local project updates
+      # `src/synth_setter.egg-info` during the sync.
       - name: Validate every shard via R2
         env:
           SPEC_URI: ${{ inputs.spec_uri }}
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e SYNTH_SETTER_STORAGE_PROVIDER \
             -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
             -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
@@ -132,5 +137,6 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
+            -e UV_PROJECT_ENVIRONMENT=/venv/main \
             "${IMAGE}" \
-            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
+            bash -c 'cd /home/build/synth-setter && uv sync --frozen --no-default-groups --group data && uv run python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
