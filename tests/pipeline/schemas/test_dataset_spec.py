@@ -670,6 +670,20 @@ class TestDatasetSpecValidators:
 
         assert spec.train_val_test_seeds == (101, 202, 303)
         assert isinstance(spec.train_val_test_seeds, tuple)
+        with pytest.raises(TypeError):
+            spec.train_val_test_seeds[0] = 999  # type: ignore[index]
+
+    @pytest.mark.parametrize("bad_length", [[42, 43], [42, 43, 44, 45]])
+    def test_train_val_test_seeds_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """Split master seeds require one value per train, validation, and test split.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param bad_length: Seed list with an invalid number of split masters.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
 
     def test_train_val_test_seeds_rejects_duplicate_split_masters(
         self, patch_runtime_io: None

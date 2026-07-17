@@ -70,6 +70,10 @@ The current implementation includes:
 - Validation catches a shard whose stored seed provenance disagrees with the
   spec-derived expected values.
 
+These row-level guarantees apply to `param_sample_cadence="sample"`. Shard
+cadence intentionally reuses one patch within each shard, so changing shard
+boundaries changes that probe's grouping.
+
 ## Legacy Specs
 
 `train_val_test_seeds=None` preserves the original `base_seed + shard_id`

@@ -928,7 +928,9 @@ class DatasetSpec(BaseModel):
         :returns: This validated spec.
         :raises ValueError: Two split master seeds are equal.
         """
-        if self.train_val_test_seeds is not None and len(set(self.train_val_test_seeds)) != 3:
+        if self.train_val_test_seeds is not None and len(set(self.train_val_test_seeds)) != len(
+            self.train_val_test_seeds
+        ):
             raise ValueError("train_val_test_seeds must be distinct")
         return self
 
