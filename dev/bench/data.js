@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784248233996,
+  "lastUpdate": 1784248236651,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15336,6 +15336,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.688561458800004,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4eeac14acd645342e4d7a19d480cc59bfda67fdf",
+          "message": "chore(data-pipeline): harden torchsynth render contracts (#2037)\n\n* internal-fix(data-pipeline): harden torchsynth render contracts\n\nReject renderer/backend name mismatches before the version gate and add behavioral coverage for package absence, spec-width drift, and real CLI-to-Lance rendering.\n\nRefs #1757\n\n* internal-fix(data-pipeline): address contract-coverage review warnings\n\nShare the torchsynth plugin-path sentinel via renderer_backend.py (spec.py\nvalidator and the vst package now use one constant), document the sentinel on\nthe plugin_path field, slow-mark the CLI subprocess e2e, and derive the\nwidth-drift test's expected counts from the live voice.\n\nRefs #1757\n\n* docs: note the torchsynth plugin-path sentinel in RenderConfig references\n\nThe data-pipeline doc's verbatim RenderConfig body and the doc-map entry for\nrenderer_backend.py now carry the plugin_path/renderer_backend agreement\ninvariant introduced by _validate_torchsynth_backend.\n\nRefs #1757",
+          "timestamp": "2026-07-16T18:23:08-04:00",
+          "tree_id": "70f8446874e100829fe35d8eac35aa73d5f44728",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4eeac14acd645342e4d7a19d480cc59bfda67fdf"
+        },
+        "date": 1784248235854,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.564112663269043,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.125737978219986,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08932175487279892,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0031400322914123535,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.245136022567749,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.586534623500006,
             "unit": "seconds"
           }
         ]
