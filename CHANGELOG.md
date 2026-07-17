@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v9.5.1 (2026-07-17)
+
+### Bug Fixes
+
+- **training**: Compile FlowVAE and fake-oracle only during fit
+  ([#2094](https://github.com/tinaudio/synth-setter/pull/2094),
+  [`45beaf4`](https://github.com/tinaudio/synth-setter/commit/45beaf46fc9a99ac866a154d33ebccb56af27272))
+
+* fix(training): compile FlowVAE and fake-oracle only during fit
+
+A compile-enabled fit followed by test re-invoked torch.compile on the existing OptimizedModule and
+  crashed assigning the result as an nn.Module child. Apply the same fit-stage guard as the VST
+  FF/flow modules; the Flow-VAE regression runs only where the optional nflows dep is installed.
+
+* docs(training): mark compile test-stage gap resolved
+
+The wandb-integration Known Gaps table still listed the #248 test-stage torch.compile crash as open;
+  with the FlowVAE and fake-oracle guards all four VST modules are covered.
+
+* internal-fix(training): import Flow-VAE module without nflows
+
+The compile-stage regression for VSTFlowVAEModule could not run in CI because importing the module
+  pulled the undeclared optional nflows dep (#1664), leaving the new setup() guard uncovered and
+  failing the codecov patch gate. Import the loss at use instead, run the regression
+  unconditionally, replace the AST-pin alias tests with identity tests, and include surge_flowvae in
+  the Hydra target-resolution check.
+
+### Testing
+
+- Serialize Darwin VST tests ([#2056](https://github.com/tinaudio/synth-setter/pull/2056),
+  [`dcaa234`](https://github.com/tinaudio/synth-setter/commit/dcaa234f491ddd46a4d6afe53dff5ee05a64808e))
+
+* internal-fix(testing): serialize Darwin VST tests
+
+* internal-fix(testing): retain both Darwin CPU lane results
+
+* internal-fix(testing): normalize Darwin VST lane failures
+
+
 ## v9.5.0 (2026-07-17)
 
 ### Bug Fixes
