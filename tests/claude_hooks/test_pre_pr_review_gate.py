@@ -143,6 +143,22 @@ def test_block_gate_excludes_comment_hygiene_blocks(tmp_path: Path) -> None:
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
+def test_gate_finding_text_with_clean_counts_reaches_finding_gate(tmp_path: Path) -> None:
+    """Clean-count prose inside a finding does not trigger worker completeness.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[synth-setter:block]** output changed to 0 BLOCK, 0 WARN.\n",
+        complete=False,
+    )
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "unresolved BLOCK finding" in result.stderr
+
+
 def test_gate_blocks_clean_pass_without_complete_worker_reports(tmp_path: Path) -> None:
     """A zero-finding sentinel without worker evidence cannot satisfy the gate.
 

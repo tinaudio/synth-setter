@@ -713,7 +713,7 @@ T_gate_clean_sentinel_no_false_positive() {
   mkdir -p "$(dirname "$path")"
   {
     printf '# repo-review-full-no-comments — review @ %s\n\n' "$head_sha"
-    printf 'PASS — no findings across all skills (code-health, comment-hygiene,\n'
+    printf 'PASS — no findings across all skills (code-health, comment-hygiene, correctness,\n'
     printf 'python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n'
     printf '%s\n\n' '- Worker reports: 8/8 complete and non-empty.'
     printf 'padding line %d\n' {1..20}

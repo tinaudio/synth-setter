@@ -417,7 +417,7 @@ fi
 # A clean result is gate-eligible only after every selected worker returned a
 # non-empty report. Findings already fail through their severity sub-gates;
 # this closes the false-PASS path where missing workers look like zero findings.
-if grep -qE '0 BLOCK, 0 WARN|^PASS — no findings' "$REVIEW_PATH"; then
+if grep -qE '^0 BLOCK, 0 WARN|^PASS — no findings' "$REVIEW_PATH"; then
   if grep -qF -- '- Worker reports: not applicable (zero diff).' "$REVIEW_PATH"; then
     :
   else
