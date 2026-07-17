@@ -8,6 +8,7 @@ have nor need. The upload itself is exercised against a real rclone in
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -220,6 +221,19 @@ def test_configure_val_audio_probe_auto_skips_without_render_group() -> None:
     _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), callbacks)
 
     assert callbacks == []
+
+
+def test_configure_val_audio_probe_auto_skip_warns_operator(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``auto`` reports an unwired probe at warning level.
+
+    :param caplog: Captures the operator-visible warning.
+    """
+    with caplog.at_level(logging.WARNING):
+        _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), [])
+
+    assert any("no render group composed" in message for message in caplog.messages)
 
 
 def test_configure_val_audio_probe_auto_skips_when_validation_disabled() -> None:

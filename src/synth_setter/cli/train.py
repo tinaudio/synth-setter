@@ -150,11 +150,25 @@ def _derive_probe_uri(cfg: DictConfig) -> str:
 
 
 def _skip_auto_probe(reason: str) -> None:
-    """Log why ``val_audio_probe: auto`` is leaving the probe unwired.
+    """Warn why ``val_audio_probe: auto`` leaves the probe unwired.
 
     :param reason: Missing prerequisite, phrased for the run log.
     """
-    log.info("val audio probe: %s; probe disabled (auto mode).", reason)
+    log.warning(f"val audio probe: {reason}; probe disabled (auto mode).")
+
+
+def _skip_auto_probe_or_raise(auto: bool, reason: str, error: str) -> None:
+    """Skip an auto-mode probe or reject an explicit-mode configuration.
+
+    :param auto: Whether the configured mode is ``"auto"``.
+    :param reason: Missing prerequisite, phrased for the run log.
+    :param error: Configuration error for explicit mode.
+    :raises ValueError: If explicit mode lacks the prerequisite.
+    """
+    if auto:
+        _skip_auto_probe(reason)
+        return
+    raise ValueError(error)
 
 
 def _validate_probe_spec_match(cfg: DictConfig) -> None:
@@ -220,31 +234,31 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
     mode = OmegaConf.select(cfg, "training.val_audio_probe")
     if mode is False:
         return
-    enabled_mode = mode is True or mode == "auto"
-    if not enabled_mode:
-        raise ValueError(f"training.val_audio_probe must be true, false, or 'auto'; got {mode!r}.")
     auto = mode == "auto"
+    explicit = mode is True
+    if not auto and not explicit:
+        raise ValueError(f"training.val_audio_probe must be true, false, or 'auto'; got {mode!r}.")
     if cfg.get("render") is None:
-        if auto:
-            _skip_auto_probe("no render group composed")
-            return
-        raise ValueError(
+        _skip_auto_probe_or_raise(
+            auto,
+            "no render group composed",
             "training.val_audio_probe=true requires a render config group "
-            "(e.g. `render=surge_xt`); cfg.render is unset."
+            "(e.g. `render=surge_xt`); cfg.render is unset.",
         )
+        return
     # A composed render group states intent, so spec mismatches raise under auto too.
     _validate_probe_spec_match(cfg)
     # A validation-hooked probe wired into a validation-disabled run would silently
     # stage nothing forever.
     if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
-        if auto:
-            _skip_auto_probe("validation is disabled (trainer.limit_val_batches=0)")
-            return
-        raise ValueError(
+        _skip_auto_probe_or_raise(
+            auto,
+            "validation is disabled (trainer.limit_val_batches=0)",
             "training.val_audio_probe=true requires validation to run, but "
             "trainer.limit_val_batches is 0. Override it (e.g. "
-            "`trainer.limit_val_batches=1.0`) to enable the probe."
+            "`trainer.limit_val_batches=1.0`) to enable the probe.",
         )
+        return
     num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
     # bool is an int subclass, so `true` would otherwise pass as 1.
     if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
