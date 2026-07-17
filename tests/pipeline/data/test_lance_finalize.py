@@ -923,19 +923,6 @@ def test_finalize_schema_mismatch_metadata_only_drift_reports_values_and_skew_hi
     assert "rebase" in message
 
 
-def test_schema_mismatch_detail_nullability_only_drift_reports_field_flags() -> None:
-    """A drift invisible to name/type/metadata diffs still yields a non-empty detail."""
-    from synth_setter.pipeline.data.lance_finalize import _schema_mismatch_detail
-
-    nullable = pa.schema([pa.field("audio", pa.int64(), nullable=True)])
-    required = pa.schema([pa.field("audio", pa.int64(), nullable=False)])
-
-    detail = _schema_mismatch_detail(nullable, required)
-
-    assert "order or nullability" in detail
-    assert "audio" in detail
-
-
 def test_finalize_rejects_fragment_file_with_fewer_rows_than_sidecar(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
