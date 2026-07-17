@@ -6,8 +6,6 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from synth_setter.models.components.vae import compute_flowvae_loss
-
 
 class VSTFlowVAEModule(LightningModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
@@ -47,6 +45,9 @@ class VSTFlowVAEModule(LightningModule):
         pass
 
     def model_step(self, batch: dict[str, torch.Tensor]):
+        # Imported at use: the optional nflows dep (#1664) must not block importing this module.
+        from synth_setter.models.components.vae import compute_flowvae_loss  # pragma: no cover
+
         target_params = batch["params"]
 
         mel_spec = batch["mel_spec"]
