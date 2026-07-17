@@ -12,7 +12,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
 import numpy as np
@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 import torch
 from hydra.core.hydra_config import HydraConfig
+from lightning.pytorch import Trainer
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
 
@@ -132,6 +133,37 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+@pytest.mark.parametrize(
+    ("received_sigterm", "expected_exit_code"),
+    [(True, 143), (False, 7)],
+)
+def test_train_fit_system_exit_uses_signal_status_only_for_sigterm(
+    cfg_train: DictConfig,
+    received_sigterm: bool,
+    expected_exit_code: int,
+) -> None:
+    """Translate Lightning's handled SIGTERM without masking other exits.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param received_sigterm: Whether Lightning recorded a SIGTERM.
+    :param expected_exit_code: Exit code expected from the training entrypoint.
+    """
+    HydraConfig().set_config(cfg_train)
+    with (
+        patch.object(Trainer, "fit", side_effect=SystemExit(7)),
+        patch.object(
+            Trainer,
+            "received_sigterm",
+            new_callable=PropertyMock,
+            return_value=received_sigterm,
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        train(cfg_train)
+
+    assert exc_info.value.code == expected_exit_code
 
 
 def test_train_torchsynth_experiment_renders_audio_online(
