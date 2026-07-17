@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _RENDERER_SCRIPT,
     build_generate_args,
     generate,
 )
@@ -1939,8 +1940,8 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[1].endswith("synth_setter/data/vst/generate_vst_dataset.py")
-        assert Path(args[1]).is_file()
+        assert Path(args[1]) == _RENDERER_SCRIPT
+        assert _RENDERER_SCRIPT.is_file()
 
     def test_script_path_resolves_from_any_working_directory(
         self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1972,9 +1973,31 @@ class TestBuildGenerateArgs:
         """
         from synth_setter.cli import generate_dataset
 
-        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", tmp_path / "gone.py")
+        missing_script = tmp_path / "gone.py"
+        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", missing_script)
 
-        with pytest.raises(RuntimeError, match="renderer script"):
+        with pytest.raises(RuntimeError, match=f"renderer script not found: {missing_script}"):
+            build_generate_args(spec, spec.shards[0], tmp_path / "out")
+
+    def test_renderer_script_directory_raises_at_build_time(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A renderer directory fails at arg-build rather than reaching a worker.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Holds the directory substituted for the script.
+        :param monkeypatch: Points the module at the substituted directory.
+        """
+        from synth_setter.cli import generate_dataset
+
+        renderer_directory = tmp_path / "renderer"
+        renderer_directory.mkdir()
+        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", renderer_directory)
+
+        with pytest.raises(
+            RuntimeError,
+            match=f"renderer script not found: {renderer_directory}",
+        ):
             build_generate_args(spec, spec.shards[0], tmp_path / "out")
 
 

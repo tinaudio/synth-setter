@@ -22,7 +22,7 @@ from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.workspace import operator_workspace
 
 _SAMPLE_RATE = 22_050
@@ -32,9 +32,8 @@ _DURATION_SECONDS = 0.5
 def _torchsynth_render_cfg(**overrides: object) -> RenderConfig:
     """Build a small torchsynth render config for one stress scenario.
 
-    :param \\*\\*overrides: ``RenderConfig`` field overrides — the stress axes are
-        ``samples_per_shard``, ``samples_per_render_batch``, ``min_loudness``,
-        ``attempts_per_sample``, and ``base_seed``.
+    :param \\*\\*overrides: ``RenderConfig`` field overrides for the exercised
+        shard size, render-batch size, and base seed axes.
     :returns: Validated render config.
     """
     kwargs: dict[str, object] = {
@@ -278,21 +277,15 @@ def _assert_map_loader_round_trip(
     assert seen == expected_train_rows
 
 
-@pytest.mark.slow
-def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
-    tmp_path: Path,
-    fake_r2_remote: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The full pipeline holds with real renders: generate → stage → finalize → load.
+def _generate_and_finalize_stress_run(
+    tmp_path: Path, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, DatasetSpec]:
+    """Run the real worker and finalizer from a non-repository directory.
 
-    Real worker subprocesses render shards, stage to a fake ``r2:`` remote,
-    and finalize the split datasets. The production Lance datamodule then
-    serves finite batches with the spec's parameter width.
-
-    :param tmp_path: Scratch root for Hydra paths and the finalize work dir.
-    :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
-    :param monkeypatch: Pins worker state, finalize auth, and a non-repository cwd.
+    :param tmp_path: Scratch root for Hydra paths and finalizer work.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins worker state, finalizer auth, and the worker cwd.
+    :returns: Finalized R2 run root and the specification used to create it.
     """
     from synth_setter.cli.finalize_dataset import finalize_lance
     from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
@@ -300,9 +293,7 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     cfg = _compose_stress_cfg(tmp_path)
-
     spec = spec_from_cfg(cfg)
-    assert spec.num_shards == 4
 
     worker_cwd = fake_r2_remote / "worker-cwd"
     worker_cwd.mkdir()
@@ -315,14 +306,26 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip(
     work_dir = tmp_path / "finalize-work"
     work_dir.mkdir()
     finalize_lance(spec, work_dir)
+    return worker_cwd / spec.r2.bucket / spec.r2.prefix, spec
 
-    run_root = worker_cwd / spec.r2.bucket / spec.r2.prefix
+
+@pytest.mark.slow
+def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip_returns_finite_rows(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full pipeline returns finite rows for every finalized split.
+
+    :param tmp_path: Scratch root for Hydra paths and the finalize work dir.
+    :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+    :param monkeypatch: Pins worker state, finalize auth, and a non-repository cwd.
+    """
+    run_root, spec = _generate_and_finalize_stress_run(tmp_path, fake_r2_remote, monkeypatch)
+
+    assert spec.num_shards == 4
     assert (run_root / "stats.npz").is_file()
     expected_rows = {"train": 12, "val": 6, "test": 6}
     _assert_finalized_split_rows(run_root, expected_rows)
     # The map loader preserves ragged shard tails; the legacy batch-indexed path drops them.
-    _assert_map_loader_round_trip(
-        run_root,
-        spec.render.param_spec_name,
-        expected_rows["train"],
-    )
+    _assert_map_loader_round_trip(run_root, spec.render.param_spec_name, expected_rows["train"])
