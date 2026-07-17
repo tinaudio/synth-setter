@@ -1,4 +1,4 @@
-"""Pinning tests for :func:`synth_setter.data.surge_datamodule.prepare_batch`.
+"""Pinning tests for :func:`synth_setter.data.vst_datamodule.prepare_batch`.
 
 Each test compares against :func:`_reference_prepare_batch`, an independent
 golden that applies the batch math (mel norm, param rescale, seeded noise,
@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from synth_setter.data.ot import _hungarian_match
-from synth_setter.data.surge_datamodule import RawBatch, prepare_batch
+from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 
 _NUM_PARAMS = 5
 _BATCH = 8
