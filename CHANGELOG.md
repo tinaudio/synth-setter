@@ -1,6 +1,90 @@
 # CHANGELOG
 
 
+## v9.6.0 (2026-07-17)
+
+### Features
+
+- **data-pipeline**: Track silent and clipped render rejections
+  ([#2055](https://github.com/tinaudio/synth-setter/pull/2055),
+  [`2dc758e`](https://github.com/tinaudio/synth-setter/commit/2dc758eb3632f07214bdc96fe1c2d8353fe0bade))
+
+* internal-feat(data-pipeline): track render rejection counts
+
+Count silent and clipped sampled-render rejections independently, relay validated per-shard reports
+  across the renderer subprocess boundary, and log both per-shard and worker-total W&B metrics.
+
+Refs #2032
+
+* internal-fix(data-pipeline): clarify rejection field comments
+
+Separate accepted-attempt provenance from per-draw rejection counters so each field's aggregation
+  contract is explicit.\n\nRefs #2032
+
+* test(data-pipeline): cover rejection aggregation without rclone
+
+Exercise parallel rejection totals and strict sidecar loading on regular coverage runners where the
+  rclone-backed integration fixtures are unavailable.\n\nRefs #2032
+
+* test(data-pipeline): harden rejection telemetry contracts
+
+Pin claims-mode aggregation, stale-sidecar cleanup, and public entrypoint telemetry while clarifying
+  per-worker summary semantics.\n\nRefs #2032
+
+* test(data-pipeline): cover claims rejection relay
+
+### Refactoring
+
+- **data-pipeline**: Canonicalize VST datamodule tests
+  ([#2061](https://github.com/tinaudio/synth-setter/pull/2061),
+  [`eb0c017`](https://github.com/tinaudio/synth-setter/commit/eb0c01745d68746473f3c7bf613dccc4816d29f0))
+
+* refactor(data-pipeline): canonicalize VST datamodule tests
+
+Rename the generic datamodule suite and import canonical VST/Lance modules while keeping deprecated
+  shim coverage isolated.
+
+Refs #2018
+
+* internal-fix(data-pipeline): remove redundant fixture docs
+
+* internal-fix(data-pipeline): retain required test docs
+
+- **data-pipeline**: Extract generic VST render base
+  ([#2060](https://github.com/tinaudio/synth-setter/pull/2060),
+  [`b546321`](https://github.com/tinaudio/synth-setter/commit/b546321b7e0fc93cb00dd4a5416f998efbeeba4f))
+
+* refactor(data-pipeline): extract generic VST render base
+
+* fix(data-pipeline): harden generic VST render registration
+
+Reserve the shared vst group from synth registration, pin the real oracle eval config, and tighten
+  generated/config-map prose.
+
+Refs #2018
+
+* fix(data-pipeline): reserve VST render name case-insensitively
+
+Prevent case-variant synth registrations from aliasing and overwriting the generic render base on
+  case-insensitive filesystems.
+
+* docs(data-pipeline): focus VST render map description
+
+Keep the render source-map entry scoped to the generic defaults and synth identity contract.
+
+* fix(data-pipeline): harden render config registration
+
+### Testing
+
+- Satisfy fake wandb logger contract in eval smoke tests
+  ([#2101](https://github.com/tinaudio/synth-setter/pull/2101),
+  [`146cace`](https://github.com/tinaudio/synth-setter/commit/146cace875a9d5573da214b3eb9039b0171c98ae))
+
+* internal-fix(testing): satisfy fake wandb logger contract
+
+* internal-fix(testing): document fake wandb config signature
+
+
 ## v9.5.1 (2026-07-17)
 
 ### Bug Fixes
