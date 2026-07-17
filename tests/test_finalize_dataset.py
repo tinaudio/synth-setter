@@ -10,13 +10,14 @@ from __future__ import annotations
 import glob
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn, cast
 
 import lance
 import pytest
 import wandb
+from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger as loguru_logger
 from omegaconf import DictConfig, OmegaConf
@@ -556,6 +557,53 @@ def test_finalize_failure_with_no_progress_omits_terminal_summary(
 
     assert metric_calls == []
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
+
+
+def test_finalize_closes_loggers_when_progress_logging_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A progress-logger setup failure closes the configured W&B run as failed.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param monkeypatch: Makes progress-logger setup fail and records logger-close status.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    def fail_progress_logger_setup(loggers: Sequence[Logger], total_shards: int) -> NoReturn:
+        del loggers, total_shards
+        raise RuntimeError("simulated progress logger setup failure")
+
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset._make_finalize_progress_logger",
+        fail_progress_logger_setup,
+    )
+    real_close = finalize_dataset.close_loggers
+    close_statuses: list[str] = []
+
+    def spy_close(loggers: list[object], status: str) -> None:
+        close_statuses.append(status)
+        real_close(loggers, status)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
+    spec = build_lance_smoke_spec(task_name="finalize-progress-logger-setup-failure")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="simulated progress logger setup failure"):
+        finalize_dataset.finalize(cfg)
+
+    assert close_statuses == ["failed"]
+    assert wandb.run is None, "finalize() left the wandb run open after logger setup failed"
 
 
 def test_finalize_failure_keeps_logger_close_best_effort_when_metric_logging_fails(
