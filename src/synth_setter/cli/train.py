@@ -323,7 +323,7 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
 
     On a hit with a recoverable W&B run id, also marks the wandb logger for
     run continuity (``apply_wandb_resume_continuity``) so the reused id
-    continues the original run page.
+    continues the original run page. Propagates invalid resume-config errors.
 
     :param cfg: Hydra-composed train cfg, mutated in place on a discovery hit.
     :param config_id: Run identity keying discovery and error messages.
@@ -334,19 +334,23 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
     mode = resolve_resume_mode(cfg)
     if mode is None:
         return None
-    decision = discover_resume_checkpoint(cfg, config_id)
+    diagnostics: list[str] = []
+    decision = discover_resume_checkpoint(cfg, config_id, diagnostics=diagnostics)
     if decision is None:
         if mode == "require":
+            diagnostic_detail = f" R2 recovery degraded: {diagnostics[-1]}." if diagnostics else ""
             raise RuntimeError(
                 f"training.resume=require found no checkpoint for config_id {config_id!r} "
-                "in local run dirs or R2 mirrors."
+                f"in local run dirs or R2 mirrors.{diagnostic_detail}"
             )
-        log.info(f"training.resume=auto found no checkpoint for {config_id!r}; starting fresh.")
+        log.info("training.resume=auto found no checkpoint for %r; starting fresh.", config_id)
         return None
     cfg.ckpt_path = str(decision.ckpt_path)
     log.info(
-        f"Auto-resume: {decision.source} checkpoint {decision.ckpt_path} "
-        f"(recovered wandb run id: {decision.wandb_run_id})"
+        "Auto-resume: %s checkpoint %s (recovered wandb run id: %s)",
+        decision.source,
+        decision.ckpt_path,
+        decision.wandb_run_id,
     )
     if decision.wandb_run_id:
         apply_wandb_resume_continuity(cfg)

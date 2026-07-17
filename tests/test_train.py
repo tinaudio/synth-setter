@@ -1074,6 +1074,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     )
 
 
+@pytest.mark.slow
 def test_train_resume_auto_continues_from_newest_sibling_run(
     cfg_train: DictConfig, tmp_path: Path
 ) -> None:
@@ -1105,6 +1106,7 @@ def test_train_resume_auto_continues_from_newest_sibling_run(
     config_id = resolve_run_config_id(first_cfg)
     run_dir_name = f"run-20260716_000000-{config_id}-20260716T000000000Z"
     (tmp_path / "run-first" / "wandb" / run_dir_name).mkdir(parents=True)
+    (tmp_path / "run-first" / ".hydra").mkdir()
 
     second_cfg = cfg_train.copy()
     with open_dict(second_cfg):
@@ -1124,6 +1126,64 @@ def test_train_resume_auto_continues_from_newest_sibling_run(
     assert set(second_weights) == set(first_weights)
     for name, first_param in first_weights.items():
         assert torch.equal(second_weights[name], first_param), f"{name} diverged"
+
+
+@pytest.mark.slow
+def test_train_resume_require_from_r2_continues_wandb_run(
+    cfg_train: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``require`` loads an R2 mirror and continues its recovered W&B run.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param monkeypatch: Pytest fixture used to bypass the R2 credential probe.
+    :param tmp_path: Parent of distinct source and recovery output families.
+    """
+    HydraConfig().set_config(cfg_train)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    source_cfg = cfg_train.copy()
+    with open_dict(source_cfg):
+        source_cfg.paths.output_dir = str(tmp_path / "source-runs" / "run-first")
+        source_cfg.test = False
+    _, source_objects = train(source_cfg)
+    source_ckpt = tmp_path / "source-runs" / "run-first" / "checkpoints" / "last.ckpt"
+    assert source_ckpt.is_file()
+    config_id = resolve_run_config_id(source_cfg)
+    run_id = f"{config_id}-20260716T000000000Z"
+    mirror = (
+        fake_r2_remote
+        / "test-bucket"
+        / "checkpoints"
+        / config_id
+        / f"{run_id}-{'a' * 32}"
+        / "last.ckpt"
+    )
+    mirror.parent.mkdir(parents=True)
+    mirror.write_bytes(source_ckpt.read_bytes())
+
+    recovery_cfg = cfg_train.copy()
+    with open_dict(recovery_cfg):
+        recovery_cfg.paths.output_dir = str(tmp_path / "recovery-runs" / "run-second")
+        recovery_cfg.test = False
+        recovery_cfg.r2.bucket = "test-bucket"
+        recovery_cfg.training.resume = "require"
+        recovery_cfg.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+    _, recovered_objects = train(recovery_cfg)
+
+    recovered_cfg = recovered_objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(
+        tmp_path / "recovery-runs" / "run-second" / "resume" / "last.ckpt"
+    )
+    assert recovered_cfg.logger.wandb.id == run_id
+    assert recovered_cfg.logger.wandb.resume == "allow"
+    source_weights = dict(source_objects["model"].named_parameters())
+    recovered_weights = dict(recovered_objects["model"].named_parameters())
+    assert set(recovered_weights) == set(source_weights)
+    for name, source_param in source_weights.items():
+        assert torch.equal(recovered_weights[name], source_param), f"{name} diverged"
 
 
 def test_train_resume_require_without_checkpoint_raises(
@@ -1146,6 +1206,53 @@ def test_train_resume_require_without_checkpoint_raises(
         train(cfg_train)
 
 
+def test_train_resume_rejects_explicit_empty_checkpoint_before_instantiation(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """An empty manual checkpoint override fails before the training graph is built.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Output directory that remains unpopulated on validation failure.
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.ckpt_path = ""
+
+    with pytest.raises(ValueError, match="ckpt_path"):
+        train(cfg_train)
+
+    assert not (tmp_path / "run-only").exists()
+
+
+def test_train_resume_require_reports_r2_degradation(
+    cfg_train: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``require`` reports why R2 discovery degraded instead of finding nothing.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    :param monkeypatch: Pytest fixture used to make the R2 tier unavailable.
+    """
+    HydraConfig().set_config(cfg_train)
+
+    def _unavailable() -> None:
+        raise RuntimeError("no R2 credentials")
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+        cfg_train.r2.bucket = "test-bucket"
+
+    with pytest.raises(RuntimeError, match="no R2 credentials"):
+        train(cfg_train)
+
+
+@pytest.mark.slow
 def test_train_resume_auto_without_checkpoint_starts_fresh(
     cfg_train: DictConfig, tmp_path: Path
 ) -> None:
@@ -1166,6 +1273,7 @@ def test_train_resume_auto_without_checkpoint_starts_fresh(
     assert object_dict["cfg"].ckpt_path is None
 
 
+@pytest.mark.slow
 def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     cfg_train: DictConfig, tmp_path: Path
 ) -> None:

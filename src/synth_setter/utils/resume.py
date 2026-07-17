@@ -17,6 +17,7 @@ import logging
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -75,7 +76,7 @@ def resolve_resume_mode(cfg: DictConfig) -> Literal["auto", "require"] | None:
         return None
     if mode not in _ACTIVE_MODES:
         raise ValueError(f"training.resume must be one of null/off/auto/require; got {mode!r}.")
-    if OmegaConf.select(cfg, "ckpt_path"):
+    if OmegaConf.select(cfg, "ckpt_path") is not None:
         raise ValueError(
             f"training.resume={mode} and an explicit ckpt_path are mutually "
             "exclusive; drop one of them."
@@ -118,16 +119,22 @@ def _run_id_from_run_dir(run_dir: Path) -> str | None:
     :param run_dir: One Hydra run output dir.
     :returns: The run id, or ``None`` when the dir has no wandb run subdir.
     """
-    names = sorted(
-        candidate.name.removeprefix("offline-")
-        for pattern in ("wandb/run-*", "wandb/offline-run-*")
-        for candidate in run_dir.glob(pattern)
-    )
-    if not names:
-        return None
+    names: list[str] = []
+    for pattern in ("wandb/run-*", "wandb/offline-run-*"):
+        names.extend(
+            candidate.name.removeprefix("offline-") for candidate in run_dir.glob(pattern)
+        )
     # ``run-<YYYYMMDD_HHMMSS>-<id>``: the id is everything past the second dash.
-    parts = names[-1].split("-", 2)
-    return parts[2] if len(parts) == 3 else None
+    for name in sorted(names, reverse=True):
+        parts = name.split("-", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            datetime.strptime(parts[1], "%Y%m%d_%H%M%S")
+        except ValueError:
+            continue
+        return parts[2]
+    return None
 
 
 def _config_id_from_hydra_dir(run_dir: Path) -> str | None:
@@ -147,7 +154,8 @@ def _config_id_from_hydra_dir(run_dir: Path) -> str | None:
         if experiment not in (None, "null"):
             return PurePosixPath(str(experiment)).name
         return OmegaConf.select(OmegaConf.load(hydra_dir / "config.yaml"), "task_name")
-    except (OSError, yaml.YAMLError):
+    except (OSError, yaml.YAMLError) as exc:
+        log.debug("Cannot read Hydra state from %s: %s", hydra_dir, exc)
         return None
 
 
@@ -172,6 +180,9 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
         run_dir = ckpt.parent.parent
         if run_dir == current_output_dir:
             continue
+        if not (run_dir / ".hydra").is_dir():
+            log.debug("Skipping auto-resume candidate %s: not a Hydra run directory.", ckpt)
+            continue
         run_id = _run_id_from_run_dir(run_dir)
         if run_id is not None:
             if not _run_id_matches_config(run_id, config_id):
@@ -189,7 +200,8 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
                 continue
         try:
             mtime = ckpt.stat().st_mtime
-        except OSError:  # a concurrent launch rotated the checkpoint away mid-scan
+        except OSError as exc:  # a concurrent launch rotated the checkpoint away mid-scan
+            log.debug("Skipping auto-resume candidate %s: %s", ckpt, exc)
             continue
         candidates.append((mtime, ckpt, run_id))
     if not candidates:
@@ -239,7 +251,12 @@ def checkpoint_mirror_prefix(cfg: DictConfig, config_id: str) -> str | None:
     return f"r2://{bucket}/checkpoints/{config_id}"
 
 
-def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> ResumeDecision | None:
+def discover_r2_checkpoint(
+    prefix: str,
+    config_id: str,
+    dest_dir: Path,
+    diagnostics: list[str] | None = None,
+) -> ResumeDecision | None:
     """Download the newest mid-run mirror ``last.ckpt`` under ``prefix``.
 
     Scans the mirror prefix (see :func:`checkpoint_mirror_prefix`) for
@@ -251,6 +268,7 @@ def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> Resum
     :param prefix: ``r2://`` parent prefix the mirrors upload under.
     :param config_id: Run identity a namespace-embedded run id must match to be reused.
     :param dest_dir: Local directory the checkpoint downloads into.
+    :param diagnostics: Optional list receiving R2 degradation descriptions.
     :returns: The downloaded checkpoint, or ``None``.
     """
     # Deferred so importing this module never pulls the rclone/env machinery.
@@ -260,7 +278,10 @@ def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> Resum
         r2_io.ensure_r2_env_loaded()
         entries = r2_io.list_entries(f"{prefix}/", recursive=True)
     except _DEGRADABLE_ERRORS as exc:
-        log.warning("Skipping R2 resume discovery under %s: %s", prefix, exc)
+        message = f"R2 resume discovery under {prefix} degraded: {exc}"
+        log.warning("%s", message)
+        if diagnostics is not None:
+            diagnostics.append(message)
         return None
     mirrors = []
     for entry in entries:
@@ -273,17 +294,22 @@ def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> Resum
         mirrors.append((entry, run_id))
     if not mirrors:
         return None
-    newest, run_id = max(mirrors, key=lambda candidate: candidate[0].mtime)
+    newest, run_id = max(mirrors, key=lambda candidate: (candidate[0].mtime, candidate[0].path))
     dest = dest_dir / "last.ckpt"
     try:
         r2_io.download_to_path(f"{prefix}/{newest.path}", dest)
     except _DEGRADABLE_ERRORS as exc:
-        log.warning("Failed to download resume checkpoint %s: %s", newest.path, exc)
+        message = f"R2 resume checkpoint download {newest.path} degraded: {exc}"
+        log.warning("%s", message)
+        if diagnostics is not None:
+            diagnostics.append(message)
         return None
     return ResumeDecision(ckpt_path=dest, wandb_run_id=run_id, source="r2")
 
 
-def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecision | None:
+def discover_resume_checkpoint(
+    cfg: DictConfig, config_id: str, diagnostics: list[str] | None = None
+) -> ResumeDecision | None:
     """Run the discovery tiers in order and return the first hit.
 
     Tier order trades freshness for cost: local sibling run dirs (free, newest
@@ -292,6 +318,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
 
     :param cfg: Composed train cfg; reads ``paths.output_dir`` and ``r2.bucket``.
     :param config_id: Run identity keying every tier.
+    :param diagnostics: Optional list receiving R2 degradation descriptions.
     :returns: The first tier's decision, or ``None`` when nothing is found.
     """
     output_dir = Path(cfg.paths.output_dir)
@@ -301,5 +328,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
         if prefix is None:
             log.info("Skipping R2 resume discovery: no mirror prefix is configured.")
         else:
-            decision = discover_r2_checkpoint(prefix, config_id, output_dir / "resume")
+            decision = discover_r2_checkpoint(
+                prefix, config_id, output_dir / "resume", diagnostics=diagnostics
+            )
     return decision

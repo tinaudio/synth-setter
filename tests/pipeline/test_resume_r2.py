@@ -68,6 +68,41 @@ def test_discover_r2_downloads_newest_namespace_last_ckpt(
     assert decision.ckpt_path.read_bytes() == b"new"
 
 
+def test_discover_r2_equal_mtime_tie_breaks_on_path_string(
+    fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Equal R2 mtimes resolve deterministically by mirror path.
+
+    :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
+    :param tmp_path: Pytest tmp dir holding the download destination.
+    :param monkeypatch: Pytest fixture used to bypass the R2 auth probe.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
+    _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"ffn_simple-20260714T000000000Z-{_UUID_A}",
+        b"first-path",
+        mtime=1_000,
+    )
+    _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"ffn_simple-20260715T225004231Z-{_UUID_B}",
+        b"later-path",
+        mtime=1_000,
+    )
+    decision = discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "dest",
+    )
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+    assert decision.ckpt_path.read_bytes() == b"later-path"
+
+
 def test_discover_r2_empty_prefix_returns_none(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -120,10 +155,6 @@ def test_discover_resume_checkpoint_prefers_local_over_r2(
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
     :param monkeypatch: Pytest fixture used to stub module attributes.
     """
-    from omegaconf import OmegaConf
-
-    from synth_setter.utils.resume import discover_resume_checkpoint
-
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *args, **kwargs: None)
     _seed_mirror(
         fake_r2_remote,
@@ -140,6 +171,7 @@ def test_discover_resume_checkpoint_prefers_local_over_r2(
         runs_root / "ffn-prior" / "wandb" / "run-20260715_185004-ffn_simple-20260715T225004231Z"
     )
     wandb_dir.mkdir(parents=True)
+    (runs_root / "ffn-prior" / ".hydra").mkdir()
     current = runs_root / "ffn-current"
     current.mkdir()
     cfg = OmegaConf.create(

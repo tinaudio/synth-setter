@@ -9,6 +9,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import resume
 from synth_setter.utils.resume import (
     discover_local_checkpoint,
@@ -60,6 +61,14 @@ def test_resolve_resume_mode_auto_with_explicit_ckpt_path_raises() -> None:
         resolve_resume_mode(cfg)
 
 
+def test_resolve_resume_mode_auto_with_empty_ckpt_path_raises() -> None:
+    """An explicit empty checkpoint override is ambiguous auto-resume intent."""
+    cfg = _cfg(resume_value="auto", ckpt_path="")
+
+    with pytest.raises(ValueError, match="ckpt_path"):
+        resolve_resume_mode(cfg)
+
+
 def test_resolve_resume_mode_off_with_explicit_ckpt_path_is_allowed() -> None:
     """Manual resume (today's flow) stays untouched when resume is disabled."""
     assert resolve_resume_mode(_cfg(resume_value=None, ckpt_path="/some/last.ckpt")) is None
@@ -78,6 +87,7 @@ def _make_run_dir(
     wandb_run_id: str | None = None,
     offline_wandb: bool = False,
     hydra_experiment: str | None = None,
+    hydra_managed: bool = True,
 ) -> Path:
     """Create one fake Hydra run dir with a ``checkpoints/last.ckpt``.
 
@@ -89,6 +99,7 @@ def _make_run_dir(
     :param offline_wandb: Name the wandb dir ``offline-run-*`` instead of ``run-*``.
     :param hydra_experiment: When set, records this experiment choice in a
         ``.hydra/hydra.yaml`` so identity is provable without a wandb dir.
+    :param hydra_managed: Create the ``.hydra`` marker for a Hydra-owned run dir.
     :returns: The created run dir.
     """
     run_dir = root / name
@@ -100,9 +111,10 @@ def _make_run_dir(
     if wandb_run_id is not None:
         prefix = "offline-run" if offline_wandb else "run"
         (run_dir / "wandb" / f"{prefix}-20260715_185004-{wandb_run_id}").mkdir(parents=True)
-    if hydra_experiment is not None:
-        hydra_dir = run_dir / ".hydra"
+    hydra_dir = run_dir / ".hydra"
+    if hydra_managed:
         hydra_dir.mkdir()
+    if hydra_experiment is not None:
         (hydra_dir / "hydra.yaml").write_text(
             f"hydra:\n  runtime:\n    choices:\n      experiment: {hydra_experiment}\n"
         )
@@ -151,6 +163,23 @@ def test_discover_local_recovers_wandb_run_id_from_run_dir(tmp_path: Path) -> No
 
     assert decision is not None
     assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_local_matching_wandb_without_hydra_state_is_skipped(tmp_path: Path) -> None:
+    """A matching W&B directory alone does not make a non-Hydra sibling resumable.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(
+        tmp_path,
+        "unmanaged-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+        hydra_managed=False,
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
 
 
 def test_discover_local_skips_sibling_of_a_different_config_id(tmp_path: Path) -> None:
@@ -211,6 +240,23 @@ def test_namespace_run_id_strips_uuid_suffix() -> None:
     """A ``{run_id}-{32-hex}`` recovery namespace yields the embedded run id."""
     namespace = "ffn_simple-20260715T225004231Z-" + "a" * 32
     assert run_id_from_recovery_namespace(namespace) == "ffn_simple-20260715T225004231Z"
+
+
+def test_discovery_accepts_a_run_id_generated_by_the_canonical_factory(tmp_path: Path) -> None:
+    """Discovery accepts recovery namespaces built from canonical run IDs.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_id = make_wandb_run_id("ffn_simple")
+    _make_run_dir(tmp_path, "ffn-prior", wandb_run_id=run_id)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert run_id_from_recovery_namespace(f"{run_id}-{'a' * 32}") == run_id
+    assert decision is not None
+    assert decision.wandb_run_id == run_id
 
 
 @pytest.mark.parametrize(
@@ -287,6 +333,26 @@ def test_discover_resume_checkpoint_unreachable_r2_returns_none(
     assert resume.discover_resume_checkpoint(cfg, config_id="ffn_simple") is None
 
 
+def test_run_id_from_run_dir_ignores_malformed_newer_wandb_dir(tmp_path: Path) -> None:
+    """A malformed W&B directory cannot hide an earlier valid run ID.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = _make_run_dir(
+        tmp_path,
+        "ffn-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+    )
+    (run_dir / "wandb" / "run-99999999_999999-malformed").mkdir()
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
 def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(tmp_path: Path) -> None:
     """A wandb dir whose name lacks the ``run-<ts>-<id>`` shape yields no run id.
 
@@ -313,7 +379,6 @@ def test_config_id_from_hydra_dir_malformed_yaml_returns_none(tmp_path: Path) ->
     """
     run_dir = _make_run_dir(tmp_path, "ffn-prior")
     hydra_dir = run_dir / ".hydra"
-    hydra_dir.mkdir()
     (hydra_dir / "hydra.yaml").write_text("hydra: [unclosed")
     current = tmp_path / "ffn-current"
     current.mkdir()
@@ -427,6 +492,18 @@ def test_checkpoint_mirror_prefix_prefers_upload_uri_override() -> None:
     )
 
     assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://custom/my/spot"
+
+
+def test_checkpoint_mirror_prefix_accepts_key_at_bucket_root() -> None:
+    """A checkpoint key directly under the bucket recovers from the bucket root."""
+    cfg = OmegaConf.create(
+        {
+            "r2": {"bucket": "other-bucket"},
+            "training": {"upload_checkpoints_uri": "r2://bkt/model.ckpt"},
+        }
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://bkt"
 
 
 def test_checkpoint_mirror_prefix_auto_derives_from_bucket() -> None:
