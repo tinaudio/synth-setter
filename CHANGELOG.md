@@ -1,6 +1,157 @@
 # CHANGELOG
 
 
+## v9.5.0 (2026-07-17)
+
+### Bug Fixes
+
+- **training**: Compile VST modules only during fit
+  ([#2076](https://github.com/tinaudio/synth-setter/pull/2076),
+  [`e665b2b`](https://github.com/tinaudio/synth-setter/commit/e665b2b38e314dc9c5d88f9ba3a0fda0eaaf24f9))
+
+- **training**: Return nonzero status after SIGTERM
+  ([#2079](https://github.com/tinaudio/synth-setter/pull/2079),
+  [`485ab08`](https://github.com/tinaudio/synth-setter/commit/485ab08527b5e4df9a6e80c4d9ad2d2e82fe475e))
+
+* fix(training): return nonzero status after SIGTERM
+
+* internal-fix(training): harden SIGTERM test synchronization
+
+* test(training): cover SIGTERM exit translation
+
+### Features
+
+- **training**: Auto-resume interrupted runs from last checkpoint
+  ([#2047](https://github.com/tinaudio/synth-setter/pull/2047),
+  [`e5e7f4e`](https://github.com/tinaudio/synth-setter/commit/e5e7f4e0535f0a810d1c4aa6c593a9f9744c46e2))
+
+* feat(training): auto-resume from the newest checkpoint via training.resume
+
+Add a three-tier discovery (local sibling run dirs -> R2 mid-run mirrors -> train-end W&B model
+  artifact) behind training.resume=auto|require, so a crashed run relaunches with the identical
+  command instead of a hand-typed ckpt_path. A recovered launch reuses the original W&B run id
+  (resume=allow) so one logical training stays on one run page; require errors instead of silently
+  starting fresh in unattended relaunch loops.
+
+Motivated by the #1886 post-mortem: one logical 440k training fragmented across ~14 run dirs and W&B
+  runs after host hangs.
+
+Refs #1991
+
+* docs(training): document training.resume auto-recovery in the training pipeline design
+
+* refactor(training): hoist the recovered wandb run id into one named local
+
+* fix(training): harden auto-resume identity checks and cover every discovery tier
+
+Address the pre-PR review findings on feat/training-auto-resume:
+
+- Anchor sibling run-id matching on the canonical {config_id}-{timestamp} shape so prefix-related
+  config_ids can never cross-match, and warn loudly when a wandb-less sibling's identity cannot be
+  verified. - Narrow the artifact tier's exception containment to a named degradable set plus
+  wandb.errors.Error (programming errors now surface), bound wandb.Api with an explicit timeout, and
+  make the shared degradable-error tuple one constant. - Publish resolve_wandb_checkpoint (second
+  caller outside its module) and move the W&B run-continuity mutation into
+  apply_wandb_resume_continuity, folded into _apply_auto_resume. - Type resolve_resume_mode with
+  Literal, drop a dead noqa, reuse the single config_id computation, and trim the train.yaml comment
+  to two lines. - New tests: fake-wandb artifact tier (success / unlogged / API error),
+  R2-to-artifact fallthrough, bucket-unset fallthrough, R2 noise filtering, continuity pinning both
+  directions, and composed-config schema keys.
+
+* fix(training): require identity evidence for local auto-resume candidates
+
+Address the second review pass:
+
+- Restore the eight test_resolve_wandb_checkpoint test names the resolver rename had mangled (still
+  collected via pytest's test* pattern, but the names violated the repo convention). - Recognize
+  offline-mode wandb dirs (wandb/offline-run-*) when recovering a sibling's run id, so offline
+  launches keep one W&B run page on resume. - Skip wandb-less siblings outright unless their
+  recorded .hydra state proves the same config_id (experiment choice basename, task_name fallback) —
+  no more accept-with-warning for unverifiable checkpoints. - Switch resume.py warnings to lazy
+  %-style logging params. - New tests: offline-run id recovery, matching/mismatched/absent Hydra
+  evidence, KeyError degradation in the artifact tier; the auto-resume e2e now plants the wandb
+  run-dir evidence a real launch leaves behind.
+
+* fix(training): drop the W&B artifact tier from auto-resume discovery
+
+The train-end model-{config_id} artifact references the monitor-best checkpoint of a *completed* run
+  — it can never recover a crashed launch, and resuming from it would rewind global_step and replay
+  scheduler state, violating the last.ckpt-only invariant the review flagged. Continuing a finished
+  run stays the explicit ckpt_path='${wandb:...}' flow (design doc §6.3); discovery is now local run
+  dirs → R2 mirrors only.
+
+Also from the third review pass: deterministic mtime tie-break (path string), R2-tier cross-check
+  that a foreign namespace-embedded run id is never reused, malformed wandb-dirname and malformed
+  .hydra YAML tests, and the auto-resume e2e now asserts the recovered id and resume=allow reach
+  logger.wandb through a real train() launch.
+
+* fix(training): honor the checkpoint-upload URI override in R2 resume discovery
+
+Third pre-PR review pass. The BLOCK: discovery hardcoded the auto-derived
+  r2://{bucket}/checkpoints/{config_id} prefix, so mirrors uploaded under a
+  training.upload_checkpoints_uri override were never found — resume=require failed and resume=auto
+  silently restarted despite a valid mirror. Discovery now derives the mirror prefix from the same
+  override the uploader honors, degrading to no-prefix (with a warning) on malformed values.
+
+Also from the same pass: guard the local-tier mtime stat against a concurrently rotated checkpoint,
+  log the skipped-R2-tier case, revert the now-callerless resolve_wandb_checkpoint rename back to
+  private, fail the resume config checks before model instantiation, document the Hydra multirun
+  blind spot, and pin the undertested guarantees (prefix-related config_id cross-match, equal-mtime
+  tie-break, non-degradable error propagation, download-failure degrade, hydra-evidence resume
+  without id reuse) with dedicated tests.
+
+* fix(training): reject foreign R2 resume namespaces
+
+Filter R2 recovery candidates by their canonical config-scoped run ID before selecting the newest
+  mirror, preventing shared custom upload prefixes from loading another experiment's checkpoint.
+  Also lower normal no-R2 skips to INFO and reserve identity warnings for candidates with no
+  readable evidence.
+
+* internal-fix(training): harden auto-resume recovery
+
+Address PR #2047 review feedback for recovery identity validation, R2 diagnostics, deterministic
+  selection, and entrypoint coverage.
+
+* internal-fix(training): remove deferred test import
+
+* internal-test(training): cover resume diagnostics
+
+* test(training): cover auto-resume unit branches
+
+* internal-fix(training): cover remaining auto-resume paths
+
+Add fast coverage for rejected R2 entries, download degradation, and Hydra-only recovery. Keep the
+  resume diagnostic compatible with RankedLogger's positional rank parameter.
+
+- **training**: Enable validation and audio probes by default
+  ([#2066](https://github.com/tinaudio/synth-setter/pull/2066),
+  [`d9dc99d`](https://github.com/tinaudio/synth-setter/commit/d9dc99d1551edd39ecf2c9fe5df9e632288e68c9))
+
+* feat(training): enable validation and audio probes by default
+
+Surge training could run without validation or audio diagnostics unless every launch supplied manual
+  overrides. Bound validation to 20 batches and make probe wiring automatic when render, validation,
+  and R2 prerequisites are available, while keeping explicit true strict and false disabled.
+
+Fixes #2036
+
+* internal-fix(training): preserve legacy probe configs
+
+* internal-fix(training): clarify probe configuration
+
+* internal-fix(training): harden validation probe defaults
+
+### Internal-Feat
+
+- **training**: Add 440k Surge flow-matching RunPod launch
+  ([#2078](https://github.com/tinaudio/synth-setter/pull/2078),
+  [`e7e51e5`](https://github.com/tinaudio/synth-setter/commit/e7e51e599b6642e3f479af5256f83662b87a7d0a))
+
+* internal-feat(training): add 440k flow RunPod launch
+
+* internal-fix(training): clarify RunPod template constraints
+
+
 ## v9.4.1 (2026-07-17)
 
 ### Bug Fixes
