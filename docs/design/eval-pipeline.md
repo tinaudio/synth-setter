@@ -318,11 +318,12 @@ When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI over
 
 ```yaml
 # src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
-_target_: synth_setter.data.vst_datamodule.VSTDataModule
+_target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
 num_workers: 4  # per dataloader — validation doubles the live worker count
+persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
 `surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
@@ -920,9 +921,9 @@ ______________________________________________________________________
 - `src/synth_setter/data/vst_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
 - Data configs carry an explicit `download_dataset_root_uri: null` opt-in line; set via CLI or experiment config
 
-**Files to create:**
+**Verification:**
 
-- `tests/data/test_vst_datamodule.py` — verify copy logic with a local rclone remote
+- `tests/data/test_lance_map_datamodule.py` runs the real rclone copy against a local-backed remote.
 
 **Key behaviors:**
 

@@ -193,11 +193,7 @@ _FAKE_ORACLE_DATASETS = [
     pytest.param(
         _FakeOracleDataset("lance", "fake_surge_smoke_datasets", "surge_lance"),
         id="lance",
-    ),
-    pytest.param(
-        _FakeOracleDataset("lance_map", "fake_surge_smoke_datasets", "surge_lance_map"),
-        id="lance_map",
-    ),
+    )
 ]
 
 
@@ -698,7 +694,7 @@ def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
 ) -> None:
     """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
 
-    ``VSTDataModule.setup`` does a ``param_specs[param_spec_name]`` lookup to derive the
+    ``LanceVSTDataModule.setup`` resolves ``param_spec_name`` to derive the
     fake/real param width; an unknown spec must surface as a ``KeyError`` at the
     ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
     registry-lookup contract is wired through the real eval entrypoint. The lookup

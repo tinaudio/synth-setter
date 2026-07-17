@@ -7,6 +7,7 @@ ot: true
 # Per dataloader, so enabling validation doubles the live worker count. Sized
 # against host RAM, not cores — see getting-started.md §8.
 num_workers: 4
+persistent_workers: true
 predict_file: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.

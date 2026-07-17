@@ -1,22 +1,13 @@
-"""Behavioral tests for the ``loader="map"`` path of ``LanceVSTDataModule``.
+"""Behavioral tests for the map-style ``LanceVSTDataModule``.
 
-Covers the sample-indexed path behind the config switch (#1740):
-
-* :class:`PrepareBatchCollate` — the picklable collate that turns
-  ``LanceMapDataset.__getitems__``'s pre-collated tensor dict into
-  :func:`prepare_batch` model batches.
-* ``LanceVSTDataModule(loader="map")`` — Lightning ``setup`` / dataloader /
-  ``teardown`` wiring over per-split :class:`LanceMapDataset` instances.
-
-Every test drives real Lance datasets written through the pipeline writer —
-no fakes or mocks of the storage layer anywhere in this module. Fixtures
-remain small; coverage targets shapes, flags, values, and flow routing,
-mirroring ``tests/data/test_lance_datamodule.py``.
+Every real-data test drives Lance datasets written through the pipeline writer. Coverage targets
+model-batch semantics and every Lightning flow.
 """
 
 from __future__ import annotations
 
 import contextlib
+import inspect
 import pickle
 from collections.abc import Iterator
 from itertools import combinations, product
@@ -28,11 +19,8 @@ import pytest
 import torch
 from lightning import LightningModule, Trainer
 
-from synth_setter.data.lance_datamodule import (
-    LanceVSTDataModule,
-    LanceVSTDataset,
-    PrepareBatchCollate,
-)
+from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchCollate
+from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
 from tests.helpers.lance_fixtures import (
@@ -64,14 +52,13 @@ def dataset_root(tmp_path: Path) -> Path:
 
 @contextlib.contextmanager
 def _set_up_map_module(**kwargs: object) -> Iterator[LanceVSTDataModule]:
-    """Construct a ``loader="map"`` datamodule, ``setup``, yield, ``teardown``.
+    """Construct, set up, yield, and tear down a map-style datamodule.
 
-    :param \\*\\*kwargs: Forwarded to ``LanceVSTDataModule``; ``loader`` and
-        cheap loader defaults (no workers, no pinning) are pre-set.
+    :param \\*\\*kwargs: Forwarded to ``LanceVSTDataModule``; cheap loader
+        defaults (no workers, no pinning) are pre-set.
     :yields: The set-up datamodule for assertion work inside the ``with`` block.
     :ytype: LanceVSTDataModule
     """
-    kwargs.setdefault("loader", "map")
     kwargs.setdefault("num_workers", 0)
     kwargs.setdefault("pin_memory", False)
     kwargs.setdefault("param_spec_name", ParamSpecName("surge_xt"))
@@ -308,8 +295,8 @@ class TestPrepareBatchCollate:
 class TestLanceMapDataModuleSetup:
     """``loader`` routing at construction and ``setup`` time."""
 
-    def test_default_loader_stays_legacy(self, dataset_root: Path) -> None:
-        """No ``loader`` argument keeps the batch-indexed ``LanceVSTDataset`` path.
+    def test_default_loader_is_sample_indexed_map_dataset(self, dataset_root: Path) -> None:
+        """The only real-data path exposes sample-indexed Lance datasets by default.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -321,15 +308,63 @@ class TestLanceMapDataModuleSetup:
         )
         module.setup()
         try:
-            assert isinstance(module.train_dataset, LanceVSTDataset)
+            assert isinstance(module.train_dataset, LanceMapDataset)
+            assert len(module.train_dataset) == 16
+            assert module.train_dataloader().batch_size == 2
         finally:
             module.teardown()
 
-    def test_map_loaders_are_sample_indexed(self, dataset_root: Path) -> None:
-        """``loader="map"`` loaders carry sample semantics: row-count datasets, real batch size.
+    def test_constructor_has_no_loader_switch(self) -> None:
+        """The public datamodule API has one Lance loading strategy."""
+        assert "loader" not in inspect.signature(LanceVSTDataModule).parameters
 
-        The legacy path is batch-indexed (``batch_size=None``, dataset length in
-        batches); this verifies that Lightning receives sample-indexed semantics.
+    def test_prepare_data_hydrates_dataset_root_from_r2(
+        self,
+        fake_r2_remote: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The shared prepare hook materializes configured R2 data locally.
+
+        :param fake_r2_remote: Real rclone remote backed by local storage.
+        :param tmp_path: Parent of the initially absent destination.
+        :param monkeypatch: Supplies canonical settings for the local rclone backend.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+        remote = fake_r2_remote / "intermediate-data" / "dataset"
+        remote.mkdir(parents=True)
+        (remote / "stats.npz").write_bytes(b"stats")
+        destination = tmp_path / "downloaded"
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri="r2://intermediate-data/dataset",
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.prepare_data()
+
+        assert (destination / "stats.npz").read_bytes() == b"stats"
+
+    def test_prepare_data_without_uri_leaves_local_root_unchanged(self, tmp_path: Path) -> None:
+        """The conservative default performs no implicit remote download.
+
+        :param tmp_path: Existing local dataset root.
+        """
+        module = LanceVSTDataModule(
+            dataset_root=tmp_path, param_spec_name=ParamSpecName("surge_xt")
+        )
+
+        module.prepare_data()
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_map_loaders_are_sample_indexed(self, dataset_root: Path) -> None:
+        """Loaders carry sample semantics: row-count datasets and real batch sizes.
+
+        This verifies that Lightning receives standard map-style semantics.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
@@ -348,37 +383,37 @@ class TestLanceMapDataModuleSetup:
                 assert loader.batch_size == 2, name
                 assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
 
-    def test_unknown_loader_raises_value_error(self, dataset_root: Path) -> None:
-        """An unregistered ``loader`` value fails at construction, not mid-training.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        """
-        with pytest.raises(ValueError, match="loader"):
-            # Hydra configs pass arbitrary strings at runtime, so the guard is
-            # the trust boundary the Literal annotation cannot enforce.
-            LanceVSTDataModule(
-                dataset_root=dataset_root,
-                batch_size=2,
-                loader="iterable",  # type: ignore[arg-type]
-                param_spec_name=ParamSpecName("surge_xt"),
-            )
-
-    def test_persistent_workers_without_workers_raises_value_error(
+    def test_persistent_workers_without_workers_is_effectively_disabled(
         self, dataset_root: Path
     ) -> None:
-        """Worker persistence fails at construction when no workers exist.
+        """Configured persistence is safe for in-process loading.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        with pytest.raises(ValueError, match="persistent_workers requires num_workers > 0"):
-            LanceVSTDataModule(
-                dataset_root=dataset_root,
-                batch_size=2,
-                loader="map",
-                num_workers=0,
-                persistent_workers=True,
-                param_spec_name=ParamSpecName("surge_xt"),
-            )
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            persistent_workers=True,
+        ) as module:
+            loader = module.val_dataloader()
+            assert loader.persistent_workers is False
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
+    def test_persistent_workers_with_workers_remains_enabled(
+        self, dataset_root: Path
+    ) -> None:
+        """Configured persistence reaches loaders that own worker processes.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=1,
+            persistent_workers=True,
+        ) as module:
+            assert module.val_dataloader().persistent_workers is True
 
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
         """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
@@ -392,7 +427,6 @@ class TestLanceMapDataModuleSetup:
         module = LanceVSTDataModule(
             dataset_root=root,
             batch_size=2,
-            loader="map",
             param_spec_name=ParamSpecName("surge_xt"),
         )
         with pytest.raises(FileNotFoundError, match="stats.npz"):
@@ -406,7 +440,6 @@ class TestLanceMapDataModuleSetup:
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
             batch_size=2,
-            loader="map",
             param_spec_name=ParamSpecName("no-such-spec"),
         )
         with pytest.raises(KeyError, match="no-such-spec"):
@@ -420,7 +453,6 @@ class TestLanceMapDataModuleSetup:
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
             batch_size=2,
-            loader="map",
             num_workers=0,
             pin_memory=False,
             param_spec_name=ParamSpecName("surge_xt"),
@@ -610,8 +642,8 @@ class TestLanceMapDataModuleFlows:
 class TestLanceMapDataModuleModes:
     """Fake mode, ``repeat_first_batch``, and worker-process parity."""
 
-    def test_fake_mode_synthesizes_batches_without_files(self, tmp_path: Path) -> None:
-        """``fake=True`` under ``loader="map"`` never touches Lance — an empty root works.
+    def test_fake_mode_uses_sample_indexed_epoch_semantics(self, tmp_path: Path) -> None:
+        """Fake splits expose rows while retaining 10,000 effective batches per epoch.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
@@ -622,8 +654,89 @@ class TestLanceMapDataModuleModes:
             fake=True,
             use_saved_mean_and_variance=False,
         ) as module:
-            batch = next(iter(module.val_dataloader()))
+            loader = module.val_dataloader()
+            batch = next(iter(loader))
+            assert len(loader.dataset) == 20_000  # type: ignore[arg-type]
+            assert len(loader) == 10_000
         assert _unwrap(batch["params"]).shape == (2, len(param_specs["surge_xt"]))
+
+    def test_fake_mode_preserves_conditioning_prediction_and_rng(self, tmp_path: Path) -> None:
+        """Fake map batches retain m2l, prediction audio, ranges, and global RNG behavior.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        torch.manual_seed(91)
+        state_before_construction = torch.random.get_rng_state()
+        module = LanceVSTDataModule(
+            dataset_root=tmp_path,
+            batch_size=2,
+            fake=True,
+            conditioning="m2l",
+            use_saved_mean_and_variance=False,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_4"),
+        )
+        assert torch.equal(torch.random.get_rng_state(), state_before_construction)
+        module.setup()
+        try:
+            val_batch = next(iter(module.val_dataloader()))
+            predict_batch = next(iter(module.predict_dataloader()))
+        finally:
+            module.teardown()
+
+        assert val_batch["mel_spec"] is None
+        assert _unwrap(val_batch["m2l"]).shape == (2, 128, 42)
+        assert _unwrap(val_batch["params"]).shape == (2, len(param_specs["surge_4"]))
+        assert _unwrap(val_batch["noise"]).shape == _unwrap(val_batch["params"]).shape
+        assert _unwrap(val_batch["params"]).min() >= -1
+        assert _unwrap(val_batch["params"]).max() < 1
+        assert val_batch["audio"] is None
+        assert _unwrap(predict_batch["audio"]).shape == (2, 2, 44100 * 4)
+
+    def test_fake_mode_same_global_seed_reproduces_batch(self, tmp_path: Path) -> None:
+        """Fake sample generation remains governed by the global PyTorch RNG.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        def draw() -> dict[str, torch.Tensor | None]:
+            torch.manual_seed(1234)
+            with _set_up_map_module(
+                dataset_root=tmp_path,
+                batch_size=2,
+                fake=True,
+                use_saved_mean_and_variance=False,
+            ) as module:
+                return next(iter(module.val_dataloader()))
+
+        first = draw()
+        second = draw()
+        for key in ("mel_spec", "params", "noise"):
+            assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
+
+    @pytest.mark.parametrize(
+        "loader_name", ["train_dataloader", "val_dataloader", "test_dataloader"]
+    )
+    def test_fake_repeat_first_batch_repeats_each_non_predict_split(
+        self, tmp_path: Path, loader_name: str
+    ) -> None:
+        """Fake train, validation, and test loaders repeat one frozen first batch.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        :param loader_name: Non-predict dataloader method under test.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            fake=True,
+            repeat_first_batch=True,
+            use_saved_mean_and_variance=False,
+        ) as module:
+            iterator = iter(getattr(module, loader_name)())
+            first = next(iterator)
+            second = next(iterator)
+
+        for key in ("mel_spec", "params", "noise"):
+            assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
     def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
         """``repeat_first_batch=True`` yields rows ``[0, batch_size)`` for every batch.
@@ -777,7 +890,6 @@ class TestLanceMapDataModuleModes:
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
             batch_size=4,
-            loader="map",
             num_workers=0,
             ot=False,
             pin_memory=False,
@@ -824,7 +936,6 @@ class TestLanceMapDataModuleModes:
         module = LanceVSTDataModule(
             dataset_root=dataset_root,
             batch_size=batch_size,
-            loader="map",
             num_workers=0,
             ot=False,
             pin_memory=False,
@@ -976,39 +1087,3 @@ class TestTrainerFlowsAcrossParamSpecs:
             trainer.predict(probe, datamodule=module)
 
         assert probe.flows_seen == {"fit", "validate", "test", "predict"}
-
-
-class TestLegacyMapParity:
-    """Cross-loader parity: the map path must reproduce legacy batch values."""
-
-    @pytest.mark.parametrize("split", ["val", "test", "predict"])
-    def test_map_loader_matches_legacy_batches_on_eval_splits(
-        self, dataset_root: Path, split: str
-    ) -> None:
-        """Same root and config: legacy and map eval epochs match batch-for-batch.
-
-        Controls isolate loader mechanics: ``ot=False`` (OT permutes rows), eval
-        splits (no shuffle), and ``batch_size`` dividing each split evenly
-        (legacy floor-divides ragged tails away; map keeps them). Noise generators
-        are seeded independently per path by design, so noise is compared on shape only.
-
-        :param dataset_root: Fixture-provided dataset-root directory.
-        :param split: Eval split whose dataloader epoch is compared.
-        """
-        epochs: dict[str, list[dict[str, torch.Tensor | None]]] = {}
-        for loader in ("legacy", "map"):
-            with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=3, ot=False, loader=loader
-            ) as module:
-                epochs[loader] = list(getattr(module, f"{split}_dataloader")())
-
-        for legacy_batch, map_batch in zip(epochs["legacy"], epochs["map"], strict=True):
-            assert legacy_batch.keys() == map_batch.keys()
-            for key in legacy_batch:
-                legacy_value, map_value = legacy_batch[key], map_batch[key]
-                if key == "noise":
-                    assert _unwrap(legacy_value).shape == _unwrap(map_value).shape
-                elif legacy_value is None or map_value is None:
-                    assert legacy_value is None and map_value is None, key
-                else:
-                    torch.testing.assert_close(legacy_value, map_value, msg=key)

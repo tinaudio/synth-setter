@@ -3072,7 +3072,7 @@ class TestMainDispatchBranches:
     ) -> None:
         """Fail-fast guard: ``oracle_eval_inline=true`` rejects ``[N, 0, 0]``-style sizes.
 
-        ``VSTDataModule.setup()`` opens train/val/test ``.lance`` unconditionally
+        ``LanceVSTDataModule.setup()`` opens train/val/test ``.lance`` unconditionally
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 

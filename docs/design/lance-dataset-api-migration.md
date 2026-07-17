@@ -25,10 +25,9 @@ after an rclone download. A review against the pinned library
   A shard / split becomes a Lance *dataset directory* (`<name>.lance/` with
   `data/`, `_versions/`, `_transactions/`), not a single file.
 - **#2 → direct R2 streaming for sequential paths only.** finalize, stats, and
-  validate read directly from R2 via `storage_options`; the array-access adapter
-  (`data/lance_datamodule.py`) keeps rclone local-first (random per-batch reads
-  across epochs must not hit the network). The later native `lance.torch`
-  dataloaders (`data/lance_torch.py`) can additionally stream R2 directly via
+  validate read directly from R2 via `storage_options`; training remains
+  local-first because random per-batch reads across epochs must not hit the
+  network. Native `lance.torch` loaders can additionally stream R2 directly via
   `r2_io.r2_storage_options()` when local staging is not an option.
 - **#3 → pin `data_storage_version="2.2"`** on every `write_dataset` call.
   `"2.2"` is one format ahead of the pylance default / stable anchor (`"2.1"`);
@@ -75,17 +74,13 @@ after an rclone download. A review against the pinned library
 - `writers.make_lance_dataset()` writes a local dataset directory; the existing
   schema/`tensor_array`/`record_batch_from_arrays` builders are unchanged.
 
-### Read path — training (local-first, unchanged transport)
+### Read path — training (local-first, map-style)
 
-- `LanceShardFile` opens `lance.dataset(local_dir)` instead of
-  `LanceFileReader`; caches `count_rows()` and per-column tensor shapes from
-  `dataset.schema`. Keep the per-PID reopen for fork-safety.
-- `LanceColumn.__getitem__`:
-  - contiguous slice → `dataset.scanner(columns=[name], offset=start, limit=stop-start).to_table()`
-  - stepped slice / fancy indices → `dataset.take(indices, columns=[name])`
-  - `dataset.take` accepts **unsorted** indices, so the ascending-order
-    constraint is relaxed (true fancy indexing); decode via
-    `to_numpy_ndarray()` + writable-copy guard is unchanged.
+- `LanceVSTDataModule` builds one sample-indexed `LanceMapDataset` per split.
+- Batched map fetches call `dataset.take(indices, columns=...)` once, preserving
+  unsorted and duplicate indices while pushing column projection into Lance.
+- Each worker lazily reopens its process-local dataset handle; decoded Arrow
+  tensors receive a writable-copy guard before entering model batches.
 
 ### Read path — sequential (direct R2, #2)
 
@@ -125,7 +120,7 @@ after an rclone download. A review against the pinned library
 | version const + dataset writer + sequential reader | `pipeline/data/lance_shard.py`                                       |
 | storage_options builder                            | `pipeline/r2_io.py`                                                  |
 | worker shard writer                                | `data/vst/writers.py`                                                |
-| training array-access adapter                      | `data/lance_datamodule.py`                                           |
+| training map-style datamodule                      | `data/lance_datamodule.py`, `data/lance_torch.py`                    |
 | finalize (direct R2 read + write)                  | `cli/finalize_dataset.py`                                            |
 | stats streaming                                    | `pipeline/data/stats.py`                                             |
 | shard validation                                   | `pipeline/ci/validate_shard.py`                                      |
@@ -136,8 +131,8 @@ after an rclone download. A review against the pinned library
 
 - Local round-trip: `write_dataset` → `lance.dataset` preserves fixed-shape
   tensor values, row order, and the `synth_setter.shard_metadata` schema key.
-- `LanceColumn`: contiguous slice, stepped slice, unsorted fancy indices,
-  writable-copy guard.
+- `LanceMapDataset`: projected unsorted/duplicate takes, row order, tensor
+  shapes, and writable-copy guard.
 - `r2_storage_options()` builds the expected dict from monkeypatched env.
 - `iter_lance_column_rows` / validate over a local dataset directory.
 - Direct-R2 round-trips (write split to `s3://`, read back) gated behind
@@ -149,7 +144,7 @@ after an rclone download. A review against the pinned library
 
 - **object-store key names for R2.** Resolved by a live R2 round-trip test; the
   builder is the single place to adjust.
-- **Fork-safety of `LanceDataset`.** Mitigated by preserving the per-PID reopen.
+- **Process-safety of `LanceDataset`.** Mitigated by spawned workers and per-PID lazy reopen.
 - **Large blast radius.** Sequenced into phases below; can be split into a PR
   chain (write path → read path → cloud/finalize) if preferred.
 
@@ -157,7 +152,7 @@ after an rclone download. A review against the pinned library
 
 1. `LANCE_DATA_STORAGE_VERSION` + `r2_storage_options()` (+ tests).
 2. Write path → `write_dataset` in `lance_shard` + `writers` (+ round-trip, #3).
-3. Training read path → `lance.dataset` adapter, relax sorted-index (+ tests).
+3. Training read path → sample-indexed `lance.torch` map dataset (+ tests).
 4. Sequential reads → direct R2 in `stats` / `validate` / `finalize`, write
    split straight to R2 (+ R2-gated tests).
 5. R2 layout wiring: `upload_dir` / `download_dir_no_overwrite`, `r2_location`
