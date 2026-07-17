@@ -590,6 +590,7 @@ Current implementation:
 
 - **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`)
 - **Row count**: Matches spec's expected shard size
+- **Schema**: the written fragment's physical schema matches the spec-derived schema — see `lance_fragment` in `pipeline/data/lance_shard.py`; Lance's append-mode writer otherwise silently inherits an existing committed dataset's schema ([#2084](https://github.com/tinaudio/synth-setter/issues/2084))
 
 Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds:
 
