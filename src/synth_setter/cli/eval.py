@@ -590,6 +590,10 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: DictConfig configuration composed by Hydra.
     """
+    # An explicit paths.output_dir override may name a directory Hydra did not
+    # create; extras writes tags.log into it before any stage would mkdir (#2116).
+    Path(cfg.paths.output_dir).mkdir(parents=True, exist_ok=True)
+
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
