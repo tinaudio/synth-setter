@@ -123,6 +123,7 @@ def _render_split_params(out_dir: Path, spec: DatasetSpec, split: Split) -> np.n
     rows: list[np.ndarray] = []
     for shard in spec.shards[lo:hi]:
         shard_path = out_dir / shard.filename
+        # Fake-plugin fields replace spec.render, so inject the shard's seed position directly.
         render_cfg = _fake_render_cfg(
             num_samples=spec.render.samples_per_shard,
             min_loudness=float("-inf"),
@@ -151,6 +152,7 @@ def _render_worker_layout(
             shard = spec.shards[shard_id]
             shard_path = out_dir / f"worker-{rank}" / shard.filename
             shard_path.parent.mkdir(parents=True, exist_ok=True)
+            # Fake-plugin fields replace spec.render, so inject the shard's seed position directly.
             render_cfg = _fake_render_cfg(
                 num_samples=spec.render.samples_per_shard,
                 min_loudness=float("-inf"),
