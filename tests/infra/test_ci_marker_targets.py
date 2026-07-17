@@ -72,18 +72,38 @@ def test_make_target_carries_canonical_marker(
     )
 
 
-def _write_command_recorder(path: Path, *, parallel_exit_code: int = 0) -> None:
-    """Write an executable that records its arguments and optionally fails parallel calls.
+RECORDED_PARALLEL_FAILURE_EXIT_CODE = 7
+RECORDED_SERIAL_FAILURE_EXIT_CODE = 8
+
+
+def _write_command_recorder(
+    path: Path, *, parallel_exit_code: int = 0, serial_exit_code: int = 0
+) -> None:
+    """Write an executable that records arguments and returns configured lane results.
 
     :param path: Script path to create.
     :param parallel_exit_code: Exit code for invocations containing ``-n auto``.
+    :param serial_exit_code: Exit code for other invocations.
     """
     path.write_text(
         "#!/bin/sh\n"
         'printf "%s\\n" "$*" >> "$MAKE_TEST_LOG"\n'
-        f'case "$*" in *"-n auto"*) exit {parallel_exit_code};; esac\n'
+        f'case "$*" in *"-n auto"*) exit {parallel_exit_code};; *) exit {serial_exit_code};; esac\n'
     )
     path.chmod(0o755)
+
+
+def _recording_environment(tmp_path: Path, log_path: Path) -> dict[str, str]:
+    """Return an environment that puts recording executables before system commands.
+
+    :param tmp_path: Directory containing the recording executables.
+    :param log_path: File where recording executables write their arguments.
+    :returns: Environment for the sandboxed make invocation.
+    """
+    return os.environ | {
+        "MAKE_TEST_LOG": str(log_path),
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+    }
 
 
 def _run_full_cpu_target(
@@ -92,6 +112,7 @@ def _run_full_cpu_target(
     *,
     uname: str,
     parallel_exit_code: int = 0,
+    serial_exit_code: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run ``test-full-cpu`` with recording stand-ins for external commands.
 
@@ -99,18 +120,19 @@ def _run_full_cpu_target(
     :param tmp_path: Directory for stand-in executables and their log.
     :param uname: Platform value passed to the Makefile.
     :param parallel_exit_code: Exit code for parallel pytest invocations.
+    :param serial_exit_code: Exit code for serial pytest invocations.
     :returns: Completed make process and recorded command arguments.
     """
     pytest_recorder = tmp_path / "pytest"
     wrapper_recorder = tmp_path / "headless-wrapper"
     log_path = tmp_path / "commands.log"
-    _write_command_recorder(pytest_recorder, parallel_exit_code=parallel_exit_code)
+    _write_command_recorder(
+        pytest_recorder,
+        parallel_exit_code=parallel_exit_code,
+        serial_exit_code=serial_exit_code,
+    )
     _write_command_recorder(wrapper_recorder)
 
-    env = os.environ | {
-        "MAKE_TEST_LOG": str(log_path),
-        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
-    }
     result = subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
         [
             shutil.which("make") or "make",
@@ -120,7 +142,7 @@ def _run_full_cpu_target(
             "test-full-cpu",
         ],
         cwd=project_root,
-        env=env,
+        env=_recording_environment(tmp_path, log_path),
         capture_output=True,
         text=True,
         timeout=30,
@@ -139,10 +161,51 @@ def test_full_cpu_darwin_non_vst_failure_still_runs_serial_vst_lane(
     :param tmp_path: Provides isolated stand-in executables and logs.
     """
     result, commands = _run_full_cpu_target(
-        project_root, tmp_path, uname="Darwin", parallel_exit_code=7
+        project_root,
+        tmp_path,
+        uname="Darwin",
+        parallel_exit_code=RECORDED_PARALLEL_FAILURE_EXIT_CODE,
     )
 
     assert result.returncode != 0
+    assert "Error 1" in result.stderr
+    assert commands == [
+        "-n auto -m not gpu and not mps and not requires_vst",
+        "-m requires_vst and not gpu and not mps",
+    ]
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize(
+    ("parallel_exit_code", "serial_exit_code"),
+    [
+        (0, RECORDED_SERIAL_FAILURE_EXIT_CODE),
+        (RECORDED_PARALLEL_FAILURE_EXIT_CODE, RECORDED_SERIAL_FAILURE_EXIT_CODE),
+    ],
+)
+def test_full_cpu_darwin_lane_failure_returns_aggregate_failure(
+    project_root: Path,
+    tmp_path: Path,
+    parallel_exit_code: int,
+    serial_exit_code: int,
+) -> None:
+    """Darwin returns failure when the serial lane or both lanes fail.
+
+    :param project_root: Locates the repository Makefile.
+    :param tmp_path: Provides isolated stand-in executables and logs.
+    :param parallel_exit_code: Recorded parallel-lane result.
+    :param serial_exit_code: Recorded serial-lane result.
+    """
+    result, commands = _run_full_cpu_target(
+        project_root,
+        tmp_path,
+        uname="Darwin",
+        parallel_exit_code=parallel_exit_code,
+        serial_exit_code=serial_exit_code,
+    )
+
+    assert result.returncode != 0
+    assert "Error 1" in result.stderr
     assert commands == [
         "-n auto -m not gpu and not mps and not requires_vst",
         "-m requires_vst and not gpu and not mps",
