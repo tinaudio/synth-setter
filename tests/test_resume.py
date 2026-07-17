@@ -349,11 +349,117 @@ def test_discover_r2_checkpoint_returns_downloaded_mirror_without_rclone(
     assert decision.ckpt_path.read_bytes() == b"checkpoint"
 
 
-def test_discover_resume_checkpoint_unreachable_r2_returns_none(
+def test_discover_r2_ignores_invalid_and_foreign_entries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only canonical mirrors for the requested config are resumable.
+
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir reserved for any downloaded checkpoint.
+    """
+    entries = [
+        r2_io.RemoteEntry(path="last.ckpt", mtime=datetime(2026, 7, 15), size=10),
+        r2_io.RemoteEntry(path="not-a-namespace/last.ckpt", mtime=datetime(2026, 7, 15), size=10),
+        r2_io.RemoteEntry(
+            path=("flow_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt"),
+            mtime=datetime(2026, 7, 15),
+            size=10,
+        ),
+    ]
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: entries)
+
+    def _unexpected_download(_uri: str, _destination: Path) -> None:
+        raise AssertionError("rejected entries must not be downloaded")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _unexpected_download)
+
+    assert (
+        resume.discover_r2_checkpoint(
+            prefix="r2://test-bucket/checkpoints/ffn_simple",
+            config_id="ffn_simple",
+            dest_dir=tmp_path / "resume",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "expected_diagnostics"),
+    [
+        (None, None),
+        (
+            [],
+            [
+                "R2 resume checkpoint download "
+                "ffn_simple-20260715T225004231Z-"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt degraded: disk full"
+            ],
+        ),
+    ],
+    ids=["without-diagnostics", "with-diagnostics"],
+)
+def test_discover_r2_download_failure_degrades_with_or_without_diagnostics(
+    diagnostics: list[str] | None,
+    expected_diagnostics: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed mirror download degrades whether diagnostics are requested or not.
+
+    :param diagnostics: Optional diagnostic collector passed to discovery.
+    :param expected_diagnostics: Expected collector state after the failed download.
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir reserved for the failed download.
+    """
+    entry = r2_io.RemoteEntry(
+        path="ffn_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt",
+        mtime=datetime(2026, 7, 15),
+        size=10,
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: [entry])
+
+    def _failed_download(_uri: str, _destination: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _failed_download)
+
+    decision = resume.discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "resume",
+        diagnostics=diagnostics,
+    )
+
+    assert decision is None
+    assert diagnostics == expected_diagnostics
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "expected_diagnostics"),
+    [
+        (None, None),
+        (
+            [],
+            [
+                "R2 resume discovery under r2://test-bucket/checkpoints/ffn_simple "
+                "degraded: no creds"
+            ],
+        ),
+    ],
+    ids=["without-diagnostics", "with-diagnostics"],
+)
+def test_discover_resume_checkpoint_unreachable_r2_returns_none(
+    diagnostics: list[str] | None,
+    expected_diagnostics: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """When local misses and R2 creds are unavailable, discovery degrades to None.
 
+    :param diagnostics: Optional diagnostic collector passed to discovery.
+    :param expected_diagnostics: Expected collector state after failed R2 setup.
     :param monkeypatch: Pytest fixture used to break the R2 tier.
     :param tmp_path: Empty run-dir family.
     """
@@ -368,15 +474,11 @@ def test_discover_resume_checkpoint_unreachable_r2_returns_none(
         {"paths": {"output_dir": str(current)}, "r2": {"bucket": "test-bucket"}}
     )
 
-    diagnostics: list[str] = []
-
     assert (
         resume.discover_resume_checkpoint(cfg, config_id="ffn_simple", diagnostics=diagnostics)
         is None
     )
-    assert diagnostics == [
-        "R2 resume discovery under r2://test-bucket/checkpoints/ffn_simple degraded: no creds"
-    ]
+    assert diagnostics == expected_diagnostics
 
 
 def test_run_id_from_run_dir_ignores_malformed_newer_wandb_dir(tmp_path: Path) -> None:

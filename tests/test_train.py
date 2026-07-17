@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import logging
 import os
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -1323,6 +1324,43 @@ def test_train_resume_auto_local_checkpoint_continues_wandb_run(
     assert recovered_cfg.ckpt_path == str(checkpoint)
     assert recovered_cfg.logger.wandb.id == "train-20260716T000000000Z"
     assert recovered_cfg.logger.wandb.resume == "allow"
+
+
+def test_train_resume_auto_hydra_only_checkpoint_uses_fresh_wandb_run(
+    cfg_train: DictConfig, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Hydra-verified checkpoint without a run ID starts a fresh W&B run.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of the prior and current Hydra output dirs.
+    :param caplog: Pytest log capture fixture enabling the resume diagnostic.
+    """
+    HydraConfig().set_config(cfg_train)
+    prior = tmp_path / "run-prior"
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    hydra_dir = prior / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text("task_name: train\n")
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-current")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+        cfg_train.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+
+    with caplog.at_level(logging.INFO, logger="synth_setter.cli.train"):
+        _, objects = train(cfg_train)
+
+    recovered_cfg = objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(checkpoint)
+    assert recovered_cfg.logger.wandb.id.startswith("train-")
+    assert recovered_cfg.logger.wandb.resume is None
 
 
 @pytest.mark.slow

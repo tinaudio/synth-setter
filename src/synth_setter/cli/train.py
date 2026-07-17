@@ -347,10 +347,8 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
         return None
     cfg.ckpt_path = str(decision.ckpt_path)
     log.info(
-        "Auto-resume: %s checkpoint %s (recovered wandb run id: %s)",
-        decision.source,
-        decision.ckpt_path,
-        decision.wandb_run_id,
+        f"Auto-resume: {decision.source} checkpoint {decision.ckpt_path} "
+        f"(recovered wandb run id: {decision.wandb_run_id})"
     )
     if decision.wandb_run_id:
         apply_wandb_resume_continuity(cfg)
