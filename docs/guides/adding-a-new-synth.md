@@ -180,13 +180,13 @@ plugin_state_paths: dict[str, str] = {
 ```
 
 The render config pins this synth's identity and inherits generic render knobs
-(sample rate, cadence, batch size) from the base `surge_xt` render config
-(`src/synth_setter/configs/render/surge_xt.yaml`):
+(sample rate, cadence, batch size) from the `vst` render base
+(`src/synth_setter/configs/render/vst.yaml`):
 
 ```yaml
 # src/synth_setter/configs/render/mysynth.yaml
 defaults:
-  - surge_xt
+  - vst
 
 plugin_path: "plugins/MySynth.vst3"
 plugin_state_path: "presets/mysynth-base.vstpreset"

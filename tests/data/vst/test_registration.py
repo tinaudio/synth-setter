@@ -27,6 +27,17 @@ from synth_setter.data.vst.registration import (
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
 REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
+_RESERVED_RENDER_CONFIG_NAMES = (
+    "obxf",
+    "surge_4",
+    "surge_simple",
+    "surge_xt",
+    "torchsynth_adsr",
+    "torchsynth_full",
+    "torchsynth_simple",
+    "vst",
+    "VST",
+)
 
 
 def _dict_keys(source: str, name: str) -> list[str]:
@@ -300,14 +311,14 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_pins_synth_identity_over_surge_xt_defaults() -> None:
-    """The emitted config inherits surge_xt knobs and overrides the identity fields."""
+def test_render_config_yaml_pins_synth_identity_over_vst_defaults() -> None:
+    """The emitted config inherits generic VST knobs and pins synth identity."""
     text = render_config_yaml(
         "fake_synth", plugin_path="plugins/fake.vst3", renderer_version="9.9.9"
     )
 
     cfg = yaml.safe_load(text)
-    assert cfg["defaults"] == ["surge_xt"]
+    assert cfg["defaults"] == ["vst"]
     assert cfg["plugin_path"] == "plugins/fake.vst3"
     assert cfg["plugin_state_path"] == "presets/fake_synth-base.vstpreset"
     assert cfg["param_spec_name"] == "fake_synth"
@@ -328,6 +339,16 @@ def test_render_config_yaml_preserves_reserved_word_spec_name_as_string() -> Non
     text = render_config_yaml("on", plugin_path="plugins/on.vst3", renderer_version="1.0")
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
+
+
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: str) -> None:
+    """A shipped render-group name cannot compose itself.
+
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        render_config_yaml(spec_name, plugin_path="plugins/fake.vst3", renderer_version="1.0")
 
 
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
@@ -389,6 +410,19 @@ def test_checkout_relative_path_relative_input_resolves_against_cwd(
     monkeypatch.chdir(tmp_path)
 
     assert checkout_relative_path("plugins/Dexed.vst3", tmp_path) == "plugins/Dexed.vst3"
+
+
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_registration_paths_reserved_render_name_raises_value_error(
+    tmp_path: Path, spec_name: str
+) -> None:
+    """A shipped render-group name cannot become synth artifacts.
+
+    :param tmp_path: Stands in for the checkout root.
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        registration_paths(tmp_path, spec_name)
 
 
 def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:

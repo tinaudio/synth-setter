@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from tests.helpers.subprocess_args import find_script_index
 
@@ -37,6 +41,7 @@ def materialize_shard(args: list[str]) -> None:
     (output_dir / "data" / "shard.bin").write_bytes(b"\x00")
     (output_dir / "_versions").mkdir(parents=True, exist_ok=True)
     (output_dir / "_versions" / "1.manifest").write_bytes(b"\x00")
+    render_metrics_path(output_dir).write_text(RenderRejectionMetrics().model_dump_json())
 
 
 def materialize_or_passthrough_rclone(args: list[str]) -> None:

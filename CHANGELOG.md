@@ -1,6 +1,298 @@
 # CHANGELOG
 
 
+## v9.6.2 (2026-07-17)
+
+### Bug Fixes
+
+- **testing**: Self-heal worktrees and bound r2 auth ping
+  ([#2104](https://github.com/tinaudio/synth-setter/pull/2104),
+  [`5bbf695`](https://github.com/tinaudio/synth-setter/commit/5bbf69570176388e58e78bd1631b74af8b24099c))
+
+
+## v9.6.1 (2026-07-17)
+
+### Bug Fixes
+
+- **testing**: Use storage env in eval artifact e2e
+  ([#2103](https://github.com/tinaudio/synth-setter/pull/2103),
+  [`a7d3bf0`](https://github.com/tinaudio/synth-setter/commit/a7d3bf0894c6e1905f1cc5118d417a72885d4676))
+
+
+## v9.6.0 (2026-07-17)
+
+### Features
+
+- **data-pipeline**: Track silent and clipped render rejections
+  ([#2055](https://github.com/tinaudio/synth-setter/pull/2055),
+  [`2dc758e`](https://github.com/tinaudio/synth-setter/commit/2dc758eb3632f07214bdc96fe1c2d8353fe0bade))
+
+* internal-feat(data-pipeline): track render rejection counts
+
+Count silent and clipped sampled-render rejections independently, relay validated per-shard reports
+  across the renderer subprocess boundary, and log both per-shard and worker-total W&B metrics.
+
+Refs #2032
+
+* internal-fix(data-pipeline): clarify rejection field comments
+
+Separate accepted-attempt provenance from per-draw rejection counters so each field's aggregation
+  contract is explicit.\n\nRefs #2032
+
+* test(data-pipeline): cover rejection aggregation without rclone
+
+Exercise parallel rejection totals and strict sidecar loading on regular coverage runners where the
+  rclone-backed integration fixtures are unavailable.\n\nRefs #2032
+
+* test(data-pipeline): harden rejection telemetry contracts
+
+Pin claims-mode aggregation, stale-sidecar cleanup, and public entrypoint telemetry while clarifying
+  per-worker summary semantics.\n\nRefs #2032
+
+* test(data-pipeline): cover claims rejection relay
+
+### Refactoring
+
+- **data-pipeline**: Canonicalize VST datamodule tests
+  ([#2061](https://github.com/tinaudio/synth-setter/pull/2061),
+  [`eb0c017`](https://github.com/tinaudio/synth-setter/commit/eb0c01745d68746473f3c7bf613dccc4816d29f0))
+
+* refactor(data-pipeline): canonicalize VST datamodule tests
+
+Rename the generic datamodule suite and import canonical VST/Lance modules while keeping deprecated
+  shim coverage isolated.
+
+Refs #2018
+
+* internal-fix(data-pipeline): remove redundant fixture docs
+
+* internal-fix(data-pipeline): retain required test docs
+
+- **data-pipeline**: Extract generic VST render base
+  ([#2060](https://github.com/tinaudio/synth-setter/pull/2060),
+  [`b546321`](https://github.com/tinaudio/synth-setter/commit/b546321b7e0fc93cb00dd4a5416f998efbeeba4f))
+
+* refactor(data-pipeline): extract generic VST render base
+
+* fix(data-pipeline): harden generic VST render registration
+
+Reserve the shared vst group from synth registration, pin the real oracle eval config, and tighten
+  generated/config-map prose.
+
+Refs #2018
+
+* fix(data-pipeline): reserve VST render name case-insensitively
+
+Prevent case-variant synth registrations from aliasing and overwriting the generic render base on
+  case-insensitive filesystems.
+
+* docs(data-pipeline): focus VST render map description
+
+Keep the render source-map entry scoped to the generic defaults and synth identity contract.
+
+* fix(data-pipeline): harden render config registration
+
+### Testing
+
+- Satisfy fake wandb logger contract in eval smoke tests
+  ([#2101](https://github.com/tinaudio/synth-setter/pull/2101),
+  [`146cace`](https://github.com/tinaudio/synth-setter/commit/146cace875a9d5573da214b3eb9039b0171c98ae))
+
+* internal-fix(testing): satisfy fake wandb logger contract
+
+* internal-fix(testing): document fake wandb config signature
+
+
+## v9.5.1 (2026-07-17)
+
+### Bug Fixes
+
+- **training**: Compile FlowVAE and fake-oracle only during fit
+  ([#2094](https://github.com/tinaudio/synth-setter/pull/2094),
+  [`45beaf4`](https://github.com/tinaudio/synth-setter/commit/45beaf46fc9a99ac866a154d33ebccb56af27272))
+
+* fix(training): compile FlowVAE and fake-oracle only during fit
+
+A compile-enabled fit followed by test re-invoked torch.compile on the existing OptimizedModule and
+  crashed assigning the result as an nn.Module child. Apply the same fit-stage guard as the VST
+  FF/flow modules; the Flow-VAE regression runs only where the optional nflows dep is installed.
+
+* docs(training): mark compile test-stage gap resolved
+
+The wandb-integration Known Gaps table still listed the #248 test-stage torch.compile crash as open;
+  with the FlowVAE and fake-oracle guards all four VST modules are covered.
+
+* internal-fix(training): import Flow-VAE module without nflows
+
+The compile-stage regression for VSTFlowVAEModule could not run in CI because importing the module
+  pulled the undeclared optional nflows dep (#1664), leaving the new setup() guard uncovered and
+  failing the codecov patch gate. Import the loss at use instead, run the regression
+  unconditionally, replace the AST-pin alias tests with identity tests, and include surge_flowvae in
+  the Hydra target-resolution check.
+
+### Testing
+
+- Serialize Darwin VST tests ([#2056](https://github.com/tinaudio/synth-setter/pull/2056),
+  [`dcaa234`](https://github.com/tinaudio/synth-setter/commit/dcaa234f491ddd46a4d6afe53dff5ee05a64808e))
+
+* internal-fix(testing): serialize Darwin VST tests
+
+* internal-fix(testing): retain both Darwin CPU lane results
+
+* internal-fix(testing): normalize Darwin VST lane failures
+
+
+## v9.5.0 (2026-07-17)
+
+### Bug Fixes
+
+- **training**: Compile VST modules only during fit
+  ([#2076](https://github.com/tinaudio/synth-setter/pull/2076),
+  [`e665b2b`](https://github.com/tinaudio/synth-setter/commit/e665b2b38e314dc9c5d88f9ba3a0fda0eaaf24f9))
+
+- **training**: Return nonzero status after SIGTERM
+  ([#2079](https://github.com/tinaudio/synth-setter/pull/2079),
+  [`485ab08`](https://github.com/tinaudio/synth-setter/commit/485ab08527b5e4df9a6e80c4d9ad2d2e82fe475e))
+
+* fix(training): return nonzero status after SIGTERM
+
+* internal-fix(training): harden SIGTERM test synchronization
+
+* test(training): cover SIGTERM exit translation
+
+### Features
+
+- **training**: Auto-resume interrupted runs from last checkpoint
+  ([#2047](https://github.com/tinaudio/synth-setter/pull/2047),
+  [`e5e7f4e`](https://github.com/tinaudio/synth-setter/commit/e5e7f4e0535f0a810d1c4aa6c593a9f9744c46e2))
+
+* feat(training): auto-resume from the newest checkpoint via training.resume
+
+Add a three-tier discovery (local sibling run dirs -> R2 mid-run mirrors -> train-end W&B model
+  artifact) behind training.resume=auto|require, so a crashed run relaunches with the identical
+  command instead of a hand-typed ckpt_path. A recovered launch reuses the original W&B run id
+  (resume=allow) so one logical training stays on one run page; require errors instead of silently
+  starting fresh in unattended relaunch loops.
+
+Motivated by the #1886 post-mortem: one logical 440k training fragmented across ~14 run dirs and W&B
+  runs after host hangs.
+
+Refs #1991
+
+* docs(training): document training.resume auto-recovery in the training pipeline design
+
+* refactor(training): hoist the recovered wandb run id into one named local
+
+* fix(training): harden auto-resume identity checks and cover every discovery tier
+
+Address the pre-PR review findings on feat/training-auto-resume:
+
+- Anchor sibling run-id matching on the canonical {config_id}-{timestamp} shape so prefix-related
+  config_ids can never cross-match, and warn loudly when a wandb-less sibling's identity cannot be
+  verified. - Narrow the artifact tier's exception containment to a named degradable set plus
+  wandb.errors.Error (programming errors now surface), bound wandb.Api with an explicit timeout, and
+  make the shared degradable-error tuple one constant. - Publish resolve_wandb_checkpoint (second
+  caller outside its module) and move the W&B run-continuity mutation into
+  apply_wandb_resume_continuity, folded into _apply_auto_resume. - Type resolve_resume_mode with
+  Literal, drop a dead noqa, reuse the single config_id computation, and trim the train.yaml comment
+  to two lines. - New tests: fake-wandb artifact tier (success / unlogged / API error),
+  R2-to-artifact fallthrough, bucket-unset fallthrough, R2 noise filtering, continuity pinning both
+  directions, and composed-config schema keys.
+
+* fix(training): require identity evidence for local auto-resume candidates
+
+Address the second review pass:
+
+- Restore the eight test_resolve_wandb_checkpoint test names the resolver rename had mangled (still
+  collected via pytest's test* pattern, but the names violated the repo convention). - Recognize
+  offline-mode wandb dirs (wandb/offline-run-*) when recovering a sibling's run id, so offline
+  launches keep one W&B run page on resume. - Skip wandb-less siblings outright unless their
+  recorded .hydra state proves the same config_id (experiment choice basename, task_name fallback) —
+  no more accept-with-warning for unverifiable checkpoints. - Switch resume.py warnings to lazy
+  %-style logging params. - New tests: offline-run id recovery, matching/mismatched/absent Hydra
+  evidence, KeyError degradation in the artifact tier; the auto-resume e2e now plants the wandb
+  run-dir evidence a real launch leaves behind.
+
+* fix(training): drop the W&B artifact tier from auto-resume discovery
+
+The train-end model-{config_id} artifact references the monitor-best checkpoint of a *completed* run
+  — it can never recover a crashed launch, and resuming from it would rewind global_step and replay
+  scheduler state, violating the last.ckpt-only invariant the review flagged. Continuing a finished
+  run stays the explicit ckpt_path='${wandb:...}' flow (design doc §6.3); discovery is now local run
+  dirs → R2 mirrors only.
+
+Also from the third review pass: deterministic mtime tie-break (path string), R2-tier cross-check
+  that a foreign namespace-embedded run id is never reused, malformed wandb-dirname and malformed
+  .hydra YAML tests, and the auto-resume e2e now asserts the recovered id and resume=allow reach
+  logger.wandb through a real train() launch.
+
+* fix(training): honor the checkpoint-upload URI override in R2 resume discovery
+
+Third pre-PR review pass. The BLOCK: discovery hardcoded the auto-derived
+  r2://{bucket}/checkpoints/{config_id} prefix, so mirrors uploaded under a
+  training.upload_checkpoints_uri override were never found — resume=require failed and resume=auto
+  silently restarted despite a valid mirror. Discovery now derives the mirror prefix from the same
+  override the uploader honors, degrading to no-prefix (with a warning) on malformed values.
+
+Also from the same pass: guard the local-tier mtime stat against a concurrently rotated checkpoint,
+  log the skipped-R2-tier case, revert the now-callerless resolve_wandb_checkpoint rename back to
+  private, fail the resume config checks before model instantiation, document the Hydra multirun
+  blind spot, and pin the undertested guarantees (prefix-related config_id cross-match, equal-mtime
+  tie-break, non-degradable error propagation, download-failure degrade, hydra-evidence resume
+  without id reuse) with dedicated tests.
+
+* fix(training): reject foreign R2 resume namespaces
+
+Filter R2 recovery candidates by their canonical config-scoped run ID before selecting the newest
+  mirror, preventing shared custom upload prefixes from loading another experiment's checkpoint.
+  Also lower normal no-R2 skips to INFO and reserve identity warnings for candidates with no
+  readable evidence.
+
+* internal-fix(training): harden auto-resume recovery
+
+Address PR #2047 review feedback for recovery identity validation, R2 diagnostics, deterministic
+  selection, and entrypoint coverage.
+
+* internal-fix(training): remove deferred test import
+
+* internal-test(training): cover resume diagnostics
+
+* test(training): cover auto-resume unit branches
+
+* internal-fix(training): cover remaining auto-resume paths
+
+Add fast coverage for rejected R2 entries, download degradation, and Hydra-only recovery. Keep the
+  resume diagnostic compatible with RankedLogger's positional rank parameter.
+
+- **training**: Enable validation and audio probes by default
+  ([#2066](https://github.com/tinaudio/synth-setter/pull/2066),
+  [`d9dc99d`](https://github.com/tinaudio/synth-setter/commit/d9dc99d1551edd39ecf2c9fe5df9e632288e68c9))
+
+* feat(training): enable validation and audio probes by default
+
+Surge training could run without validation or audio diagnostics unless every launch supplied manual
+  overrides. Bound validation to 20 batches and make probe wiring automatic when render, validation,
+  and R2 prerequisites are available, while keeping explicit true strict and false disabled.
+
+Fixes #2036
+
+* internal-fix(training): preserve legacy probe configs
+
+* internal-fix(training): clarify probe configuration
+
+* internal-fix(training): harden validation probe defaults
+
+### Internal-Feat
+
+- **training**: Add 440k Surge flow-matching RunPod launch
+  ([#2078](https://github.com/tinaudio/synth-setter/pull/2078),
+  [`e7e51e5`](https://github.com/tinaudio/synth-setter/commit/e7e51e599b6642e3f479af5256f83662b87a7d0a))
+
+* internal-feat(training): add 440k flow RunPod launch
+
+* internal-fix(training): clarify RunPod template constraints
+
+
 ## v9.4.1 (2026-07-17)
 
 ### Bug Fixes

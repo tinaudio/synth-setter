@@ -72,6 +72,9 @@ def _default_env_file() -> Path:
 
 _DEFAULT_ENV_FILE = _default_env_file()
 
+# Wall-clock cap for the credential auth ping; rclone's --timeout is IO-idle only.
+_AUTH_PING_TIMEOUT_SECONDS = 45
+
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
 
@@ -149,12 +152,19 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
     # Auth ping — fail fast on bad creds instead of several seconds into the first
     # real operation. Cheap (<1 RTT): `rclone lsd r2:` lists visible buckets.
-    result = subprocess.run(  # noqa: S603 — args are literal strings
-        ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_AUTH_PING_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "rclone auth ping timed out while validating the resolved R2 credentials "
+            f"after {_AUTH_PING_TIMEOUT_SECONDS}s"
+        ) from exc
     if result.returncode != 0:
         stderr_excerpt = result.stderr.strip().splitlines()[-1][:200] if result.stderr else ""
         raise RuntimeError(
@@ -194,8 +204,9 @@ def is_r2_reachable() -> bool:
             text=True,
             check=True,
             env={**os.environ, **config.rclone_env()},
+            timeout=_AUTH_PING_TIMEOUT_SECONDS,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
     return True
 

@@ -572,6 +572,25 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
+# Secret injection needs Infisical; Cloudsmith's versioned .deb avoids an apt repo.
+# When bumping, download both packages, then run `sha256sum infisical_*.deb` to refresh pins.
+ARG TARGETARCH
+ARG INFISICAL_VERSION=0.38.0
+ARG INFISICAL_SHA256_AMD64=b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f
+ARG INFISICAL_SHA256_ARM64=503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7
+RUN case "${TARGETARCH:-}" in \
+      amd64) infisical_sha=${INFISICAL_SHA256_AMD64} ;; \
+      arm64) infisical_sha=${INFISICAL_SHA256_ARM64} ;; \
+      *) echo "ERROR: unsupported TARGETARCH for infisical: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    package="infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" && \
+    url="https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" && \
+    curl -fsSL "$url" -o "/tmp/${package}" && \
+    echo "${infisical_sha}  /tmp/${package}" | sha256sum -c - && \
+    dpkg -i "/tmp/${package}" && \
+    rm "/tmp/${package}" && \
+    infisical --version
+
 # Install Node.js and the system Codex CLI.
 ARG CODEX_VERSION=latest
 COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
@@ -588,7 +607,6 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
 # verified against a pinned per-arch SHA256 (run `sha256sum` on the release
 # tarballs to refresh these when bumping ZELLIJ_VERSION).
-ARG TARGETARCH
 ARG ZELLIJ_VERSION=v0.44.3
 ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
 ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb

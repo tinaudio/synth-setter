@@ -110,7 +110,7 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Antigravity (agy), Hermes, zellij, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij, dev user
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
   GIT_REF="$(git rev-parse HEAD)" \
@@ -126,7 +126,8 @@ Node.js installed system-wide, the `@anthropic-ai/claude-code`,
 for the `dev` user via a per-user npm prefix (`~/.npm-global`, on PATH) — so
 later `npm install -g` runs, including claude-code's in-app self-update, avoid
 EACCES on the root-owned tree and aren't shadowed by a system-wide copy. It
-also adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
+also installs the pinned, SHA256-verified Infisical CLI for secret injection.
+It also adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
 SHA256-pinned upstream `install.sh` installs into a dedicated per-user venv —
 run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
 doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the

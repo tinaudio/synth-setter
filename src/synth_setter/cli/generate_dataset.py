@@ -37,6 +37,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
@@ -56,6 +57,10 @@ from synth_setter.pipeline.partitioning import (
     available_cpus,
     get_my_shards,
     read_rank_world_from_env,
+)
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
@@ -163,14 +168,12 @@ def _run_oracle_eval_subprocess(
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # eval.yaml leaves render null; render_vst=true re-renders predicted
-        # params. Take the surge_simple group for structure, then override every
-        # render field predict_vst_audio renders with to the generation render so
-        # the round-trip matches it exactly (not the group / CLI defaults).
-        "render=surge_simple",
-        f"render.param_spec_name={render.param_spec_name}",
-        f"render.plugin_state_path={render.plugin_state_path}",
-        f"render.plugin_path={render.plugin_path}",
+        # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
+        "render=vst",
+        f"+render.param_spec_name={render.param_spec_name}",
+        f"+render.plugin_state_path={render.plugin_state_path}",
+        f"+render.plugin_path={render.plugin_path}",
+        f"+render.renderer_version={render.renderer_version}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
@@ -330,7 +333,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         # ``start`` brackets only the dispatch call so the rate still includes the
         # in-loop R2 skip probes (observable cost of the resumability MVP, #750).
         start = time.perf_counter()
-        rendered, skipped, assigned = _dispatch_shards(
+        rendered, skipped, assigned, rejections = _dispatch_shards(
             spec,
             work_dir=work_dir,
             loggers=loggers,
@@ -355,7 +358,16 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             elapsed_s=elapsed_s,
             rate=rate,
         )
-        _log_summary(loggers, rendered, skipped, assigned, elapsed_s, samples, rate)
+        _log_summary(
+            loggers,
+            rendered=rendered,
+            skipped=skipped,
+            total=assigned,
+            elapsed_s=elapsed_s,
+            samples=samples,
+            rate=rate,
+            rejections=rejections,
+        )
     except BaseException:
         status = "failed"
         raise
@@ -414,7 +426,12 @@ def _log_spec_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
 
 
 def _log_shard_metrics(
-    loggers: list[Logger], shard_id: int, byte_size: int, render_seconds: float
+    loggers: list[Logger],
+    *,
+    shard_id: int,
+    byte_size: int,
+    render_seconds: float,
+    rejections: RenderRejectionMetrics,
 ) -> None:
     """Emit per-shard byte size + render duration as a wandb history row.
 
@@ -424,8 +441,14 @@ def _log_shard_metrics(
         retained at ``work_dir``.
     :param render_seconds: Wall-clock seconds from subprocess invoke through
         upload-end; ``0.0`` on the R2-skip branch.
+    :param rejections: Silent and clipped sampled draws rejected by the renderer.
     """
-    payload = {"shard/bytes": byte_size, "shard/render_seconds": render_seconds}
+    payload = {
+        "shard/bytes": byte_size,
+        "shard/samples_rejected_clipped": rejections.clipped,
+        "shard/samples_rejected_silent": rejections.silent,
+        "shard/render_seconds": render_seconds,
+    }
     for lg in loggers:
         try:
             lg.log_metrics(payload, step=shard_id)
@@ -435,12 +458,14 @@ def _log_shard_metrics(
 
 def _log_summary(
     loggers: list[Logger],
+    *,
     rendered: int,
     skipped: int,
     total: int,
     elapsed_s: float,
     samples: int,
     rate: float,
+    rejections: RenderRejectionMetrics,
 ) -> None:
     """Emit the run-level shard counters + e2e generation triple.
 
@@ -456,6 +481,7 @@ def _log_summary(
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
     :param rate: ``samples / elapsed_s`` (``0.0`` when ``elapsed_s == 0``).
+    :param rejections: Silent and clipped sampled draws rejected across rendered shards.
     """
     payload = {
         "shards/rendered": rendered,
@@ -464,6 +490,8 @@ def _log_summary(
         "generation/elapsed_seconds": elapsed_s,
         "generation/samples": samples,
         "generation/samples_per_second": rate,
+        "generation/samples_rejected_clipped": rejections.clipped,
+        "generation/samples_rejected_silent": rejections.silent,
     }
     for lg in loggers:
         try:
@@ -472,12 +500,28 @@ def _log_summary(
             logger.warning(f"log_metrics(summary) failed on {type(lg).__name__}: {exc}")
 
 
+def _sum_rejections(
+    left: RenderRejectionMetrics,
+    right: RenderRejectionMetrics,
+) -> RenderRejectionMetrics:
+    """Sum rejection counts without mutating either validated report.
+
+    :param left: Counts accumulated from earlier shards.
+    :param right: Counts from the next completed shard.
+    :returns: Field-wise total without modifying either input.
+    """
+    return RenderRejectionMetrics(
+        clipped=left.clipped + right.clipped,
+        silent=left.silent + right.silent,
+    )
+
+
 def _dispatch_shards_serial(
     spec: DatasetSpec,
     my_range: range,
     work_dir: Path,
     loggers: list[Logger],
-) -> tuple[int, int]:
+) -> tuple[int, int, RenderRejectionMetrics]:
     """Render+upload owned shards in order; fail-fast on first error.
 
     :param spec: Validated dataset spec.
@@ -485,15 +529,19 @@ def _dispatch_shards_serial(
     :param work_dir: Hydra per-run output dir; shards land here before upload.
     :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
         byte size + render duration land in wandb history.
-    :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
+    :returns: Rendered/skipped shard counts and rejection totals over ``my_range``.
     """
     rendered = 0
     skipped = 0
+    rejections = RenderRejectionMetrics()
     for shard_id in my_range:
-        r, s = _render_one_owned_shard(spec, shard_id, work_dir, loggers)
-        rendered += int(r)
-        skipped += int(s)
-    return rendered, skipped
+        did_render, did_skip, shard_rejections = _render_one_owned_shard(
+            spec, shard_id, work_dir, loggers
+        )
+        rendered += int(did_render)
+        skipped += int(did_skip)
+        rejections = _sum_rejections(rejections, shard_rejections)
+    return rendered, skipped, rejections
 
 
 def _dispatch_shards_parallel(
@@ -501,7 +549,7 @@ def _dispatch_shards_parallel(
     my_range: range,
     work_dir: Path,
     loggers: list[Logger],
-) -> tuple[int, int]:
+) -> tuple[int, int, RenderRejectionMetrics]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
 
     Pool size is ``min(max(1, available_cpus() // 2), len(my_range))``. The
@@ -525,14 +573,15 @@ def _dispatch_shards_parallel(
     :param work_dir: Hydra per-run output dir; every owned shard lands here.
     :param loggers: Forwarded to ``_render_one_owned_shard`` so per-shard
         byte size + render duration land in wandb history.
-    :returns: ``(rendered, skipped)`` summary counts over ``my_range``.
+    :returns: Rendered/skipped shard counts and rejection totals over ``my_range``.
     """
     workers = min(max(1, available_cpus() // 2), len(my_range))
     logger.info(f"parallel dispatch: workers={workers} shards={len(my_range)}")
     rendered = 0
     skipped = 0
+    rejections = RenderRejectionMetrics()
     pending = iter(my_range)
-    in_flight: set[Future[tuple[bool, bool]]] = set()
+    in_flight: set[Future[tuple[bool, bool, RenderRejectionMetrics]]] = set()
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
         for _ in range(workers):
@@ -543,9 +592,10 @@ def _dispatch_shards_parallel(
         while in_flight:
             done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
             for fut in done:
-                did_render, did_skip = fut.result()
+                did_render, did_skip, shard_rejections = fut.result()
                 rendered += int(did_render)
                 skipped += int(did_skip)
+                rejections = _sum_rejections(rejections, shard_rejections)
             for _ in range(len(done)):
                 sid = next(pending, None)
                 if sid is None:
@@ -553,7 +603,7 @@ def _dispatch_shards_parallel(
                 in_flight.add(pool.submit(_render_one_owned_shard, spec, sid, work_dir, loggers))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
-    return rendered, skipped
+    return rendered, skipped, rejections
 
 
 def _dispatch_shards(
@@ -561,15 +611,14 @@ def _dispatch_shards(
     *,
     work_dir: Path,
     loggers: list[Logger],
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, RenderRejectionMetrics]:
     """Dispatch shards by dynamic claim-table wins or static rank/world ownership.
 
     :param spec: Validated dataset spec.
     :param work_dir: Directory where shards are rendered before upload.
     :param loggers: Loggers receiving per-shard metrics.
-    :returns: ``(rendered, skipped, assigned)`` counts; ``assigned`` is the
-        static rank's shard count or, in claims mode, the claims won by
-        this machine (``rendered + skipped``).
+    :returns: Rendered/skipped/assigned counts plus rejection totals; ``assigned``
+        is the static rank's shard count or the claims won by this machine.
     """
     if spec.use_shard_queue:
         logger.info(
@@ -582,13 +631,13 @@ def _dispatch_shards(
                 "render.parallel=true is ignored with use_shard_queue=true: "
                 "claims mode renders one claim at a time per machine"
             )
-        rendered, skipped = _dispatch_shards_from_claims(
+        rendered, skipped, rejections = _dispatch_shards_from_claims(
             _shard_claims_for_spec(spec),
             spec,
             work_dir=work_dir,
             loggers=loggers,
         )
-        return rendered, skipped, rendered + skipped
+        return rendered, skipped, rendered + skipped, rejections
 
     rank, world = read_rank_world_from_env()
     my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
@@ -603,10 +652,12 @@ def _dispatch_shards(
         total=spec.num_shards,
     )
     if spec.render.parallel and len(my_range) > 0:
-        rendered, skipped = _dispatch_shards_parallel(spec, my_range, work_dir, loggers)
+        rendered, skipped, rejections = _dispatch_shards_parallel(
+            spec, my_range, work_dir, loggers
+        )
     else:
-        rendered, skipped = _dispatch_shards_serial(spec, my_range, work_dir, loggers)
-    return rendered, skipped, len(my_range)
+        rendered, skipped, rejections = _dispatch_shards_serial(spec, my_range, work_dir, loggers)
+    return rendered, skipped, len(my_range), rejections
 
 
 def _shard_claims_for_spec(spec: DatasetSpec) -> ShardClaims:
@@ -627,7 +678,7 @@ def _dispatch_shards_from_claims(
     *,
     work_dir: Path,
     loggers: list[Logger],
-) -> tuple[int, int]:
+) -> tuple[int, int, RenderRejectionMetrics]:
     """Claim, render, and complete shards until nothing is claimable.
 
     A failed render propagates with its claim left held: peers cannot pile
@@ -638,13 +689,14 @@ def _dispatch_shards_from_claims(
     :param spec: Validated dataset spec.
     :param work_dir: Directory where shards are rendered before upload.
     :param loggers: Loggers receiving per-shard metrics.
-    :returns: ``(rendered, skipped)`` counts over claims won by this worker.
+    :returns: Rendered/skipped counts and rejection totals over won claims.
     :raises ValueError: A claimed row's shard ID falls outside the spec —
         the persisted table drifted from the spec (negative IDs would
         otherwise silently render the wrong shard via Python indexing).
     """
     rendered = 0
     skipped = 0
+    rejections = RenderRejectionMetrics()
     while (claimed := claims.claim()) is not None:
         if not 0 <= claimed.shard_id < spec.num_shards:
             raise ValueError(
@@ -655,11 +707,14 @@ def _dispatch_shards_from_claims(
             shard_id=claimed.shard_id,
             claim_gen=claimed.claim_gen,
         )
-        did_render, did_skip = _render_one_owned_shard(spec, claimed.shard_id, work_dir, loggers)
+        did_render, did_skip, shard_rejections = _render_one_owned_shard(
+            spec, claimed.shard_id, work_dir, loggers
+        )
         claims.complete(claimed)
         rendered += int(did_render)
         skipped += int(did_skip)
-    return rendered, skipped
+        rejections = _sum_rejections(rejections, shard_rejections)
+    return rendered, skipped, rejections
 
 
 def _render_one_owned_shard(
@@ -667,7 +722,7 @@ def _render_one_owned_shard(
     shard_id: int,
     work_dir: Path,
     loggers: list[Logger],
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, RenderRejectionMetrics]:
     """Render+stage one owned shard, or skip if it is already staged.
 
     Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
@@ -680,7 +735,7 @@ def _render_one_owned_shard(
     :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
     :param work_dir: Hydra per-run output dir; shards land here before staging.
     :param loggers: Forwarded to ``_log_shard_metrics``.
-    :returns: ``(rendered, skipped)`` — exactly one is ``True``.
+    :returns: Rendered/skipped flags plus this call's rejection counts.
     """
     shard = spec.shards[shard_id]
     # A Lance shard is staged iff a complete attempt set (sidecar + stats +
@@ -689,14 +744,30 @@ def _render_one_owned_shard(
         logger.info("skipping shard {} — already staged: {}", shard.shard_id, shard.filename)
         # Staged fragment size isn't probed on the skip path; the metrics row
         # deliberately logs 0 bytes for an already-staged lance shard.
-        _log_shard_metrics(loggers, shard_id, byte_size=0, render_seconds=0.0)
-        return False, True
+        _log_shard_metrics(
+            loggers,
+            shard_id=shard_id,
+            byte_size=0,
+            render_seconds=0.0,
+            rejections=RenderRejectionMetrics(),
+        )
+        return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size = _render_and_upload_shard(spec, shard, work_dir)
-    _log_shard_metrics(
-        loggers, shard_id, byte_size=byte_size, render_seconds=time.monotonic() - t0
+    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir)
+    logger.info(
+        "shard {} render rejections: silent={} clipped={}",
+        shard_id,
+        rejections.silent,
+        rejections.clipped,
     )
-    return True, False
+    _log_shard_metrics(
+        loggers,
+        shard_id=shard_id,
+        byte_size=byte_size,
+        render_seconds=time.monotonic() - t0,
+        rejections=rejections,
+    )
+    return True, False, rejections
 
 
 def _worker_id() -> str:
@@ -711,11 +782,27 @@ def _worker_id() -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "-", platform.node() or "worker")
 
 
+def _load_render_rejections(metrics_path: Path, shard_id: int) -> RenderRejectionMetrics:
+    """Validate a renderer sidecar and add shard context to contract failures.
+
+    :param metrics_path: Renderer sidecar expected after a successful subprocess exit.
+    :param shard_id: Logical shard used to identify a failed report.
+    :returns: Strictly validated rejection counts.
+    :raises RuntimeError: The sidecar is missing, unreadable, or invalid.
+    """
+    try:
+        return RenderRejectionMetrics.model_validate_json(metrics_path.read_text())
+    except (OSError, UnicodeError, ValidationError) as exc:
+        raise RuntimeError(
+            f"invalid render metrics for shard {shard_id}: {metrics_path}: {exc}"
+        ) from exc
+
+
 def _render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
-) -> int:
+) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2; shards are retained at ``work_dir``.
 
     Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
@@ -728,12 +815,11 @@ def _render_and_upload_shard(
     :param spec: Validated dataset spec; provides the render config and R2 URIs.
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
-    :returns: Local shard byte size, summed over its Lance directory tree; stable
-        for the caller because shards are retained at ``work_dir``.
+    :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
-    :raises RuntimeError: Renderer exited 0 without writing the expected shard
-        dataset, or a rendered Lance shard failed local validation.
+    :raises RuntimeError: Renderer output or metrics are missing/invalid, or
+        the rendered Lance shard failed local validation.
     """
     # One identity threads the start marker and the staged attempt below.
     worker_id = _worker_id()
@@ -753,7 +839,9 @@ def _render_and_upload_shard(
         args += build_generate_args(spec, shard, work_dir)
         logger.info("rendering shard {} -> {}", shard.shard_id, shard.filename)
         max_attempts = spec.render.max_retries + 1
+        metrics_path = render_metrics_path(work_dir / shard.filename)
         for attempt in range(max_attempts):
+            metrics_path.unlink(missing_ok=True)
             try:
                 _check_call_streamed(args)
                 break
@@ -774,6 +862,7 @@ def _render_and_upload_shard(
             "generate_vst_dataset.py exited 0 but did not write expected shard "
             f"dataset: {shard_path}"
         )
+    rejections = _load_render_rejections(metrics_path, shard.shard_id)
     byte_size = sum(p.stat().st_size for p in shard_path.rglob("*") if p.is_file())
     logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
     # Worker-side validation gates staging — corrupt renders never earn a
@@ -791,7 +880,7 @@ def _render_and_upload_shard(
         shard.filename,
         spec.r2.shard_staging_dir_uri(shard.shard_id),
     )
-    return byte_size
+    return byte_size, rejections
 
 
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
