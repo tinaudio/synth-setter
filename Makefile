@@ -40,8 +40,10 @@ test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so t
 # GPU/MPS tests run serially because accelerators need exclusive device access.
 test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb; Darwin: serial VST lane.
 	@if [ "$(UNAME_S)" = "Darwin" ]; then \
-		pytest -n auto -m "not gpu and not mps and not requires_vst" && \
-		pytest -m "requires_vst and not gpu and not mps"; \
+		status=0; \
+		pytest -n auto -m "not gpu and not mps and not requires_vst" || status=$$?; \
+		pytest -m "requires_vst and not gpu and not mps" || status=$$?; \
+		exit $$status; \
 	else \
 		$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"; \
 	fi

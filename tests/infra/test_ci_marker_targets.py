@@ -10,7 +10,10 @@ of an inline `pytest -m`, so a future edit can't reintroduce drift unnoticed.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -69,17 +72,96 @@ def test_make_target_carries_canonical_marker(
     )
 
 
+def _write_command_recorder(path: Path, *, parallel_exit_code: int = 0) -> None:
+    """Write an executable that records its arguments and optionally fails parallel calls.
+
+    :param path: Script path to create.
+    :param parallel_exit_code: Exit code for invocations containing ``-n auto``.
+    """
+    path.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$MAKE_TEST_LOG"\n'
+        f'case "$*" in *"-n auto"*) exit {parallel_exit_code};; esac\n'
+    )
+    path.chmod(0o755)
+
+
+def _run_full_cpu_target(
+    project_root: Path,
+    tmp_path: Path,
+    *,
+    uname: str,
+    parallel_exit_code: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run ``test-full-cpu`` with recording stand-ins for external commands.
+
+    :param project_root: Repository whose Makefile target to run.
+    :param tmp_path: Directory for stand-in executables and their log.
+    :param uname: Platform value passed to the Makefile.
+    :param parallel_exit_code: Exit code for parallel pytest invocations.
+    :returns: Completed make process and recorded command arguments.
+    """
+    pytest_recorder = tmp_path / "pytest"
+    wrapper_recorder = tmp_path / "headless-wrapper"
+    log_path = tmp_path / "commands.log"
+    _write_command_recorder(pytest_recorder, parallel_exit_code=parallel_exit_code)
+    _write_command_recorder(wrapper_recorder)
+
+    env = os.environ | {
+        "MAKE_TEST_LOG": str(log_path),
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [
+            shutil.which("make") or "make",
+            "--no-print-directory",
+            f"UNAME_S={uname}",
+            f"HEADLESS_WRAPPER={wrapper_recorder}",
+            "test-full-cpu",
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return result, log_path.read_text().splitlines()
+
+
 @pytest.mark.infra
-def test_full_cpu_darwin_runs_vst_tests_serially(project_root: Path) -> None:
-    """Darwin separates parallel non-VST tests from the serial VST lane.
+def test_full_cpu_darwin_non_vst_failure_still_runs_serial_vst_lane(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """Darwin reports both lane results while retaining a non-VST failure.
 
     :param project_root: Locates the repository Makefile.
+    :param tmp_path: Provides isolated stand-in executables and logs.
     """
-    recipe = _recipe((project_root / "Makefile").read_text(), "test-full-cpu")
+    result, commands = _run_full_cpu_target(
+        project_root, tmp_path, uname="Darwin", parallel_exit_code=7
+    )
 
-    assert 'if [ "$(UNAME_S)" = "Darwin" ]' in recipe
-    assert 'pytest -n auto -m "not gpu and not mps and not requires_vst"' in recipe
-    assert 'pytest -m "requires_vst and not gpu and not mps"' in recipe
+    assert result.returncode != 0
+    assert commands == [
+        "-n auto -m not gpu and not mps and not requires_vst",
+        "-m requires_vst and not gpu and not mps",
+    ]
+
+
+@pytest.mark.infra
+def test_full_cpu_linux_runs_all_cpu_tests_through_headless_wrapper(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """Linux keeps the complete CPU lane parallel behind its display wrapper.
+
+    :param project_root: Locates the repository Makefile.
+    :param tmp_path: Provides isolated stand-in executables and logs.
+    """
+    result, commands = _run_full_cpu_target(project_root, tmp_path, uname="Linux")
+
+    assert result.returncode == 0
+    assert commands == ["pytest -n auto -m not gpu and not mps"]
 
 
 @pytest.mark.infra
