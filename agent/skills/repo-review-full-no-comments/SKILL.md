@@ -189,12 +189,12 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > ```bash
 > is_zero_diff="${is_zero_diff:-false}"
-> findings_json_path="<exact printed path>"
+> findings_json_path="${findings_json_path:-}"
 > finding_count=0
 > pr_health_flag_count=0
 > # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
 > # Otherwise derive them from the Step 6 findings JSON.
-> if [[ "$is_zero_diff" == false && -f "$findings_json_path" ]]; then
+> if [[ "$is_zero_diff" == false && -n "$findings_json_path" && -f "$findings_json_path" ]]; then
 >   finding_count=$(jq '.findings | length' "$findings_json_path")
 >   pr_health_flag_count=$(jq -r '.review_body' "$findings_json_path" | grep -c '\[pr-health\]' || true)
 > fi
@@ -298,7 +298,9 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > - The sentinel file is the gate's contract; your returned report is the human
 >   deliverable. Always produce both.
 >
-> After rendering or failing closed, remove the findings file at the exact printed path with `rm -f -- <exact-path>`. Never remove or read another review's findings file.
+> After rendering or failing closed, if `findings_json_path` is non-empty,
+> remove that exact file with `rm -f -- "$findings_json_path"`. Never remove or
+> read another review's findings file.
 >
 > **Return value.** Reply with the full Markdown report (the exact content you
 > wrote to the sentinel) followed by a final line: `Sentinel: <REVIEW_PATH>`.

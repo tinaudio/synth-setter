@@ -116,9 +116,9 @@ turn budget exhausted result is a failed attempt, never a partial success; add
 its exact diagnostic to the audit and retry through the candidate sequence.
 
 Run two model passes for every selected skill, then merge their reports using
-the existing union and near-duplicate rules in **Cross-model opencode pass**
-below. Pi does not run the opencode launcher; it derives provenance from each
-successful effective model as specified below. Record each attempt's skill,
+the provenance and near-duplicate verification rules below. Pi does not run the
+opencode launcher; it derives provenance from each successful effective model
+as specified below. Record each attempt's skill,
 pass, exact model, thinking level, Tintin agent id, status, and
 the exact transcript path from the result's `Output file:` field in a
 `## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
@@ -210,6 +210,9 @@ Codex/OpenRouter pass, bounded turn/runtime/token columns, an existing
 transcript path for each launched attempt, and the current full HEAD from
 `review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
 helper CLI tests.
+
+- [ ] Record both authenticated host commands, their exit status, parsed
+  sentinel HEAD, and fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after same-provider fallback:

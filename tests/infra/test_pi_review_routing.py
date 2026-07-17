@@ -439,6 +439,33 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
     )
 
 
+@pytest.mark.parametrize(
+    "malformed_line",
+    [
+        "**src/missing-number.py:20** — Missing list number.",
+        "2. **src/missing-description.py:30** —",
+    ],
+)
+def test_extract_report_rejects_malformed_finding_like_line(
+    tmp_path: Path, malformed_line: str
+) -> None:
+    """Fail closed instead of dropping or merging malformed findings.
+
+    :param tmp_path: Temporary location for a transcript.
+    :param malformed_line: Finding-like row that violates the report contract.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        "### WARN findings\\n1. **src/valid.py:10** — Valid.\\n"
+        f'{malformed_line}\\n\\n### What looks good\\n- Clear."}}}}\n'
+    )
+
+    with pytest.raises(ValueError, match="malformed finding-like line"):
+        extract_report(transcript)
+
+
 def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
     tmp_path: Path,
 ) -> None:

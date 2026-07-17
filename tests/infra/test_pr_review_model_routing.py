@@ -288,6 +288,45 @@ def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: P
     assert "SYNTH_SETTER_PI_REVIEW=1" in prompt
 
 
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_rejects_nested_session(tmp_path: Path) -> None:
+    """Stop a child Pi session from recursively launching the harness.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+
+    with pytest.raises(sh.ErrorReturnCode_2):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "SYNTH_SETTER_PI_REVIEW": "1",
+            },
+        )
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
+    """Reject PR zero before invoking Pi.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+
+    with pytest.raises(sh.ErrorReturnCode_2):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            "--target",
+            "0",
+            _cwd=REPO_ROOT,
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+
+
 def test_no_comments_review_uses_isolated_findings_path() -> None:
     """Prevent concurrent reviews from sharing one global findings file."""
     text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
@@ -296,7 +335,7 @@ def test_no_comments_review_uses_isolated_findings_path() -> None:
     assert "review_sentinel.py findings" in text
     assert str(fixed_findings_path) not in text
     assert "exact printed path" in text
-    assert "remove the findings file" in text
+    assert "remove that exact file" in text
 
 
 def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
@@ -305,6 +344,8 @@ def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
 
     assert "If `is_zero_diff == true`" in text
     assert "A non-zero diff with no findings" in text
+    assert 'findings_json_path="${findings_json_path:-}"' in text
+    assert "if `findings_json_path` is non-empty" in text
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:

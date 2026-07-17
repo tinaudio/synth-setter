@@ -12,7 +12,15 @@ usage() {
     >&2
 }
 
-# Validate the host request before replacing it with the shared Pi process.
+#######################################
+# Validate a host request, then replace it with the shared Pi process.
+# Arguments:
+#   repo-review-full or repo-review-full-no-comments, optionally --target N.
+# Outputs:
+#   Writes usage or recursion diagnostics to stderr.
+# Returns:
+#   2 for invalid input; otherwise Pi's exit status through exec.
+#######################################
 main() {
   if [[ "${SYNTH_SETTER_PI_REVIEW:-}" == "1" ]]; then
     echo "run_pi_review.sh cannot be nested inside its Pi review session" >&2
@@ -34,7 +42,7 @@ main() {
 
   local target_instruction="Resolve the target from the current branch."
   if (( $# == 3 )); then
-    if [[ "${2}" != "--target" || ! "${3}" =~ ^[0-9]+$ ]]; then
+    if [[ "${2}" != "--target" || ! "${3}" =~ ^[1-9][0-9]*$ ]]; then
       usage
       return 2
     fi

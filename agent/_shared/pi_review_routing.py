@@ -349,6 +349,7 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
 
     :param lines: Raw lines from a BLOCK or WARN section.
     :returns: Canonical finding lines with surrounding narration removed.
+    :raises ValueError: If a finding-like line violates the report contract.
     """
     normalized: list[str] = []
     in_fence = False
@@ -382,8 +383,8 @@ def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
                 f"{len(normalized) + 1}. **{path}{start}** — {range_note}{description}"
             )
             continue
-        if normalized and normalized[-1] != "None.":
-            normalized[-1] = f"{normalized[-1]} {stripped}"
+        if "**" in stripped:
+            raise ValueError(f"malformed finding-like line: {stripped}")
     return [
         re.sub(r"^\d+\.", f"{index}.", finding) if _FINDING.fullmatch(finding) else finding
         for index, finding in enumerate(normalized, start=1)
