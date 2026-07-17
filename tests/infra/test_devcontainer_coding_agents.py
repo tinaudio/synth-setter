@@ -50,6 +50,7 @@ def test_devcontainer_tools_installs_pinned_infisical_cli(project_root: Path) ->
         "503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7"
     ) in dockerfile
     assert "infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" in dockerfile
+    assert "dl.cloudsmith.io/public/infisical/infisical-cli" in dockerfile
     assert 'echo "${infisical_sha}  /tmp/${package}" | sha256sum -c -' in dockerfile
     assert "infisical --version" in dockerfile
 
