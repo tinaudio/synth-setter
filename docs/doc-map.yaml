@@ -465,12 +465,15 @@ docs:
       - pattern: "tests/infra/test_agent_hooks_suite.py"
         covers: "Runs the full agent/hooks/test.sh bash suite in CI under a simulated Codex skill layout"
 
-  # ── PR review fan-out (roles, model pinning, cross-model pass) ──
   - doc: AGENTS.md
     description: Code-review section — review fan-out worker configuration
     sources:
       - pattern: "agent/_shared/run_codex_review_agent.*"
-        covers: "Codex review launcher from role resolution through agent_message extraction"
+        covers: "Legacy Codex role launcher from role resolution through agent_message extraction"
+      - pattern: "agent/_shared/run_pi_review.sh"
+        covers: "Shared Claude/Codex entrypoint into the Pi-native full-review harness"
+      - pattern: "agent/_shared/pi_review_routing.py"
+        covers: "Pi PR-review routing policy"
       - pattern: "agent/_shared/run_opencode_review_agent.*"
         covers: "OpenCode review launcher from role resolution through the exit-3 degrade signal"
       - pattern: ".claude/agents/pr-review-*.md"
@@ -479,6 +482,8 @@ docs:
         covers: "Codex-side pinned review roles with their developer instructions"
       - pattern: ".opencode/agents/*.toml"
         covers: "OpenCode-side pinned review models/variants for the worker roles"
+      - pattern: ".pi/agents/pr-review-*.md"
+        covers: "Pi review worker role with model and thinking selected per pass"
       - pattern: "opencode.json"
         covers: "Read-only pr-reviewer opencode agent permission profile"
       - pattern: "agent/skills/_shared/repo-review-full-analysis.md"

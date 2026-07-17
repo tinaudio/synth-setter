@@ -1,4 +1,4 @@
-"""Contract tests for PR-review model routing across Claude, Codex, and OpenCode."""
+"""Contract tests for PR-review model routing across supported agent harnesses."""
 
 from __future__ import annotations
 
@@ -174,26 +174,217 @@ def test_codex_review_roles_are_registered_with_nested_fanout() -> None:
         assert registered["config_file"] == f"agents/{role}.toml"
 
 
-def test_full_review_skills_require_the_pinned_orchestrator() -> None:
-    """Prevent review gates from bypassing project-scoped agent configuration."""
+def test_full_review_skills_route_external_harnesses_through_pi() -> None:
+    """Keep Claude and Codex on the same Pi-native review implementation."""
     for skill in ("repo-review-full", "repo-review-full-no-comments"):
         text = (REPO_ROOT / "agent" / "skills" / skill / "SKILL.md").read_text()
-        assert "`pr-review-orchestrator`" in text
-        assert "CLAUDE_CODE_SUBAGENT_MODEL" in text
-        assert "run_codex_review_agent.sh" in text
-        assert "general-purpose" not in text
+        assert "SYNTH_SETTER_PI_REVIEW" in text
+        assert "run_pi_review.sh" in text
+        assert "run_codex_review_agent.sh" not in text
+        assert "Claude Code" in text
+        assert "Codex" in text
+        assert "foreground Bash" in text
+        assert "600000" in text
+        assert "not use background execution" in text
 
 
-def test_review_fanout_promotes_only_correctness() -> None:
-    """Keep expensive reasoning reserved for the correctness pass."""
+def test_review_fanout_promotes_deep_checklists() -> None:
+    """Keep high thinking pinned for correctness-sensitive checklists."""
+    routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
+
+    assert 'DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
+    assert 'return "high", "deep checklist"' in routing
+
+
+def test_pi_review_worker_allows_dynamic_model_routing() -> None:
+    """Ensure policy, rather than the agent definition, selects Pi worker models."""
+    text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
+    _, frontmatter, prompt = text.split("---", 2)
+    worker = yaml.safe_load(frontmatter)
+
+    assert worker["description"]
+    assert worker["prompt_mode"] == "append"
+    assert isinstance(worker["tools"], str), "Pi worker tools must use comma-separated syntax"
+    assert set(worker["tools"].split(", ")) == {"bash", "grep", "read"}
+    assert "max_turns" not in worker
+    assert "model" not in worker
+    assert "thinking" not in worker
+    assert "structured report" in prompt.lower()
+    assert "### BLOCK findings" in prompt
+    assert "### WARN findings" in prompt
+    assert "### What looks good" in prompt
+    assert "Never run `find`" in prompt
+    assert "60-second timeout" in prompt
+    assert "changed paths" in prompt
+
+
+def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
+    """Keep project-local Pi defaults scoped away from Anthropic."""
+    settings = json.loads((REPO_ROOT / ".pi" / "settings.json").read_text())
+
+    assert settings["defaultProvider"] == "openai-codex"
+    assert settings["defaultModel"] == "gpt-5.6-terra"
+    assert settings["enabledModels"]
+    assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
+    assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
+    assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+
+
+def test_pi_project_append_system_forbids_anthropic_agents() -> None:
+    """Tell Pi sessions and project subagents not to select Anthropic models."""
+    text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
+
+    assert "Anthropic" in text
+    assert "Do not select Anthropic providers or models" in text
+    assert "Do not launch subagents" in text
+    assert "openai-codex" in text
+    assert "openrouter" in text
+
+
+def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
+    """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert re.search(r"`correctness-review` uses\s+`pr-review-worker-deep`", text)
-    assert re.search(r"all other selected skills use\s+`pr-review-worker-fast`", text)
-    assert "general-purpose" not in text
-    assert "do not fall back" in text.lower()
+    assert "pi_review_routing.py plan" in text
+    assert "pi_review_routing.py extract-report" in text
+    assert "pi_review_routing.py validate-report" in text
+    assert "pi_review_routing.py transcript-stats" in text
+    assert "pi_review_routing.py provenance" in text
+    assert "run_in_background: true" in text
+    assert "Output file:" in text
+    assert "get_subagent_result(wait: true)" in text
+    assert "OpenRouter-only findings never enter aggregation directly" in text
+    assert re.search(r"successful Codex\s+pass's effective model", text)
+    assert re.search(r"successful Codex pass's\s+`max_turns`", text)
+    assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
+    assert "max_turns: <plan.max_turns>" in text
+    assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
+    assert "turn budget exhausted" in text
+    assert re.search(r"print\s+the audit table before stopping", text)
+    assert "secondary_fallback_candidates" in text
+    assert "fallback_candidates" in text
+    assert "Codex fallback" in text
+    assert "OpenRouter failed; only Codex ran." in text
+    assert re.search(r"successful Codex pass's effective\s+model to the end", text)
+    assert "claude -p --dangerously-skip-permissions" in text
+    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: Path) -> None:
+    """Invoke the shared Pi harness with a target and child-session marker.
+
+    :param tmp_path: Temporary directory containing the fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\nprintf '%s\\n' \"${SYNTH_SETTER_PI_REVIEW:-unset}\"\nprintf '%s\\n' \"$@\"\n"
+    )
+    pi.chmod(0o755)
+
+    result = sh.Command(str(launcher))(
+        "repo-review-full",
+        "--target",
+        "2052",
+        _cwd=REPO_ROOT,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    lines = str(result).splitlines()
+    assert lines[0] == "1"
+    assert lines[1:10] == [
+        "-p",
+        "--approve",
+        "--provider",
+        "openai-codex",
+        "--model",
+        "gpt-5.6-terra",
+        "--thinking",
+        "medium",
+        "--no-session",
+    ]
+    prompt = lines[10]
+    assert "repo-review-full" in prompt
+    assert "PR #2052" in prompt
+    assert "SYNTH_SETTER_PI_REVIEW=1" in prompt
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_rejects_nested_session(tmp_path: Path) -> None:
+    """Stop a child Pi session from recursively launching the harness.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+
+    with pytest.raises(sh.ErrorReturnCode_2):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            _cwd=REPO_ROOT,
+            _env={
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "SYNTH_SETTER_PI_REVIEW": "1",
+            },
+        )
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
+    """Reject PR zero before invoking Pi.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+
+    with pytest.raises(sh.ErrorReturnCode_2):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            "--target",
+            "0",
+            _cwd=REPO_ROOT,
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+
+
+def test_no_comments_review_uses_isolated_findings_path() -> None:
+    """Prevent concurrent reviews from sharing one global findings file."""
+    text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
+
+    fixed_findings_path = Path("/").joinpath("tmp", "repo-review-full-no-comments-findings.json")
+    assert "review_sentinel.py findings" in text
+    assert str(fixed_findings_path) not in text
+    assert "exact printed path" in text
+    assert "remove that exact file" in text
+
+
+def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
+    """Keep non-empty reviews from discarding the Pi audit on PASS."""
+    text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
+
+    assert "If `is_zero_diff == true`" in text
+    assert "A non-zero diff with no findings" in text
+    assert 'findings_json_path="${findings_json_path:-}"' in text
+    assert "if `findings_json_path` is non-empty" in text
+
+
+def test_full_review_skills_define_flat_pi_orchestration() -> None:
+    """Avoid unsupported nested Tintin fan-out while preserving the pipeline."""
+    for skill in ("repo-review-full", "repo-review-full-no-comments"):
+        text = (REPO_ROOT / "agent" / "skills" / skill / "SKILL.md").read_text()
+        assert "Tintin" in text
+        assert "pr-review-worker" in text
+        assert "flat" in text.lower()
+        assert "Agent" in text
+        assert "allocation, fallback, merge" in text
+        assert "SYNTH_SETTER_PI_REVIEW=1" in text
+        if skill == "repo-review-full-no-comments":
+            assert "Pi PASS report" in text
 
 
 def test_headless_hook_review_defaults_match_pinned_tier() -> None:
@@ -940,15 +1131,15 @@ def test_opencode_config_reviewer_agent_denies_mutations() -> None:
     assert reviewer["permission"]["bash"]["git diff*"] == "allow"
 
 
-def test_review_fanout_analysis_requires_opencode_pass_and_degrade() -> None:
-    """Pin the cross-model pass and its degrade contract in the fan-out spec."""
+def test_review_fanout_analysis_uses_pi_instead_of_legacy_launchers() -> None:
+    """Keep the active fan-out independent of host-specific worker launchers."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "run_opencode_review_agent.sh" in text
-    assert "flagged by:" in text
-    assert "opencode pass skipped/failed" in text
+    assert "run_pi_review.sh" in text
+    assert "run_opencode_review_agent.sh" not in text
+    assert "run_codex_review_agent.sh" not in text
 
 
 def test_worker_agent_briefs_permit_only_opencode_launcher() -> None:

@@ -2,11 +2,9 @@
 name: repo-review-full-no-comments
 description: |-
   Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN report to the user instead of posting inline comments
-  on GitHub. Spawns one orchestrator agent that runs the pipeline and returns
-  the rendered report. Works against either an open PR or a local branch that
-  has not been pushed yet — use it as a pre-PR gate or whenever GitHub side
-  effects are undesirable. Requires the tinaudio-synth-setter-skills plugin.
+  aggregated BLOCK/WARN report instead of posting inline comments. Routes every
+  host harness through Pi and works against an open PR or local branch. Requires
+  the tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full-no-comments — Multi-Skill Review Without Posting
@@ -18,35 +16,37 @@ Same analysis as `/repo-review-full`, with two differences:
 2. A PR is **not** required. If no PR exists for the current branch, the
    orchestrator reviews the local branch vs. the default branch.
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result.
+The review implementation is Pi-native. Claude Code and Codex invoke the same
+headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## What you (the main agent) do
 
 1. Capture the target argument: if the command was invoked with an explicit
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
-2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
-   unset. If it is set, stop and explain that it overrides the project
-   review-agent models; do not run a gate with an overridden model policy.
-3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
-   the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
-   may not expose a custom-role selector, run
-   `agent/_shared/run_codex_review_agent.sh pr-review-orchestrator --skill-brief agent/skills/repo-review-full-no-comments/SKILL.md` (append
-   `--target <N>` only when an explicit target was passed). The launcher reads
-   the project agent file and supplies its pinned model, reasoning effort, and
-   developer instructions directly to `codex exec`. The prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute an explicit
-   `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
-   is unavailable, stop with a configuration error; do not fall back to an
-   inherited or anonymous agent.
+
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, invoke the shared launcher with a
+   foreground Bash tool call and a `600000` ms timeout. Claude Code and Codex
+   use this same command; neither launches its native review agents:
+
+   ```bash
+   agent/_shared/run_pi_review.sh repo-review-full-no-comments
+   ```
+
+   Append `--target <N>` only when the caller supplied an explicit target. Do
+   not use background execution, `&`, task output, or a detached process. Wait
+   for the command to exit, relay its output verbatim, and stop; the child Pi
+   session owns the review.
+
+3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
+   orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
+   Agent for the flat Step 4 fan-out. Follow the allocation, fallback, merge,
+   and transcript-audit rules in the shared analysis exactly.
+
 4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
    append any narration of your own. Do not re-run the pipeline.
-
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
 
 ## Orchestrator agent brief
 
@@ -55,8 +55,8 @@ sub-agents; you never launch those directly.
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
 >
-> **Model policy.** Use the named PR-review worker roles from the shared
-> analysis. Do not supply per-invocation model overrides.
+> **Model policy.** Use the shared dynamic routing table and supply every
+> worker's model and thinking level explicitly.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >
@@ -131,7 +131,18 @@ sub-agents; you never launch those directly.
 >   `[<calling-skill>:block]` prefixes inside the `## PR health` bullets (PR mode
 >   only — local-branch mode has no PR-health bullets).
 >
-> - Write the findings JSON to `/tmp/repo-review-full-no-comments-findings.json`.
+> - Before writing findings, create an invocation-isolated path:
+>
+>   ```bash
+>   python3 agent/_shared/review_sentinel.py findings "${TMPDIR:-/tmp}"
+>   ```
+>
+>   Capture the exact printed path and write this invocation's findings JSON only
+>   there. Shell variables do not persist across tool calls, so substitute that
+>   exact path in every later command; never use a shared fixed filename. Bash
+>   tool calls do not share an `EXIT` trap, so remove the path on every
+>   controlled success or failure; an interrupted run leaves only an isolated
+>   file in the platform temporary directory and cannot contaminate another run.
 >
 > - For `pr_number` in the JSON: use the resolved PR number in PR mode, or
 >   `null` in local-branch mode. Do not place branch names in `pr_number`; keep
@@ -152,8 +163,8 @@ sub-agents; you never launch those directly.
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
 > `gh pr review` command. This step has zero GitHub side effects.
 >
-> Transform the JSON payload at
-> `/tmp/repo-review-full-no-comments-findings.json` into a Markdown report. The
+> Transform the JSON payload at the exact printed findings path into a Markdown
+> report. The
 > report is **both** written to a sentinel file **and** returned as your final
 > message (the main agent prints it for the user). The retained
 > `pre-pr-review-gate.sh` parser validates this filename after its local
@@ -178,13 +189,14 @@ sub-agents; you never launch those directly.
 >
 > ```bash
 > is_zero_diff="${is_zero_diff:-false}"
+> findings_json_path="${findings_json_path:-}"
 > finding_count=0
 > pr_health_flag_count=0
 > # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
 > # Otherwise derive them from the Step 6 findings JSON.
-> if [[ "$is_zero_diff" == false && -f /tmp/repo-review-full-no-comments-findings.json ]]; then
->   finding_count=$(jq '.findings | length' /tmp/repo-review-full-no-comments-findings.json)
->   pr_health_flag_count=$(jq -r '.review_body' /tmp/repo-review-full-no-comments-findings.json | grep -c '\[pr-health\]' || true)
+> if [[ "$is_zero_diff" == false && -n "$findings_json_path" && -f "$findings_json_path" ]]; then
+>   finding_count=$(jq '.findings | length' "$findings_json_path")
+>   pr_health_flag_count=$(jq -r '.review_body' "$findings_json_path" | grep -c '\[pr-health\]' || true)
 > fi
 > is_non_pass=false
 > if ((finding_count > 0 || pr_health_flag_count > 0)); then
@@ -257,8 +269,15 @@ sub-agents; you never launch those directly.
 > - Preserve the PR-health bullets from `review_body` verbatim — they are
 >   important for human reviewers and easy to lose if you re-summarize.
 >
-> - **PASS short form.** If the JSON has no findings AND no PR-health flags,
->   still write the sentinel file. The gate's size guard rejects files under
+> - **Pi PASS report.** When Pi has no findings or PR-health flags, preserve the
+>   complete `## Pi review audit` section from `review_body` between the PASS
+>   line and `## Summary`; a successful review must not discard its model,
+>   attempt, agent-id, or transcript evidence. The fixed short form below is
+>   only for zero-diff reviews, which skip worker allocation and audit rows.
+>
+> - **PASS short form.** If `is_zero_diff == true`, still write the sentinel
+>   file. A non-zero diff with no findings keeps the complete Pi audit above
+>   instead of using this short form. The gate's size guard rejects files under
 >   200 bytes, and the header + `PASS` line + `Reviewed at:` line are
 >   ~130 bytes — pad with a one-line context summary so the total is ≥200
 >   bytes. Use this exact template (substitute `<target>` and `<sha>`):
@@ -278,6 +297,10 @@ sub-agents; you never launch those directly.
 >
 > - The sentinel file is the gate's contract; your returned report is the human
 >   deliverable. Always produce both.
+>
+> After rendering or failing closed, if `findings_json_path` is non-empty,
+> remove that exact file with `rm -f -- "$findings_json_path"`. Never remove or
+> read another review's findings file.
 >
 > **Return value.** Reply with the full Markdown report (the exact content you
 > wrote to the sentinel) followed by a final line: `Sentinel: <REVIEW_PATH>`.

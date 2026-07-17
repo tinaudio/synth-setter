@@ -7,9 +7,9 @@ delegates only Steps 3–6 here. The final delivery step (Step 7 — post inline
 comments vs. print the report to the user) differs and lives in each skill's
 orchestrator brief.
 
-"You" below is the **orchestrator agent** the calling skill spawned to run this
-whole pipeline — not the main agent, which only launches you and relays your
-result.
+"You" below is the Pi review orchestrator. Claude Code and Codex enter through
+`agent/_shared/run_pi_review.sh`, so every harness uses the same flat Tintin
+fan-out. Tintin intentionally removes its `Agent` tool from spawned subagents.
 
 You MUST complete every step below in order, then return to your orchestrator
 brief's Step 7 for the final delivery step.
@@ -93,24 +93,161 @@ skip `lance-review`.
 
 ## Step 4: Launch parallel review agents
 
-Launch one named review Agent per selected skill. `correctness-review` uses
-`pr-review-worker-deep`; all other selected skills use
-`pr-review-worker-fast`. Under Claude Code, select those exact values with the
-Agent tool's `subagent_type`. Under Codex, write each complete worker prompt to
-a unique temporary file, then invoke
-`agent/_shared/run_codex_review_agent.sh <role> --prompt-file <path>`.
-That launcher resolves the role's project-pinned model and reasoning effort
-before starting `codex exec`. **Launch all agents in a single message** so they
-run concurrently (one message with N tool calls = N parallel agents). Do not
-add any other per-invocation model override: each project agent file owns its
-provider-specific model and effort. You are an orchestrator agent yourself, so
-these review agents are your sub-agents.
+### Pi + Tintin
 
-If either named worker is unavailable or nested spawning is disabled, stop and
-surface the configuration error. Do not fall back to an inherited, anonymous,
-or sequential worker because that would bypass the gate's model policy.
+Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
+with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
+`run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
+helper output. Tintin removes `Agent` from
+subagents, so do not spawn a Pi orchestrator and then ask it to nest workers.
+Launch all independent passes in one message, capture each start result's
+`Agent ID` and `Output file`, then collect them with
+`get_subagent_result(wait: true)`. Every pass receives the same complete worker
+prompt and must not modify the checkout or GitHub state.
 
-Each agent's prompt MUST include:
+Give every worker the exact base SHA, head SHA, and changed paths. Require it to
+inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
+paths. It must never recursively discover files or checklists, search above the
+current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
+assigned `tdd-refactor` pass may search tracked files with `git grep` and
+`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool
+call has a 60-second timeout. A command timeout or
+turn budget exhausted result is a failed attempt, never a partial success; add
+its exact diagnostic to the audit and retry through the candidate sequence.
+
+Run two model passes for every selected skill, then merge their reports using
+the provenance and near-duplicate verification rules below. Pi does not run the
+opencode launcher; it derives provenance from each successful effective model
+as specified below. Record each attempt's skill,
+pass, exact model, thinking level, Tintin agent id, status, and
+the exact transcript path from the result's `Output file:` field in a
+`## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
+contract. Render it as this table so the sentinel caller never has to inspect a
+process tree or transcript to understand execution:
+
+| Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
+| ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
+
+Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
+`authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
+exact failure diagnostic or allocation reason,
+not a generic summary. Include one row per attempt, including retries and
+verification passes. Precede the table with one sentence counting successful,
+failed, retried, and rejected attempts. If the pipeline must fail closed, print the audit table before stopping even though no sentinel is written.
+
+Use the tested routing helper as the single source of model candidates,
+availability filtering, thinking levels, and allocation reasons. Count changed
+lines and inspect the diff for these risk signals: file moves, concurrency,
+persistence, authentication, workflow permissions, and numeric/dtype/shape
+logic. Pass each detected signal with `--risk` and one `--skill` argument per
+selected checklist:
+
+```bash
+python3 agent/_shared/pi_review_routing.py plan \
+  --skill correctness-review --skill code-health \
+  --changed-lines "$changed_lines" --risk concurrency
+```
+
+The command runs `pi --list-models` and returns JSON with two logical passes per
+skill, the ordered available primary `candidates`, skipped `unavailable` models,
+OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
+Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
+OpenRouter is optional because its pass can degrade through the secondary
+free-model tier and then the returned Codex fallback. Record skipped candidates
+in the audit with no agent id or transcript.
+
+Start each pass with its first candidate. If `Agent` reports HTTP `429`,
+`quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
+`no endpoints available`, `provider unavailable`, or `Model not found`, record
+the failure and launch a fresh worker with the next same-provider candidate.
+Codex-pass candidates are always `openai-codex/*`; OpenRouter-pass candidates
+are always `openrouter/*`. Exhaust the primary OpenRouter `candidates` first,
+then continue through `secondary_fallback_candidates` before attempting any
+Codex fallback. If an OpenRouter pass has no free candidates, or every primary
+and secondary candidate exhausts quota/capacity, move the successful Codex pass's effective
+model to the end of `fallback_candidates`, then launch a fresh worker
+with the first model. This prefers a distinct fallback even when the Codex pass
+reached its own fallback. Continue through that bounded Codex sequence only for
+the same availability failures. Record each launch as `Codex fallback` in the
+audit detail. Never resume a failed session under a different model.
+Authentication, tool/checklist, malformed-report, timeout, and turn-budget
+failures do not trigger the cross-provider fallback.
+
+A completed worker is not successful until its final assistant Markdown passes
+the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
+extract its final assistant text deterministically, then validate that file:
+
+```bash
+python3 agent/_shared/pi_review_routing.py extract-report \
+  <output-file> --output <report-path>
+python3 agent/_shared/pi_review_routing.py validate-report \
+  <report-path> --skill <skill-name> --target <PR-or-branch-label>
+python3 agent/_shared/pi_review_routing.py transcript-stats <output-file>
+```
+
+Use `transcript-stats` for the audit's elapsed, turns, and cumulative-token
+columns. The token number is explicitly cumulative processed context across
+turns, not generated output, so label it exactly as the table does.
+
+Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
+directly to `validate-report`. If extraction or validation fails, record
+`malformed report` and try the next candidate. This
+is a bounded report-quality retry, not a quota classification. Authentication,
+tool, and checklist errors stop immediately. If a Codex pass exhausts its
+candidates, stop before aggregation or delivery; never write a PASS sentinel
+after silently dropping the required Codex pass. If an OpenRouter pass exhausts
+its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
+`fallback_candidates`, continue the review with Codex-only findings, record the
+failed OpenRouter attempt chain in the audit, and add the exact sentence
+`OpenRouter failed; only Codex ran.` to `review_body` so the posted review or
+rendered report is explicit and truthful about the degraded coverage.
+
+CI cannot exercise authenticated Tintin providers. Before opening a PR that
+changes this flow, run both host harnesses against the PR from the worktree:
+
+```bash
+claude -p --dangerously-skip-permissions --no-session-persistence --model haiku \
+  --effort low --output-format text \
+  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+codex exec --dangerously-bypass-approvals-and-sandbox \
+  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+```
+
+After each command, verify the sentinel audit contains every planned
+Codex/OpenRouter pass, bounded turn/runtime/token columns, an existing
+transcript path for each launched attempt, and the current full HEAD from
+`review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
+helper CLI tests.
+
+- [ ] Record both authenticated host commands, their exit status, parsed
+  sentinel HEAD, and fallback audit result in the PR verification comment.
+
+Attribute findings from each successful report to the provider that actually
+produced it, including after same-provider fallback:
+
+```bash
+python3 agent/_shared/pi_review_routing.py provenance <effective-model>
+```
+
+Merge duplicate findings using effective provenance. Findings independently
+reported by Codex and OpenRouter are `both`; Codex-only findings are `codex`.
+OpenRouter-only findings never enter aggregation directly. A logical
+OpenRouter pass produced by a Codex fallback has Codex provenance and needs no
+additional verification. For each skill that has any, launch one additional
+`pr-review-worker` with the successful Codex
+pass's effective model, `high` thinking, and the successful Codex pass's
+`max_turns`, supplying the exact candidate findings and asking it to return only
+those it can reproduce from the diff. This model has already passed availability
+preflight; if the original Codex pass used a fallback, verification uses that
+same effective fallback rather than a hard-coded selector.
+Extract and validate that verification report through the same helper commands.
+A confirmed candidate is tagged `openrouter; verified by: codex`; a rejected
+candidate is omitted and recorded in the audit. If verification fails or is
+malformed, stop rather than posting unverified free-model output. Add every
+unavailable, failed, malformed, verified, rejected, and successful attempt to
+the audit section.
+
+Each worker's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
@@ -123,43 +260,9 @@ that call errors (the harness has not registered it) falls back to reading and
 applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
 contract below is unchanged for both.
 
-`lance-review` additionally requires web access (`WebFetch`/`WebSearch`): its
-grounding rule only holds if the agent can fetch the live Lance docs. The
-`pr-review-worker-fast` role inherits the parent agent's tools, including web
-access. `correctness-review` needs no web access and runs on the deep worker.
-
-### Cross-model opencode pass (every worker)
-
-Every worker prompt MUST additionally instruct the worker to run a second,
-parallel opencode pass of the same checklist and merge the two:
-
-1. **Before anything else**, write an opencode prompt to a unique temp file
-   (`mktemp`). It contains: the skill name and its checklist (the SKILL.md
-   checklist text or a faithful summary), the PR/branch metadata (repo, base
-   SHA, head SHA, file list), an instruction to inspect the diff via read-only
-   git/gh commands, and the exact per-agent output contract below.
-2. **Immediately launch the pass in the background** so it runs while the
-   native pass works:
-   `agent/_shared/run_opencode_review_agent.sh <your-role> --prompt-file <tmp>`
-   (Claude Code: the Bash tool's background mode; otherwise append `&`).
-   `<your-role>` is the worker role you are running as:
-   `pr-review-worker-deep` for `correctness-review`, `pr-review-worker-fast`
-   for everything else. The launcher owns model pinning and a hard timeout; do
-   not pass model flags.
-3. Run your native skill pass as specified above.
-4. Collect the background result. If the launcher exited zero and produced a
-   parseable report, **merge**: take the union of findings; collapse
-   near-duplicates (same `<path>:<line>` and the same defect) into one
-   finding. End every merged finding's description with its provenance:
-   `(flagged by: native)`, `(flagged by: opencode)`, or `(flagged by: both)`.
-   The merged report keeps the single-report contract and the 1500-word cap.
-5. **Degrade + note.** If the launcher exits non-zero (opencode missing,
-   timed out, errored) or returns nothing parseable, the native findings
-   stand unchanged;
-   mark every finding `(flagged by: native)` and append one final line to the
-   report: `_opencode pass skipped/failed: <one-line reason>._` Never block,
-   retry more than once, or drop native findings because the second pass
-   failed. CI has no opencode CLI, so this path is normal there.
+`lance-review` additionally requires live documentation access. Its Pi worker
+must fetch the required upstream pages through read-only Bash commands within
+the same 60-second command deadline. `correctness-review` needs no web access.
 
 Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
 
@@ -182,10 +285,7 @@ Each agent returns a Markdown block:
 
 Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
 
-Each finding's description ends with its `(flagged by: …)` provenance from the
-cross-model pass; a degraded pass still tags every finding
-`(flagged by: native)` and additionally appends the single
-`_opencode pass skipped/failed: …_` line after `### What looks good`.
+Each finding ends with `codex`, `openrouter`, or `both` provenance.
 
 ## Step 5: Aggregate findings
 
@@ -251,7 +351,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, prepend `OpenRouter failed; only Codex ran.` to the non-health portion of `review_body`.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 
@@ -269,13 +369,7 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
-- The structure is three-level and intentional: the main agent spawns the
-  project review orchestrator (you), which fans out one named review worker per
-  skill; each worker invokes its plugin skill via the Skill tool. The
-  orchestration is your contribution; each plugin skill's authoritative
-  checklist is the source of truth for its domain.
-- Each worker internally runs two model passes (native + opencode) but still
-  returns one report; the orchestrator's aggregation, tagging, and sentinel
-  contract are unchanged, and cross-skill findings are still never deduped —
-  only the within-worker native/opencode near-duplicates are collapsed.
+- Claude Code and Codex both invoke the Pi-native main agent → flat Tintin
+  worker structure. Every harness therefore uses the same checklist,
+  aggregation, audit, and fallback contracts.
 - For the concrete invocation pattern (parallel Agent tool calls in a single message, expected per-agent prompt shape), see the example trace recorded in PR #777's review history — that's the workflow this pipeline packages.
