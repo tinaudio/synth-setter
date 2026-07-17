@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784302936924,
+  "lastUpdate": 1784302938922,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15765,6 +15765,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.780606734199978,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b546321b7e0fc93cb00dd4a5416f998efbeeba4f",
+          "message": "refactor(data-pipeline): extract generic VST render base (#2060)\n\n* refactor(data-pipeline): extract generic VST render base\n\n* fix(data-pipeline): harden generic VST render registration\n\nReserve the shared vst group from synth registration, pin the real oracle eval config, and tighten generated/config-map prose.\n\nRefs #2018\n\n* fix(data-pipeline): reserve VST render name case-insensitively\n\nPrevent case-variant synth registrations from aliasing and overwriting the generic render base on case-insensitive filesystems.\n\nRefs #2018\n\n* docs(data-pipeline): focus VST render map description\n\nKeep the render source-map entry scoped to the generic defaults and synth identity contract.\n\nRefs #2018\n\n* fix(data-pipeline): harden render config registration",
+          "timestamp": "2026-07-17T11:13:24-04:00",
+          "tree_id": "fdc2ac6dbf2c0a22c25e0fe1aba41e4502a621b4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b546321b7e0fc93cb00dd4a5416f998efbeeba4f"
+        },
+        "date": 1784302938653,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.954024791717529,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.887740238010883,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0936439111828804,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002424299716949463,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.295398712158203,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.588188693999996,
             "unit": "seconds"
           }
         ]
