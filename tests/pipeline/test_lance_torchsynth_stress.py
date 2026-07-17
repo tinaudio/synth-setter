@@ -23,6 +23,7 @@ from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SP
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.workspace import operator_workspace
 
 _SAMPLE_RATE = 22_050
 _DURATION_SECONDS = 0.5
@@ -176,8 +177,7 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
 
     assert fragment_calls == 2
     assert any((shard / "data").iterdir())
-    with pytest.raises(ValueError):
-        lance.dataset(str(shard))
+    assert not any((shard / "_versions").glob("*.manifest"))
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg())
@@ -213,8 +213,6 @@ def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
     from hydra import compose, initialize_config_module
     from omegaconf import open_dict
 
-    from tests.conftest import _set_workspace_root
-
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
@@ -229,7 +227,7 @@ def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
             ],
         )
         with open_dict(cfg):
-            _set_workspace_root(cfg)
+            cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(tmp_path)
             cfg.paths.work_dir = str(tmp_path)
             cfg.paths.log_dir = str(tmp_path)
