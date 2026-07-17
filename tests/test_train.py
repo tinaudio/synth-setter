@@ -12,7 +12,6 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
@@ -22,7 +21,6 @@ import pytest
 import torch
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
-from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
@@ -56,6 +54,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.noise_capture import NoiseCaptureCallback
+from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
@@ -65,25 +64,6 @@ _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
-
-
-class _RecordingWandbLogger(WandbLogger):
-    """A W&B logger boundary fake that records consumed artifact references."""
-
-    def __init__(self) -> None:
-        self.used_artifacts: list[str] = []
-
-    @property
-    def experiment(self) -> Any:  # type: ignore[override]
-        """Return the recorder without initializing an external W&B run."""
-        return self
-
-    def use_artifact(self, name_alias: str) -> None:
-        """Record the artifact reference the training entrypoint consumes.
-
-        :param name_alias: W&B artifact name with its alias.
-        """
-        self.used_artifacts.append(name_alias)
 
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
