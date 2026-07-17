@@ -437,6 +437,45 @@ def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
     assert "2. **src/second.py:20** — Second finding." in report
 
 
+def test_extract_report_cli_normalizes_narrated_mixed_findings(tmp_path: Path) -> None:
+    """Write a valid canonical report from a narrated worker transcript.
+
+    :param tmp_path: Temporary location for transcript and report files.
+    """
+    transcript = tmp_path / "worker.jsonl"
+    report = tmp_path / "worker.md"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        "### WARN findings\\nThe following were observed.\\n"
+        "- **src/first.py:10** — First finding.\\n"
+        "2. **src/second.py:20** — Second finding.\\n\\n"
+        '### What looks good\\n- Clear."}}\n'
+    )
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+    python = sh.Command(sys.executable)
+
+    python(script, "extract-report", transcript, "--output", report)
+    python(
+        script,
+        "validate-report",
+        report,
+        "--skill",
+        "code-health",
+        "--target",
+        "smoke",
+    )
+
+    assert report.read_text() == (
+        "## code-health review — smoke\n\n"
+        "### BLOCK findings\nNone.\n\n"
+        "### WARN findings\n"
+        "1. **src/first.py:10** — First finding.\n"
+        "2. **src/second.py:20** — Second finding.\n\n"
+        "### What looks good\n- Clear.\n"
+    )
+
+
 def test_extract_report_rejects_duplicate_heading_after_good_section(
     tmp_path: Path,
 ) -> None:
