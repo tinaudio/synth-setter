@@ -1,10 +1,11 @@
 # Full-dataset RunPod template; the launcher injects commands, credentials, and provenance.
+# A run block would conflict with launcher command injection and is rejected.
 
 resources:
   cloud: runpod
   accelerators: { RTX3090:1, RTX4090:1, A40:1 }
   use_spot: false
-  # Pre-staging the 480k-example Lance dataset requires substantially more than the smoke default.
+  # Pre-staging 440k train examples (480k across all splits) exceeds the smoke disk.
   disk_size: 750
 
 envs:
