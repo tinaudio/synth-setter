@@ -1,42 +1,14 @@
-"""Lance-backed dataloading for VST datasets.
-
-``LanceShardFile`` adapts a Lance dataset directory — the format the data
-pipeline's writer and finalize steps emit via
-:func:`synth_setter.pipeline.data.lance_shard.write_lance_dataset` — to the
-minimal :class:`~synth_setter.data.vst_datamodule.ShardFile` read surface
-``VSTDataset`` consumes, so the Lance subclasses inherit every batching /
-normalization / OT behavior unchanged.
-
-``LanceVSTDataModule(loader="map")`` instead wires the native sample-indexed
-:class:`synth_setter.data.lance_torch.LanceMapDataset` into standard
-``DataLoader`` semantics, with :class:`PrepareBatchCollate` bridging batches
-into :func:`synth_setter.data.vst_datamodule.prepare_batch`.
-
-Example::
-
-    module = LanceVSTDataModule(
-        dataset_root="data",
-        param_spec_name=ParamSpecName("surge_xt"),
-        loader="map",
-    )
-    module.setup("fit")
-    batch = next(iter(module.train_dataloader()))
-"""
+"""Map-style Lance dataloading for VST training and evaluation."""
 
 from __future__ import annotations
 
-import logging
-import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Literal, cast
+from typing import cast
 
-import lance
 import numpy as np
-import pyarrow as pa
 import torch
-from lance.torch.data import get_safe_loader
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import ConditioningMode
@@ -44,9 +16,7 @@ from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
-    ShiftedBatchSampler,
     VSTDataModule,
-    VSTDataset,
     draw_generator_seed,
     load_dataset_statistics,
     prepare_batch,
@@ -54,182 +24,16 @@ from synth_setter.data.vst_datamodule import (
 )
 from synth_setter.param_spec_name import ParamSpecName
 
-logger = logging.getLogger(__name__)
+_FAKE_BATCHES_PER_EPOCH = 10_000
+_FAKE_AUDIO_SHAPE = (2, 44100 * 4)
+_FAKE_M2L_SHAPE = (128, 42)
+_FAKE_MEL_SHAPE = (2, 128, 401)
 
-
-class LanceColumn:
-    """``ShardColumn`` read view over one fixed-shape tensor column."""
-
-    def __init__(self, shard: LanceShardFile, name: str, inner_shape: tuple[int, ...]):
-        """Wrap one column of an open Lance shard.
-
-        :param shard: Open shard the reads go through.
-        :param name: Column name within the schema.
-        :param inner_shape: Per-row tensor shape from the schema.
-        """
-        self._shard = shard
-        self._name = name
-        # Backs the ``shape`` property; decode reads the shape from
-        # Arrow's tensor type, so reads don't consult this.
-        self._inner_shape = inner_shape
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """``(num_rows, *tensor_shape)``, mirroring ``ShardColumn.shape``.
-
-        :return: Row count followed by the per-row tensor shape.
-        """
-        return (self._shard.num_rows, *self._inner_shape)
-
-    def __getitem__(self, idx: slice | Sequence[int] | np.ndarray) -> np.ndarray:
-        """Materialize the selected rows as one numpy array.
-
-        :param idx: Slice (positive step) or per-row integer indices in any
-            order — ``LanceDataset.take`` preserves the requested order, so
-            unlike the single-file reader this needs no ascending contract.
-        :return: ``(len(idx), *tensor_shape)`` array of the column's dtype.
-        :raises ValueError: If the slice step is negative.
-        """
-        dataset = self._shard.live_dataset()
-        if isinstance(idx, slice):
-            start, stop, step = idx.indices(self._shard.num_rows)
-            if step < 1:
-                raise ValueError(f"slice step must be >= 1, got {step}")
-            if step == 1:
-                table = dataset.scanner(
-                    columns=[self._name], offset=start, limit=max(stop - start, 0)
-                ).to_table()
-            else:
-                table = dataset.take(list(range(start, stop, step)), columns=[self._name])
-        else:
-            table = dataset.take([int(i) for i in idx], columns=[self._name])
-        chunk = table.column(self._name).combine_chunks()
-        array = chunk.to_numpy_ndarray()
-        # Copy out of Arrow's read-only buffer: readers return writable arrays,
-        # and torch.from_numpy over a read-only view is undefined behavior on write.
-        return array if array.flags.writeable else array.copy()
-
-
-class LanceShardFile:
-    """Read-only adapter exposing a Lance dataset directory via the ``ShardFile`` read surface."""
-
-    def __init__(self, path: str | Path):
-        """Open the ``.lance`` shard dataset read-only.
-
-        :param path: Path to the ``.lance`` dataset directory.
-        :raises ValueError: If ``path`` is missing or is a file rather than a
-            Lance dataset directory — a stable contract independent of which
-            exception ``lance.dataset`` would raise.
-        """
-        path = Path(path)
-        self._path = str(path)
-        if path.is_file():
-            raise ValueError(
-                f"expected a Lance dataset directory, got a file "
-                f"(legacy single-file Lance shard?): {self._path}"
-            )
-        if not path.is_dir():
-            raise ValueError(f"Lance shard dataset was not found: {self._path}")
-        dataset = lance.dataset(self._path)
-        # count_rows()/schema each traverse the version manifest, so cache them
-        # once: the shard is immutable, and reads happen per training batch.
-        self.num_rows = dataset.count_rows()
-        self._inner_shapes = {
-            field.name: tuple(cast(pa.FixedShapeTensorType, field.type).shape)
-            for field in dataset.schema
-        }
-        self._dataset: lance.LanceDataset | None = dataset
-        self._pid = os.getpid()
-        self._closed = False
-
-    def __getstate__(self) -> dict[str, object]:
-        """Drop the native handle before sending this shard to a spawned worker.
-
-        :returns: Pickle state that recreates the handle in the receiving process.
-        """
-        state = self.__dict__.copy()
-        state["_dataset"] = None
-        state["_pid"] = None
-        return state
-
-    def live_dataset(self) -> lance.LanceDataset:
-        """Return the dataset handle, reopening after a process boundary.
-
-        Lance datasets are process-local, so each DataLoader worker opens its own handle on first
-        read.
-
-        :return: Dataset handle owned by the current process.
-        :raises ValueError: If the shard has been closed.
-        """
-        if self._closed:
-            raise ValueError("I/O on closed LanceShardFile")
-        if self._dataset is None or os.getpid() != self._pid:
-            self._dataset = lance.dataset(self._path)
-            self._pid = os.getpid()
-        return self._dataset
-
-    def __getitem__(self, name: str) -> LanceColumn:
-        """Return the named column view.
-
-        :param name: Column name in the Lance schema (e.g. ``"mel_spec"``).
-        :return: Lazy read view over that column.
-        :raises KeyError: If the schema has no such column — at lookup, not on first read.
-        :raises ValueError: If the shard has been closed.
-        """
-        if self._closed:
-            raise ValueError("I/O on closed LanceShardFile")
-        if name not in self._inner_shapes:
-            raise KeyError(name)
-        return LanceColumn(self, name, self._inner_shapes[name])
-
-    def __bool__(self) -> bool:
-        """Mirror ``ShardFile`` truthiness: True while open, False after ``close``.
-
-        :return: Whether the shard is still open.
-        """
-        return not self._closed
-
-    def close(self) -> None:
-        """Release the underlying Lance dataset handle (idempotent)."""
-        self._dataset = None
-        self._closed = True
-
-
-class LanceVSTDataset(VSTDataset):
-    """``VSTDataset`` reading a ``.lance`` dataset directory."""
-
-    def __getstate__(self) -> dict[str, object]:
-        """Remove the generator state that cannot cross a spawned worker boundary.
-
-        :returns: Pickle state with a generator recreated by ``__setstate__``.
-        """
-        state = self.__dict__.copy()
-        state["generator"] = None
-        state["_worker_reseed_done"] = False
-        return state
-
-    def __setstate__(self, state: dict[str, object]) -> None:
-        """Restore a spawned worker's dataset state with a local generator.
-
-        :param state: Pickle state supplied by ``__getstate__``.
-        """
-        self.__dict__.update(state)
-        self.generator = torch.Generator()
-
-    def _open(self, dataset_file: str | Path) -> LanceShardFile:
-        """Open the ``.lance`` shard dataset read-only.
-
-        :param dataset_file: Path to the ``.lance`` dataset directory.
-        :return: Adapter handle the base-class readers consume.
-        """
-        return LanceShardFile(dataset_file)
+ModelBatch = dict[str, torch.Tensor | None]
 
 
 class PrepareBatchCollate:
-    """Adapt pre-collated map batches through ``prepare_batch`` with a process-local RNG.
-
-    The RNG is dropped on pickle and lazily seeded from the worker seed or global RNG draw.
-    """
+    """Transform pre-collated Lance columns with a process-local noise RNG."""
 
     def __init__(
         self,
@@ -239,12 +43,12 @@ class PrepareBatchCollate:
         rescale_params: bool,
         ot: bool,
     ) -> None:
-        """Fix the per-batch semantics this collate applies.
+        """Configure model-batch transformation semantics.
 
-        :param mean: Mel mean to subtract, or ``None`` to skip normalization.
-        :param std: Mel std to divide by, or ``None`` to skip normalization.
-        :param rescale_params: Whether to map params from ``[0, 1]`` to ``[-1, 1]``.
-        :param ot: Whether to Hungarian-match noise to params per batch.
+        :param mean: Mel mean, or ``None`` to skip normalization.
+        :param std: Mel standard deviation, or ``None`` to skip normalization.
+        :param rescale_params: Whether to map parameters to ``[-1, 1]``.
+        :param ot: Whether to Hungarian-match noise to parameters.
         """
         self.mean = mean
         self.std = std
@@ -259,19 +63,18 @@ class PrepareBatchCollate:
         self._generator: torch.Generator | None = None
 
     def __getstate__(self) -> dict[str, object]:
-        """Drop the unpicklable generator so spawn workers can receive the collate.
+        """Drop the process-local generator before worker serialization.
 
-        :returns: ``__dict__`` copy with ``_generator`` reset to ``None``.
+        :returns: Pickle state with a lazily recreated generator.
         """
         state = self.__dict__.copy()
         state["_generator"] = None
         return state
 
     def _live_generator(self) -> torch.Generator:
-        """Return this process's noise RNG, creating and seeding it on first use.
+        """Return this process's lazily seeded noise generator.
 
-        :returns: Generator seeded from the worker seed (inside a worker) or the construction-time
-            global-RNG draw (in-process loading).
+        :returns: Generator namespaced by worker and distributed rank.
         """
         generator = self._generator
         if generator is None:
@@ -286,15 +89,14 @@ class PrepareBatchCollate:
             self._generator = generator
         return generator
 
-    def __call__(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
-        """Turn one pre-collated column batch into model-ready tensors.
+    def __call__(self, batch: object) -> ModelBatch:
+        """Convert stored Lance columns to the model batch contract.
 
-        :param batch: Column-name-to-tensor mapping from ``__getitems__``;
-            column names match the :class:`RawBatch` keys.
-        :returns: ``prepare_batch`` output — ``{"mel_spec", "m2l", "params",
-            "noise", "audio"}`` float32 tensors, ``None`` for unread modalities.
+        :param batch: Pre-collated stored columns from :class:`LanceMapDataset`.
+        :returns: Float32 model batch with generated noise.
         """
-        raw = cast(RawBatch, {name: tensor.numpy() for name, tensor in batch.items()})
+        columns = cast(dict[str, torch.Tensor], batch)
+        raw = cast(RawBatch, {name: tensor.numpy() for name, tensor in columns.items()})
         return prepare_batch(
             raw,
             mean=self.mean,
@@ -305,16 +107,102 @@ class PrepareBatchCollate:
         )
 
 
+class _FakeMapDataset(torch.utils.data.Dataset):
+    """Sample-indexed synthetic dataset retaining the historical fake batch contract."""
+
+    def __init__(
+        self,
+        *,
+        batch_size: int,
+        num_params: int,
+        read_audio: bool,
+        conditioning: ConditioningMode,
+    ) -> None:
+        """Configure synthetic sample shapes and epoch length.
+
+        :param batch_size: Samples per batch, used to retain 10,000 batches per epoch.
+        :param num_params: Width of parameter and noise tensors.
+        :param read_audio: Whether generated samples include prediction audio.
+        :param conditioning: Synthetic conditioning modality to populate.
+        """
+        self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
+        self._num_params = num_params
+        self._read_audio = read_audio
+        self._conditioning = conditioning
+
+    def __len__(self) -> int:
+        """Return the sample count corresponding to 10,000 full batches.
+
+        :returns: Effective samples per epoch.
+        """
+        return self._num_rows
+
+    def _batch(self, num_rows: int) -> ModelBatch:
+        """Draw one synthetic model batch from the worker's global RNG.
+
+        :param num_rows: Number of requested sample indices.
+        :returns: Model-ready random tensors with the configured shapes.
+        """
+        audio = torch.randn(num_rows, *_FAKE_AUDIO_SHAPE) if self._read_audio else None
+        mel_spec = (
+            torch.randn(num_rows, *_FAKE_MEL_SHAPE)
+            if self._conditioning == "mel"
+            else None
+        )
+        m2l = (
+            torch.randn(num_rows, *_FAKE_M2L_SHAPE)
+            if self._conditioning == "m2l"
+            else None
+        )
+        params = torch.rand(num_rows, self._num_params) * 2 - 1
+        noise = torch.randn_like(params)
+        return {
+            "mel_spec": mel_spec,
+            "m2l": m2l,
+            "params": params,
+            "noise": noise,
+            "audio": audio,
+        }
+
+    def __getitems__(self, indices: Sequence[int]) -> ModelBatch:
+        """Draw one pre-collated batch for requested sample indices.
+
+        :param indices: Sample indices selected by the dataloader.
+        :returns: Synthetic batch with ``len(indices)`` rows.
+        """
+        return self._batch(len(indices))
+
+    def __getitem__(self, index: int) -> ModelBatch:
+        """Draw one synthetic sample.
+
+        :param index: Sample index; values are synthetic and index-independent.
+        :returns: Model batch fields without a leading batch dimension.
+        """
+        del index
+        batch = self._batch(1)
+        return {name: value[0] if value is not None else None for name, value in batch.items()}
+
+
+def _model_batch_passthrough(batch: object) -> ModelBatch:
+    """Return a pre-collated synthetic batch unchanged.
+
+    :param batch: Synthetic model batch.
+    :returns: The same batch.
+    """
+    return cast(ModelBatch, batch)
+
+
 class _RepeatFirstBatchDataset(torch.utils.data.Dataset):
     """Fold every requested sample index into the first full batch."""
 
-    def __init__(self, dataset: LanceMapDataset, batch_size: int) -> None:
-        """Wrap a map dataset with repeat-mode index folding.
+    def __init__(
+        self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int
+    ) -> None:
+        """Wrap a map dataset with first-batch index folding.
 
-        :param dataset: Sample-indexed dataset to read.
-        :param batch_size: Row modulus every index is folded into.
-        :raises ValueError: If the dataset holds less than one full batch — flooring would
-            otherwise yield a silently empty epoch.
+        :param dataset: Sample-indexed real or synthetic dataset.
+        :param batch_size: Row modulus used for index folding.
+        :raises ValueError: If the dataset has less than one full batch.
         """
         num_rows = len(dataset)
         if num_rows < batch_size:
@@ -325,84 +213,87 @@ class _RepeatFirstBatchDataset(torch.utils.data.Dataset):
         self._dataset = dataset
         self._num_rows = num_rows - num_rows % batch_size
         self._batch_size = batch_size
+        self._frozen_batch = (
+            dataset.__getitems__(range(batch_size))
+            if isinstance(dataset, _FakeMapDataset)
+            else None
+        )
 
     def __len__(self) -> int:
-        """Return the epoch length floored to complete batches.
+        """Return the source row count floored to complete batches.
 
-        :returns: Row count floored to a multiple of the batch size.
+        :returns: Effective sample count.
         """
         return self._num_rows
 
-    def __getitems__(self, indices: Sequence[int]) -> dict[str, torch.Tensor]:
-        """Read requested indices after folding them into the first batch.
+    def __getitems__(self, indices: Sequence[int]) -> ModelBatch:
+        """Read requested rows after folding indices into the first batch.
 
-        :param indices: Row indices supplied by the active sampler.
-        :returns: Pre-collated column tensors from the wrapped dataset.
+        :param indices: Sample indices selected by the dataloader.
+        :returns: Pre-collated model or stored columns.
         """
-        return self._dataset.__getitems__([i % self._batch_size for i in indices])
+        folded = [index % self._batch_size for index in indices]
+        if self._frozen_batch is not None:
+            return {
+                name: value[folded] if value is not None else None
+                for name, value in self._frozen_batch.items()
+            }
+        return cast(ModelBatch, self._dataset.__getitems__(folded))
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        """Read one index after folding it into the first batch.
+    def __getitem__(self, index: int) -> ModelBatch:
+        """Read one row after folding its index into the first batch.
 
-        :param index: Row index supplied by the active sampler.
-        :returns: One row from the wrapped dataset.
+        :param index: Sample index selected by the dataloader.
+        :returns: One row of model or stored columns.
         """
-        return self._dataset[index % self._batch_size]
+        batch = self.__getitems__([index])
+        return {name: value[0] if value is not None else None for name, value in batch.items()}
+
+
+_SplitDataset = LanceMapDataset | _FakeMapDataset
 
 
 @dataclass(frozen=True)
 class _MapSplit:
-    """One split's map-path pieces.
+    """Dataset and collate operation for one Lightning split.
 
     .. attribute :: dataset
 
-        Sample-indexed dataset the split's loader reads.
+       Sample-indexed dataset for this split.
 
     .. attribute :: collate
 
-        Collate carrying the split's batch semantics (stats, rescale, OT).
+       Batch transformation applied after sample retrieval.
     """
 
-    dataset: LanceMapDataset
-    collate: PrepareBatchCollate
+    dataset: _SplitDataset
+    collate: Callable[[object], ModelBatch]
 
 
 class LanceVSTDataModule(VSTDataModule):
-    """Read Lance splits through either the batch-indexed legacy or sample-indexed map path.
-
-    Fake mode remains in-memory on the legacy path; map evaluation preserves ragged tails.
-
-    .. attribute :: dataset_cls
-
-        Dataset class each split opens on the legacy path (``LanceVSTDataset``).
-
-    .. attribute :: shard_suffix
-
-        Shard filename suffix selecting ``*.lance`` splits.
+    """Read every VST split through sample-indexed map semantics.
 
     .. attribute :: train_dataset
 
-        Training dataset for the selected loader path.
+       Sample-indexed training dataset.
 
     .. attribute :: val_dataset
 
-        Validation dataset for the selected loader path.
+       Sample-indexed validation dataset.
 
     .. attribute :: test_dataset
 
-        Test dataset for the selected loader path.
+       Sample-indexed test dataset.
 
     .. attribute :: predict_dataset
 
-        Prediction dataset for the selected loader path.
+       Sample-indexed prediction dataset.
     """
 
-    dataset_cls: ClassVar[type[VSTDataset]] = LanceVSTDataset
-    shard_suffix: ClassVar[str] = ".lance"
-    train_dataset: VSTDataset | LanceMapDataset
-    val_dataset: VSTDataset | LanceMapDataset
-    test_dataset: VSTDataset | LanceMapDataset
-    predict_dataset: VSTDataset | LanceMapDataset
+    train_dataset: _SplitDataset
+    val_dataset: _SplitDataset
+    test_dataset: _SplitDataset
+    predict_dataset: _SplitDataset
 
     def __init__(
         self,
@@ -419,36 +310,24 @@ class LanceVSTDataModule(VSTDataModule):
         conditioning: ConditioningMode = "mel",
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
-        loader: Literal["legacy", "map"] = "legacy",
         persistent_workers: bool = False,
     ) -> None:
-        """Store the loader selection on top of the base datamodule config.
+        """Store map-style Lance loader configuration.
 
-        Mirrors the base signature explicitly (rather than ``*args``
-        pass-through) so call sites keep full type checking.
-
-        :param dataset_root: Local directory holding the per-split ``.lance`` datasets.
-        :param download_dataset_root_uri: R2 URI to hydrate ``dataset_root`` from, or
-            ``None`` to use the local directory as-is.
-        :param use_saved_mean_and_variance: Whether to load and apply saved mel stats.
-        :param batch_size: Number of samples per batch.
-        :param ot: Whether to optimal-transport match noise to params per batch.
-        :param num_workers: Number of dataloader worker processes.
-        :param fake: Whether datasets synthesise random batches instead of reading shards.
-        :param repeat_first_batch: Whether every batch repeats the first one.
-        :param predict_file: Dataset used for prediction; defaults to the test split.
-        :param conditioning: Conditioning feature, either ``"mel"`` or ``"m2l"``.
-        :param pin_memory: Whether dataloaders pin memory for faster host-to-device copies.
-        :param param_spec_name: Registry key selecting the param spec width.
-        :param loader: Read path per split: ``"legacy"`` (batch-indexed
-            adapter) or ``"map"`` (sample-indexed ``LanceMapDataset``).
-        :param persistent_workers: Whether dataloader workers survive iterator resets.
-        :raises ValueError: If ``loader`` is unknown or worker persistence has no workers.
+        :param dataset_root: Local directory holding per-split Lance datasets.
+        :param download_dataset_root_uri: R2 URI used to hydrate ``dataset_root``.
+        :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
+        :param batch_size: Samples per model batch.
+        :param ot: Whether training batches use optimal-transport matching.
+        :param num_workers: Worker processes per dataloader.
+        :param fake: Whether to synthesize samples instead of reading Lance.
+        :param repeat_first_batch: Whether non-predict loaders repeat their first batch.
+        :param predict_file: Prediction split; defaults to ``test.lance``.
+        :param conditioning: Conditioning feature, ``"mel"`` or ``"m2l"``.
+        :param pin_memory: Whether dataloaders pin returned tensors.
+        :param param_spec_name: Registry key selecting parameter width.
+        :param persistent_workers: Whether positive worker counts persist between iterators.
         """
-        if loader not in ("legacy", "map"):
-            raise ValueError(f"loader must be 'legacy' or 'map', got {loader!r}")
-        if persistent_workers and num_workers == 0:
-            raise ValueError("persistent_workers requires num_workers > 0")
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -463,44 +342,10 @@ class LanceVSTDataModule(VSTDataModule):
             pin_memory=pin_memory,
             param_spec_name=param_spec_name,
         )
-        self.loader = loader
         self.persistent_workers = persistent_workers
-        self._map_splits: dict[str, _MapSplit] = {}
+        self._splits: dict[str, _MapSplit] = {}
 
-    def _legacy_dataloader(
-        self,
-        dataset: VSTDataset,
-        *,
-        sampler: ShiftedBatchSampler | None = None,
-    ) -> DataLoader:
-        """Build a legacy loader that isolates Lance handles in spawned workers.
-
-        :param dataset: Split dataset the loader reads.
-        :param sampler: Optional training sampler; ``None`` keeps sequential order.
-        :returns: Dataloader over ``dataset``.
-        """
-        loader_kwargs = {
-            "batch_size": None,
-            "num_workers": self.num_workers,
-            "pin_memory": self.pin_memory,
-            "sampler": sampler,
-            "shuffle": False,
-            "persistent_workers": self.persistent_workers,
-        }
-        if self.num_workers == 0:
-            return DataLoader(dataset, **loader_kwargs)
-        return get_safe_loader(dataset, **loader_kwargs)
-
-    @property
-    def _map_mode(self) -> bool:
-        """Whether dataloading goes through the sample-indexed map path.
-
-        :returns: True for ``loader="map"`` outside fake mode; fake batches
-            are synthesized in memory, so they stay on the legacy path.
-        """
-        return self.loader == "map" and not self.fake
-
-    def _build_map_split(
+    def _build_lance_split(
         self,
         shard_path: Path,
         *,
@@ -508,84 +353,109 @@ class LanceVSTDataModule(VSTDataModule):
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
     ) -> _MapSplit:
-        """Build one split's map dataset and collate.
+        """Build one real Lance split and its batch transformer.
 
-        :param shard_path: ``.lance`` dataset directory of the split.
-        :param ot: Whether this split Hungarian-matches noise to params.
-        :param read_audio: Whether to project the ``audio`` column.
-        :param stats: Mel ``(mean, std)`` to normalize with, or ``None`` to skip.
-        :returns: The split's dataset/collate pair.
+        :param shard_path: Lance dataset directory.
+        :param ot: Whether to match batch noise to parameters.
+        :param read_audio: Whether to project prediction audio.
+        :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
+        :returns: Sample-indexed dataset and collate operation.
         """
         columns = ["param_array"]
         columns.append("mel_spec" if self.conditioning == "mel" else "music2latent")
         if read_audio:
             columns.append("audio")
-        dataset = LanceMapDataset(shard_path, columns=columns)
         mean, std = stats if stats is not None else (None, None)
-        collate = PrepareBatchCollate(mean=mean, std=std, rescale_params=True, ot=ot)
-        return _MapSplit(dataset=dataset, collate=collate)
+        return _MapSplit(
+            dataset=LanceMapDataset(shard_path, columns=columns),
+            collate=PrepareBatchCollate(
+                mean=mean,
+                std=std,
+                rescale_params=True,
+                ot=ot,
+            ),
+        )
+
+    def _build_fake_split(self, *, num_params: int, read_audio: bool) -> _MapSplit:
+        """Build one sample-indexed in-memory split.
+
+        :param num_params: Selected parameter-spec width.
+        :param read_audio: Whether prediction audio is generated.
+        :returns: Synthetic dataset and pass-through collate.
+        """
+        return _MapSplit(
+            dataset=_FakeMapDataset(
+                batch_size=self.batch_size,
+                num_params=num_params,
+                read_audio=read_audio,
+                conditioning=self.conditioning,
+            ),
+            collate=_model_batch_passthrough,
+        )
 
     def setup(self, stage: str | None = None) -> None:
-        """Build per-split datasets for the selected loader path.
+        """Build all sample-indexed train, validation, test, and prediction splits.
 
-        :param stage: Lightning stage hint; unused because every split is constructed eagerly
-            (matching the legacy path).
+        :param stage: Lightning stage hint; all splits are built eagerly.
         """
-        if not self._map_mode:
-            if self.loader == "map" and self.fake:
-                logger.info(
-                    "fake mode ignores loader='map': batches use the legacy in-memory path"
+        del stage
+        num_params = len(resolve_param_spec(self.param_spec_name))
+        if self.fake:
+            self._splits = {
+                "train": self._build_fake_split(num_params=num_params, read_audio=False),
+                "val": self._build_fake_split(num_params=num_params, read_audio=False),
+                "test": self._build_fake_split(num_params=num_params, read_audio=False),
+                "predict": self._build_fake_split(num_params=num_params, read_audio=True),
+            }
+        else:
+            train_shard = self.dataset_root / f"train{self.shard_suffix}"
+            split_stats = predict_stats = None
+            if self.use_saved_mean_and_variance:
+                split_stats = load_dataset_statistics(train_shard)
+                predict_stats = (
+                    split_stats
+                    if self.predict_file.parent == self.dataset_root
+                    else load_dataset_statistics(self.predict_file)
                 )
-            super().setup(stage)
-            return
-        resolve_param_spec(self.param_spec_name)
-        train_shard = self.dataset_root / f"train{self.shard_suffix}"
-        split_stats = predict_stats = None
-        if self.use_saved_mean_and_variance:
-            # train/val/test share the root's stats.npz; only a predict_file
-            # outside the root carries its own.
-            split_stats = load_dataset_statistics(train_shard)
-            predict_stats = (
-                split_stats
-                if self.predict_file.parent == self.dataset_root
-                else load_dataset_statistics(self.predict_file)
-            )
-        self._map_splits = {
-            "train": self._build_map_split(
-                train_shard, ot=self.ot, read_audio=False, stats=split_stats
-            ),
-            "val": self._build_map_split(
-                self.dataset_root / f"val{self.shard_suffix}",
-                ot=False,
-                read_audio=False,
-                stats=split_stats,
-            ),
-            "test": self._build_map_split(
-                self.dataset_root / f"test{self.shard_suffix}",
-                ot=False,
-                read_audio=False,
-                stats=split_stats,
-            ),
-            "predict": self._build_map_split(
-                self.predict_file, ot=False, read_audio=True, stats=predict_stats
-            ),
-        }
-        self.train_dataset = self._map_splits["train"].dataset
-        self.val_dataset = self._map_splits["val"].dataset
-        self.test_dataset = self._map_splits["test"].dataset
-        self.predict_dataset = self._map_splits["predict"].dataset
+            self._splits = {
+                "train": self._build_lance_split(
+                    train_shard, ot=self.ot, read_audio=False, stats=split_stats
+                ),
+                "val": self._build_lance_split(
+                    self.dataset_root / f"val{self.shard_suffix}",
+                    ot=False,
+                    read_audio=False,
+                    stats=split_stats,
+                ),
+                "test": self._build_lance_split(
+                    self.dataset_root / f"test{self.shard_suffix}",
+                    ot=False,
+                    read_audio=False,
+                    stats=split_stats,
+                ),
+                "predict": self._build_lance_split(
+                    self.predict_file,
+                    ot=False,
+                    read_audio=True,
+                    stats=predict_stats,
+                ),
+            }
+        self.train_dataset = self._splits["train"].dataset
+        self.val_dataset = self._splits["val"].dataset
+        self.test_dataset = self._splits["test"].dataset
+        self.predict_dataset = self._splits["predict"].dataset
 
-    def _map_dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
-        """Build the sample-indexed loader for one set-up split.
+    def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
+        """Build one standard map-style dataloader.
 
-        :param split: Split key in ``_map_splits``.
-        :param shuffle: Whether the sampler permutes row order.
-        :param drop_last: Whether a ragged final batch is dropped.
-        :returns: DataLoader yielding ``prepare_batch`` model batches.
+        :param split: Split key created by :meth:`setup`.
+        :param shuffle: Whether to randomize sample order.
+        :param drop_last: Whether to discard a ragged final batch.
+        :returns: Dataloader yielding model-ready batches.
         """
-        pieces = self._map_splits[split]
+        pieces = self._splits[split]
         repeats_first_batch = self.repeat_first_batch and split != "predict"
-        dataset: torch.utils.data.Dataset = pieces.dataset
+        dataset = pieces.dataset
         if repeats_first_batch:
             dataset = _RepeatFirstBatchDataset(pieces.dataset, self.batch_size)
         return map_dataloader_over(
@@ -600,64 +470,44 @@ class LanceVSTDataModule(VSTDataModule):
         )
 
     def train_dataloader(self) -> DataLoader:
-        """Shuffle full training batches, dropping the ragged tail on the map path.
+        """Return the shuffled training loader with ragged tails dropped.
 
-        :returns: Legacy batch-indexed or map sample-indexed training loader.
+        :returns: Sample-indexed training dataloader.
         """
-        if not self._map_mode:
-            return self._legacy_dataloader(
-                cast(VSTDataset, self.train_dataset),
-                sampler=ShiftedBatchSampler(self.batch_size, len(self.train_dataset)),
-            )
-        # drop_last matches legacy's floor-divide: a trailing short batch (down
-        # to size 1) would break batch-statistics layers during training.
-        return self._map_dataloader("train", shuffle=True, drop_last=True)
+        return self._dataloader("train", shuffle=True, drop_last=True)
 
     def val_dataloader(self) -> DataLoader:
-        """Preserve validation row order and any ragged tail on the map path.
+        """Return the ordered validation loader, retaining a ragged tail.
 
-        :returns: Sequential validation loader for the selected storage path.
+        :returns: Sample-indexed validation dataloader.
         """
-        if not self._map_mode:
-            return self._legacy_dataloader(cast(VSTDataset, self.val_dataset))
-        return self._map_dataloader("val", shuffle=False, drop_last=False)
+        return self._dataloader("val", shuffle=False, drop_last=False)
 
     def test_dataloader(self) -> DataLoader:
-        """Preserve test row order and any ragged tail on the map path.
+        """Return the ordered test loader, retaining a ragged tail.
 
-        :returns: Sequential test loader for the selected storage path.
+        :returns: Sample-indexed test dataloader.
         """
-        if not self._map_mode:
-            return self._legacy_dataloader(cast(VSTDataset, self.test_dataset))
-        return self._map_dataloader("test", shuffle=False, drop_last=False)
+        return self._dataloader("test", shuffle=False, drop_last=False)
 
     def predict_dataloader(self) -> DataLoader:
-        """Preserve prediction row order, projected audio, and any ragged tail on the map path.
+        """Return the ordered prediction loader including source audio.
 
-        :returns: Sequential prediction loader including ground-truth audio.
+        :returns: Sample-indexed prediction dataloader.
         """
-        if not self._map_mode:
-            return self._legacy_dataloader(cast(VSTDataset, self.predict_dataset))
-        return self._map_dataloader("predict", shuffle=False, drop_last=False)
+        return self._dataloader("predict", shuffle=False, drop_last=False)
 
     def teardown(self, stage: str | None = None) -> None:
-        """Release split resources for the selected loader path.
+        """Release references to process-local Lance datasets.
 
-        :param stage: Lightning stage hint; unused because all splits are released together.
+        :param stage: Lightning stage hint; all splits are released together.
         """
-        if not self._map_mode:
-            super().teardown(stage)
-            return
-        # LanceMapDataset has no close API: handles open lazily per process
-        # and are released with the references.
-        self._map_splits = {}
+        del stage
+        self._splits = {}
         for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
             if hasattr(self, name):
                 delattr(self, name)
 
 
-# Complete deprecated bindings deferred by the circular base-module import.
-from synth_setter.data import vst_datamodule as _vst_datamodule
-
-_vst_datamodule.SurgeXTDataset = LanceVSTDataset
-_vst_datamodule.SurgeDataModule = LanceVSTDataModule
+SurgeXTDataset = LanceMapDataset
+SurgeDataModule = LanceVSTDataModule

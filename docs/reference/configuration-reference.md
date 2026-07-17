@@ -87,6 +87,8 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - `datamodule.num_workers` applies to *each* dataloader, so enabling validation
   doubles the live worker count — size it against host RAM, not core count
   (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
+- VST configs set `datamodule.persistent_workers=true`; it is effective only when
+  `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
 - `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one

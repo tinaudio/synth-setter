@@ -180,9 +180,8 @@ def _run_oracle_eval_subprocess(
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",
         "+logger.wandb.resume=must",
-        # VSTDataset floors len to samples // batch_size; the 128 default
-        # would yield zero batches on the smoke-sized test split (4 samples),
-        # so predict_step never runs and no audio/* metric is logged — see #1331.
+        # One-row batches keep smoke evaluation artifacts sample-indexed and
+        # avoid coupling downstream render assertions to batch unpacking.
         "datamodule.batch_size=1",
         # Forwarded from the generate run so the eval honours the same worker
         # count; pass 0 on Darwin where the Lance shard handle isn't fork-safe.

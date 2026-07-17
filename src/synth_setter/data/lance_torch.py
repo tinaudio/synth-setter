@@ -1,9 +1,8 @@
 """Native ``lance.torch`` dataloaders over Lance shard/split datasets.
 
 Thin factories over Lance's own PyTorch integration (``LanceDataset``,
-``SafeLanceDataset``, ``ShardedBatchSampler``) rather than the batch-indexed
-adapter in :mod:`synth_setter.data.lance_datamodule`. Both loaders stream
-object storage natively: pass ``storage_options`` (see
+``SafeLanceDataset``, ``ShardedBatchSampler``). Both map and iterable loaders
+stream object storage natively: pass ``storage_options`` (see
 :func:`synth_setter.pipeline.r2_io.r2_storage_options`) with an ``s3://`` URI.
 
 Typical usage::
@@ -181,12 +180,11 @@ def map_dataloader_over(
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
-    :returns: DataLoader over ``dataset``.
-    :raises ValueError: If worker persistence is enabled without worker processes.
+    :returns: DataLoader over ``dataset``. Worker persistence is disabled when
+        ``num_workers`` is zero.
     """
-    if persistent_workers and num_workers == 0:
-        raise ValueError("persistent_workers requires num_workers > 0")
     effective_collate = collate_fn or _prebatched_collate
+    effective_persistence = persistent_workers and num_workers > 0
     effective_shuffle = None if sampler is not None else shuffle
     if num_workers == 0:
         # get_safe_loader requires workers; plain DataLoader supports in-process loading.
@@ -200,7 +198,7 @@ def map_dataloader_over(
             collate_fn=typed_collate,
             pin_memory=pin_memory,
             drop_last=drop_last,
-            persistent_workers=persistent_workers,
+            persistent_workers=effective_persistence,
         )
     return get_safe_loader(
         dataset,
@@ -211,7 +209,7 @@ def map_dataloader_over(
         collate_fn=effective_collate,
         pin_memory=pin_memory,
         drop_last=drop_last,
-        persistent_workers=persistent_workers,
+        persistent_workers=effective_persistence,
     )
 
 
@@ -245,10 +243,8 @@ def lance_map_dataloader(
     :param persistent_workers: Whether worker processes survive across iterator resets.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
-    :raises ValueError: If worker persistence is enabled without worker processes.
+        Worker persistence is disabled when ``num_workers`` is zero.
     """
-    if persistent_workers and num_workers == 0:
-        raise ValueError("persistent_workers requires num_workers > 0")
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
         "lance map dataloader: uri=%s rows=%d columns=%s batch_size=%d num_workers=%d",

@@ -367,9 +367,10 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
     datamodule = object_dict["datamodule"]
-    assert datamodule.train_dataset.num_params == expected_width
-    sample = datamodule.train_dataset[0]
-    assert sample["params"].shape == (2, expected_width)
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, expected_width)
+    datamodule.teardown("fit")
 
 
 def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
@@ -415,18 +416,16 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
 @pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
 def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) -> None:
-    """Run training of the Surge XT model on the smoke test fixture, across both experiments and Lance dataloaders.
+    """Train both Surge XT smoke experiments through the map-style Lance datamodule.
 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
     ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
     oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
     oracle stopped being an oracle); meaningful loss-progression coverage comes from
-    the ``surge/ffn_full`` leg. Parametrized over the legacy and map Lance dataloaders so
-    both train through the real Surge XT render.
+    the ``surge/ffn_full`` leg. Both train through the real Surge XT render.
 
-    :param cfg_surge_real_train: Surge XT training config (parametrized over experiment and
-        Lance dataloader).
+    :param cfg_surge_real_train: Surge XT training config parametrized over experiment.
     :param experiment_name: Hydra experiment override the cfg was built from — drives
         the oracle-specific tight bound below.
     """
@@ -463,7 +462,7 @@ def test_train_eval_surge_xt(
     param_spec_name: str,
     experiment_name: str,
 ) -> None:
-    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint, for the Lance dataloader arm.
+    """Train Surge XT briefly, then evaluate its checkpoint through Lance.
 
     :param tmp_path: The temporary logging path.
     :param cfg_surge_real_train: Surge XT smoke-test training config (Lance).
@@ -634,26 +633,21 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-@pytest.mark.parametrize("loader", ["legacy", "map"])
-def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig, loader: str) -> None:
+def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
     """Run one spawned-worker train, val, and test step from Lance shards.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
     reads end-to-end through the in-process ``train(cfg)`` entrypoint with
     spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Parametrized over the datamodule's ``loader`` switch so both the
-    legacy batch-indexed path and sample-indexed ``lance.torch`` map path train.
-    Also pins the
+    fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
-    :param loader: Datamodule read path under test (``legacy`` or ``map``).
     """
     with open_dict(cfg_train_lance):
         cfg_train_lance.datamodule.num_workers = 1
-        cfg_train_lance.datamodule.loader = loader
     HydraConfig().set_config(cfg_train_lance)
     _, object_dict = train(cfg_train_lance)
 
@@ -692,23 +686,18 @@ def test_train_lance_records_dataset_lineage_from_local_spec(
     assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
 
 
-@pytest.mark.parametrize("loader", ["legacy", "map"])
-def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig, loader: str) -> None:
+def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:
     """Two ``train(cfg)`` runs under one ``cfg.seed`` consume identical batch noise.
 
-    Pins the operator-facing seeding contract: batch noise is drawn from a
-    per-dataset generator (legacy path) or ``PrepareBatchCollate`` (map path),
-    both governed by ``seed_everything(cfg.seed, workers=True)``. Runs
-    ``num_workers=0`` because forking workers over Lance deadlocks on the
-    parent's tokio threadpool; the forked-worker re-seed is covered over Lance
-    by ``tests/data/test_vst_datamodule.py::TestNoiseGeneratorSeeding``.
+    Pins the operator-facing seeding contract: ``PrepareBatchCollate`` noise is
+    governed by ``seed_everything(cfg.seed, workers=True)``. This isolates the
+    in-process stream; spawned-worker stream behavior is covered in
+    ``tests/data/test_lance_map_datamodule.py::TestLanceMapDataModuleModes``.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
-    :param loader: Datamodule read path under test (``legacy`` or ``map``).
     """
     HydraConfig().set_config(cfg_train_lance)
     with open_dict(cfg_train_lance):
-        cfg_train_lance.datamodule.loader = loader
         cfg_train_lance.seed = 1234
         cfg_train_lance.callbacks.noise_capture = {
             "_target_": "tests.helpers.noise_capture.NoiseCaptureCallback"
@@ -736,7 +725,7 @@ def test_train_surge_fake(
     """Run the Surge smoke training matrix over the fake-plugin Lance splits.
 
     :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
-    :param surge_smoke_variant: Lance dataloader arm (legacy or map) the cfg was built from.
+    :param surge_smoke_variant: Lance smoke fixture configuration.
     :param experiment_name: Hydra experiment override the cfg was built from.
     """
     HydraConfig().set_config(cfg_surge_fake_train)
@@ -778,7 +767,7 @@ def test_train_eval_surge_fake(
     :param tmp_path: The temporary logging path.
     :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
     :param cfg_surge_fake_eval: Matching eval config pinned to ``last.ckpt``.
-    :param surge_smoke_variant: Lance dataloader arm (legacy or map) under test.
+    :param surge_smoke_variant: Lance smoke fixture configuration.
     :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
     :param experiment_name: Hydra experiment override the cfg was built from.
     """
@@ -821,7 +810,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
     :param tmp_path: The temporary logging path.
     :param cfg_surge_fake_train: CPU training config for the dataset-format arm under test.
     :param cfg_surge_fake_eval: Matching eval config pinned to ``last.ckpt``.
-    :param surge_smoke_variant: Lance dataloader arm (legacy or map) under test.
+    :param surge_smoke_variant: Lance smoke fixture configuration.
     :param monkeypatch: Stubs render/metrics subprocesses so no real VST host launches.
     :param experiment_name: Hydra experiment override; parametrizes the train/eval run.
     """

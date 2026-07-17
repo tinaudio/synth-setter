@@ -228,9 +228,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                     args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
                 args.append("-t")
-            # Budget scales with the sample count predict_vst_audio will render:
-            # one pred-*.pt per batch, and VSTDataset drops the partial tail batch,
-            # so files * batch_size matches the rendered count.
+            # Each pred file stores at most one configured batch, so this is a
+            # conservative timeout budget when the final map-style batch is ragged.
             n_render_samples = (
                 sum(1 for f in predictions_dir.glob("pred-*.pt") if f.is_file())
                 * cfg.datamodule.batch_size

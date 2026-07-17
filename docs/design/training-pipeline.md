@@ -289,11 +289,11 @@ The best checkpoint is uploaded to R2 at train end and referenced by the `model-
 
 Datasets are Lance: `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
-(`src/synth_setter/data/lance_datamodule.py`), a subclass that overrides the `dataset_cls` /
-`shard_suffix` extension points. Native `lance.torch` dataloader factories
-(`lance_map_dataloader` / `lance_iterable_dataloader` in
-`src/synth_setter/data/lance_torch.py`) additionally provide direct Lance→tensor loading with
-native R2 streaming and DDP sharding; they are not yet wired into a datamodule config. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
+(`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceMapDataset`
+instances with standard PyTorch batching, shuffling, worker persistence, and Lightning DDP
+sampler replacement. `lance_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
+remains available for native sequential streaming with `batch_size=None`; both native factories
+accept `storage_options` for direct R2 reads. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
 
 ```yaml
