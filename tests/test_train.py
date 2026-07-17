@@ -27,6 +27,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -390,7 +391,7 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
     encoder = object_dict["model"].encoder
-    assert type(encoder).__name__ == "PretrainedASTEncoder"
+    assert isinstance(encoder, PretrainedASTEncoder)
 
 
 @pytest.mark.requires_vst

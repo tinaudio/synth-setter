@@ -64,17 +64,28 @@ class PretrainedASTEncoder(nn.Module):
         :param freeze: Freeze only the backbone, leaving adaptation layers trainable.
         :param spec_shape: Input geometry as ``(n_mels, n_frames)``.
         :param backbone_config: ``ASTConfig`` overrides used in offline mode.
-        :raises ValueError: Backbone width or mel-bin count violates the input contract.
+        :raises ValueError: Backbone geometry, width, or mel bins violate the input contract.
         """
         super().__init__()
         from transformers import ASTConfig, ASTModel
 
         n_mels, n_frames = spec_shape
         if pretrained:
+            if backbone_config is not None:
+                raise ValueError("backbone_config requires pretrained=False")
             backbone = ASTModel.from_pretrained(checkpoint)
             interpolate_time_position_embeddings(backbone, max_length=n_frames)
         else:
-            config = ASTConfig(num_mel_bins=n_mels, max_length=n_frames, **(backbone_config or {}))
+            config_overrides = backbone_config or {}
+            reserved_keys = sorted({"max_length", "num_mel_bins"} & config_overrides.keys())
+            if reserved_keys:
+                names = ", ".join(reserved_keys)
+                raise ValueError(f"backbone_config keys {names} are derived from spec_shape")
+            config = ASTConfig(
+                num_mel_bins=n_mels,
+                max_length=n_frames,
+                **config_overrides,
+            )
             backbone = ASTModel(config)
 
         if backbone.config.hidden_size != d_model:

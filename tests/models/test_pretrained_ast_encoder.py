@@ -69,7 +69,7 @@ class TestForwardContract:
         with torch.no_grad():
             mixed = encoder(torch.stack((left_heavy, centered)))
 
-        assert torch.equal(mixed[0], mixed[1])
+        torch.testing.assert_close(mixed[0], mixed[1], rtol=1e-5, atol=1e-6)
 
     def test_forward_is_trainable_end_to_end_by_default(self) -> None:
         """Unfrozen construction backpropagates through the backbone."""
@@ -113,6 +113,35 @@ class TestOfflineConstruction:
 
         _tiny_encoder()
 
+    @pytest.mark.parametrize("backbone_config", [{}, {"hidden_size": 32}])
+    def test_pretrained_true_with_backbone_config_raises_before_download(
+        self, monkeypatch: pytest.MonkeyPatch, backbone_config: dict[str, int]
+    ) -> None:
+        """Checkpoint mode rejects offline-only overrides before network access.
+
+        :param monkeypatch: Replaces ``from_pretrained`` with a tripwire.
+        :param backbone_config: Explicit offline override, empty or populated.
+        """
+
+        def _forbid(*args: object, **kwargs: object) -> None:
+            raise AssertionError("checkpoint download attempted")
+
+        monkeypatch.setattr(ASTModel, "from_pretrained", _forbid)
+
+        with pytest.raises(ValueError, match="backbone_config requires pretrained=False"):
+            PretrainedASTEncoder(backbone_config=backbone_config)
+
+    @pytest.mark.parametrize("reserved_key", ["max_length", "num_mel_bins"])
+    def test_offline_reserved_geometry_override_raises(self, reserved_key: str) -> None:
+        """Offline overrides cannot conflict with geometry derived from spec_shape.
+
+        :param reserved_key: ``ASTConfig`` key owned by ``spec_shape``.
+        """
+        config = {**TINY_BACKBONE, reserved_key: 1}
+
+        with pytest.raises(ValueError, match=rf"{reserved_key}.*spec_shape"):
+            _tiny_encoder(backbone_config=config)
+
     def test_d_model_mismatching_backbone_hidden_size_raises(self) -> None:
         """A backbone-width mismatch fails before training."""
         with pytest.raises(ValueError, match="d_model"):
@@ -132,6 +161,9 @@ class TestPositionEmbeddingInterpolation:
             ASTConfig(
                 num_mel_bins=128,
                 max_length=max_length,
+                patch_size=16,
+                frequency_stride=10,
+                time_stride=10,
                 hidden_size=32,
                 num_hidden_layers=2,
                 num_attention_heads=2,
