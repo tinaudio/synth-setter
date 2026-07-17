@@ -33,6 +33,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
+- **Pi provider policy:** project-local Pi sessions and Pi subagents use
+  `openai-codex` or the pinned `openrouter/*:free` review pool only. Do not
+  select Anthropic models or launch Anthropic-backed Pi subagents; keep
+  `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 

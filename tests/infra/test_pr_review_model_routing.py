@@ -218,6 +218,29 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "changed paths" in prompt
 
 
+def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
+    """Keep project-local Pi defaults scoped away from Anthropic."""
+    settings = json.loads((REPO_ROOT / ".pi" / "settings.json").read_text())
+
+    assert settings["defaultProvider"] == "openai-codex"
+    assert settings["defaultModel"] == "gpt-5.6-terra"
+    assert settings["enabledModels"]
+    assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
+    assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
+    assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+
+
+def test_pi_project_append_system_forbids_anthropic_agents() -> None:
+    """Tell Pi sessions and project subagents not to select Anthropic models."""
+    text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
+
+    assert "Anthropic" in text
+    assert "Do not select Anthropic providers or models" in text
+    assert "Do not launch subagents" in text
+    assert "openai-codex" in text
+    assert "openrouter" in text
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
@@ -240,8 +263,10 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
     assert "turn budget exhausted" in text
     assert re.search(r"print\s+the audit table before stopping", text)
+    assert "secondary_fallback_candidates" in text
     assert "fallback_candidates" in text
     assert "Codex fallback" in text
+    assert "OpenRouter failed; only Codex ran." in text
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
     assert "claude -p --dangerously-skip-permissions" in text
     assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text

@@ -24,10 +24,46 @@ from agent._shared.pi_review_routing import (
 AVAILABLE_MODELS = """\
 openai-codex  gpt-5.6-sol    372K  128K  yes  yes
 openai-codex  gpt-5.6-terra  372K  128K  yes  yes
-openrouter    nvidia/nemotron-3-ultra-550b-a55b:free  1000K  128K  yes  yes
-openrouter    openrouter/free  200K  128K  yes  yes
-openrouter    cohere/north-mini-code:free  256K  128K  yes  yes
+openrouter    cohere/north-mini-code:free  256K  64K  yes  no
+openrouter    google/gemma-4-31b-it:free  262.1K  32.8K  yes  yes
+openrouter    google/gemma-4-26b-a4b-it:free  131.1K  32.8K  yes  yes
+openrouter    nvidia/nemotron-3-ultra-550b-a55b:free  1M  65.5K  yes  no
+openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
+openrouter    nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free  256K  65.5K  yes  yes
+openrouter    openai/gpt-oss-20b:free  131.1K  32.8K  yes  no
+openrouter    poolside/laguna-m.1:free  262.1K  32.8K  yes  no
+openrouter    nvidia/nemotron-3-nano-30b-a3b:free  256K  4.1K  yes  no
+openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
 """
+
+DEEP_PRIMARY_OPENROUTER_MODELS = (
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "openrouter/openai/gpt-oss-20b:free",
+)
+DEEP_SECONDARY_OPENROUTER_MODELS = (
+    "openrouter/google/gemma-4-26b-a4b-it:free",
+    "openrouter/poolside/laguna-m.1:free",
+    "openrouter/cohere/north-mini-code:free",
+    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+    "openrouter/tencent/hy3:free",
+)
+STANDARD_PRIMARY_OPENROUTER_MODELS = (
+    "openrouter/cohere/north-mini-code:free",
+    "openrouter/openai/gpt-oss-20b:free",
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/google/gemma-4-26b-a4b-it:free",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+)
+STANDARD_SECONDARY_OPENROUTER_MODELS = (
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/poolside/laguna-m.1:free",
+    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+    "openrouter/tencent/hy3:free",
+)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -35,9 +71,8 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     assert parse_available_models(AVAILABLE_MODELS) == {
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/openrouter/free",
-        "openrouter/cohere/north-mini-code:free",
+        *DEEP_PRIMARY_OPENROUTER_MODELS,
+        *DEEP_SECONDARY_OPENROUTER_MODELS,
     }
 
 
@@ -57,8 +92,10 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         ("comment-hygiene", "openrouter", "low"),
     ]
     assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].candidates[0] == "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert plan[3].candidates[0] == "openrouter/cohere/north-mini-code:free"
+    assert plan[1].candidates == DEEP_PRIMARY_OPENROUTER_MODELS
+    assert plan[1].secondary_fallback_candidates == DEEP_SECONDARY_OPENROUTER_MODELS
+    assert plan[3].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS
+    assert plan[3].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS
     assert all(
         model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
     )
@@ -124,10 +161,11 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
-def test_build_review_plan_skips_unavailable_candidate() -> None:
-    """Advance to an available fallback when a free model is retired."""
+def test_build_review_plan_skips_unavailable_candidates_across_both_tiers() -> None:
+    """Drop retired free models while keeping deterministic primary and secondary tiers."""
     available = parse_available_models(AVAILABLE_MODELS)
     available.remove("openrouter/cohere/north-mini-code:free")
+    available.remove("openrouter/tencent/hy3:free")
 
     plan = build_review_plan(
         ["code-health"],
@@ -136,8 +174,12 @@ def test_build_review_plan_skips_unavailable_candidate() -> None:
         available_models=available,
     )
 
-    assert plan[1].candidates[0] == "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert plan[1].unavailable == ("openrouter/cohere/north-mini-code:free",)
+    assert plan[1].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS[1:]
+    assert plan[1].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS[:-1]
+    assert plan[1].unavailable == (
+        "openrouter/cohere/north-mini-code:free",
+        "openrouter/tencent/hy3:free",
+    )
 
 
 def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
@@ -168,6 +210,7 @@ def test_build_review_plan_missing_openrouter_uses_codex_fallback() -> None:
 
     assert [item.pass_name for item in plan] == ["codex", "openrouter"]
     assert plan[1].candidates == ()
+    assert plan[1].secondary_fallback_candidates == ()
     assert plan[1].fallback_candidates == (
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
@@ -696,4 +739,7 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"][0] == "openrouter/cohere/north-mini-code:free"
+    assert payload[1]["candidates"] == list(STANDARD_PRIMARY_OPENROUTER_MODELS)
+    assert payload[1]["secondary_fallback_candidates"] == list(
+        STANDARD_SECONDARY_OPENROUTER_MODELS
+    )

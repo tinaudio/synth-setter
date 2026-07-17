@@ -149,25 +149,29 @@ python3 agent/_shared/pi_review_routing.py plan \
 ```
 
 The command runs `pi --list-models` and returns JSON with two logical passes per
-skill, the ordered available `candidates`, skipped `unavailable` models,
-`fallback_candidates`, `thinking`, and `reason`. Codex is required. OpenRouter
-is optional because its pass can degrade to the returned Codex fallback. Record
-skipped candidates in the audit with no agent id or transcript.
+skill, the ordered available primary `candidates`, skipped `unavailable` models,
+OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
+Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
+OpenRouter is optional because its pass can degrade through the secondary
+free-model tier and then the returned Codex fallback. Record skipped candidates
+in the audit with no agent id or transcript.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next same-provider candidate.
 Codex-pass candidates are always `openai-codex/*`; OpenRouter-pass candidates
-are always `openrouter/*`. If an OpenRouter pass has no candidates, or every
-candidate exhausts quota/capacity, move the successful Codex pass's effective
-model to the end of `fallback_candidates`, then launch a fresh worker with the
-first model. This prefers a distinct fallback even when the Codex pass reached
-its own fallback. Continue through that bounded Codex sequence only for the
-same availability failures. Record each launch as
-`Codex fallback` in the audit detail. Never resume a failed session under a
-different model. Authentication, tool/checklist, malformed-report, timeout,
-and turn-budget failures do not trigger the cross-provider fallback.
+are always `openrouter/*`. Exhaust the primary OpenRouter `candidates` first,
+then continue through `secondary_fallback_candidates` before attempting any
+Codex fallback. If an OpenRouter pass has no free candidates, or every primary
+and secondary candidate exhausts quota/capacity, move the successful Codex pass's effective
+model to the end of `fallback_candidates`, then launch a fresh worker
+with the first model. This prefers a distinct fallback even when the Codex pass
+reached its own fallback. Continue through that bounded Codex sequence only for
+the same availability failures. Record each launch as `Codex fallback` in the
+audit detail. Never resume a failed session under a different model.
+Authentication, tool/checklist, malformed-report, timeout, and turn-budget
+failures do not trigger the cross-provider fallback.
 
 A completed worker is not successful until its final assistant Markdown passes
 the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
@@ -190,9 +194,13 @@ directly to `validate-report`. If extraction or validation fails, record
 `malformed report` and try the next candidate. This
 is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, or an OpenRouter pass exhausts both its candidates and
-`fallback_candidates`, stop before aggregation or delivery; never write a PASS
-sentinel after silently dropping a logical pass.
+candidates, stop before aggregation or delivery; never write a PASS sentinel
+after silently dropping the required Codex pass. If an OpenRouter pass exhausts
+its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
+`fallback_candidates`, continue the review with Codex-only findings, record the
+failed OpenRouter attempt chain in the audit, and add the exact sentence
+`OpenRouter failed; only Codex ran.` to `review_body` so the posted review or
+rendered report is explicit and truthful about the degraded coverage.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
 changes this flow, run both host harnesses against the PR from the worktree:
@@ -343,7 +351,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, prepend `OpenRouter failed; only Codex ran.` to the non-health portion of `review_body`.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 

@@ -45,27 +45,45 @@ _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
 
-_DEEP_CANDIDATES = {
-    "codex": (
-        "openai-codex/gpt-5.6-sol",
-        "openai-codex/gpt-5.6-terra",
-    ),
-    "openrouter": (
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/openrouter/free",
-    ),
-}
-_STANDARD_CANDIDATES = {
-    "codex": (
-        "openai-codex/gpt-5.6-terra",
-        "openai-codex/gpt-5.6-sol",
-    ),
-    "openrouter": (
-        "openrouter/cohere/north-mini-code:free",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/openrouter/free",
-    ),
-}
+_DEEP_CODEX_CANDIDATES = (
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+)
+_STANDARD_CODEX_CANDIDATES = (
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-sol",
+)
+# Keep the routed OpenRouter review pool pinned to exact live free-model IDs.
+# These lists intentionally exclude Anthropic-backed aliases and generic routers
+# such as ``openrouter/free`` so the audit can report the exact reviewed model.
+_DEEP_OPENROUTER_PRIMARY_CANDIDATES = (
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "openrouter/openai/gpt-oss-20b:free",
+)
+_DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
+    "openrouter/google/gemma-4-26b-a4b-it:free",
+    "openrouter/poolside/laguna-m.1:free",
+    "openrouter/cohere/north-mini-code:free",
+    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+    "openrouter/tencent/hy3:free",
+)
+_STANDARD_OPENROUTER_PRIMARY_CANDIDATES = (
+    "openrouter/cohere/north-mini-code:free",
+    "openrouter/openai/gpt-oss-20b:free",
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/google/gemma-4-26b-a4b-it:free",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+)
+_STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/poolside/laguna-m.1:free",
+    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+    "openrouter/tencent/hy3:free",
+)
 _REQUIRED_REPORT_HEADINGS = (
     "### BLOCK findings",
     "### WARN findings",
@@ -251,11 +269,17 @@ class ReviewPass:
 
         Configured models absent from Pi's registry.
 
+    .. attribute :: secondary_fallback_candidates
+        :type: tuple[str, ...]
+
+        Same-provider OpenRouter free models reserved for the secondary fallback
+        tier after the primary free-model tier is exhausted.
+
     .. attribute :: fallback_candidates
         :type: tuple[str, ...]
 
-        Codex models used only after an OpenRouter pass exhausts its candidates.
-        The orchestrator reorders them around the effective Codex-pass model.
+        Codex models used only after an OpenRouter pass exhausts both free-model
+        tiers. The orchestrator reorders them around the effective Codex-pass model.
 
     .. attribute :: thinking
         :type: str
@@ -277,6 +301,7 @@ class ReviewPass:
     pass_name: str
     candidates: tuple[str, ...]
     unavailable: tuple[str, ...]
+    secondary_fallback_candidates: tuple[str, ...]
     fallback_candidates: tuple[str, ...]
     thinking: str
     reason: str
@@ -547,6 +572,21 @@ def _findings_section_is_valid(lines: Sequence[str]) -> bool:
     return all(_FINDING.fullmatch(line) for line in content)
 
 
+def _available_and_unavailable(
+    configured: Sequence[str],
+    available_models: AbstractSet[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split configured model selectors by current Pi registry availability.
+
+    :param configured: Ordered model selectors from the routing policy.
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :returns: Ordered available and unavailable selectors.
+    """
+    available = tuple(model for model in configured if model in available_models)
+    unavailable = tuple(model for model in configured if model not in available_models)
+    return available, unavailable
+
+
 def build_review_plan(
     skills: Sequence[str],
     *,
@@ -575,34 +615,70 @@ def build_review_plan(
     plan: list[ReviewPass] = []
     for skill in skills:
         is_deep = skill in DEEP_SKILLS
-        candidates_by_pass = _DEEP_CANDIDATES if is_deep else _STANDARD_CANDIDATES
+        codex_configured = _DEEP_CODEX_CANDIDATES if is_deep else _STANDARD_CODEX_CANDIDATES
+        openrouter_primary_configured = (
+            _DEEP_OPENROUTER_PRIMARY_CANDIDATES
+            if is_deep
+            else _STANDARD_OPENROUTER_PRIMARY_CANDIDATES
+        )
+        openrouter_secondary_configured = (
+            _DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
+            if is_deep
+            else _STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
+        )
         thinking, reason = _thinking_for(
             skill,
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
         )
-        codex_candidates = tuple(
-            model for model in candidates_by_pass["codex"] if model in available_models
+        codex_candidates, codex_unavailable = _available_and_unavailable(
+            codex_configured,
+            available_models,
         )
-        for pass_name, is_codex in (("codex", True), ("openrouter", False)):
-            configured = candidates_by_pass[pass_name]
-            candidates = tuple(model for model in configured if model in available_models)
-            unavailable = tuple(model for model in configured if model not in available_models)
-            if is_codex and not candidates:
-                raise ValueError(f"No available models remain for {skill}/{pass_name}")
-            fallback_candidates = () if is_codex else tuple(reversed(codex_candidates))
-            plan.append(
-                ReviewPass(
-                    skill=skill,
-                    pass_name=pass_name,
-                    candidates=candidates,
-                    unavailable=unavailable,
-                    fallback_candidates=fallback_candidates,
-                    thinking=thinking,
-                    reason=reason,
-                    max_turns=PI_REVIEW_MAX_TURNS,
-                )
+        if not codex_candidates:
+            raise ValueError(f"No available models remain for {skill}/codex")
+        codex_label = "codex"
+        plan.append(
+            ReviewPass(
+                skill=skill,
+                pass_name=codex_label,
+                candidates=codex_candidates,
+                unavailable=codex_unavailable,
+                secondary_fallback_candidates=(),
+                fallback_candidates=(),
+                thinking=thinking,
+                reason=reason,
+                max_turns=PI_REVIEW_MAX_TURNS,
             )
+        )
+        openrouter_candidates, openrouter_primary_unavailable = _available_and_unavailable(
+            openrouter_primary_configured,
+            available_models,
+        )
+        (
+            openrouter_secondary_candidates,
+            openrouter_secondary_unavailable,
+        ) = _available_and_unavailable(
+            openrouter_secondary_configured,
+            available_models,
+        )
+        openrouter_label = "openrouter"
+        plan.append(
+            ReviewPass(
+                skill=skill,
+                pass_name=openrouter_label,
+                candidates=openrouter_candidates,
+                unavailable=(
+                    *openrouter_primary_unavailable,
+                    *openrouter_secondary_unavailable,
+                ),
+                secondary_fallback_candidates=openrouter_secondary_candidates,
+                fallback_candidates=tuple(reversed(codex_candidates)),
+                thinking=thinking,
+                reason=reason,
+                max_turns=PI_REVIEW_MAX_TURNS,
+            )
+        )
     return plan
 
 
