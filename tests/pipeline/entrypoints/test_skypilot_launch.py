@@ -1663,6 +1663,26 @@ class TestCheckedInLaunchConfigs:
             "train-runpod.yaml",
         ],
     )
+    def test_shipped_train_config_pins_remote_dataset_source(self, name: str) -> None:
+        """A fresh pod has no local dataset, so every train cmd must download one (#2095).
+
+        :param name: Shipped training launch config under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+        assert cfg.cmd is not None
+        assert any(
+            token.startswith("datamodule.download_dataset_root_uri=r2://")
+            for token in shlex.split(cfg.cmd)
+        ), "worker cmd must pin a remote dataset root; fresh pods have no local dataset"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+        ],
+    )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
         """Single-GPU RunPod training opts into crash-recovery checkpoints.
 
@@ -1676,10 +1696,11 @@ class TestCheckedInLaunchConfigs:
         "name",
         [
             "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
             "train-runpod.yaml",
             "eval-runpod.yaml",
         ],
-        ids=["flow-simple-440k", "train", "eval"],
+        ids=["flow-simple-440k", "smoke", "train", "eval"],
     )
     def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
         """A shipped config validates, names a real template, and its cmd injects cleanly.

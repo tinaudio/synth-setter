@@ -5,6 +5,10 @@
 # every_n_train_steps=5 guarantees a checkpoint file exists at step 10 even
 # though no epoch completes; the published model-ffn_simple:latest is junk —
 # do not evaluate it for quality.
+#
+# The dataset override makes the run self-contained: a fresh pod has no local
+# dataset, so the cmd pins a small finalized R2 root (~5 GiB, fits the 50 GB
+# template disk). num_workers=0 keeps startup deterministic for a 10-step run.
 
 compute_template: src/synth_setter/configs/compute/runpod-template.yaml
 worker_image_tag: dev-snapshot
@@ -17,6 +21,10 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
   experiment=surge/ffn_simple
+  datamodule=surge_lance_map
+  datamodule.param_spec_name=surge_simple
+  datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
+  datamodule.num_workers=0
   training.upload_checkpoints_during_training=true
   trainer.min_steps=10
   trainer.max_steps=10
