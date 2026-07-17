@@ -1,6 +1,81 @@
 # CHANGELOG
 
 
+## v9.4.0 (2026-07-17)
+
+### Chores
+
+- **data-pipeline**: Harden torchsynth render contracts
+  ([#2037](https://github.com/tinaudio/synth-setter/pull/2037),
+  [`4eeac14`](https://github.com/tinaudio/synth-setter/commit/4eeac14acd645342e4d7a19d480cc59bfda67fdf))
+
+* internal-fix(data-pipeline): harden torchsynth render contracts
+
+Reject renderer/backend name mismatches before the version gate and add behavioral coverage for
+  package absence, spec-width drift, and real CLI-to-Lance rendering.
+
+Refs #1757
+
+* internal-fix(data-pipeline): address contract-coverage review warnings
+
+Share the torchsynth plugin-path sentinel via renderer_backend.py (spec.py validator and the vst
+  package now use one constant), document the sentinel on the plugin_path field, slow-mark the CLI
+  subprocess e2e, and derive the width-drift test's expected counts from the live voice.
+
+* docs: note the torchsynth plugin-path sentinel in RenderConfig references
+
+The data-pipeline doc's verbatim RenderConfig body and the doc-map entry for renderer_backend.py now
+  carry the plugin_path/renderer_backend agreement invariant introduced by
+  _validate_torchsynth_backend.
+
+- **test**: Restore pluginless unit checks and coverage
+  ([#2038](https://github.com/tinaudio/synth-setter/pull/2038),
+  [`c279e85`](https://github.com/tinaudio/synth-setter/commit/c279e858a0b1e5299ca33c4ff3cfec6139eb87fa))
+
+* fix(testing): restore pluginless unit checks and coverage
+
+Stub plugin loading at the writer-test boundary so parameter-cadence tests remain independent of
+  installed VST bundles while still exercising the cached-plugin default. Upload partial CPU
+  coverage after pytest failures to prevent stale Codecov carryforward reports.
+
+Fixes #2014
+
+* test(testing): clarify missing coverage-step failures
+
+Raise an explicit assertion naming the missing workflow step and job instead of leaking
+  StopIteration from the lookup.
+
+Refs #2014
+
+### Features
+
+- **training**: Add pretrained Hugging Face AST encoder option
+  ([`0064a1a`](https://github.com/tinaudio/synth-setter/commit/0064a1a806b21e1822af18a16aa56d04f1f92777))
+
+Add a pretrained AudioSet AST flow-conditioning encoder with offline-safe tests and fail-closed
+  configuration validation.\n\nFixes #2005\nRefs #1974
+
+### Internal-Fix
+
+- **ci-automation**: Relocate Docker storage for CI
+  ([#2027](https://github.com/tinaudio/synth-setter/pull/2027),
+  [`df7eb37`](https://github.com/tinaudio/synth-setter/commit/df7eb37dea83dc78edc0bc660801f76de15349f6))
+
+* internal-fix(ci-automation): relocate Docker storage for CI
+
+* internal-fix(ci-automation): support runners without separate mnt
+
+- **ci-automation**: Suspend pre-PR review gate
+  ([#2054](https://github.com/tinaudio/synth-setter/pull/2054),
+  [`c461964`](https://github.com/tinaudio/synth-setter/commit/c46196463779d4ae83f4c32abeddb73b43349e4e))
+
+### Testing
+
+- **testing**: Retry transient W&B artifact uploads
+  ([#2034](https://github.com/tinaudio/synth-setter/pull/2034),
+  [`b6410db`](https://github.com/tinaudio/synth-setter/commit/b6410dbc18e0f8353447ded1a47e2ae399d11be0))
+
+
 ## v9.3.1 (2026-07-16)
 
 ### Bug Fixes
