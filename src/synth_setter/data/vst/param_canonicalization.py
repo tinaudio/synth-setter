@@ -85,17 +85,15 @@ def block_indices_by_prefix(
     if key_suffix not in first:
         raise ValueError(f"key_suffix {key_suffix!r} is not a param suffix of {prefixes[0]!r}")
 
-    indices = tuple(
-        tuple(offsets[prefix + suffix] for suffix in first) for prefix in prefixes
-    )
+    indices = tuple(tuple(offsets[prefix + suffix] for suffix in first) for prefix in prefixes)
     return CanonicalBlocks(indices=indices, key_offset=first.index(key_suffix))
 
 
 def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarray:
     """Reorder each row's symmetric blocks by descending sort-key value.
 
-    Stable: rows whose blocks are already in descending key order (including
-    ties) come back unchanged. Dims outside ``blocks`` are untouched.
+    Key ties use the remaining block values as descending lexicographic
+    tie-breakers. Dims outside ``blocks`` are untouched.
 
     :param params: ``(batch, num_params)`` encoded rows; not mutated.
     :param blocks: Block layout to sort within each row.
@@ -103,11 +101,13 @@ def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarr
     """
     out = params.copy()
     block_index_matrix = np.array(blocks.indices)
-    keys = params[:, block_index_matrix[:, blocks.key_offset]]
-    # kind="stable" keeps the original block order on ties; negation gives
-    # the descending order np.argsort cannot express stably on its own.
-    order = np.argsort(-keys, axis=1, kind="stable")
     gathered = params[:, block_index_matrix]
+    tie_break_offsets = [
+        offset for offset in range(gathered.shape[2]) if offset != blocks.key_offset
+    ]
+    priority_offsets = [blocks.key_offset, *tie_break_offsets]
+    sort_keys = tuple(-gathered[:, :, offset] for offset in reversed(priority_offsets))
+    order = np.lexsort(sort_keys, axis=1)
     sorted_blocks = np.take_along_axis(gathered, order[:, :, None], axis=1)
     out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(len(params), -1)
     return out

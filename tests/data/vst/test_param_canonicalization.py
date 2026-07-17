@@ -39,6 +39,7 @@ OSC_VOLUME_DIMS = (20, 27, 34)
 
 class TestBlockIndicesByPrefix:
     """block_indices_by_prefix derivation and validation."""
+
     def test_surge_simple_osc_blocks_are_aligned_and_volume_keyed(self) -> None:
         """surge_simple's three osc blocks resolve to aligned index runs keyed on volume."""
         blocks = block_indices_by_prefix(
@@ -125,11 +126,24 @@ class TestCanonicalizeBlocks:
         out = canonicalize_blocks(row, THREE_BLOCKS)
         assert np.allclose(out, row)
 
-    def test_tied_keys_keep_original_block_order(self) -> None:
-        """Equal keys keep the stored block order (stable sort)."""
-        row = np.array([[0.1, 0.5, 0.2, 0.5, 0.3, 0.5]], dtype=np.float32)
-        out = canonicalize_blocks(row, THREE_BLOCKS)
-        assert np.allclose(out, row)
+    def test_tied_keys_use_block_values_as_deterministic_tiebreaker(self) -> None:
+        """Permuted blocks with equal keys share one canonical form."""
+        rows = np.array(
+            [
+                [0.1, 0.5, 0.2, 0.5, 0.3, 0.5],
+                [0.3, 0.5, 0.1, 0.5, 0.2, 0.5],
+            ],
+            dtype=np.float32,
+        )
+        out = canonicalize_blocks(rows, THREE_BLOCKS)
+        expected = np.array(
+            [
+                [0.3, 0.5, 0.2, 0.5, 0.1, 0.5],
+                [0.3, 0.5, 0.2, 0.5, 0.1, 0.5],
+            ],
+            dtype=np.float32,
+        )
+        assert np.array_equal(out, expected)
 
     def test_input_array_is_not_mutated(self) -> None:
         """The input array is left untouched (pure function)."""
@@ -141,6 +155,7 @@ class TestCanonicalizeBlocks:
 
 class TestResolveCanonicalBlocks:
     """Registry resolution for specs with symmetric blocks."""
+
     def test_surge_simple_resolves_osc_blocks(self) -> None:
         """surge_simple resolves to its osc blocks keyed on volume."""
         blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
@@ -193,9 +208,8 @@ class TestDataModuleWiring:
 
         :param tmp_path: Pytest per-test directory the splits are written under.
         """
-        from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
-
         from synth_setter.data.lance_datamodule import LanceVSTDataModule
+        from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
 
         for split, seed in (("train", 0), ("val", 1), ("test", 2)):
             columns = make_shard_columns(8, num_params=92, seed=seed)
