@@ -12,6 +12,36 @@ _GROUP_PROBE_COUNT = 8
 _NESTED_PYTEST_TIMEOUT_SECONDS = 60
 
 
+@pytest.mark.parametrize(
+    ("timed_out", "exitcode", "expected"),
+    [
+        (True, -9, "Nested pytest timed out after 60 seconds (exit code -9)"),
+        (False, 1, "Nested pytest failed (exit code 1)"),
+    ],
+)
+def test_nested_pytest_diagnostic_status_expected(
+    timed_out: bool, exitcode: int, expected: str
+) -> None:
+    """Report whether a nested pytest process timed out or failed.
+
+    :param timed_out: Whether the parent killed the nested process at its timeout.
+    :param exitcode: Nested pytest process exit status.
+    :param expected: Expected diagnostic for the observed process result.
+    """
+    assert _nested_pytest_failure_message(timed_out, exitcode) == expected
+
+
+def _nested_pytest_failure_message(timed_out: bool, exitcode: int | None) -> str:
+    """Describe an unsuccessful nested pytest session.
+
+    :param timed_out: Whether the parent killed the nested process at its timeout.
+    :param exitcode: Nested pytest process exit status.
+    :returns: A diagnostic that distinguishes timeout from test failure.
+    """
+    status = f"timed out after {_NESTED_PYTEST_TIMEOUT_SECONDS} seconds" if timed_out else "failed"
+    return f"Nested pytest {status} (exit code {exitcode})"
+
+
 def _run_pytest(args: list[str]) -> NoReturn:
     """Run a nested pytest session in an isolated interpreter.
 
@@ -67,11 +97,12 @@ def test_shared_xdist_group_runs_on_one_worker(tmp_path: Path, project_root: Pat
     )
     process.start()
     process.join(timeout=_NESTED_PYTEST_TIMEOUT_SECONDS)
-    if process.is_alive():
+    timed_out = process.is_alive()
+    if timed_out:
         process.kill()
         process.join()
 
-    assert process.exitcode == 0
+    assert process.exitcode == 0, _nested_pytest_failure_message(timed_out, process.exitcode)
     worker_ids = worker_log.read_text().splitlines()
     assert len(worker_ids) == _GROUP_PROBE_COUNT
     assert len(set(worker_ids)) == 1
