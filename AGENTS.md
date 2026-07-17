@@ -221,11 +221,10 @@ Local skills wrap the review workflow:
 - `/fix-review-comments` (applies the sentinel's comment-hygiene findings,
   commits, and re-reviews — the remediation half of the pre-PR comment gate).
 
-Outside Pi, each fan-out worker runs a second parallel OpenCode-CLI pass
-(auto-skipped where `opencode` is unavailable) and merges attributed findings.
-Pi instead uses Tintin's flat `pr-review-worker` fan-out; the shared analysis
-owns dynamic Codex/OpenRouter allocation, quota failover, and transcript audit
-rows while preserving the same finding and sentinel contracts.
+Claude Code and Codex invoke the shared Pi-native review launcher. Pi uses
+Tintin's flat `pr-review-worker` fan-out; the shared analysis owns dynamic
+Codex/OpenRouter allocation, Codex fallback, and transcript audit rows while
+preserving the same finding and sentinel contracts.
 
 See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)
 and the shared analysis in

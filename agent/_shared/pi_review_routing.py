@@ -42,13 +42,7 @@ SUPPORTED_SKILLS = frozenset(
 PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
-_REQUIRED_PROVIDER_SETUP = (
-    ("openai-codex", "authenticate with `/login openai-codex`"),
-    (
-        "openrouter",
-        "set OPENROUTER_API_KEY before starting Pi or use `/login openrouter`",
-    ),
-)
+_CODEX_SETUP = "authenticate with `/login openai-codex`"
 
 _DEEP_CANDIDATES = {
     "codex": (
@@ -256,6 +250,12 @@ class ReviewPass:
 
         Configured models absent from Pi's registry.
 
+    .. attribute :: fallback_candidates
+        :type: tuple[str, ...]
+
+        Codex models used only after an OpenRouter pass exhausts its candidates,
+        ordered to prefer a model distinct from the primary Codex pass.
+
     .. attribute :: thinking
         :type: str
 
@@ -276,6 +276,7 @@ class ReviewPass:
     pass_name: str
     candidates: tuple[str, ...]
     unavailable: tuple[str, ...]
+    fallback_candidates: tuple[str, ...]
     thinking: str
     reason: str
     max_turns: int
@@ -560,8 +561,8 @@ def build_review_plan(
     :param risk_reasons: Named risk signals detected in the diff.
     :param available_models: Canonical selectors from Pi's model registry.
     :returns: Two ordered passes per skill, preserving the supplied skill order.
-    :raises ValueError: If no skills are selected, inputs are invalid, provider authentication is
-        missing, or all candidates are unavailable.
+    :raises ValueError: If no skills are selected, inputs are invalid, or Codex authentication is
+        missing.
     """
     if not skills:
         raise ValueError("skills must be non-empty")
@@ -570,7 +571,7 @@ def build_review_plan(
     unknown = sorted(set(skills) - SUPPORTED_SKILLS)
     if unknown:
         raise ValueError(f"Unknown review skill(s): {', '.join(unknown)}")
-    _require_providers(available_models)
+    _require_codex(available_models)
     plan: list[ReviewPass] = []
     for skill in skills:
         is_deep = skill in DEEP_SKILLS
@@ -580,18 +581,23 @@ def build_review_plan(
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
         )
-        for pass_name in ("codex", "openrouter"):
+        codex_candidates = tuple(
+            model for model in candidates_by_pass["codex"] if model in available_models
+        )
+        for pass_name, is_codex in (("codex", True), ("openrouter", False)):
             configured = candidates_by_pass[pass_name]
             candidates = tuple(model for model in configured if model in available_models)
             unavailable = tuple(model for model in configured if model not in available_models)
-            if not candidates:
+            if is_codex and not candidates:
                 raise ValueError(f"No available models remain for {skill}/{pass_name}")
+            fallback_candidates = () if is_codex else tuple(reversed(codex_candidates))
             plan.append(
                 ReviewPass(
                     skill=skill,
                     pass_name=pass_name,
                     candidates=candidates,
                     unavailable=unavailable,
+                    fallback_candidates=fallback_candidates,
                     thinking=thinking,
                     reason=reason,
                     max_turns=PI_REVIEW_MAX_TURNS,
@@ -600,16 +606,14 @@ def build_review_plan(
     return plan
 
 
-def _require_providers(available_models: set[str]) -> None:
-    """Require at least one registered model for every review provider.
+def _require_codex(available_models: set[str]) -> None:
+    """Require a registered Codex model for the always-available fallback.
 
     :param available_models: Canonical selectors returned by Pi's model registry.
-    :raises ValueError: If either required provider has no available model.
+    :raises ValueError: If Codex has no available model.
     """
-    for provider, setup in _REQUIRED_PROVIDER_SETUP:
-        prefix = f"{provider}/"
-        if not any(model.startswith(prefix) for model in available_models):
-            raise ValueError(f"No {provider} models available; {setup}; credentials required")
+    if not any(model.startswith("openai-codex/") for model in available_models):
+        raise ValueError(f"No openai-codex models available; {_CODEX_SETUP}; credentials required")
 
 
 def _thinking_for(

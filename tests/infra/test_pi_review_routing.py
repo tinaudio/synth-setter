@@ -63,6 +63,11 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
     )
     assert all(model.startswith("openrouter/") for item in plan[1::2] for model in item.candidates)
+    assert all(
+        model.startswith("openai-codex/")
+        for item in plan[1::2]
+        for model in item.fallback_candidates
+    )
 
 
 def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> None:
@@ -146,15 +151,38 @@ def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
         )
 
 
-def test_build_review_plan_missing_provider_raises_actionable_error() -> None:
-    """Reject missing provider authentication before launching workers."""
+def test_build_review_plan_missing_openrouter_uses_codex_fallback() -> None:
+    """Keep both logical passes when OpenRouter has no registered models."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
         if not model.startswith("openrouter/")
     }
 
-    with pytest.raises(ValueError, match=r"openrouter.*credentials required"):
+    plan = build_review_plan(
+        ["code-health"],
+        changed_lines=300,
+        risk_reasons=(),
+        available_models=available,
+    )
+
+    assert [item.pass_name for item in plan] == ["codex", "openrouter"]
+    assert plan[1].candidates == ()
+    assert plan[1].fallback_candidates == (
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-5.6-terra",
+    )
+
+
+def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
+    """Reject a plan that cannot run its required Codex passes."""
+    available = {
+        model
+        for model in parse_available_models(AVAILABLE_MODELS)
+        if not model.startswith("openai-codex/")
+    }
+
+    with pytest.raises(ValueError, match=r"openai-codex.*credentials required"):
         build_review_plan(
             ["code-health"],
             changed_lines=300,

@@ -2,11 +2,9 @@
 name: repo-review-full-no-comments
 description: |-
   Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN report to the user instead of posting inline comments
-  on GitHub. Spawns one orchestrator agent that runs the pipeline and returns
-  the rendered report. Works against either an open PR or a local branch that
-  has not been pushed yet — use it as a pre-PR gate or whenever GitHub side
-  effects are undesirable. Requires the tinaudio-synth-setter-skills plugin.
+  aggregated BLOCK/WARN report instead of posting inline comments. Routes every
+  host harness through Pi and works against an open PR or local branch. Requires
+  the tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full-no-comments — Multi-Skill Review Without Posting
@@ -18,8 +16,8 @@ Same analysis as `/repo-review-full`, with two differences:
 2. A PR is **not** required. If no PR exists for the current branch, the
    orchestrator reviews the local branch vs. the default branch.
 
-The pipeline normally runs inside one spawned orchestrator. Pi uses the flat
-Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
+The review implementation is Pi-native. Claude Code and Codex invoke the same
+headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## What you (the main agent) do
 
@@ -27,29 +25,21 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
 
-2. When running under Claude Code, check that `CLAUDE_CODE_SUBAGENT_MODEL` is
-   unset. If it is set, stop and explain that it overrides the project
-   review-agent models; do not run a gate with an overridden model policy.
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, invoke the shared launcher. Claude
+   Code and Codex use this same command; neither launches its native review
+   agents:
 
-3. Launch exactly **one** `pr-review-orchestrator` agent. Under Claude Code, use
-   the Agent tool's `subagent_type` selector. Under Codex, where `spawn_agent`
-   may not expose a custom-role selector, run
-   `agent/_shared/run_codex_review_agent.sh pr-review-orchestrator --skill-brief agent/skills/repo-review-full-no-comments/SKILL.md` (append
-   `--target <N>` only when an explicit target was passed). The launcher reads
-   the project agent file and supplies its pinned model, reasoning effort, and
-   developer instructions directly to `codex exec`. The prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute an explicit
-   `<N>`; otherwise pass the brief verbatim. If the selected launch mechanism
-   is unavailable, stop with a configuration error; do not fall back to an
-   inherited or anonymous agent.
+   ```bash
+   agent/_shared/run_pi_review.sh repo-review-full-no-comments
+   ```
 
-   **Pi exception:** do not launch `pr-review-orchestrator`. Execute the
-   orchestrator brief in the main Pi session and use Tintin's `Agent` tool with
-   `subagent_type: "pr-review-worker"` for the flat, parallel Step 4 fan-out.
-   Pi must supply per-invocation model and thinking overrides selected by the
-   shared policy; the non-Pi pinned-role rule does not apply. Follow the Pi
-   allocation, quota retry, merge, and transcript-audit rules in
-   `agent/skills/_shared/repo-review-full-analysis.md` exactly.
+   Append `--target <N>` only when the caller supplied an explicit target.
+   Relay its output verbatim and stop; the child Pi session owns the review.
+
+3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
+   orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
+   Agent for the flat Step 4 fan-out. Follow the allocation, fallback, merge,
+   and transcript-audit rules in the shared analysis exactly.
 
 4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
@@ -63,10 +53,8 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
 >
-> **Model policy.** Outside Pi, use the named PR-review worker roles from the
-> shared analysis without per-invocation model overrides. Under Pi, use the
-> shared dynamic routing table and supply every worker's model and thinking
-> level explicitly.
+> **Model policy.** Use the shared dynamic routing table and supply every
+> worker's model and thinking level explicitly.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >
@@ -283,7 +271,7 @@ Tintin exception in Step 3 because Tintin workers cannot nest `Agent` calls.
 >   complete `## Pi review audit` section from `review_body` between the PASS
 >   line and `## Summary`; a successful review must not discard its model,
 >   attempt, agent-id, or transcript evidence. The fixed short form below is
->   only for non-Pi harnesses.
+>   only for zero-diff reviews, which skip worker allocation and audit rows.
 >
 > - **PASS short form.** If the JSON has no findings AND no PR-health flags,
 >   still write the sentinel file. The gate's size guard rejects files under
