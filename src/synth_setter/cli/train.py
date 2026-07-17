@@ -199,17 +199,20 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
 
     Wired here rather than through the ``callbacks`` config group because the probe
     needs ``cfg.render`` and the Python-resolved run config id, neither of which a
-    callback YAML can interpolate.
+    callback YAML can interpolate. An absent mode remains disabled for legacy config objects.
 
     :param cfg: Hydra config carrying the probe mode, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
-    :raises ValueError: If the mode is not ``true``/``false``/``"auto"``, the render spec
+    :raises ValueError: If a present mode is not ``true``/``false``/``"auto"``, the render spec
         cannot decode the model's predictions, a non-positive-integer sample count is
         set, or the mode is ``true`` without a ``render`` group / with validation
         disabled (``"auto"`` skips the probe in those two cases instead).
     :raises RuntimeError: Propagated from the R2 pre-flight under mode ``true``.
     :raises OSError: Propagated from the R2 pre-flight under mode ``true``.
     """
+    training = cfg.get("training")
+    if training is None or "val_audio_probe" not in training:
+        return
     mode = OmegaConf.select(cfg, "training.val_audio_probe")
     if mode is False:
         return

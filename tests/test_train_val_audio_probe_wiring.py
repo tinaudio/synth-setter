@@ -69,10 +69,22 @@ def _cfg(
 
 
 def test_configure_val_audio_probe_appends_nothing_when_disabled() -> None:
-    """The default-off flag leaves the callback list untouched."""
+    """False leaves the callback list untouched."""
     callbacks: list[Callback] = []
 
     _configure_val_audio_probe(_cfg(enabled=False), callbacks)
+
+    assert callbacks == []
+
+
+def test_configure_val_audio_probe_appends_nothing_when_setting_absent() -> None:
+    """A legacy config without the probe setting leaves callbacks untouched."""
+    callbacks: list[Callback] = []
+    cfg = _cfg(enabled=False)
+    with open_dict(cfg):
+        del cfg.training.val_audio_probe
+
+    _configure_val_audio_probe(cfg, callbacks)
 
     assert callbacks == []
 
