@@ -104,14 +104,21 @@ def test_generate_sample_records_accepted_attempt_zero_when_first_loud(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_render(monkeypatch, [_loud_audio()])
-    assert _generate().attempt == 0
+    sample = _generate()
+
+    assert sample.attempt == 0
+    assert sample.clipped_rejections == 0
+    assert sample.silent_rejections == 0
 
 
 def test_generate_sample_all_attempts_silent_raises_runtimeerror_naming_sample_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_render(monkeypatch, [_silent_audio()] * 3)
-    with pytest.raises(RuntimeError, match=f"sample {_SAMPLE_IDX}"):
+    with pytest.raises(
+        RuntimeError,
+        match=rf"sample {_SAMPLE_IDX}.*silent rejections: 3; clipped rejections: 0",
+    ):
         _generate(max_attempts=3)
 
 

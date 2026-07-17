@@ -20,7 +20,13 @@ import wandb
 from lightning.pytorch.loggers.wandb import WandbLogger
 
 from synth_setter.cli.generate_dataset import generate
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.subprocess_args import find_script_index
 from tests.helpers.wandb_offline import read_history_rows, read_run_binary, read_run_config
 
 _RUN_ID = "wandb-track-test-20260520T000000000Z"
@@ -172,8 +178,8 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
 ) -> None:
     """``generate`` emits one history row per shard plus a terminal summary row.
 
-    Per-shard rows carry ``shard/bytes`` (from the R2 skip-probe's
-    ``existing_size``) and ``shard/render_seconds`` (``0.0`` for skips).
+    Per-shard rows carry byte size, render duration, and separate silent/clipped
+    rejection counts. Skip-probe rows report zero for all render-only metrics.
     The terminal row carries the ``shards/{rendered,skipped,total}``
     counters and the e2e generation triple
     (``generation/{elapsed_seconds,samples,samples_per_second}``).
@@ -222,6 +228,8 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     for r in shard_rows:
         assert json.loads(r["shard/bytes"]) == 0, r
         assert json.loads(r["shard/render_seconds"]) == 0.0, r
+        assert json.loads(r["shard/samples_rejected_clipped"]) == 0, r
+        assert json.loads(r["shard/samples_rejected_silent"]) == 0, r
 
     summary_rows = [r for r in rows if "shards/rendered" in r]
     assert len(summary_rows) == 1, (
@@ -231,6 +239,8 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     assert json.loads(summary["shards/rendered"]) == 0, summary
     assert json.loads(summary["shards/skipped"]) == spec.num_shards, summary
     assert json.loads(summary["shards/total"]) == spec.num_shards, summary
+    assert json.loads(summary["generation/samples_rejected_clipped"]) == 0, summary
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 0, summary
     for key in (
         "generation/elapsed_seconds",
         "generation/samples",
@@ -239,6 +249,67 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         assert key in summary, (key, summary)
     assert json.loads(summary["generation/samples"]) == 0, summary
     assert json.loads(summary["generation/samples_per_second"]) == 0.0, summary
+
+
+def test_generate_relay_preserves_nonzero_rejection_counts_offline(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """Renderer rejection counts reach per-shard and run-summary W&B rows.
+
+    :param tmp_path: Per-test render and offline W&B directory.
+    :param fake_r2_remote: Local filesystem backing the real rclone staging path.
+    :param monkeypatch: Pins offline W&B and renderer boundaries.
+    :param dataset_spec_factory: Shared ``DatasetSpec`` factory.
+    """
+    _offline_wandb_env(monkeypatch, tmp_path)
+    spec = _build_spec(dataset_spec_factory)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.renderer_version,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    render_shard = stub_renderer(spec)
+
+    def _render_with_rejections(args: list[str]) -> None:
+        render_shard(args)
+        if args and args[0] != "rclone":
+            shard_path = Path(args[find_script_index(args) + 1])
+            render_metrics_path(shard_path).write_text(
+                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+            )
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        _render_with_rejections,
+    )
+    wandb_logger = WandbLogger(
+        offline=True,
+        save_dir=str(tmp_path),
+        id=spec.run_id,
+        project="wandb-track-test-project",
+    )
+
+    generate(spec, tmp_path, [wandb_logger])
+
+    binary_files = glob.glob(
+        str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
+    )
+    rows = read_history_rows(
+        Path(binary_files[0]),
+        until=lambda scanned: any("shards/rendered" in row for row in scanned),
+    )
+    shard_rows = [row for row in rows if "shard/bytes" in row]
+    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3]
+    summary = next(row for row in rows if "shards/rendered" in row)
+    assert json.loads(summary["generation/samples_rejected_clipped"]) == 4
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 6
 
 
 def test_generate_stamps_wandb_provenance_into_run_config_offline(

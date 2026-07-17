@@ -218,24 +218,34 @@ the single binding point: re-running with the same `spec` resumes the same W&B r
 
 ### 5b. Per-shard metrics (one history row per shard, `step=shard_id`)
 
-| Key                    | What                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `shard/bytes`          | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
-| `shard/render_seconds` | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| Key                              | What                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `shard/bytes`                    | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
+| `shard/render_seconds`           | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| `shard/samples_rejected_clipped` | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
+| `shard/samples_rejected_silent`  | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
 
 Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
-serial and parallel dispatchers.
+serial and parallel dispatchers. A renderer that exits successfully without a
+valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 
-### 5c. Run summary (one terminal row)
+### 5c. Per-worker summary (one terminal row per worker invocation)
 
-| Key                             | What                                              |
-| ------------------------------- | ------------------------------------------------- |
-| `shards/rendered`               | Shards this rank actually rendered                |
-| `shards/skipped`                | Shards short-circuited by the R2-skip probe       |
-| `shards/total`                  | `len(my_range)` — owned shard count for this rank |
-| `generation/elapsed_seconds`    | Wall-clock dispatcher duration (mirrors #1304)    |
-| `generation/samples`            | `rendered * spec.render.samples_per_shard`        |
-| `generation/samples_per_second` | `samples / elapsed_s` (0.0 when `elapsed_s == 0`) |
+| Key                                   | What                                                         |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `shards/rendered`                     | Shards this rank actually rendered                           |
+| `shards/skipped`                      | Shards short-circuited by the R2-skip probe                  |
+| `shards/total`                        | `len(my_range)` — owned shard count for this rank            |
+| `generation/elapsed_seconds`          | Wall-clock dispatcher duration (mirrors #1304)               |
+| `generation/samples`                  | `rendered * spec.render.samples_per_shard`                   |
+| `generation/samples_per_second`       | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)            |
+| `generation/samples_rejected_clipped` | Clipped sampled renders rejected across this worker's shards |
+| `generation/samples_rejected_silent`  | Silent sampled renders rejected across this worker's shards  |
+
+Generation rejection totals are worker-local, not distributed-run totals. They
+sum only shards rendered by this invocation; in claims mode, those are claims
+won and rendered by this worker. R2-skipped shards contribute zero because their
+prior local sidecars are unavailable.
 
 Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast — there
 is no partial-success path. Either every owned shard's contract is fulfilled (rendered or
@@ -249,6 +259,7 @@ in the `finally`.
 | Issue                                                         | Topic                                                                                                                   |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
+| [#2032](https://github.com/tinaudio/synth-setter/issues/2032) | Separate per-shard counts for silent and clipped sampled-render rejections                                              |
 
 ### 5e. Sweeps
 
