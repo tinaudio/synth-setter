@@ -44,7 +44,7 @@ from unittest.mock import patch
 import lance
 import numpy as np
 import pytest
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
@@ -130,8 +130,8 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
 
     Pins #1999 through the ``spec_from_cfg`` entrypoint path: the composed
-    ``surge_simple`` render group (inheriting ``render/surge_xt.yaml``'s surfaced
-    value) resolves ``"once"`` when neither experiment nor CLI overrides it. The
+    ``surge_simple`` render group (inheriting ``render/vst.yaml``'s surfaced value)
+    resolves ``"once"`` when neither experiment nor CLI overrides it. The
     schema-level Field default is pinned separately in
     ``tests/pipeline/schemas/test_dataset_spec.py::test_cadence_defaults_off_darwin``.
 
@@ -1209,6 +1209,15 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
+
+        eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
+        assert len(eval_configs) == 3
+        for config_path in eval_configs:
+            eval_cfg = OmegaConf.load(config_path)
+            assert eval_cfg.render.param_spec_name == "surge_simple"
+            assert eval_cfg.render.plugin_state_path == "presets/surge-simple.vstpreset"
+            assert eval_cfg.render.renderer_version == "1.3.4"
+            assert eval_cfg.render.sample_rate == 44100
 
         # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))

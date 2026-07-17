@@ -161,14 +161,12 @@ def _run_oracle_eval_subprocess(
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # eval.yaml leaves render null; render_vst=true re-renders predicted
-        # params. Take the surge_simple group for structure, then override every
-        # render field predict_vst_audio renders with to the generation render so
-        # the round-trip matches it exactly (not the group / CLI defaults).
-        "render=surge_simple",
-        f"render.param_spec_name={render.param_spec_name}",
-        f"render.plugin_state_path={render.plugin_state_path}",
-        f"render.plugin_path={render.plugin_path}",
+        # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
+        "render=vst",
+        f"+render.param_spec_name={render.param_spec_name}",
+        f"+render.plugin_state_path={render.plugin_state_path}",
+        f"+render.plugin_path={render.plugin_path}",
+        f"+render.renderer_version={render.renderer_version}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",

@@ -2687,7 +2687,7 @@ class TestMainDispatchBranches:
         Pins the load-bearing overrides (``experiment=surge/fake_oracle``,
         ``datamodule.dataset_root``, ``ckpt_path=null``, ``mode=predict``), the
         wandb-resume trio that routes the eval's ``audio/*`` metrics onto the
-        generate run, and every render field passed through from the generation
+        generate run, and each postprocessing render field copied from the generation
         ``RenderConfig`` so the eval re-renders identically (here a surge_xt spec).
         Runs the helper directly so cfg-resolution noise can't mask an argv drift.
 
@@ -2745,13 +2745,13 @@ class TestMainDispatchBranches:
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
-        # render_vst=true re-renders predicted params; surge_simple supplies the
-        # group structure, while every render field predict_vst_audio renders with
-        # is overridden from the generation RenderConfig so the re-render matches it.
-        assert "render=surge_simple" in called_argv
-        assert "render.param_spec_name=surge_xt" in called_argv
-        assert "render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
-        assert "render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        # render_vst=true re-renders predicted params; the generic VST group supplies
+        # the structure while synth identity comes from the generation RenderConfig.
+        assert "render=vst" in called_argv
+        assert "+render.param_spec_name=surge_xt" in called_argv
+        assert "+render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
+        assert "+render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert f"+render.renderer_version={render.renderer_version}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv
         assert f"render.velocity={render.velocity}" in called_argv
