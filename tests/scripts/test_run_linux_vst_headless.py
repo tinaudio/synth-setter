@@ -113,8 +113,13 @@ def _assert_stub_xvfb_pids_dead(env: dict[str, str]) -> None:
     pids_file = Path(env["XVFB_STUB_DIR"]) / "xvfb_pids"
     for line in pids_file.read_text().splitlines():
         pid = int(line)
-        with pytest.raises(ProcessLookupError):
+        try:
             os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pytest.fail(f"stub Xvfb pid={pid} still exists (PermissionError)")
+        pytest.fail(f"stub Xvfb pid={pid} still exists")
 
 
 def test_bootstrap_first_attempt_succeeds_runs_command_under_display(
@@ -199,6 +204,94 @@ def test_bootstrap_non_numeric_attempts_falls_back_to_default(
     result = _run_wrapper(stub_env)
     assert result.returncode != 0
     assert _xvfb_calls(stub_env) == 3
+
+
+@pytest.mark.parametrize("override", ["00", "000"])
+def test_bootstrap_zero_padded_zero_attempts_falls_back_to_default(
+    stub_env: dict[str, str], override: str
+) -> None:
+    """A zero-padded zero retry budget degrades to the script's default.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    :param override: Zero-padded retry-budget override.
+    """
+    stub_env["XVFB_STUB_FAILS"] = "99"
+    stub_env["XVFB_BOOTSTRAP_ATTEMPTS"] = override
+    result = _run_wrapper(stub_env)
+    assert result.returncode != 0
+    assert _xvfb_calls(stub_env) == 3
+
+
+@pytest.mark.parametrize("override", ["00", "000"])
+def test_bootstrap_zero_padded_zero_ready_probes_falls_back_to_default(
+    stub_env: dict[str, str], override: str
+) -> None:
+    """A zero-padded zero probe budget degrades to the script's default.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    :param override: Zero-padded readiness-probe override.
+    """
+    stub_env["XVFB_READY_PROBES"] = override
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert _xvfb_calls(stub_env) == 1
+
+
+def test_bootstrap_non_numeric_ready_probes_falls_back_to_default(
+    stub_env: dict[str, str],
+) -> None:
+    """A malformed readiness-probe override degrades to the default.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XVFB_READY_PROBES"] = "not-a-number"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+
+
+@pytest.mark.parametrize("override", ["10", "99999999999999999999"])
+def test_bootstrap_attempts_above_max_clamps_to_bound(
+    stub_env: dict[str, str], override: str
+) -> None:
+    """An excessive retry budget remains bounded by the script's maximum.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    :param override: Retry-budget override exceeding the supported maximum.
+    """
+    stub_env["XVFB_STUB_FAILS"] = "99"
+    stub_env["XVFB_BOOTSTRAP_ATTEMPTS"] = override
+    result = _run_wrapper(stub_env)
+    assert result.returncode != 0
+    assert _xvfb_calls(stub_env) == 9
+    assert "clamping XVFB_BOOTSTRAP_ATTEMPTS to 9" in result.stderr
+
+
+def test_bootstrap_ready_probes_above_max_reports_clamp(
+    stub_env: dict[str, str],
+) -> None:
+    """An excessive readiness budget reports the enforced maximum.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XVFB_READY_PROBES"] = "101"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "clamping XVFB_READY_PROBES to 100" in result.stderr
+
+
+def test_bootstrap_jitter_above_max_reports_clamp(
+    stub_env: dict[str, str],
+) -> None:
+    """An excessive jitter override reports its sub-second maximum.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XVFB_RETRY_JITTER_MAX"] = "10"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "clamping XVFB_RETRY_JITTER_MAX to 9" in result.stderr
 
 
 def test_bootstrap_zero_padded_jitter_override_recovers(

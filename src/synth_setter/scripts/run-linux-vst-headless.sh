@@ -72,31 +72,39 @@ trap cleanup EXIT
 
 # Concurrent bootstraps can lose the display-lock race or miss the readiness
 # window, so retry instead of failing the renderer (#2035).
-XVFB_BOOTSTRAP_ATTEMPTS="${XVFB_BOOTSTRAP_ATTEMPTS:-3}"
-# Readiness probes per attempt, 0.1 s apart; widen on congested hosts.
-XVFB_READY_PROBES="${XVFB_READY_PROBES:-50}"
-# Max retry jitter in tenths of a second, capped sub-second; 0 disables.
-XVFB_RETRY_JITTER_MAX="${XVFB_RETRY_JITTER_MAX:-9}"
-# Malformed (and zero, where invalid) overrides fall back to defaults so a
-# typo'd knob degrades to stock behavior instead of aborting the bootstrap.
-case "$XVFB_BOOTSTRAP_ATTEMPTS" in
-  '' | *[!0-9]* | 0) XVFB_BOOTSTRAP_ATTEMPTS=3 ;;
-esac
-case "$XVFB_READY_PROBES" in
-  '' | *[!0-9]* | 0) XVFB_READY_PROBES=50 ;;
-esac
-case "$XVFB_RETRY_JITTER_MAX" in
-  '' | *[!0-9]*) XVFB_RETRY_JITTER_MAX=9 ;;
-esac
-# Force base-10 so zero-padded overrides (e.g. "09") don't parse as octal
-# and silently break the retry loop's $(( )) arithmetic.
-XVFB_BOOTSTRAP_ATTEMPTS=$((10#$XVFB_BOOTSTRAP_ATTEMPTS))
-XVFB_READY_PROBES=$((10#$XVFB_READY_PROBES))
-XVFB_RETRY_JITTER_MAX=$((10#$XVFB_RETRY_JITTER_MAX))
-if [ "$XVFB_RETRY_JITTER_MAX" -gt 9 ]; then
-  XVFB_RETRY_JITTER_MAX=9
-fi
+normalize_decimal() {
+  local name=$1 value=$2 default=$3 minimum=$4 maximum=$5
+  case "$value" in
+    '' | *[!0-9]*)
+      printf '%s\n' "$default"
+      return
+      ;;
+  esac
+  while [[ "$value" == 0* ]]; do
+    value=${value#0}
+  done
+  value=${value:-0}
+  if [[ "$value" == 0 && "$minimum" -gt 0 ]]; then
+    printf '%s\n' "$default"
+    return
+  fi
+  if (( ${#value} > ${#maximum} )) ||
+    [[ ${#value} -eq ${#maximum} && "$value" > "$maximum" ]]; then
+    echo "[wrapper] clamping ${name} to ${maximum}" >&2
+    printf '%s\n' "$maximum"
+    return
+  fi
+  printf '%s\n' "$value"
+}
+
+XVFB_BOOTSTRAP_ATTEMPTS=$(normalize_decimal \
+  XVFB_BOOTSTRAP_ATTEMPTS "${XVFB_BOOTSTRAP_ATTEMPTS:-3}" 3 1 9)
+XVFB_READY_PROBES=$(normalize_decimal \
+  XVFB_READY_PROBES "${XVFB_READY_PROBES:-50}" 50 1 100)
+XVFB_RETRY_JITTER_MAX=$(normalize_decimal \
+  XVFB_RETRY_JITTER_MAX "${XVFB_RETRY_JITTER_MAX:-9}" 9 0 9)
 readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX
+readonly XVFB_STARTUP_PROBES=100
 
 # Start Xvfb and wait until it accepts connections; returns non-zero on any
 # startup fault, leaving XVFB_PID for reap_failed_xvfb to collect.
@@ -108,16 +116,15 @@ start_xvfb_attempt() {
     </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
   XVFB_PID=$!
 
-  # Check for death before sleeping: a lost display-lock race kills Xvfb
-  # within milliseconds, and instant detection keeps failed attempts cheap.
+  # The display-number write has its own fixed limit before readiness probes.
   local count=0
-  while [ ! -s "$DISPLAY_FILE" ]; do
+  while [[ ! -s "$DISPLAY_FILE" ]]; do
     if ! kill -0 "$XVFB_PID" 2>/dev/null; then
       echo "Xvfb died unexpectedly" >&2
       return 1
     fi
     count=$((count+1))
-    if [ "$count" -ge 100 ]; then
+    if (( count >= XVFB_STARTUP_PROBES )); then
       echo "Timeout waiting for Xvfb to start" >&2
       return 1
     fi
@@ -127,7 +134,8 @@ start_xvfb_attempt() {
   DISPLAY=":$(cat "$DISPLAY_FILE")"
   export DISPLAY
 
-  for _ in $(seq "$XVFB_READY_PROBES"); do
+  local probe
+  for ((probe = 0; probe < XVFB_READY_PROBES; probe += 1)); do
     if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
       return 0
     fi
@@ -149,18 +157,18 @@ reap_failed_xvfb() {
 attempt=1
 until start_xvfb_attempt; do
   reap_failed_xvfb
-  if [ "$attempt" -ge "$XVFB_BOOTSTRAP_ATTEMPTS" ]; then
+  if (( attempt >= XVFB_BOOTSTRAP_ATTEMPTS )); then
     echo "Xvfb bootstrap failed after ${attempt} attempt(s)" >&2
     exit 1
   fi
   attempt=$((attempt+1))
-  # Sub-second jitter decorrelates concurrent bootstraps racing the same
-  # display locks.
-  if [ "$XVFB_RETRY_JITTER_MAX" -gt 0 ]; then
-    sleep "0.$((RANDOM % XVFB_RETRY_JITTER_MAX + 1))"
-  fi
   echo "[wrapper] retrying Xvfb bootstrap" \
     "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
+  # Sub-second jitter decorrelates concurrent bootstraps racing the same
+  # display locks.
+  if (( XVFB_RETRY_JITTER_MAX > 0 )); then
+    sleep "0.$((RANDOM % XVFB_RETRY_JITTER_MAX + 1))"
+  fi
 done
 
 # Start an XSettings manager.
