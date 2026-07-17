@@ -41,6 +41,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _dispatch_shards_parallel,
+    _load_render_rejections,
+    _render_one_owned_shard,
     build_generate_args,
     generate,
 )
@@ -3530,6 +3533,92 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     monkeypatch.setattr(generate_dataset.platform, "node", lambda: "pod@host:1/x")
 
     assert generate_dataset._worker_id() == "pod-host-1-x"
+
+
+def test_parallel_dispatch_aggregates_rejections_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """Parallel dispatch returns exact totals from completed shard reports.
+
+    :param monkeypatch: Replaces the renderer boundary and pins two workers.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Unused work directory passed through the dispatcher.
+    """
+    outcomes = {
+        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
+        1: (False, True, RenderRejectionMetrics(clipped=3, silent=4)),
+        2: (True, False, RenderRejectionMetrics(clipped=5, silent=6)),
+    }
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_parallel(
+        spec,
+        range(3),
+        tmp_path,
+        [],
+    )
+
+    assert (rendered, skipped) == (2, 1)
+    assert rejections == RenderRejectionMetrics(clipped=9, silent=12)
+
+
+def test_load_render_rejections_valid_sidecar_returns_strict_report(tmp_path: Path) -> None:
+    """A valid renderer sidecar round-trips through launcher validation.
+
+    :param tmp_path: Per-test sidecar directory.
+    """
+    metrics_path = tmp_path / "shard.render-metrics.json"
+    metrics_path.write_text('{"clipped":2,"silent":3}')
+
+    assert _load_render_rejections(metrics_path, shard_id=7) == RenderRejectionMetrics(
+        clipped=2,
+        silent=3,
+    )
+
+
+def test_load_render_rejections_invalid_sidecar_names_shard(tmp_path: Path) -> None:
+    """An invalid renderer sidecar fails with its logical shard ID.
+
+    :param tmp_path: Per-test sidecar directory.
+    """
+    metrics_path = tmp_path / "shard.render-metrics.json"
+    metrics_path.write_text('{"clipped":"2","silent":3}')
+
+    with pytest.raises(RuntimeError, match="invalid render metrics for shard 7"):
+        _load_render_rejections(metrics_path, shard_id=7)
+
+
+def test_render_one_owned_shard_relays_rejection_report_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """A rendered shard returns the validated report supplied by its renderer.
+
+    :param monkeypatch: Replaces staging and the renderer boundary.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Unused work directory passed through the renderer boundary.
+    """
+    expected = RenderRejectionMetrics(clipped=2, silent=3)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_and_upload_shard",
+        lambda _spec, _shard, _work_dir: (123, expected),
+    )
+
+    rendered, skipped, rejections = _render_one_owned_shard(spec, 0, tmp_path, [])
+
+    assert (rendered, skipped) == (True, False)
+    assert rejections == expected
 
 
 def test_worker_id_empty_hostname_falls_back_to_worker(
