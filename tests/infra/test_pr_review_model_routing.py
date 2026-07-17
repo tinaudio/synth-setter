@@ -184,8 +184,8 @@ def test_full_review_skills_require_the_pinned_orchestrator() -> None:
         assert "general-purpose" not in text
 
 
-def test_review_fanout_fails_closed_on_incomplete_worker_reports() -> None:
-    """Incomplete fan-out cannot be rendered as a zero-finding sentinel."""
+def test_review_fanout_documents_incomplete_worker_remediation() -> None:
+    """The review instructions require cleanup instead of a partial PASS sentinel."""
     shared = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
@@ -193,12 +193,11 @@ def test_review_fanout_fails_closed_on_incomplete_worker_reports() -> None:
         REPO_ROOT / "agent" / "skills" / "repo-review-full-no-comments" / "SKILL.md"
     ).read_text()
 
-    assert "missing" in shared
-    assert "empty" in shared
-    assert "malformed" in shared
-    assert "stop without building" in shared
-    assert "remove that file" in no_comments
-    assert "Worker reports: K/K complete and non-empty" in no_comments
+    assert "Every result must be\nnon-empty after whitespace trimming" in shared
+    assert "If any selected worker is missing,\nempty, or malformed" in shared
+    assert "stop without building\nthe findings JSON" in shared
+    assert "remove that file\n>   and the temporary findings JSON" in no_comments
+    assert "- Worker reports: K/K complete and non-empty." in no_comments
 
 
 def test_review_fanout_promotes_only_correctness() -> None:

@@ -159,6 +159,40 @@ def test_gate_finding_text_with_clean_counts_reaches_finding_gate(tmp_path: Path
     assert "unresolved BLOCK finding" in result.stderr
 
 
+def test_gate_blocks_dash_bulleted_clean_summary_with_partial_workers(tmp_path: Path) -> None:
+    """A dash-bulleted clean summary requires every selected worker report.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Summary\n\n"
+        "- 0 BLOCK, 0 WARN across 8 skills\n"
+        "- Worker reports: 3/8 complete and non-empty.\n",
+        complete=False,
+    )
+    result = _run_gate(review)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "complete worker reports" in result.stderr
+
+
+def test_gate_blocks_clean_pass_with_multiple_worker_evidence_lines(tmp_path: Path) -> None:
+    """A clean sentinel must contain exactly one well-formed evidence line.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Summary\n\n0 BLOCK, 0 WARN. PASS.\n"
+        "- Worker reports: 8/8 complete and non-empty.\n"
+        "- Worker reports: malformed.\n",
+        complete=False,
+    )
+    result = _run_gate(review)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "complete worker reports" in result.stderr
+
+
 def test_gate_blocks_clean_pass_without_complete_worker_reports(tmp_path: Path) -> None:
     """A zero-finding sentinel without worker evidence cannot satisfy the gate.
 

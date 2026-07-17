@@ -1,4 +1,4 @@
-"""Shared helpers for the pre-PR review-gate sentinel filename.
+"""Shared helpers for pre-PR review-gate sentinel files.
 
 The sentinel encodes the commit SHA the review was performed against directly
 in the review file's name, e.g.::
@@ -7,8 +7,8 @@ in the review file's name, e.g.::
 
 Both ``/repo-review-full-no-comments`` (when writing the rendered report) and
 ``agent/hooks/pre-pr-review-gate.sh`` (when validating the path supplied via
-``REVIEW_FULL=<path>`` on ``gh pr create``) call into this module so the file
-name format has exactly one source of truth.
+``REVIEW_FULL=<path>`` on ``gh pr create``) call into this module so sentinel
+filename and worker-evidence formats have exactly one source of truth.
 
 Stdlib-only so the bash gate can ``python3 review_sentinel.py parse <path>``
 without project deps on PATH.
@@ -20,12 +20,18 @@ import os
 import re
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 REVIEW_DIR = ".agent-reviews"
 SKILL_PREFIX = "repo-review-full-no-comments"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME_RE = re.compile(rf"^{re.escape(SKILL_PREFIX)}\.([0-9a-f]{{40}})\.md$")
-_SUBCOMMANDS = frozenset({"make", "parse", "path"})
+_WORKER_REPORT_PREFIX = "- Worker reports:"
+_ZERO_DIFF_WORKER_REPORT = f"{_WORKER_REPORT_PREFIX} not applicable (zero diff)."
+_WORKER_REPORT_RE = re.compile(
+    rf"^{re.escape(_WORKER_REPORT_PREFIX)} ([0-9]+)/([0-9]+) complete and non-empty\.$"
+)
+_SUBCOMMANDS = frozenset({"make", "parse", "path", "worker-evidence"})
 _USAGE = f"usage: review_sentinel.py {{{'|'.join(sorted(_SUBCOMMANDS))}}} <arg>"
 
 
@@ -57,6 +63,32 @@ def parse_review_filename(filename: str) -> str | None:
     return match.group(1) if match else None
 
 
+def parse_worker_evidence(contents: str) -> tuple[int, int] | None:
+    """Return complete worker counts, or ``None`` for invalid evidence.
+
+    The zero-diff exception returns ``(0, 0)``. Exactly one worker-evidence
+    line is required; malformed or duplicate lines cannot make a review pass.
+
+    :param contents: Rendered review sentinel text.
+    :returns: ``(completed, expected)`` when valid, otherwise ``None``.
+    """
+    evidence_lines = [
+        line for line in contents.splitlines() if line.startswith(_WORKER_REPORT_PREFIX)
+    ]
+    if evidence_lines == [_ZERO_DIFF_WORKER_REPORT]:
+        return (0, 0)
+    if len(evidence_lines) != 1:
+        return None
+
+    match = _WORKER_REPORT_RE.fullmatch(evidence_lines[0])
+    if match is None:
+        return None
+    completed, expected = (int(value) for value in match.groups())
+    if completed == 0 or completed != expected:
+        return None
+    return (completed, expected)
+
+
 def make_review_path(sha: str, base_dir: str = REVIEW_DIR) -> str:  # noqa: DOC502
     """Return the canonical relative path for a sentinel review file.
 
@@ -71,11 +103,12 @@ def make_review_path(sha: str, base_dir: str = REVIEW_DIR) -> str:  # noqa: DOC5
 
 
 def _main(argv: Sequence[str]) -> int:
-    """Tiny CLI so the bash gate can parse/format filenames without Python imports.
+    """Tiny CLI so the bash gate can validate sentinel metadata without imports.
 
     Subcommands: ``make <sha>`` prints the filename; ``parse <path>`` prints
     the encoded SHA (or exits 1 if the path is not a sentinel); ``path <sha>``
-    prints ``<REVIEW_DIR>/<filename>``.
+    prints ``<REVIEW_DIR>/<filename>``; ``worker-evidence <path>`` prints
+    validated completed/expected counts (or exits 1 for invalid evidence).
 
     :param argv: Argument list, normally ``sys.argv``.
     :returns: Process exit code (0 success; 1 parse no-match; 2 usage/ValueError).
@@ -89,6 +122,11 @@ def _main(argv: Sequence[str]) -> int:
             sys.stdout.write(make_review_filename(arg) + "\n")
         elif command == "path":
             sys.stdout.write(make_review_path(arg) + "\n")
+        elif command == "worker-evidence":
+            evidence = parse_worker_evidence(Path(arg).read_text(encoding="utf-8"))
+            if evidence is None:
+                return 1
+            sys.stdout.write(f"{evidence[0]} {evidence[1]}\n")
         else:
             sha = parse_review_filename(arg)
             if sha is None:

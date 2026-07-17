@@ -131,6 +131,30 @@ def test_parse_review_filename_rejects_non_matching_names(
     assert helper.parse_review_filename(bad_filename) is None
 
 
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        ("- Worker reports: 8/8 complete and non-empty.\n", (8, 8)),
+        ("- Worker reports: not applicable (zero diff).\n", (0, 0)),
+        ("- Worker reports: 3/8 complete and non-empty.\n", None),
+        (
+            "- Worker reports: 8/8 complete and non-empty.\n- Worker reports: malformed.\n",
+            None,
+        ),
+    ],
+)
+def test_parse_worker_evidence_validates_complete_single_report(
+    helper: ModuleType, contents: str, expected: tuple[int, int] | None
+) -> None:
+    """Worker evidence accepts complete/zero-diff reports and rejects invalid input.
+
+    :param helper: The loaded helper module.
+    :param contents: Synthetic sentinel evidence lines.
+    :param expected: Expected completed/selected count pair, if valid.
+    """
+    assert helper.parse_worker_evidence(contents) == expected
+
+
 def test_make_review_path_uses_default_directory(helper: ModuleType) -> None:
     """``make_review_path`` joins the helper's REVIEW_DIR by default.
 
