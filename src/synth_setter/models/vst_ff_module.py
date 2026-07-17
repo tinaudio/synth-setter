@@ -24,7 +24,7 @@ class VSTFeedForwardModule(LightningModule):
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param compile: Whether to ``torch.compile`` the net during fit setup.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         """
         super().__init__()
@@ -84,10 +84,8 @@ class VSTFeedForwardModule(LightningModule):
         )
 
     def setup(self, stage: str) -> None:
-        if not self.hparams.compile:
-            return
-
-        self.net = torch.compile(self.net)
+        if self.hparams.compile and stage == "fit":
+            self.net = torch.compile(self.net)
 
     def on_before_optimizer_step(self, optimizer) -> None:
         norms = grad_norm(self.net, 2.0)
