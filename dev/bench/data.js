@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784255030052,
+  "lastUpdate": 1784255032119,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15622,6 +15622,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.330530653999995,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3937a342a05c1fc8feb86bb24b2f1cd434c11838",
+          "message": "fix(data-pipeline): stabilize dataset split seed streams (#2069)\n\n* fix(data-pipeline): stabilize dataset split seed streams\n\n* test(data-pipeline): tighten split seed contracts\n\n* test(data-pipeline): update spec validator fixtures\n\n* test(data-pipeline): explain fake renderer seed injection",
+          "timestamp": "2026-07-16T21:55:02-04:00",
+          "tree_id": "61722126d8de24c04982aebe58d9be6b3c2c69cd",
+          "url": "https://github.com/tinaudio/synth-setter/commit/3937a342a05c1fc8feb86bb24b2f1cd434c11838"
+        },
+        "date": 1784255031718,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.173649787902832,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.205591107904912,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08834536373615265,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.009539246559143066,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1032698154449463,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.780606734199978,
             "unit": "seconds"
           }
         ]
