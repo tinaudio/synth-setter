@@ -76,7 +76,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param validation_cfg_strength: Classifier-free-guidance strength at validation.
         :param test_sample_steps: RK4 integration steps used at test.
         :param test_cfg_strength: Classifier-free-guidance strength at test.
-        :param compile: Whether to ``torch.compile`` the net in :meth:`setup`.
+        :param compile: Whether to compile the encoder and vector field during fit setup.
         :param num_params: Parameter-vector width the field operates on.
         """
         super().__init__()
@@ -262,11 +262,9 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
     def setup(self, stage: str) -> None:
-        if not self.hparams.compile:
-            return
-
-        self.vector_field = torch.compile(self.vector_field)
-        self.encoder = torch.compile(self.encoder)
+        if self.hparams.compile and stage == "fit":
+            self.vector_field = torch.compile(self.vector_field)
+            self.encoder = torch.compile(self.encoder)
 
     def on_before_optimizer_step(self, optimizer) -> None:
         vf_norms = grad_norm(self.vector_field, 2.0)
