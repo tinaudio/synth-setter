@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v9.4.1 (2026-07-17)
+
+### Bug Fixes
+
+- **data-pipeline**: Stabilize dataset split seed streams
+  ([#2069](https://github.com/tinaudio/synth-setter/pull/2069),
+  [`3937a34`](https://github.com/tinaudio/synth-setter/commit/3937a342a05c1fc8feb86bb24b2f1cd434c11838))
+
+* fix(data-pipeline): stabilize dataset split seed streams
+
+* test(data-pipeline): tighten split seed contracts
+
+* test(data-pipeline): update spec validator fixtures
+
+* test(data-pipeline): explain fake renderer seed injection
+
+
 ## v9.4.0 (2026-07-17)
 
 ### Chores
