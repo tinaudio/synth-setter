@@ -6,9 +6,8 @@
 # though no epoch completes; the published model-ffn_simple:latest is junk —
 # do not evaluate it for quality.
 #
-# The dataset override makes the run self-contained: a fresh pod has no local
-# dataset, so the cmd pins a small finalized R2 root (~5 GiB, fits the 50 GB
-# template disk). num_workers=0 keeps startup deterministic for a 10-step run.
+# A fresh pod has no local dataset, so the cmd pins a small finalized R2 root
+# (~5 GiB, fits the 50 GB disk); num_workers=0 keeps 10-step startup deterministic.
 
 compute_template: src/synth_setter/configs/compute/runpod-template.yaml
 worker_image_tag: dev-snapshot
