@@ -1,5 +1,6 @@
 """Tests for ``synth_setter.utils.resume`` — auto-resume checkpoint discovery."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -243,18 +244,24 @@ def test_apply_wandb_resume_continuity_without_wandb_logger_is_noop() -> None:
     assert cfg.logger is None
 
 
-def test_discover_resume_checkpoint_no_local_and_no_bucket_returns_none(
-    tmp_path: Path,
+def test_discover_resume_checkpoint_no_local_and_no_bucket_logs_info(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """With no local sibling and no r2.bucket, discovery falls through to None.
+    """With no local sibling or R2 config, discovery falls through at INFO level.
 
     :param tmp_path: Empty run-dir family.
+    :param caplog: Pytest log capture fixture.
     """
     current = tmp_path / "ffn-current"
     current.mkdir()
     cfg = OmegaConf.create({"paths": {"output_dir": str(current)}, "r2": {"bucket": None}})
 
-    assert resume.discover_resume_checkpoint(cfg, config_id="ffn_simple") is None
+    with caplog.at_level(logging.INFO, logger="synth_setter.utils.resume"):
+        decision = resume.discover_resume_checkpoint(cfg, config_id="ffn_simple")
+
+    assert decision is None
+    record = next(record for record in caplog.records if "no mirror prefix" in record.message)
+    assert record.levelno == logging.INFO
 
 
 def test_discover_resume_checkpoint_unreachable_r2_returns_none(
@@ -328,32 +335,36 @@ def test_composed_train_config_ships_resume_keys() -> None:
     assert cfg.logger.wandb.resume is None
 
 
-def test_discover_local_sibling_without_any_identity_evidence_is_skipped(
-    tmp_path: Path,
+def test_discover_local_sibling_without_any_identity_evidence_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """No wandb dir and no ``.hydra`` state means the sibling cannot be trusted.
+    """No wandb dir and no ``.hydra`` state warns that the sibling is unverifiable.
 
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    :param caplog: Pytest log capture fixture.
     """
     _make_run_dir(tmp_path, "ffn-prior")
     current = tmp_path / "ffn-current"
     current.mkdir()
 
     assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
-def test_discover_local_wandb_less_sibling_with_mismatched_hydra_state_is_skipped(
-    tmp_path: Path,
+def test_discover_local_mismatched_hydra_state_skips_without_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A wandb-less sibling recorded for another experiment must not be resumed.
+    """A sibling recorded for another experiment is skipped without warning.
 
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    :param caplog: Pytest log capture fixture.
     """
     _make_run_dir(tmp_path, "flow-prior", hydra_experiment="surge/flow_simple")
     current = tmp_path / "ffn-current"
     current.mkdir()
 
     assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
 def test_discover_local_recovers_run_id_from_offline_wandb_dir(tmp_path: Path) -> None:

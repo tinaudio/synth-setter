@@ -176,14 +176,17 @@ def discover_local_checkpoint(current_output_dir: Path, config_id: str) -> Resum
         if run_id is not None:
             if not _run_id_matches_config(run_id, config_id):
                 continue
-        elif _config_id_from_hydra_dir(run_dir) != config_id:
-            log.warning(
-                "Skipping auto-resume candidate %s: no W&B run id or matching "
-                "Hydra state proves it belongs to config_id %r.",
-                ckpt,
-                config_id,
-            )
-            continue
+        else:
+            candidate_config_id = _config_id_from_hydra_dir(run_dir)
+            if candidate_config_id is None:
+                log.warning(
+                    "Skipping auto-resume candidate %s: no W&B run id or readable "
+                    "Hydra state proves its identity.",
+                    ckpt,
+                )
+                continue
+            if candidate_config_id != config_id:
+                continue
         try:
             mtime = ckpt.stat().st_mtime
         except OSError:  # a concurrent launch rotated the checkpoint away mid-scan
@@ -259,25 +262,24 @@ def discover_r2_checkpoint(prefix: str, config_id: str, dest_dir: Path) -> Resum
     except _DEGRADABLE_ERRORS as exc:
         log.warning("Skipping R2 resume discovery under %s: %s", prefix, exc)
         return None
-    mirrors = [
-        entry
-        for entry in entries
-        if entry.path.count("/") == 1 and entry.path.endswith("/last.ckpt")
-    ]
+    mirrors = []
+    for entry in entries:
+        if entry.path.count("/") != 1 or not entry.path.endswith("/last.ckpt"):
+            continue
+        namespace = entry.path.split("/", 1)[0]
+        run_id = run_id_from_recovery_namespace(namespace)
+        if run_id is None or not _run_id_matches_config(run_id, config_id):
+            continue
+        mirrors.append((entry, run_id))
     if not mirrors:
         return None
-    newest = max(mirrors, key=lambda entry: entry.mtime)
+    newest, run_id = max(mirrors, key=lambda candidate: candidate[0].mtime)
     dest = dest_dir / "last.ckpt"
     try:
         r2_io.download_to_path(f"{prefix}/{newest.path}", dest)
     except _DEGRADABLE_ERRORS as exc:
         log.warning("Failed to download resume checkpoint %s: %s", newest.path, exc)
         return None
-    namespace = newest.path.split("/", 1)[0]
-    run_id = run_id_from_recovery_namespace(namespace)
-    # The prefix path scopes identity; a foreign embedded run id is never reused.
-    if run_id is not None and not _run_id_matches_config(run_id, config_id):
-        run_id = None
     return ResumeDecision(ckpt_path=dest, wandb_run_id=run_id, source="r2")
 
 
@@ -286,7 +288,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
 
     Tier order trades freshness for cost: local sibling run dirs (free, newest
     mid-run state), then the R2 mid-run mirrors (survives a lost disk). The R2
-    tier is skipped (with a warning) when no mirror prefix is configured.
+    tier is skipped at INFO level when no mirror prefix is configured.
 
     :param cfg: Composed train cfg; reads ``paths.output_dir`` and ``r2.bucket``.
     :param config_id: Run identity keying every tier.
@@ -297,7 +299,7 @@ def discover_resume_checkpoint(cfg: DictConfig, config_id: str) -> ResumeDecisio
     if decision is None:
         prefix = checkpoint_mirror_prefix(cfg, config_id)
         if prefix is None:
-            log.warning("Skipping R2 resume discovery: no mirror prefix is configured.")
+            log.info("Skipping R2 resume discovery: no mirror prefix is configured.")
         else:
             decision = discover_r2_checkpoint(prefix, config_id, output_dir / "resume")
     return decision

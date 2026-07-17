@@ -280,10 +280,10 @@ def test_discover_r2_non_degradable_error_propagates(
         )
 
 
-def test_discover_r2_foreign_namespace_run_id_is_not_reused(
+def test_discover_r2_newer_foreign_namespace_is_ignored(
     fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A namespace embedding another config's run id yields the checkpoint but no id.
+    """A newer mirror from another config cannot displace this config's checkpoint.
 
     :param fake_r2_remote: Fake R2 root backing the ``r2:`` remote.
     :param tmp_path: Holds the download destination.
@@ -293,9 +293,16 @@ def test_discover_r2_foreign_namespace_run_id_is_not_reused(
     _seed_mirror(
         fake_r2_remote,
         "ffn_simple",
-        f"other_config-20260715T225004231Z-{_UUID_A}",
-        b"foreign",
+        f"ffn_simple-20260714T000000000Z-{_UUID_A}",
+        b"valid",
         mtime=1_000,
+    )
+    _seed_mirror(
+        fake_r2_remote,
+        "ffn_simple",
+        f"other_config-20260715T225004231Z-{_UUID_B}",
+        b"foreign",
+        mtime=2_000,
     )
 
     decision = discover_r2_checkpoint(
@@ -305,4 +312,5 @@ def test_discover_r2_foreign_namespace_run_id_is_not_reused(
     )
 
     assert decision is not None
-    assert decision.wandb_run_id is None
+    assert decision.wandb_run_id == "ffn_simple-20260714T000000000Z"
+    assert decision.ckpt_path.read_bytes() == b"valid"
