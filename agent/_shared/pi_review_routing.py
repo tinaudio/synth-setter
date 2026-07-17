@@ -74,7 +74,7 @@ _REQUIRED_REPORT_HEADINGS = (
 _REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
 _FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
 _RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-(\d+)(\*\* — \S.+)$")
-_BULLET_FINDING = re.compile(r"^- \*\*(.+:)(\d+)(?:-(\d+))?\*\* — (\S.+)$")
+_BULLET_FINDING = re.compile(r"^(?:- )?\*\*(.+:)(\d+)(?:-(\d+))?\*\* — (\S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):

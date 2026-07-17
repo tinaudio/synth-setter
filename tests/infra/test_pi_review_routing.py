@@ -441,10 +441,7 @@ def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) ->
 
 @pytest.mark.parametrize(
     "malformed_line",
-    [
-        "**src/missing-number.py:20** — Missing list number.",
-        "2. **src/missing-description.py:30** —",
-    ],
+    ["2. **src/missing-description.py:30** —"],
 )
 def test_extract_report_rejects_malformed_finding_like_line(
     tmp_path: Path, malformed_line: str
@@ -464,6 +461,24 @@ def test_extract_report_rejects_malformed_finding_like_line(
 
     with pytest.raises(ValueError, match="malformed finding-like line"):
         extract_report(transcript)
+
+
+def test_extract_report_numbers_unnumbered_bold_finding(tmp_path: Path) -> None:
+    """Preserve an unnumbered bold finding by canonicalizing it.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"'
+        "## shell-style review — PR #2052\\n\\n### BLOCK findings\\nNone.\\n\\n"
+        "### WARN findings\\n**agent/review.sh:15** — Missing header.\\n\\n"
+        '### What looks good\\n- Strict mode."}}\n'
+    )
+
+    report = extract_report(transcript)
+
+    assert "1. **agent/review.sh:15** — Missing header." in report
 
 
 def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
