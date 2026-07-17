@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v10.0.2 (2026-07-17)
+
+### Bug Fixes
+
+- **evaluation**: Render torchsynth predictions without a plugin host
+  ([#2112](https://github.com/tinaudio/synth-setter/pull/2112),
+  [`5458585`](https://github.com/tinaudio/synth-setter/commit/5458585780a7673664d37b41ae3fdf5244eb6640))
+
+* fix(evaluation): render torchsynth predictions without a plugin host
+
+predict_vst_audio always rendered through pedalboard's plugin loader, so mode=predict on a
+  torchsynth run died with ImportError after sampling completed. The 'torchsynth' plugin-path
+  sentinel now dispatches to the in-process TorchSynthRenderer; every other path keeps the raw
+  render_params call, without the generation-side amplitude gate that would reject legitimately
+  clipping predicted-parameter renders.
+
+* docs(evaluation): note the torchsynth render branch in eval-pipeline
+
+The 5.2 render section described rendering as unconditionally pedalboard-hosted and
+  display-server-bound; the torchsynth sentinel now dispatches in-process.
+
+
 ## v10.0.1 (2026-07-17)
 
 ### Bug Fixes
