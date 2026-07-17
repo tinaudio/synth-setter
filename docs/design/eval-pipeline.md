@@ -271,18 +271,25 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} --plugin_path {vst} --plugin_state_path {preset}` |
 | **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                                                   |
 | **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`                                 |
-| **Compute**  | CPU — VST audio rendering via pedalboard                                                                                       |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                                       |
+| **Compute**  | CPU — VST audio rendering via pedalboard (or in-process torchsynth, see below)                                                 |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                                             |
 
-The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
+The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison. When `--plugin_path` is the `torchsynth` sentinel (`renderer_backend.TORCHSYNTH_PLUGIN_NAME`), `_make_render_fn` in `predict_vst_audio.py` dispatches to `TorchSynthRenderer` instead — in-process, with no plugin host or display-server requirement.
 
 **Key behaviors:**
 
+- When `--plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer` — no `renderscript.sh`/Xvfb wrapper is involved and no plugin bundle is loaded
+
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
+
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
+
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
+
 - Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
+
 - Preset path default: the registry preset for the selected spec, `plugin_state_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--plugin_state_path`)
+
 - Parameters are denormalized from the model-output range via `decode_model_output` before rendering
 
 ### 5.3 Metrics
