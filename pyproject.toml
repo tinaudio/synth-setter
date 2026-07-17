@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "9.6.2"
+version = "9.6.3"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -310,6 +310,7 @@ namespaces = true
 [tool.pytest.ini_options]
 addopts = [
   "--color=yes",
+  "--dist=loadgroup",
   "--durations=0",
   "--strict-markers",
   "--doctest-modules",
@@ -326,6 +327,7 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
+  "dataloader_multiprocess: exercises real DataLoader child processes and must share one xdist resource group",
   "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",

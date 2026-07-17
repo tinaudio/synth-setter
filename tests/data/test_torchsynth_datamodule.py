@@ -213,6 +213,8 @@ def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
     assert _epoch_param_rows(loader) == _epoch_param_rows(loader)
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
 def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
     """Iterating a split with ``num_workers>0`` renders finite batches through forked workers.

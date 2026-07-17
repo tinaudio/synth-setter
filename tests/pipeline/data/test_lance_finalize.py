@@ -842,6 +842,87 @@ def test_finalize_rejects_fragment_file_with_physical_schema_drift(
         finalize_from_spec(spec, tmp_path / "work")
 
 
+def fragment_data_file(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int = 0) -> Path:
+    """Local path of a shard's staged train fragment data file under the fake R2 root.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param spec: Spec whose R2 location shapes the run prefix.
+    :param shard_id: Staged shard whose fragment sidecar names the data file.
+    :returns: Path of the fragment's physical data file inside ``train.lance/data/``.
+    """
+    sidecar = staging_file(fake_r2_remote, spec, shard_id, f"pod-a-u{shard_id:04d}.fragment.json")
+    fragment_meta = json.loads(json.loads(sidecar.read_text())["fragment_json"])
+    return (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "train.lance"
+        / "data"
+        / fragment_meta["files"][0]["path"]
+    )
+
+
+def test_finalize_schema_mismatch_field_drift_names_differing_fields(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A field-level schema drift error names the fields present on only one side.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    target_file = fragment_data_file(fake_r2_remote, spec)
+    bad_dataset = tmp_path / "bad-schema.lance"
+    lance.write_dataset(pa.table({"wrong": pa.array([1, 2], type=pa.int64())}), bad_dataset)
+    bad_file = next((bad_dataset / "data").iterdir())
+    shutil.copyfile(bad_file, target_file)
+
+    with pytest.raises(ValueError, match="physical schema does not match") as excinfo:
+        finalize_from_spec(spec, tmp_path / "work")
+
+    message = str(excinfo.value)
+    assert "fields only in fragment: ['wrong']" in message
+    assert "fields only in expected:" in message
+    assert "audio" in message
+
+
+def test_finalize_schema_mismatch_metadata_only_drift_reports_values_and_skew_hint(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A metadata-only schema drift shows both metadata payloads and a version-skew hint.
+
+    Reproduces the #2084 signature: a writer on different code derives the same
+    fields but different ``synth_setter.shard_metadata`` (e.g. a shifted
+    ``sample_offset``), which must surface as explicit skew, not a bare mismatch.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    target_file = fragment_data_file(fake_r2_remote, spec)
+    source = lance.dataset(str(tmp_path / "w-0" / "shard-000000.lance"))
+    schema_metadata = dict(source.schema.metadata)
+    shard_metadata = json.loads(schema_metadata[b"synth_setter.shard_metadata"])
+    shard_metadata["sample_offset"] = 999
+    schema_metadata[b"synth_setter.shard_metadata"] = json.dumps(shard_metadata).encode()
+    skewed_dataset = tmp_path / "skewed.lance"
+    lance.write_dataset(
+        source.to_table().replace_schema_metadata(schema_metadata), skewed_dataset
+    )
+    skewed_file = next((skewed_dataset / "data").iterdir())
+    shutil.copyfile(skewed_file, target_file)
+
+    with pytest.raises(ValueError, match="physical schema does not match") as excinfo:
+        finalize_from_spec(spec, tmp_path / "work")
+
+    message = str(excinfo.value)
+    assert '"sample_offset": 999' in message
+    assert "code-version skew" in message
+    assert "rebase" in message
+
+
 def test_finalize_rejects_fragment_file_with_fewer_rows_than_sidecar(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
