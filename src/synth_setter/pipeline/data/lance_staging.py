@@ -133,7 +133,7 @@ def stage_lance_shard_attempt(
             f"local shard {local_shard_path.name} has {rows} rows; "
             f"spec expects {spec.render.samples_per_shard} per shard"
         )
-    render = spec.render.model_copy(update={"base_seed": shard.seed})
+    render = spec.render_for_shard(shard)
     expected_schema = lance_schema(
         dataset_field_shapes(render, spec.num_params), render.shard_metadata()
     )

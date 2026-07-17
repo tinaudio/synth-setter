@@ -2,8 +2,7 @@
 
 # Full-scale surge_simple Lance dataset: 480k total samples → 192 shards at
 # samples_per_shard=2500, written to the experiments bucket.
-# base_seed stays at the dataset.yaml default, so early shard seeds repeat those
-# of the smaller surge runs — harmless unless the datasets are ever combined.
+# Inherited split masters keep rows stable across dataset sizes and shard layouts.
 
 defaults:
   - override /datamodule: surge_simple

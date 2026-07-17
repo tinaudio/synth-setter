@@ -33,11 +33,11 @@ class SampleSeed:
 
     .. attribute :: master_seed
 
-        Per-shard master seed (``ShardSpec.seed``), folded into every draw.
+        Split master seed (``ShardSpec.seed``), folded into every draw.
 
     .. attribute :: sample_idx
 
-        Absolute row index, folded into the per-sample seed.
+        Split-local row index, folded into the per-sample seed.
 
     .. attribute :: max_attempts
 

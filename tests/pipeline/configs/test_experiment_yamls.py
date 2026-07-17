@@ -87,6 +87,13 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     assert restored == spec
 
 
+def test_dataset_experiments_use_independent_split_seed_streams() -> None:
+    """Newly composed datasets opt into size-stable split streams."""
+    spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
+
+    assert spec.train_val_test_seeds == (42, 43, 44)
+
+
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:
     """The DawDreamer smoke experiment uses one Surge XT sample per shard."""
     spec = _compose_dataset_spec("generate_dataset/surge-xt-dawdreamer-smoke")

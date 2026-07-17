@@ -659,16 +659,27 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=bad_length))
 
-    @pytest.mark.parametrize(
-        "bad_value",
-        [[42, 43, 44], (42, 43, 44), [1, 2, 3, 4], "anything", 0],
-    )
-    def test_train_val_test_seeds_setting_raises_not_implemented(
-        self, patch_runtime_io: None, bad_value: Any
+    def test_train_val_test_seeds_accepts_json_list_as_immutable_tuple(
+        self, patch_runtime_io: None
     ) -> None:
-        """Setting train_val_test_seeds raises NotImplementedError — reserved for #884."""
-        with pytest.raises(NotImplementedError, match="reserved for per-split independent seed"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_value))
+        """Independent split masters accept JSON's list shape and remain immutable.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[101, 202, 303]))
+
+        assert spec.train_val_test_seeds == (101, 202, 303)
+        assert isinstance(spec.train_val_test_seeds, tuple)
+
+    def test_train_val_test_seeds_rejects_duplicate_split_masters(
+        self, patch_runtime_io: None
+    ) -> None:
+        """Split master seeds must be distinct to prevent cross-split leakage.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        with pytest.raises(ValidationError, match="train_val_test_seeds must be distinct"):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[42, 42, 44]))
 
     def test_train_val_test_seeds_defaults_to_none(self, patch_runtime_io: None) -> None:
         """Omitting train_val_test_seeds yields the default None — field is optional."""
@@ -771,9 +782,32 @@ class TestDatasetSpecComputedFields:
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
-        """Per-shard seed equals ``base_seed + shard_id``."""
+        """Legacy specs preserve ``base_seed + shard_id`` derivation."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
+
+    def test_explicit_split_seeds_use_split_local_sample_offsets(
+        self, patch_runtime_io: None
+    ) -> None:
+        """Each split restarts its own stable sample-index stream at zero.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(
+                train_val_test_sizes=[200, 200, 200],
+                train_val_test_seeds=[101, 202, 303],
+            )
+        )
+
+        assert [(shard.seed, shard.sample_offset) for shard in spec.shards] == [
+            (101, 0),
+            (101, 100),
+            (202, 0),
+            (202, 100),
+            (303, 0),
+            (303, 100),
+        ]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
         """Shard filenames use the ``shard-NNNNNN`` six-digit zero-padded form."""

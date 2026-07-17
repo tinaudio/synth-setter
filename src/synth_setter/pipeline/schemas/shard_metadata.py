@@ -58,7 +58,12 @@ class ShardMetadata(BaseModel):
     .. attribute :: base_seed
         :type: int
 
-        Per-shard master seed the row RNGs are derived from (#884).
+        Master seed for this shard's dataset or split stream (#884).
+
+    .. attribute :: sample_offset
+        :type: int
+
+        Split-local index of the shard's first sample.
 
     .. attribute :: attempts_per_sample
         :type: int
@@ -78,10 +83,15 @@ class ShardMetadata(BaseModel):
     base_seed: int = Field(
         default=0,
         description=(
-            "Per-shard master seed the row RNGs are derived from (#884). Defaults to 0 so "
+            "Master seed for this shard's row stream (#884). Defaults to 0 so "
             "sidecars written before this field existed still validate; new shards write the "
             "real seed."
         ),
+    )
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of the shard's first sample.",
     )
     attempts_per_sample: int = Field(
         default=DEFAULT_ATTEMPTS_PER_SAMPLE,

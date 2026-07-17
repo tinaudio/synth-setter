@@ -167,7 +167,28 @@ def _default_gui_toggle_cadence() -> _GuiToggleCadence:
 
 
 class ShardSpec(BaseModel):
-    """Per-shard identity and pre-computed derived values."""
+    """Per-shard identity and seed position.
+
+    .. attribute :: model_config
+
+        Pydantic model configuration sentinel.
+
+    .. attribute :: shard_id
+
+        Zero-based logical shard index.
+
+    .. attribute :: filename
+
+        Materialized Lance shard filename.
+
+    .. attribute :: seed
+
+        Master seed for the shard's row stream.
+
+    .. attribute :: sample_offset
+
+        Split-local index of the shard's first sample.
+    """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
@@ -177,7 +198,12 @@ class ShardSpec(BaseModel):
     filename: str = Field(
         description="Shard filename including the ``.lance`` suffix (``shard-NNNNNN.lance``)."
     )
-    seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
+    seed: int = Field(description="Master seed for this shard's sample-index stream.")
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of this shard's first sample.",
+    )
 
 
 class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
@@ -190,8 +216,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     .. attribute :: base_seed
 
-        Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each
-        shard renders a distinct, reproducible per-sample stream (#884).
+        Split master seed injected from ``ShardSpec.seed`` (#884).
+
+    .. attribute :: sample_offset
+
+        Split-local index of the shard's first sample.
 
     .. attribute :: attempts_per_sample
 
@@ -260,11 +289,14 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     base_seed: int = Field(
         default=0,
         description=(
-            "Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each "
-            "shard renders a distinct stream. Row ``i`` draws from "
-            "``seed_for_sample(base_seed, i, attempt)``, making every sample reproducible "
-            "regardless of worker, order, or retry history (#884)."
+            "Master seed for the shard's split stream. Row ``sample_offset + i`` draws "
+            "from ``seed_for_sample(base_seed, sample_offset + i, attempt)`` (#884)."
         ),
+    )
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of the shard's first sample.",
     )
     attempts_per_sample: int = Field(
         default=DEFAULT_ATTEMPTS_PER_SAMPLE,
@@ -315,9 +347,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
             "first sample, via the normal loudness-gated path) and reuses it for the "
             "rest of the shard — one identical patch per shard, a probe for the "
-            "per-patch render variance tracked in #489. The shared patch is the row-0 "
-            "seeded draw (``seed_for_sample(base_seed, 0, attempt)``), so shard cadence "
-            "is reproducible across runs (#884)."
+            "per-patch render variance tracked in #489. The shared patch uses the shard's "
+            "first split-local row seed, so shard cadence is reproducible across runs (#884)."
         ),
     )
 
@@ -428,6 +459,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             channels=self.channels,
             min_loudness=self.min_loudness,
             base_seed=self.base_seed,
+            sample_offset=self.sample_offset,
             attempts_per_sample=self.attempts_per_sample,
         )
 
@@ -591,11 +623,11 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: train_val_test_seeds
 
-        Reserved for per-sample seeding (#884); must be ``None``.
+        Optional independent master seeds for train, validation, and test streams.
 
     .. attribute :: base_seed
 
-        Seed used to derive per-shard ``ShardSpec.seed`` values.
+        Legacy seed used when independent split masters are absent.
 
     .. attribute :: render
 
@@ -653,18 +685,15 @@ class DatasetSpec(BaseModel):
             "``render.samples_per_shard``."
         )
     )
-    # Enforced by _reject_train_val_test_seeds.
     train_val_test_seeds: tuple[int, int, int] | None = Field(
         default=None,
         description=(
-            "Reserved for per-split independent seed streams (distinct train/val/test "
-            "masters); must be ``None`` until implemented — any non-None value raises "
-            "``NotImplementedError``. Per-sample reproducibility itself ships via "
-            "``base_seed`` → ``ShardSpec.seed`` → ``seed_for_sample`` (#884)."
+            "Optional independent master seeds for train, validation, and test streams. "
+            "None preserves legacy base_seed + shard_id derivation for materialized specs."
         ),
     )
     base_seed: int = Field(
-        description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
+        description="Legacy seed for ``base_seed + shard_id`` derivation when split seeds are None."
     )
 
     render: RenderConfig = Field(
@@ -804,23 +833,6 @@ class DatasetSpec(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_train_val_test_seeds(cls, data: Any) -> Any:
-        """Reject any non-None ``train_val_test_seeds`` — reserved for #884, not implemented.
-
-        Runs in ``mode="before"`` so ``NotImplementedError`` propagates as-is
-        instead of being wrapped in a ``ValidationError`` (which is what
-        pydantic does for ``ValueError`` raised inside field validators).
-        """
-        if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
-            raise NotImplementedError(
-                "train_val_test_seeds is reserved for per-split independent seed streams "
-                "and is not yet implemented; omit the field. Per-sample reproducibility "
-                "ships via base_seed (#884)."
-            )
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
     def _strip_computed_field_keys(cls, data: Any) -> Any:
         """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
 
@@ -855,7 +867,7 @@ class DatasetSpec(BaseModel):
             data.pop("run_id")
         return data
 
-    @field_validator("train_val_test_sizes", mode="before")
+    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
     @classmethod
     def _splits_list_to_tuple(cls, value: Any) -> Any:
         """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.
@@ -910,6 +922,17 @@ class DatasetSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
+    def _split_seeds_must_be_distinct(self) -> DatasetSpec:
+        """Reject seed reuse across independent split streams.
+
+        :returns: This validated spec.
+        :raises ValueError: Two split master seeds are equal.
+        """
+        if self.train_val_test_seeds is not None and len(set(self.train_val_test_seeds)) != 3:
+            raise ValueError("train_val_test_seeds must be distinct")
+        return self
+
+    @model_validator(mode="after")
     def _split_sizes_must_be_multiples_of_samples_per_shard(self) -> DatasetSpec:
         """Each split's sample count must divide cleanly into shards.
 
@@ -943,21 +966,48 @@ class DatasetSpec(BaseModel):
                 )
         return self
 
+    def render_for_shard(self, shard: ShardSpec) -> RenderConfig:
+        """Inject a shard's stable seed position into the renderer config.
+
+        :param shard: Materialized shard belonging to this spec.
+        :returns: Renderer config positioned at the shard's first split-local row.
+        """
+        return self.render.model_copy(
+            update={"base_seed": shard.seed, "sample_offset": shard.sample_offset}
+        )
+
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def shards(self) -> tuple[ShardSpec, ...]:
-        """Shard identities derived from total sample counts and ``samples_per_shard``."""
+        """Shard identities derived from split sizes and their seed streams."""
         sps = self.render.samples_per_shard
-        total_shards = sum(self.train_val_test_sizes) // sps
         ext = self.output_format.extension
-        return tuple(
-            ShardSpec(
-                shard_id=i,
-                filename=f"shard-{i:06d}{ext}",
-                seed=self.base_seed + i,
+        if self.train_val_test_seeds is None:
+            total_shards = sum(self.train_val_test_sizes) // sps
+            return tuple(
+                ShardSpec(
+                    shard_id=i,
+                    filename=f"shard-{i:06d}{ext}",
+                    seed=self.base_seed + i,
+                )
+                for i in range(total_shards)
             )
-            for i in range(total_shards)
-        )
+
+        shards: list[ShardSpec] = []
+        for split_size, split_seed in zip(
+            self.train_val_test_sizes, self.train_val_test_seeds, strict=True
+        ):
+            for split_shard_id in range(split_size // sps):
+                shard_id = len(shards)
+                shards.append(
+                    ShardSpec(
+                        shard_id=shard_id,
+                        filename=f"shard-{shard_id:06d}{ext}",
+                        seed=split_seed,
+                        sample_offset=split_shard_id * sps,
+                    )
+                )
+        return tuple(shards)
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property

@@ -138,7 +138,7 @@ def _render_in_batches(
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param param_spec: Resolved parameter spec for the render.
-    :param start_idx: First absolute row index this run renders (non-zero on resume).
+    :param start_idx: First shard-local row this run renders (non-zero on resume).
     :param fixed_synth_params_list: Pre-set synth params (or ``None``), indexed by absolute row.
         Under shard cadence the shard's single patch is seeded from row ``start_idx`` and reused;
         callers pin ``start_idx=0`` for shard cadence, so that seed is row 0 and the
@@ -196,11 +196,10 @@ def _render_in_batches(
                 fixed_synth_params=fixed_synth,
                 fixed_note_params=fixed_note,
                 warmup=warmup_this_render,
-                # sample_idx is the absolute row index (the seed key); resumability
-                # must preserve it or per-row seed isolation breaks (#884).
+                # The split-local index stays stable across shard layouts and resumes (#884).
                 seed=SampleSeed(
                     master_seed=render_cfg.base_seed,
-                    sample_idx=i,
+                    sample_idx=render_cfg.sample_offset + i,
                     max_attempts=render_cfg.attempts_per_sample,
                 ),
             )

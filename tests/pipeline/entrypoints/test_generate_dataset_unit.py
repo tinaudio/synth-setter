@@ -190,6 +190,31 @@ def test_build_generate_args_passes_shard_seed_as_base_seed(tmp_path: Path) -> N
     assert passed_seeds == ["42", "43", "44"]
 
 
+def test_build_generate_args_passes_split_local_sample_offset(tmp_path: Path) -> None:
+    """Renderer argv carries each shard's split-local seed position.
+
+    :param tmp_path: Output dir build_generate_args composes shard paths under.
+    """
+    kwargs = _base_spec_kwargs(
+        tmp_path,
+        train_val_test_sizes=[4, 2, 2],
+        train_val_test_seeds=[101, 202, 303],
+    )
+    spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+    seed_offsets = []
+    for shard in spec.shards:
+        args = build_generate_args(spec, shard, tmp_path)
+        seed_offsets.append(
+            (
+                args[args.index("--base_seed") + 1],
+                args[args.index("--sample_offset") + 1],
+            )
+        )
+
+    assert seed_offsets == [("101", "0"), ("101", "2"), ("202", "0"), ("303", "0")]
+
+
 # ---------------------------------------------------------------------------
 # load_spec_from_uri — local path, file:// URI, r2:// URI dispatch
 # ---------------------------------------------------------------------------

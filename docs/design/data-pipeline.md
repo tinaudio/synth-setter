@@ -1169,6 +1169,7 @@ class ShardSpec(BaseModel):
     shard_id: int
     filename: str
     seed: int
+    sample_offset: int = 0
 
 class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
@@ -1185,6 +1186,7 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
+    sample_offset: int = 0      # split-local index of this shard's first row
     attempts_per_sample: int = 100
     max_retries: int = 0        # per-shard retry budget for transient renderer failures
     parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
@@ -1241,10 +1243,13 @@ class DatasetSpec(BaseModel):
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
-**Seed derivation:** `DatasetSpec` stores `base_seed`, each `ShardSpec` stores
-the derived shard seed, and row-level retries derive per-sample RNGs from that
-shard seed. See [Deterministic Dataset Seeding](deterministic-seeding.md) for
-the canonical seeding design.
+**Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
+split masters. Each `ShardSpec` pairs its split master with a split-local
+`sample_offset`; row-level retries derive RNGs from the master, absolute
+split-local row, and attempt. `None` preserves legacy `base_seed + shard_id`
+semantics for old specs. See
+[Deterministic Dataset Seeding](deterministic-seeding.md) for the canonical
+design.
 
 **Why JSON for specs and reports:** Machine-generated, stored in R2, read back by the CLI. JSON is the simplest correct format — Pydantic has native JSON methods (`.model_dump_json()` / `.model_validate_json()`), it's human-readable (`rclone cat` + `jq`), and handles nested structures natively. Config files use YAML because they're human-authored.
 

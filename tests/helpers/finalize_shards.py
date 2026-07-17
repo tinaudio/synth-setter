@@ -52,6 +52,7 @@ def build_lance_smoke_spec(
     mask_degenerate_bins: bool = False,
     render: RenderConfig | dict[str, Any] | None = None,
     base_seed: int = 42,
+    train_val_test_seeds: tuple[int, int, int] | None = None,
 ) -> DatasetSpec:
     """Construct a lance ``DatasetSpec`` directly (no Hydra compose).
 
@@ -61,13 +62,15 @@ def build_lance_smoke_spec(
     :param mask_degenerate_bins: Threaded onto the spec for stats-fold tests.
     :param render: Optional render config replacing the smoke default — used by
         e2e tests that must wrap the exact config a writer rendered with.
-    :param base_seed: Dataset seed used to derive shard seeds.
+    :param base_seed: Dataset seed used to derive legacy shard seeds.
+    :param train_val_test_seeds: Optional independent split master seeds.
     :returns: A frozen lance ``DatasetSpec`` whose shards are deterministic.
     """
     kwargs: dict[str, Any] = {
         "task_name": task_name,
         "output_format": "lance",
         "train_val_test_sizes": list(train_val_test_sizes),
+        "train_val_test_seeds": train_val_test_seeds,
         "base_seed": base_seed,
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
@@ -133,21 +136,9 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
         channels=render.channels,
         min_loudness=render.min_loudness,
         base_seed=render.base_seed,
+        sample_offset=render.sample_offset,
         attempts_per_sample=render.attempts_per_sample,
     )
-
-
-def shard_seed_for_path(dest: Path, spec: DatasetSpec) -> int:
-    """Return the spec shard seed matching ``dest.name``.
-
-    :param dest: Shard path being written.
-    :param spec: Dataset spec whose shard filenames define per-shard seeds.
-    :returns: Matching shard seed, or the first shard seed for ad hoc test paths.
-    """
-    for shard in spec.shards:
-        if shard.filename == dest.name:
-            return shard.seed
-    return spec.shards[0].seed
 
 
 def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | None = None) -> None:
@@ -165,7 +156,8 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
     )
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    render = spec.render.model_copy(update={"base_seed": shard_seed_for_path(dest, spec)})
+    shard = next((item for item in spec.shards if item.filename == dest.name), spec.shards[0])
+    render = spec.render_for_shard(shard)
     shapes = dataset_field_shapes(render, spec.num_params)
     if num_rows is not None:
         shapes = {field: (num_rows, *shape[1:]) for field, shape in shapes.items()}

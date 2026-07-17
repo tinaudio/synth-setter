@@ -341,7 +341,7 @@ def _shard_schema(spec: DatasetSpec, shard_id: int) -> pa.Schema:
     :param shard_id: Logical shard whose seed appears in schema metadata.
     :returns: Spec-derived physical Arrow schema for the shard.
     """
-    render = spec.render.model_copy(update={"base_seed": spec.shards[shard_id].seed})
+    render = spec.render_for_shard(spec.shards[shard_id])
     return lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
 
 

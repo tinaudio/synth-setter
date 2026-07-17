@@ -24,6 +24,8 @@ task_name: ???
 # Dropped before DatasetSpec construction (it's not a spec field).
 run_name: ${task_name}
 output_format: lance
+# Distinct split masters keep held-outs stable as dataset and shard sizes change (#884).
+train_val_test_seeds: [42, 43, 44]
 base_seed: 42
 
 # Wandb run tags; parity with train.yaml/eval.yaml. ``extras: default`` sets
