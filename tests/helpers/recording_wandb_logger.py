@@ -9,11 +9,15 @@ class RecordingWandbConfig(dict[str, Any]):
     """``wandb.config`` stand-in honoring ``update(..., allow_val_change=...)``."""
 
     def __init__(self) -> None:
+        """Initialize the config recorder."""
         super().__init__()
         self.allow_val_change_calls: list[bool] = []
 
     def update(self, params: dict[str, Any], allow_val_change: bool = False) -> None:  # type: ignore[override]
-        """Merge logged hyperparameters while recording the W&B contract flag.
+        """Mirror ``wandb.config.update(params, allow_val_change=...)``, not ``dict.update``.
+
+        The fake intentionally keeps W&B's narrower signature because Lightning
+        calls ``experiment.config.update(..., allow_val_change=True)`` directly.
 
         :param params: Hyperparameters Lightning forwards to ``wandb.config``.
         :param allow_val_change: Whether W&B should allow later updates.
@@ -26,6 +30,7 @@ class RecordingWandbExperiment:
     """Injected fake run satisfying the ``WandbLogger.experiment`` contract."""
 
     def __init__(self) -> None:
+        """Initialize the fake W&B run state."""
         self.config = RecordingWandbConfig()
         self.logged_artifacts: list[tuple[Any, list[str] | None]] = []
         self.logged_metrics: list[dict[str, float]] = []
@@ -60,6 +65,7 @@ class RecordingWandbLogger(WandbLogger):
     """A ``WandbLogger`` with real base initialization and an injected fake run."""
 
     def __init__(self) -> None:
+        """Initialize the real logger base with an injected fake experiment."""
         self._recording_experiment = RecordingWandbExperiment()
         super().__init__(project="pytest", experiment=cast(Any, self._recording_experiment))
 
