@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _dispatch_shards,
     _dispatch_shards_from_claims,
     _dispatch_shards_parallel,
     _load_render_rejections,
@@ -3577,6 +3578,44 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
     assert (rendered, skipped) == (2, 0)
     assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
     assert claims.complete.call_count == 2
+
+
+def test_dispatch_shards_claims_mode_relays_rejections_and_claim_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Claims dispatch returns renderer totals and the worker's won-claim count.
+
+    :param monkeypatch: Replaces the claims-table and rendering boundaries.
+    :param tmp_path: Builds the claims-mode dataset specification.
+    """
+    spec = _claims_spec(tmp_path, n=3)
+    claims = object()
+    expected = RenderRejectionMetrics(clipped=4, silent=7)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._shard_claims_for_spec",
+        lambda _spec: claims,
+    )
+
+    def _dispatch_from_claims(
+        actual_claims: object, *_args: object, **_kwargs: object
+    ) -> tuple[int, int, RenderRejectionMetrics]:
+        assert actual_claims is claims
+        return 2, 1, expected
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._dispatch_shards_from_claims",
+        _dispatch_from_claims,
+    )
+
+    rendered, skipped, assigned, rejections = _dispatch_shards(
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped, assigned) == (2, 1, 3)
+    assert rejections == expected
 
 
 def test_parallel_dispatch_aggregates_rejections_without_rclone(
