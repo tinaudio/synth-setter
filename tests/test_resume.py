@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,43 @@ def test_discover_resume_checkpoint_no_local_and_no_bucket_logs_info(
     assert record.levelno == logging.INFO
 
 
+def test_discover_r2_checkpoint_returns_downloaded_mirror_without_rclone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An R2 mirror produces a usable local resume decision in the unit-tier fallback.
+
+    The fake-R2 integration suite separately verifies the real rclone transfer; this test keeps the
+    same discovery contract covered where that binary is unavailable.
+
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir holding the downloaded checkpoint.
+    """
+    entry = r2_io.RemoteEntry(
+        path="ffn_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt",
+        mtime=datetime(2026, 7, 15),
+        size=10,
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: [entry])
+
+    def _download(_uri: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"checkpoint")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _download)
+
+    decision = resume.discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "resume",
+    )
+
+    assert decision is not None
+    assert decision.source == "r2"
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+    assert decision.ckpt_path.read_bytes() == b"checkpoint"
+
+
 def test_discover_resume_checkpoint_unreachable_r2_returns_none(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -378,6 +416,39 @@ def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(tmp_path: Path
 
     # A malformed name yields no run id, so identity falls to (absent) Hydra state.
     assert decision is None
+
+
+def test_discover_local_skips_two_segment_wandb_dir(tmp_path: Path) -> None:
+    """A malformed W&B directory cannot establish a sibling's identity.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior")
+    (prior / "wandb" / "run-onlyoneseg").mkdir(parents=True)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_uses_task_name_when_hydra_has_no_experiment(tmp_path: Path) -> None:
+    """Hydra's recorded task name establishes identity without an experiment choice.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior")
+    hydra_dir = prior / ".hydra"
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text("task_name: ffn_simple\n")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == prior / "checkpoints" / "last.ckpt"
 
 
 def test_config_id_from_hydra_dir_malformed_yaml_returns_none(tmp_path: Path) -> None:

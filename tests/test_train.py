@@ -1252,6 +1252,79 @@ def test_train_resume_require_reports_r2_degradation(
         train(cfg_train)
 
 
+def test_train_resume_require_without_r2_reports_no_degradation(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``require`` distinguishes no configured R2 tier from a degraded one.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.test = False
+        cfg_train.training.resume = "require"
+        cfg_train.r2.bucket = None
+
+    with pytest.raises(RuntimeError, match="found no checkpoint") as exc_info:
+        train(cfg_train)
+
+    assert "degraded" not in str(exc_info.value)
+
+
+def test_train_resume_auto_without_checkpoint_initializes_fresh_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``auto`` initializes normally when neither local nor R2 recovery exists.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Empty run-dir family (no sibling checkpoints).
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-only")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+
+    _, objects = train(cfg_train)
+
+    assert objects["cfg"].ckpt_path is None
+
+
+def test_train_resume_auto_local_checkpoint_continues_wandb_run(
+    cfg_train: DictConfig, tmp_path: Path
+) -> None:
+    """``auto`` selects a verified local checkpoint and preserves W&B continuity.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param tmp_path: Parent of the prior and current Hydra output dirs.
+    """
+    HydraConfig().set_config(cfg_train)
+    prior = tmp_path / "run-prior"
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    (prior / ".hydra").mkdir()
+    (prior / "wandb" / "run-20260716_000000-train-20260716T000000000Z").mkdir(parents=True)
+    with open_dict(cfg_train):
+        cfg_train.paths.output_dir = str(tmp_path / "run-current")
+        cfg_train.train = False
+        cfg_train.test = False
+        cfg_train.training.resume = "auto"
+        cfg_train.r2.bucket = None
+        cfg_train.logger = {"wandb": {"id": None, "resume": None, "job_type": ""}}
+
+    _, objects = train(cfg_train)
+
+    recovered_cfg = objects["cfg"]
+    assert recovered_cfg.ckpt_path == str(checkpoint)
+    assert recovered_cfg.logger.wandb.id == "train-20260716T000000000Z"
+    assert recovered_cfg.logger.wandb.resume == "allow"
+
+
 @pytest.mark.slow
 def test_train_resume_auto_without_checkpoint_starts_fresh(
     cfg_train: DictConfig, tmp_path: Path
