@@ -333,12 +333,13 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "datamodule.param_spec_name",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
     "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
-    # Opt-in W&B artifact-lineage block (#1508/#1509); absent in v0.0.0 — provenance,
-    # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
-    # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.
+    # Training contains checkpoint/probe observability only; re-narrow this path if a
+    # model-affecting setting is added.
     "training",
     # W&B model lineage ref is provenance, not a model knob.
     "consumed_train_config_id",
+    # Validation volume affects observability, not optimized parameters, in these configs.
+    "trainer.limit_val_batches",
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)

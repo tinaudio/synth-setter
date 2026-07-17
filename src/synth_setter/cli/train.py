@@ -149,53 +149,55 @@ def _derive_probe_uri(cfg: DictConfig) -> str:
     return f"r2://{cfg.r2.bucket}/probes/{resolve_run_config_id(cfg)}"
 
 
-def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
-    """Append the opt-in validation audio probe.
+def _skip_auto_probe(reason: str) -> None:
+    """Warn why ``val_audio_probe: auto`` leaves the probe unwired.
 
-    Wired here rather than through the ``callbacks`` config group because the probe
-    needs ``cfg.render`` and the Python-resolved run config id, neither of which a
-    callback YAML can interpolate.
-
-    :param cfg: Hydra config carrying the opt-in flag, ``render`` group, and ``r2.bucket``.
-    :param callbacks: Callback list mutated in place.
-    :raises ValueError: If the probe is enabled without a ``render`` config group, with a
-        render spec the model's predictions cannot decode against, with validation
-        disabled, or with a non-positive-integer sample count.
+    :param reason: Missing prerequisite, phrased for the run log.
     """
-    if not OmegaConf.select(cfg, "training.val_audio_probe"):
+    log.warning(f"val audio probe: {reason}; probe disabled (auto mode).")
+
+
+def _skip_auto_probe_or_raise(auto: bool, reason: str, error: str) -> None:
+    """Skip an auto-mode probe or reject an explicit-mode configuration.
+
+    :param auto: Whether the configured mode is ``"auto"``.
+    :param reason: Missing prerequisite, phrased for the run log.
+    :param error: Configuration error for explicit mode.
+    :raises ValueError: If explicit mode lacks the prerequisite.
+    """
+    if auto:
+        _skip_auto_probe(reason)
         return
-    if cfg.get("render") is None:
-        raise ValueError(
-            "training.val_audio_probe=true requires a render config group "
-            "(e.g. `render=surge_xt`); cfg.render is unset."
-        )
-    # A mismatched spec fails the probe's decode every cycle (#1990); a datamodule
-    # without param_spec_name (non-VST) deliberately opts out of the guard.
+    raise ValueError(error)
+
+
+def _validate_probe_spec_match(cfg: DictConfig) -> None:
+    """Reject a render spec that cannot decode the model's predictions.
+
+    :param cfg: Hydra config carrying the render and datamodule specs.
+    :raises ValueError: If a VST datamodule's spec differs from the render spec.
+    """
     render_spec = OmegaConf.select(cfg, "render.param_spec_name")
     datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
-    if datamodule_spec is not None and datamodule_spec != render_spec:
-        render_desc = "unset" if render_spec is None else repr(render_spec)
-        raise ValueError(
-            "training.val_audio_probe=true requires the probe to decode predictions "
-            f"with the model's spec, but render.param_spec_name is {render_desc} while "
-            f"datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
-            f"group (e.g. `render={datamodule_spec}`)."
-        )
-    # The surge experiment base ships trainer.limit_val_batches: 0 — a validation-hooked
-    # probe wired into such a run would silently stage nothing forever.
-    if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
-        raise ValueError(
-            "training.val_audio_probe=true requires validation to run, but "
-            "trainer.limit_val_batches is 0. Override it (e.g. "
-            "`trainer.limit_val_batches=1.0`) to enable the probe."
-        )
-    num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
-    # bool is an int subclass, so `true` would otherwise pass as 1.
-    if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
-        raise ValueError(
-            f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
-        )
-    settings = ProbeRenderSettings(
+    if datamodule_spec is None or datamodule_spec == render_spec:
+        return
+
+    render_desc = "unset" if render_spec is None else repr(render_spec)
+    raise ValueError(
+        "the val audio probe must decode predictions with the model's spec, "
+        f"but render.param_spec_name is {render_desc} while "
+        f"datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
+        f"group (e.g. `render={datamodule_spec}`)."
+    )
+
+
+def _probe_render_settings(cfg: DictConfig) -> ProbeRenderSettings:
+    """Build probe render settings from the composed render group.
+
+    :param cfg: Hydra config carrying the composed render group.
+    :returns: Settings consumed by the audio-probe subprocess.
+    """
+    return ProbeRenderSettings(
         param_spec_name=cfg.render.param_spec_name,
         plugin_state_path=cfg.render.plugin_state_path,
         plugin_path=cfg.render.get("plugin_path"),
@@ -204,7 +206,73 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
         velocity=cfg.render.get("velocity"),
         signal_duration_seconds=cfg.render.get("signal_duration_seconds"),
     )
-    r2_io.ensure_r2_env_loaded()
+
+
+def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
+    """Append the validation audio probe when its mode and prerequisites allow.
+
+    Wired here rather than through the ``callbacks`` config group because the probe
+    needs ``cfg.render`` and the Python-resolved run config id, neither of which a
+    callback YAML can interpolate. An absent mode remains disabled for legacy config objects.
+
+    :param cfg: Hydra config carrying the probe mode, ``render`` group, and ``r2.bucket``.
+    :param callbacks: Callback list mutated in place.
+    :raises ValueError: If any condition holds:
+
+        - A present mode is not ``true``, ``false``, or ``"auto"``.
+        - The render spec cannot decode the model's predictions.
+        - The sample count is not a positive integer.
+        - Mode ``true`` lacks a render group or validation is disabled.
+
+        Mode ``"auto"`` skips the probe for the final condition.
+    :raises RuntimeError: Propagated from the R2 pre-flight under mode ``true``.
+    :raises OSError: Propagated from the R2 pre-flight under mode ``true``.
+    """
+    training = cfg.get("training")
+    if training is None or "val_audio_probe" not in training:
+        return
+    mode = OmegaConf.select(cfg, "training.val_audio_probe")
+    if mode is False:
+        return
+    auto = mode == "auto"
+    explicit = mode is True
+    if not auto and not explicit:
+        raise ValueError(f"training.val_audio_probe must be true, false, or 'auto'; got {mode!r}.")
+    if cfg.get("render") is None:
+        _skip_auto_probe_or_raise(
+            auto,
+            "no render group composed",
+            "training.val_audio_probe=true requires a render config group "
+            "(e.g. `render=surge_xt`); cfg.render is unset.",
+        )
+        return
+    # A composed render group states intent, so spec mismatches raise under auto too.
+    _validate_probe_spec_match(cfg)
+    # A validation-hooked probe wired into a validation-disabled run would silently
+    # stage nothing forever.
+    if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
+        _skip_auto_probe_or_raise(
+            auto,
+            "validation is disabled (trainer.limit_val_batches=0)",
+            "training.val_audio_probe=true requires validation to run, but "
+            "trainer.limit_val_batches is 0. Override it (e.g. "
+            "`trainer.limit_val_batches=1.0`) to enable the probe.",
+        )
+        return
+    num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
+    # bool is an int subclass, so `true` would otherwise pass as 1.
+    if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
+        raise ValueError(
+            f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
+        )
+    settings = _probe_render_settings(cfg)
+    try:
+        r2_io.ensure_r2_env_loaded()
+    except (RuntimeError, OSError) as exc:
+        if auto:
+            _skip_auto_probe(f"R2 unavailable ({exc})")
+            return
+        raise
     callbacks.append(
         ValAudioProbe(
             probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
