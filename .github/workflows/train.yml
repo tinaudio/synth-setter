@@ -2,8 +2,8 @@ name: Train
 
 # Manually-dispatched training: submits a SkyPilot managed job that runs
 # synth-setter-train on the provider named in the launch config (RunPod by
-# default). The launch config selects the compute and worker command; an
-# optional experiment input overrides that command's baked default. See
+# default). The launch config selects the compute and worker command; optional
+# inputs override that command's baked experiment and dataset defaults. See
 # src/synth_setter/configs/launch/train-runpod.yaml and
 # storage-provenance-spec.md §8.
 #
@@ -15,6 +15,11 @@ name: Train
 on:
   workflow_dispatch:
     inputs:
+      dataset_root_uri:
+        description: "Remote dataset root override (empty uses the launch config default)"
+        required: false
+        type: string
+        default: ""
       experiment:
         description: "Hydra experiment override (empty uses the launch config default)"
         required: false
@@ -59,6 +64,7 @@ jobs:
       # passes through step env so a stray token cannot break out.
       - name: Dispatch via SkyPilot
         env:
+          DATASET_ROOT_URI: ${{ inputs.dataset_root_uri }}
           EXPERIMENT: ${{ inputs.experiment }}
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
@@ -81,6 +87,7 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e WANDB_API_KEY \
             -e WORKER_GIT_REF \
+            -e DATASET_ROOT_URI \
             -e EXPERIMENT \
             -e LAUNCH_CONFIG \
             "$IMAGE" \
@@ -88,6 +95,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               python -m synth_setter.pipeline.skypilot_launch \
+                --extra-env DATASET_ROOT_URI "$DATASET_ROOT_URI" \
                 --extra-env EXPERIMENT "$EXPERIMENT" \
                 "$LAUNCH_CONFIG"
             ' 2>&1 | tee train-dispatch.log

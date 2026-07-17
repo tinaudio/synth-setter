@@ -12,7 +12,7 @@ cmd: >-
   "experiment=${EXPERIMENT:-surge/flow_simple}"
   datamodule=surge_lance_map
   datamodule.param_spec_name=surge_simple
-  datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/}"
   render=surge_simple
   training.val_audio_probe=true
   training.upload_checkpoints_during_training=true

@@ -1585,13 +1585,13 @@ class TestSkypilotLaunchCli:
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert task_doc["run"] == cmd
 
-    def test_extra_env_option_forwards_value_to_worker(
+    def test_extra_env_options_forward_values_to_worker(
         self,
         tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A CLI extra-env override reaches the submitted worker environment.
+        """Repeated CLI extra-env overrides reach the submitted worker environment.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
@@ -1608,11 +1608,20 @@ class TestSkypilotLaunchCli:
 
         result = CliRunner().invoke(
             main,
-            ["--extra-env", "EXPERIMENT", "surge/flow_simple", str(cfg_path)],
+            [
+                "--extra-env",
+                "DATASET_ROOT_URI",
+                "r2://experiments/data/custom/",
+                "--extra-env",
+                "EXPERIMENT",
+                "surge/flow_simple",
+                str(cfg_path),
+            ],
         )
 
         assert result.exit_code == 0, result.output
         injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
         assert injected["EXPERIMENT"] == "surge/flow_simple"
 
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
@@ -1677,9 +1686,9 @@ class TestCheckedInLaunchConfigs:
         assert "datamodule=surge_lance_map" in tokens
         assert "datamodule.param_spec_name=surge_simple" in tokens
         assert (
-            "datamodule.download_dataset_root_uri="
+            "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-"
             "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
-            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
+            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/}"
         ) in tokens
         assert "render=surge_simple" in tokens
         assert "training.val_audio_probe=true" in tokens
@@ -1701,9 +1710,10 @@ class TestCheckedInLaunchConfigs:
         cfg = load_launch_config(self._LAUNCH_DIR / name)
         assert cfg.cmd is not None
         assert any(
-            token.startswith("datamodule.download_dataset_root_uri=r2://")
+            token.startswith("datamodule.download_dataset_root_uri=")
+            and "DATASET_ROOT_URI:-r2://" in token
             for token in shlex.split(cfg.cmd)
-        ), "worker cmd must pin a remote dataset root; fresh pods have no local dataset"
+        ), "worker cmd must default to a remote dataset root; fresh pods have no local dataset"
 
     @pytest.mark.parametrize(
         "name",

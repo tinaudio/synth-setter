@@ -22,7 +22,7 @@ cmd: >-
   "experiment=${EXPERIMENT:-surge/ffn_simple}"
   datamodule=surge_lance_map
   datamodule.param_spec_name=surge_simple
-  datamodule.download_dataset_root_uri=r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/}"
   datamodule.num_workers=0
   training.upload_checkpoints_during_training=true
   trainer.min_steps=10
