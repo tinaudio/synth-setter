@@ -1,6 +1,86 @@
 # CHANGELOG
 
 
+## v10.0.1 (2026-07-17)
+
+### Bug Fixes
+
+- **data-pipeline**: Fail fragment writes that inherit a stale schema
+  ([#2109](https://github.com/tinaudio/synth-setter/pull/2109),
+  [`f26c505`](https://github.com/tinaudio/synth-setter/commit/f26c5057a6c64ed497a4d84e69b89a7c6d4285ab))
+
+* fix(data-pipeline): fail fragment writes that inherit a stale dataset schema
+
+Lance append-mode fragment writes silently stamp an existing committed dataset's schema metadata
+  onto new data files, discarding the caller's schema. At a reused run prefix holding a pre-#2069
+  dataset this turned correct worker output into stale-schema fragments that finalize rejected with
+  a misleading mismatch (#2084's residual, proven by a minimal repro and a green re-dispatch of the
+  failing SHA on a fresh prefix).
+
+lance_fragment now reads back the written file's physical schema and raises at write time when it
+  differs from the intended spec-derived schema, naming the inheritance mechanism and the diff. The
+  mismatch renderer moves to lance_shard so writer and finalize share one message.
+
+Fixes #2084
+
+* docs(data-pipeline): record the write-time fragment schema guard
+
+Refs #2084
+
+### Internal-Feat
+
+- **ci-automation**: Add Pi-native full review workflow
+  ([#2052](https://github.com/tinaudio/synth-setter/pull/2052),
+  [`ad16fee`](https://github.com/tinaudio/synth-setter/commit/ad16feea5329129ed7c22cb2ee3f31d46e5b2209))
+
+* feat(ci-automation): add Pi full-review workflow
+
+* fix(ci-automation): preflight Pi review models
+
+* fix(ci-automation): validate Pi review routing
+
+* fix(ci-automation): extract Pi worker reports
+
+* fix(ci-automation): verify OpenRouter review findings
+
+* test(ci-automation): cover Pi report CLI path
+
+* fix(ci-automation): bound Pi review workers
+
+* fix(ci-automation): clarify Pi review audit failures
+
+* fix(ci-automation): normalize Pi worker reports
+
+* fix(ci-automation): isolate review findings files
+
+* fix(ci-automation): normalize ranged review findings
+
+* fix(ci-automation): preserve cross-provider review
+
+* fix(ci-automation): reject lossy worker normalization
+
+* fix(ci-automation): normalize review audit fields
+
+* internal-fix(ci-automation): address review boundary failures
+
+* internal-fix(ci-automation): normalize Pi review findings
+
+Address duplicate correctness and code-health review warnings by dropping unanchored section
+  narration, canonicalizing finding ordinals, and documenting private routing helpers.
+
+* test(ci-automation): cover narrated Pi report CLI output
+
+* internal-fix(ci-automation): route full reviews through Pi
+
+* internal-fix(ci-automation): keep Pi reviews in foreground
+
+* internal-fix(ci-automation): harden Pi review evidence
+
+* internal-fix(ci-automation): fail closed on malformed Pi reviews
+
+* internal-fix(ci-automation): pin Pi review routing tiers
+
+
 ## v10.0.0 (2026-07-17)
 
 ### Internal-Fix
