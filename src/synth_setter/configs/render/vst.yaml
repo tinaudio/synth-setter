@@ -9,5 +9,6 @@ samples_per_render_batch: 32
 max_retries: 0
 parallel: false
 plugin_reload_cadence: once
+# macOS rejects ``render``; cadence sweeps override this safe default (#714, #489).
 gui_toggle_cadence: once
 param_sample_cadence: sample

@@ -1,3 +1,4 @@
+# Pin OB-Xf identity while generic knobs come from ``vst``.
 defaults:
   - vst
 

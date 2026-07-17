@@ -161,12 +161,12 @@ def _run_oracle_eval_subprocess(
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # eval.yaml leaves render null; use the generic VST structure and copy
-        # the generation render fields needed for an exact round-trip.
+        # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
         "render=vst",
         f"+render.param_spec_name={render.param_spec_name}",
         f"+render.plugin_state_path={render.plugin_state_path}",
         f"+render.plugin_path={render.plugin_path}",
+        f"+render.renderer_version={render.renderer_version}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",

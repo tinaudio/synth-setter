@@ -27,6 +27,17 @@ from synth_setter.data.vst.registration import (
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
 REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
+_RESERVED_RENDER_CONFIG_NAMES = (
+    "obxf",
+    "surge_4",
+    "surge_simple",
+    "surge_xt",
+    "torchsynth_adsr",
+    "torchsynth_full",
+    "torchsynth_simple",
+    "vst",
+    "VST",
+)
 
 
 def _dict_keys(source: str, name: str) -> list[str]:
@@ -330,6 +341,16 @@ def test_render_config_yaml_preserves_reserved_word_spec_name_as_string() -> Non
     assert yaml.safe_load(text)["param_spec_name"] == "on"
 
 
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: str) -> None:
+    """A shipped render-group name cannot compose itself.
+
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        render_config_yaml(spec_name, plugin_path="plugins/fake.vst3", renderer_version="1.0")
+
+
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
     """A plugin inside the checkout is recorded checkout-relative (POSIX form).
 
@@ -389,6 +410,19 @@ def test_checkout_relative_path_relative_input_resolves_against_cwd(
     monkeypatch.chdir(tmp_path)
 
     assert checkout_relative_path("plugins/Dexed.vst3", tmp_path) == "plugins/Dexed.vst3"
+
+
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_registration_paths_reserved_render_name_raises_value_error(
+    tmp_path: Path, spec_name: str
+) -> None:
+    """A shipped render-group name cannot become synth artifacts.
+
+    :param tmp_path: Stands in for the checkout root.
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        registration_paths(tmp_path, spec_name)
 
 
 def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:

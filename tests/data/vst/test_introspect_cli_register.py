@@ -268,7 +268,7 @@ def test_register_reserved_render_group_fails_before_plugin_load(
     result = _register(checkout, spec_name=spec_name)
 
     assert result.exit_code != 0
-    assert "reserved for the generic VST render config" in result.output
+    assert "reserved for a render config" in result.output
 
 
 def test_register_rejects_explicit_out_paths(checkout: Path) -> None:
