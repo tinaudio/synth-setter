@@ -1296,7 +1296,7 @@ def test_generate_sample_silent_and_clipped_draws_counted_separately(
 ) -> None:
     """An accepted sample reports each rejected draw by its distinct reason.
 
-    :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
+    :param monkeypatch: Replaces rendering and parameter sampling with deterministic fakes.
     """
     from synth_setter.data.vst import generate_vst_dataset
 

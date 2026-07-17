@@ -38,6 +38,7 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -62,6 +63,7 @@ from tests._vst import (
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.subprocess_args import find_script_index
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -189,11 +191,39 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
-        side_effect=render_shard,
+    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
+    recording_logger = SimpleNamespace(
+        finalize=lambda _status: None,
+        log_hyperparams=lambda _payload: None,
+        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
+    )
+
+    def _render_with_rejections(args: list[str]) -> None:
+        render_shard(args)
+        if args and args[0] != "rclone":
+            shard_path = Path(args[find_script_index(args) + 1])
+            render_metrics_path(shard_path).write_text(
+                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+            )
+
+    with (
+        patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=_render_with_rejections,
+        ),
+        patch(
+            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
+            return_value=[recording_logger],
+        ),
     ):
         from_hydra(cfg_dataset)
+
+    shard_rows = [payload for step, payload in metrics_rows if step is not None]
+    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
+    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
+    summary = next(payload for step, payload in metrics_rows if step is None)
+    assert summary["generation/samples_rejected_clipped"] == 6
+    assert summary["generation/samples_rejected_silent"] == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix

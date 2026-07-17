@@ -229,7 +229,7 @@ Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
 serial and parallel dispatchers. A renderer that exits successfully without a
 valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 
-### 5c. Run summary (one terminal row)
+### 5c. Per-worker summary (one terminal row per worker invocation)
 
 | Key                                   | What                                                         |
 | ------------------------------------- | ------------------------------------------------------------ |
@@ -242,8 +242,9 @@ valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 | `generation/samples_rejected_clipped` | Clipped sampled renders rejected across this worker's shards |
 | `generation/samples_rejected_silent`  | Silent sampled renders rejected across this worker's shards  |
 
-Run-level rejection totals include only shards rendered by the current worker
-invocation. Resumed shards skipped by the R2 probe contribute zero because their
+Generation rejection totals are worker-local, not distributed-run totals. They
+sum only shards rendered by this invocation; in claims mode, those are claims
+won and rendered by this worker. R2-skipped shards contribute zero because their
 prior local sidecars are unavailable.
 
 Emitted by `_log_summary` after the dispatcher returns. The dispatcher is fail-fast — there

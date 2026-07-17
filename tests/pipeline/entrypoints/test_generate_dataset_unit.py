@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _dispatch_shards_from_claims,
     _dispatch_shards_parallel,
     _load_render_rejections,
     _render_one_owned_shard,
@@ -1470,11 +1471,16 @@ class TestRun(RenderSeamFixtures):
         kwargs["render"] = {**kwargs["render"], "max_retries": 1}  # type: ignore[dict-item]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         renderer_calls = 0
+        sidecar_exists_at_attempt_start: list[bool] = []
 
         def _flaky_dispatcher(args: list[str]) -> None:
             nonlocal renderer_calls
             renderer_calls += 1
+            shard_path = Path(args[find_script_index(args) + 1])
+            metrics_path = render_metrics_path(shard_path)
+            sidecar_exists_at_attempt_start.append(metrics_path.exists())
             if renderer_calls == 1:
+                metrics_path.write_text("partial")
                 raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
             _render_valid_shard(args, spec)
 
@@ -1485,6 +1491,7 @@ class TestRun(RenderSeamFixtures):
             generate(spec, tmp_path, [])
 
         assert renderer_calls == 2
+        assert sidecar_exists_at_attempt_start == [False, False]
         assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
     def test_parallel_render_uses_thread_pool_and_uploads_all_shards(
@@ -3533,6 +3540,43 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     monkeypatch.setattr(generate_dataset.platform, "node", lambda: "pod@host:1/x")
 
     assert generate_dataset._worker_id() == "pod-host-1-x"
+
+
+def test_claims_dispatch_aggregates_rejections_without_rclone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Claims dispatch returns exact totals from completed claim reports.
+
+    :param monkeypatch: Replaces the renderer boundary.
+    :param tmp_path: Builds the claims spec and receives the dispatcher work path.
+    """
+    spec = _claims_spec(tmp_path, n=3)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        SimpleNamespace(shard_id=0, claim_gen=1),
+        SimpleNamespace(shard_id=1, claim_gen=1),
+        None,
+    ]
+    outcomes = {
+        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
+        1: (True, False, RenderRejectionMetrics(clipped=3, silent=5)),
+    }
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_from_claims(
+        claims,
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped) == (2, 0)
+    assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
+    assert claims.complete.call_count == 2
 
 
 def test_parallel_dispatch_aggregates_rejections_without_rclone(
