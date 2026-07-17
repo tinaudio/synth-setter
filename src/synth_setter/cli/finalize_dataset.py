@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from time import perf_counter
+from traceback import format_tb
 from typing import cast
 
 import hydra
@@ -240,6 +241,16 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
     return artifact
 
 
+def _log_finalize_failure(error: BaseException) -> None:
+    """Log a failed finalize traceback without exposing the exception text.
+
+    :param error: Exception raised by the finalize body.
+    """
+    logger.error(
+        "finalize failed ({})\n{}", type(error).__name__, "".join(format_tb(error.__traceback__))
+    )
+
+
 def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
     """Log the canonical ``dataset`` artifact to each ``WandbLogger`` in ``loggers``.
 
@@ -292,25 +303,21 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     loggers = instantiate_loggers(cfg.get("logger"))
     status = "success"
     started_at = perf_counter()
-    elapsed_seconds: float | None = None
     log_summary: Callable[[float], None] | None = None
     try:
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
         finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
-        elapsed_seconds = perf_counter() - started_at
+        log_summary(perf_counter() - started_at)
         _log_dataset_artifact(loggers, spec)
-    except BaseException:
+    except BaseException as error:
         status = "failed"
-        logger.exception("")
+        failed_elapsed_seconds = perf_counter() - started_at
+        _log_finalize_failure(error)
+        if log_summary is not None:
+            log_summary(failed_elapsed_seconds)
         raise
     finally:
-        try:
-            if log_summary is not None:
-                log_summary(
-                    elapsed_seconds if elapsed_seconds is not None else perf_counter() - started_at
-                )
-        finally:
-            close_loggers(loggers, status)
+        close_loggers(loggers, status)
 
 
 @hydra.main(
