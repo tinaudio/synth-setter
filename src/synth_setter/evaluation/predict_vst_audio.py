@@ -1,6 +1,7 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -16,6 +17,10 @@ from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
+from synth_setter.data.vst.renderers import TorchSynthRenderer
+from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+
+RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> list[np.ndarray]:
@@ -117,6 +122,67 @@ def resolve_plugin_state_path(plugin_state_path: str | None, param_spec: str) ->
     return plugin_state_path if plugin_state_path is not None else plugin_state_paths[param_spec]
 
 
+def _make_render_fn(
+    plugin_path: str,
+    plugin_state_path: str | None,
+    sample_rate: float,
+    channels: int,
+    velocity: int,
+    signal_duration_seconds: float,
+) -> RenderFn:
+    """Return the per-row render callable for the backend ``plugin_path`` selects.
+
+    The ``"torchsynth"`` sentinel dispatches to the in-process
+    :class:`TorchSynthRenderer` (no plugin host); every other path keeps the
+    pedalboard ``render_params`` call unchanged, without the generation-side
+    amplitude gate — predicted-parameter renders may legitimately clip.
+
+    :param plugin_path: Plugin bundle path, or the ``"torchsynth"`` backend sentinel.
+    :param plugin_state_path: Baseline preset path; unused by the torchsynth backend.
+    :param sample_rate: Render sample rate in Hz.
+    :param channels: Output channel count.
+    :param velocity: MIDI note velocity applied to every render.
+    :param signal_duration_seconds: Duration of each rendered sample.
+    :returns: Callable of ``(synth_params, pitch, note_start_and_end)`` returning
+        ``(channels, samples)`` audio.
+    """
+    if plugin_path == TORCHSYNTH_PLUGIN_NAME:
+        renderer = TorchSynthRenderer(
+            plugin_path=plugin_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=signal_duration_seconds,
+        )
+
+        def render_torchsynth_row(
+            synth_params: dict[str, float],
+            pitch: int,
+            note_start_and_end: tuple[float, float],
+        ) -> np.ndarray:
+            return renderer.render(synth_params, pitch, velocity, note_start_and_end)
+
+        return render_torchsynth_row
+
+    def render_pedalboard_row(
+        synth_params: dict[str, float],
+        pitch: int,
+        note_start_and_end: tuple[float, float],
+    ) -> np.ndarray:
+        return render_params(
+            plugin_path,
+            synth_params,
+            pitch,
+            velocity,
+            note_start_and_end,
+            signal_duration_seconds,
+            sample_rate,
+            channels,
+            plugin_state_path=plugin_state_path,
+        )
+
+    return render_pedalboard_row
+
+
 @click.command()
 @click.argument("pred_dir", type=str)
 @click.argument("output_dir", type=str)
@@ -148,8 +214,16 @@ def main(
     spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
 
-    # render_params loads the plugin (and applies plugin_state_path) on every call,
-    # so no upfront load_plugin is needed here.
+    # The pedalboard path loads the plugin (and applies plugin_state_path) on
+    # every call, so no upfront load_plugin is needed here.
+    render_fn = _make_render_fn(
+        plugin_path,
+        plugin_state_path,
+        sample_rate,
+        channels,
+        velocity,
+        signal_duration_seconds,
+    )
 
     # list the .pt files with accompanying indices (each file has name
     # pred-{index}.pt, and we want to sort by index)
@@ -198,16 +272,10 @@ def main(
             row_params = pred_params[j].float().numpy()
             synth_params, note_params = decode_model_output(row_params, spec)
 
-            pred_audio = render_params(
-                plugin_path,
+            pred_audio = render_fn(
                 synth_params,
                 int(note_params["pitch"]),
-                velocity,
                 note_params["note_start_and_end"],
-                signal_duration_seconds,
-                sample_rate,
-                channels,
-                plugin_state_path=plugin_state_path,
             )
 
             target_synth_params: dict[str, float] | None = None
@@ -222,16 +290,10 @@ def main(
                 target_params_ = target_params[j].float().numpy()
                 target_synth_params, target_note_params = decode_model_output(target_params_, spec)
 
-                new_target = render_params(
-                    plugin_path,
+                new_target = render_fn(
                     target_synth_params,
                     int(target_note_params["pitch"]),
-                    velocity,
                     target_note_params["note_start_and_end"],
-                    signal_duration_seconds,
-                    sample_rate,
-                    channels,
-                    plugin_state_path=plugin_state_path,
                 )
                 with AudioFile(out_target, "w", sample_rate, channels) as f:
                     f.write(new_target.T)
