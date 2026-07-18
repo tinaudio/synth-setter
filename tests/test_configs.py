@@ -11,6 +11,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationToMissingValueError
 
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -267,7 +268,7 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
             "surge_flow",
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
-            90,
+            92,
             None,
             True,
             1e-4,
@@ -276,7 +277,7 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
             "surge_flowmlp",
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
-            90,
+            92,
             None,
             True,
             1e-4,
@@ -292,7 +293,7 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
         ),
     ],
 )
-def test_legacy_surge_model_group_preserves_concrete_defaults(
+def test_legacy_surge_model_group_composes_canonical_defaults(
     legacy_name: str,
     target_suffix: str,
     expected_path: str,
@@ -301,15 +302,15 @@ def test_legacy_surge_model_group_preserves_concrete_defaults(
     expected_compile: bool,
     expected_learning_rate: float,
 ) -> None:
-    """Each archived model selection preserves its concrete defaults.
+    """Each legacy model selection composes the canonical VST defaults.
 
-    :param legacy_name: Historical Hydra model-group name.
+    :param legacy_name: Legacy Hydra model-group name.
     :param target_suffix: Canonical VST target expected after composition.
-    :param expected_path: Config field preserving the historical concrete default.
-    :param expected_value: Historical concrete default.
-    :param expected_param_spec: Historical ParamSpec default, when applicable.
-    :param expected_compile: Historical torch.compile default.
-    :param expected_learning_rate: Historical optimizer learning-rate default.
+    :param expected_path: Config field containing the canonical default.
+    :param expected_value: Expected canonical default.
+    :param expected_param_spec: Default ParamSpec, when applicable.
+    :param expected_compile: Expected torch.compile default.
+    :param expected_learning_rate: Expected optimizer learning-rate default.
     """
     legacy_cfg = _compose(
         "train.yaml",
@@ -320,6 +321,20 @@ def test_legacy_surge_model_group_preserves_concrete_defaults(
     assert legacy_cfg.model.compile is expected_compile
     assert legacy_cfg.model.optimizer.lr == expected_learning_rate
     assert OmegaConf.select(legacy_cfg.model, "param_spec") == expected_param_spec
+
+
+@pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp", "surge_flow", "surge_flowmlp"])
+def test_surge_simple_flow_model_width_matches_param_spec(model_name: str) -> None:
+    """Flow model groups match the active Surge-simple encoded width.
+
+    :param model_name: Canonical or legacy Hydra model-group name.
+    """
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", f"model={model_name}", "trainer=cpu"],
+    )
+
+    assert cfg.model.num_params == len(param_specs[cfg.datamodule.param_spec_name])
 
 
 @pytest.mark.parametrize(
