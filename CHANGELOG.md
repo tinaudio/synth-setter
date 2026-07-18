@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v10.0.5 (2026-07-18)
+
+### Automation
+
+- Disable Pi Explore agent ([#2130](https://github.com/tinaudio/synth-setter/pull/2130),
+  [`df40e15`](https://github.com/tinaudio/synth-setter/commit/df40e158397aadc0fe279fcd8bf96f48f310f6c1))
+
+### Bug Fixes
+
+- **testing**: Accept wandb resume config drift
+  ([#2150](https://github.com/tinaudio/synth-setter/pull/2150),
+  [`113dc56`](https://github.com/tinaudio/synth-setter/commit/113dc56d0c3cd01476f606d91e32f1704c98651c))
+
+### Testing
+
+- Isolate Codex launcher test interpreter
+  ([#2148](https://github.com/tinaudio/synth-setter/pull/2148),
+  [`d22a7c6`](https://github.com/tinaudio/synth-setter/commit/d22a7c69bd6b193c948b9af760d0521ce477f65c))
+
+- Isolate lance target R2 env ([#2142](https://github.com/tinaudio/synth-setter/pull/2142),
+  [`4e199e6`](https://github.com/tinaudio/synth-setter/commit/4e199e6643fe1f82d45542b7c6e5ca0704e1b1a5))
+
+
 ## v10.0.4 (2026-07-18)
 
 ### Automation
