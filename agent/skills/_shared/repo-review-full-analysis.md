@@ -281,7 +281,7 @@ helper CLI tests.
   sentinel HEAD, and fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
-produced it, including after same-provider fallback:
+produced it, including after within-pass fallback:
 
 ```bash
 ./.venv/bin/python agent/_shared/pi_review_routing.py provenance <effective-model>
