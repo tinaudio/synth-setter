@@ -278,6 +278,7 @@ def _publish_staged_lance_dir(staged_dir: Path, target_dir: Path) -> None:
     try:
         staged_dir.replace(target_dir)
     except OSError:
+        _cleanup_staged_lance_dir(staged_dir)
         if backup_dir is not None and backup_dir.exists():
             backup_dir.replace(target_dir)
         raise
