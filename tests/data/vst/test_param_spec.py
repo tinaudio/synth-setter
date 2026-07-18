@@ -39,6 +39,14 @@ def _tiny_spec() -> ParamSpec:
 _ROW = [0.0, -1.0, 1.0, 0.0, 0.2, 0.2]
 
 
+def test_encoded_width_counts_onehot_and_note_columns() -> None:
+    """Encoded width includes expanded categorical and note columns."""
+    spec = _tiny_spec()
+
+    assert spec.encoded_width == 6
+    assert len(spec) == 6
+
+
 class TestDecodeModelOutput:
     """The rescale-then-clip contract, pinned independently of any caller."""
 

@@ -681,15 +681,13 @@ def _run_predict(
 
     Paths are passed as absolute (``.resolve()``) because ``src/synth_setter/cli/eval.py`` runs under Hydra, which
     chdirs into its own output dir before the job starts; relative paths would otherwise resolve
-    against the wrong cwd. ``model.net.d_out`` is overridden from ``len(param_specs[...])`` to
-    satisfy the mandatory-override sentinel in ``configs/experiment/surge/test.yaml``.
+    against the wrong cwd. The datamodule ParamSpec drives the model output width.
 
     ``subprocess_runner`` exists for test injection (#844). ``None`` (the default) resolves to
     ``subprocess.check_call`` at call time so legacy ``monkeypatch.setattr(subprocess, ...)``
     tests keep working until they migrate to direct injection.
     """
     runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
-    encoded_width = len(param_specs[param_spec_name])
     runner(  # noqa: S603
         [
             sys.executable,
@@ -700,7 +698,7 @@ def _run_predict(
             "datamodule.predict_file=" + str(predict_file.resolve()),
             "datamodule.dataset_root=" + str(dataset_root_dir.resolve()),
             "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir.resolve()),
-            f"model.net.d_out={encoded_width}",
+            f"datamodule.param_spec_name={param_spec_name}",
             "mode=predict",
         ],
         timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,

@@ -253,7 +253,7 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         raw = OmegaConf.to_container(cfg.render, resolve=True)
         render = RenderConfig(**{{k: v for k, v in raw.items() if isinstance(k, str)}})
         print(json.dumps({{
-            "encoded_width": len(spec),
+            "encoded_width": spec.encoded_width,
             "plugin_path": render.plugin_path,
             "renderer_version": render.renderer_version,
         }}))

@@ -11,12 +11,6 @@ defaults:
 run_name: fake_oracle
 experiment_name: surge-fake-oracle
 
-model:
-  net:
-    # FakeOracleNet ignores d_out: it returns a fixed dummy param and never
-    # builds a projection of this width; -1 marks it a dead knob, not a real size.
-    d_out: -1
-
 mode: predict
 
 tags:
@@ -26,9 +20,7 @@ tags:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    # Track the render group's spec so per-param MSE labels match the rendered
-    # params; this experiment always selects a render group (render_vst: true).
-    param_spec: ${render.param_spec_name}
+    param_spec: ${datamodule.param_spec_name}
   plot_proj_ii: null
 
 datamodule:

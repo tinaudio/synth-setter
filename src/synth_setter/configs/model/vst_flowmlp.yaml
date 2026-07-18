@@ -28,7 +28,7 @@ vector_field:
 # training
 cfg_dropout_rate: 0.1
 
-num_params: 92
+num_params: ${param_spec_width:${datamodule.param_spec_name}}
 
 rectified_sigma_min: 0.0
 

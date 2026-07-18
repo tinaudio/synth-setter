@@ -5,10 +5,6 @@ defaults:
   - override /model: vst_ffn
   - _self_
 
-model:
-  net:
-    d_out: 92
-
 experiment_name: surge-simple-onehot
 run_name: ffn
 

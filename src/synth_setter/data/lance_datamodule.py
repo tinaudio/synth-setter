@@ -399,7 +399,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param stage: Lightning stage hint; all splits are built eagerly.
         """
         del stage
-        num_params = len(resolve_param_spec(self.param_spec_name))
+        num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
                 "train": self._build_fake_split(num_params=num_params, read_audio=False),

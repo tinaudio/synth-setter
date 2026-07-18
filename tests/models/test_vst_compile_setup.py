@@ -1,7 +1,9 @@
 """Regression tests for compile-enabled VST module stage transitions."""
 
 from functools import partial
+from typing import Any, cast
 
+import pytest
 import torch
 
 from synth_setter.models.vst_fake_oracle_module import FakeOracleNet, VSTFakeOracleModule
@@ -62,6 +64,19 @@ def test_feed_forward_setup_fit_then_test_compiles_net_once() -> None:
 
     assert compiled_net is not original_net
     assert module.net is compiled_net
+
+
+def test_flow_matching_constructor_without_num_params_raises_type_error() -> None:
+    """Flow models require an explicit target width from configuration."""
+    constructor = cast(Any, VSTFlowMatchingModule)
+
+    with pytest.raises(TypeError, match="num_params"):
+        constructor(
+            encoder=torch.nn.Linear(1, 1),
+            vector_field=torch.nn.Linear(1, 1),
+            optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+            scheduler=None,  # pyright: ignore[reportArgumentType]
+        )
 
 
 def test_flow_matching_setup_fit_then_test_compiles_components_once() -> None:

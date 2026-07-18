@@ -18,6 +18,7 @@ from synth_setter.data.vst.param_spec_registry import (
     param_specs,
     plugin_state_paths,
     resolve_param_spec,
+    resolve_param_spec_width,
 )
 from synth_setter.param_spec_name import ParamSpecName
 
@@ -86,10 +87,21 @@ def test_default_plugin_path_falls_back_to_bundle_when_env_empty(
 
 def test_param_spec_widths_match_known_values() -> None:
     """Hardcoded width tripwires guard the shipped specs against silent drift."""
-    assert len(param_specs["surge_xt"]) == 300
-    assert len(param_specs["surge_simple"]) == 92
-    assert len(param_specs["surge_4"]) == 7
-    assert len(param_specs["obxf"]) == 187
+    assert param_specs["surge_xt"].encoded_width == 300
+    assert param_specs["surge_simple"].encoded_width == 92
+    assert param_specs["surge_4"].encoded_width == 7
+    assert param_specs["obxf"].encoded_width == 187
+
+
+def test_resolve_param_spec_width_returns_encoded_width() -> None:
+    """The registry width resolver returns the selected spec's encoded width."""
+    assert resolve_param_spec_width("surge_simple") == 92
+
+
+def test_resolve_param_spec_width_unknown_name_raises_key_error() -> None:
+    """An unknown spec name fails instead of supplying a fallback width."""
+    with pytest.raises(KeyError, match="not_registered"):
+        resolve_param_spec_width("not_registered")
 
 
 def test_resolve_param_spec_returns_registered_dynamic_spec(
