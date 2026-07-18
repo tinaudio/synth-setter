@@ -146,7 +146,7 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failure after a fragment flush leaves no dataset; a clean rerun succeeds.
+    """A failed fresh write leaves no target dataset; a clean rerun succeeds.
 
     :param tmp_path: Destination directory for the shard.
     :param monkeypatch: Injects a failure after the first real fragment flush.
@@ -175,12 +175,50 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
         make_lance_dataset(shard, _torchsynth_render_cfg())
 
     assert fragment_calls == 2
-    assert any((shard / "data").iterdir())
-    assert not any((shard / "_versions").glob("*.manifest"))
+    assert not shard.exists()
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg())
     assert _read_params(shard).shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+
+
+def test_make_lance_dataset_failed_rerun_preserves_previous_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed overwrite attempt leaves the previously committed dataset intact.
+
+    :param tmp_path: Destination directory for the shard.
+    :param monkeypatch: Injects a failure after the first rerun fragment flush.
+    """
+    from synth_setter.pipeline.data import lance_shard
+
+    shard = tmp_path / "shard.lance"
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    first = _read_params(shard)
+
+    real_lance_fragment = lance_shard.lance_fragment
+    fragment_calls = 0
+
+    def _fail_after_first_fragment(
+        uri: Path | str,
+        schema: pa.Schema,
+        batch: pa.RecordBatch | Iterable[pa.RecordBatch],
+        *,
+        storage_options: dict[str, str] | None = None,
+    ) -> lance.fragment.FragmentMetadata:
+        nonlocal fragment_calls
+        fragment_calls += 1
+        if fragment_calls > 1:
+            raise RuntimeError("injected fragment failure")
+        return real_lance_fragment(uri, schema, batch, storage_options=storage_options)
+
+    monkeypatch.setattr(lance_shard, "lance_fragment", _fail_after_first_fragment)
+    with pytest.raises(RuntimeError, match="injected fragment failure"):
+        make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+
+    assert fragment_calls == 2
+    np.testing.assert_array_equal(_read_params(shard), first)
 
 
 def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:
@@ -263,7 +301,6 @@ def _assert_map_loader_round_trip(
         param_spec_name=param_spec_name,
         batch_size=4,
         num_workers=0,
-        loader="map",
     )
     datamodule.setup()
     encoded_width = len(resolve_param_spec(param_spec_name))
