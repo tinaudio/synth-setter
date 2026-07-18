@@ -362,6 +362,55 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_falls_back_to_path_python_without_repo_venv(
+    tmp_path: Path,
+) -> None:
+    """Use the active PATH interpreter when the repo copy has no local ``.venv``.
+
+    :param tmp_path: Temporary repo copy and fake Pi executable directory.
+    """
+    sh = importlib.import_module("sh")
+    repo_root = tmp_path / "repo"
+    launcher = repo_root / "agent" / "_shared" / "run_pi_review.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text((REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh").read_text())
+    launcher.chmod(0o755)
+    routing = repo_root / "agent" / "_shared" / "pi_review_routing.py"
+    routing.write_text((REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text())
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        '[[ "${SYNTH_SETTER_PI_REVIEW:-}" == 1 ]]\n'
+        'printf \'{"type":"message_start","message":{"role":"assistant",\'\n'
+        'printf \'"content":[],"provider":"openai-codex",\'\n'
+        'printf \'"model":"gpt-5.6-terra"}}\\n\'\n'
+        'printf \'{"type":"message_end","message":{"role":"assistant",\'\n'
+        'printf \'"content":[{"type":"text","text":"pi-complete"}]}}\\n\'\n'
+    )
+    pi.chmod(0o755)
+
+    stderr = io.BytesIO()
+    result = sh.Command(str(launcher))(
+        "repo-review-full",
+        "--target",
+        "2052",
+        _cwd=repo_root,
+        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _err=stderr,
+    )
+    assert str(result).strip() == "pi-complete"
+    stderr_text = stderr.getvalue().decode()
+    match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr_text)
+    assert match is not None
+    transcript = repo_root / match.group(1)
+    try:
+        assert transcript.read_text().count("message_") == 2
+        assert "openai-codex/gpt-5.6-terra started" in stderr_text
+    finally:
+        transcript.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: Path) -> None:
     """Keep a failed Pi run from publishing an intermediate assistant message.
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import shutil
 
 import numpy as np
 from loguru import logger
@@ -284,6 +285,7 @@ def make_lance_dataset(
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
+    lance_path = Path(lance_dir)
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
@@ -292,11 +294,14 @@ def make_lance_dataset(
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
 
+    if lance_path.exists():
+        shutil.rmtree(lance_path)
+
     fragments: list[lance.fragment.FragmentMetadata] = []
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch))
+        fragments.append(lance_fragment(lance_path, schema, record_batch))
 
     # Commit only after a clean render: orphaned fragment data files from a failed
     # run stay uncommitted (no dataset manifest references them).
@@ -308,5 +313,5 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
         flush_batch=_flush,
     )
-    commit_lance_dataset(lance_dir, schema, fragments)
+    commit_lance_dataset(lance_path, schema, fragments)
     return metrics
