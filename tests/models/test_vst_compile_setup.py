@@ -77,11 +77,7 @@ def test_flow_matching_constructor_without_num_params_raises_type_error() -> Non
 
 
 def test_flow_matching_constructor_num_params_positional_raises_type_error() -> None:
-    """A positional fifth argument must fail loudly.
-
-    ``num_params`` occupies the pre-#2119 ``conditioning`` positional slot, so a
-    stale positional caller would otherwise silently train at a bogus width.
-    """
+    """A positional fifth argument must fail to prevent a bogus training width."""
     with pytest.raises(TypeError, match="positional"):
         VSTFlowMatchingModule(
             torch.nn.Linear(1, 1),
