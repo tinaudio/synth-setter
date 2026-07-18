@@ -230,6 +230,14 @@ def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
 
 
+def test_pi_project_explore_agent_is_disabled() -> None:
+    """Keep Tintin's unbounded built-in Explore agent unavailable in this repo."""
+    text = (REPO_ROOT / ".pi" / "agents" / "Explore.md").read_text()
+    _, frontmatter, _ = text.split("---", 2)
+
+    assert yaml.safe_load(frontmatter) == {"enabled": False}
+
+
 def test_pi_project_append_system_forbids_anthropic_agents() -> None:
     """Tell Pi sessions and project subagents not to select Anthropic models."""
     text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
