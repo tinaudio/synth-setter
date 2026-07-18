@@ -142,11 +142,11 @@ def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path
     assert not np.array_equal(first, second)
 
 
-def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_recovers(
+def test_make_lance_dataset_failed_rerun_preserves_existing_dataset_and_clean_rerun_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failure after a fragment flush leaves no dataset; a clean rerun succeeds.
+    """A failed rerun keeps the committed dataset until a clean overwrite succeeds.
 
     :param tmp_path: Destination directory for the shard.
     :param monkeypatch: Injects a failure after the first real fragment flush.
@@ -154,6 +154,9 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
     from synth_setter.pipeline.data import lance_shard
 
     shard = tmp_path / "shard.lance"
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    first = _read_params(shard)
+
     real_lance_fragment = lance_shard.lance_fragment
     fragment_calls = 0
 
@@ -172,15 +175,16 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
 
     monkeypatch.setattr(lance_shard, "lance_fragment", _fail_after_first_fragment)
     with pytest.raises(RuntimeError, match="injected fragment failure"):
-        make_lance_dataset(shard, _torchsynth_render_cfg())
+        make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
 
     assert fragment_calls == 2
-    assert any((shard / "data").iterdir())
-    assert not any((shard / "_versions").glob("*.manifest"))
+    np.testing.assert_array_equal(_read_params(shard), first)
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
-    make_lance_dataset(shard, _torchsynth_render_cfg())
-    assert _read_params(shard).shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+    second = _read_params(shard)
+    assert second.shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+    assert not np.array_equal(second, first)
 
 
 def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:

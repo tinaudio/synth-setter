@@ -711,6 +711,50 @@ def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
+def test_from_hydra_torchsynth_rerun_after_invalidated_stage_succeeds_with_new_seed(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forced torchsynth rerun overwrites the local shard instead of tripping stale schema drift.
+
+    :param cfg_dataset_torchsynth: Hydra cfg composed from the torchsynth smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker entrypoint contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.r2.prefix = "fake-r2/torchsynth-rerun/"
+        cfg_dataset_torchsynth.logger = None
+
+    first_spec = spec_from_cfg(cfg_dataset_torchsynth)
+    from_hydra(cfg_dataset_torchsynth)
+
+    shard = first_spec.shards[0]
+    staging = (
+        fake_r2_remote
+        / first_spec.r2.bucket
+        / first_spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    first_valid = next(staging.glob("*.valid"))
+    first_valid.unlink()
+    assert not shard_has_complete_attempt(first_spec, shard.shard_id)
+
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.base_seed += 1
+    rerun_spec = spec_from_cfg(cfg_dataset_torchsynth)
+    from_hydra(cfg_dataset_torchsynth)
+
+    second_valid = next(staging.glob("*.valid"))
+    assert second_valid.name != first_valid.name
+    assert shard_has_complete_attempt(rerun_spec, shard.shard_id)
+
+
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
     cfg_dataset: DictConfig,
     monkeypatch: pytest.MonkeyPatch,

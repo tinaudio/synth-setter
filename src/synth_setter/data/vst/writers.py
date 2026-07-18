@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import shutil
+import tempfile
 
 import numpy as np
 from loguru import logger
@@ -282,12 +283,11 @@ def make_lance_dataset(
         record_batch_from_arrays,
     )
 
-    if isinstance(lance_dir, str) and "://" in lance_dir:
-        target_dir: Path | str = lance_dir
-    else:
-        target_dir = Path(lance_dir)
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
+    target_dir = Path(lance_dir)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=f"{target_dir.name}.tmp-", dir=target_dir.parent)
+    )
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
@@ -304,17 +304,27 @@ def make_lance_dataset(
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(target_dir, schema, record_batch))
+        fragments.append(lance_fragment(staging_dir, schema, record_batch))
 
-    # Commit only after a clean render: orphaned fragment data files from a failed
-    # run stay uncommitted (no dataset manifest references them).
-    metrics = _render_in_batches(
-        render_cfg=render_cfg,
-        param_spec=param_spec,
-        start_idx=start_idx,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-        flush_batch=_flush,
-    )
-    commit_lance_dataset(target_dir, schema, fragments)
+    committed = False
+    try:
+        # Commit only after a clean render: orphaned fragment data files from a failed
+        # run stay uncommitted (no dataset manifest references them).
+        metrics = _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=param_spec,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+            flush_batch=_flush,
+        )
+        commit_lance_dataset(staging_dir, schema, fragments)
+        committed = True
+    finally:
+        if not committed:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    staging_dir.replace(target_dir)
     return metrics
