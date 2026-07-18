@@ -235,6 +235,28 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
         covers: "Current DatasetSpec.r2 field that becomes DatasetSpec.storage with storage.root {bucket, key}"
 
+  - doc: docs/design/experiment-ux-options.md
+    description: Accepted architecture for one-selector local and cloud experiment runs
+    sources:
+      - pattern: "src/synth_setter/configs/experiment/**"
+        covers: "Runnable experiment recipes and family defaults"
+      - pattern: "src/synth_setter/configs/train.yaml"
+        covers: "Training Hydra root composition"
+      - pattern: "src/synth_setter/configs/eval.yaml"
+        covers: "Evaluation Hydra root composition"
+      - pattern: "src/synth_setter/configs/datamodule/**"
+        covers: "Dataset hydration configuration"
+      - pattern: "src/synth_setter/configs/launch/**"
+        covers: "SkyPilot launch command configuration"
+      - pattern: "src/synth_setter/configs/compute/**"
+        covers: "SkyPilot resource policy"
+      - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
+        covers: "SkyPilot worker dispatch"
+      - pattern: ".github/workflows/train.yml"
+        covers: "Training dispatch workflow"
+      - pattern: ".github/workflows/eval.yml"
+        covers: "Evaluation dispatch workflow"
+
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
