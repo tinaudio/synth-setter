@@ -289,6 +289,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
+    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
+    assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
+    assert "python3 agent/_shared/pi_review_routing.py" not in text
+    assert "Insert a `## PR health` section after the `## Provider incidents`" in text
+    assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
@@ -299,7 +304,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "max_turns: <plan.max_turns>" in text
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
     assert "turn budget exhausted" in text
-    assert re.search(r"print\s+the audit table before stopping", text)
+    assert "review_failure.py deliver" in text
+    assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
+    assert re.search(r"never merely print the audit\s+and stop", text)
     assert "secondary_fallback_candidates" in text
     assert "fallback_candidates" in text
     assert "Codex fallback" in text

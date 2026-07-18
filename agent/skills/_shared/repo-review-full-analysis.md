@@ -19,6 +19,59 @@ authoritative host audit and the launcher's stdout as the final deliverable.
 You MUST complete every step below in order, then return to your orchestrator
 brief's Step 7 for the final delivery step.
 
+## Terminal failure delivery
+
+After Step 1 resolves the target and origin HEAD, route every terminal failure
+through the tested failure-delivery helper. This includes planner/provider
+preflight errors, authentication failures, exhausted required passes, malformed
+report exhaustion, aggregation errors, and ordinary Step 7 delivery errors.
+Every terminal failure uses this delivery helper; never merely print the audit
+and stop.
+
+Before returning from a terminal failure, write one isolated JSON object with
+this strict shape:
+
+```json
+{
+  "target": "PR #<N> or branch <head_ref>",
+  "head": "<40-character origin HEAD>",
+  "stage": "<failed pipeline stage>",
+  "diagnostic": "<exact terminal diagnostic>",
+  "repo": "tinaudio/synth-setter",
+  "pr_number": 123,
+  "transcript_paths": ["<preserved host or worker transcript>"],
+  "provider_incidents": [
+    {
+      "model": "<exact provider/model selector>",
+      "category": "quota/capacity",
+      "diagnostic": "<exact provider diagnostic>"
+    }
+  ],
+  "audit_markdown": "<accumulated attempt audit table, possibly empty>",
+  "partial_findings": ["<validated partial finding summary>"]
+}
+```
+
+Use JSON `null` for both `repo` and `pr_number` in local-branch mode. Use an
+empty list or empty string for unavailable partial audit fields; never invent
+an attempt, incident, finding, or transcript.
+
+`repo-review-full` invokes `review_failure.py deliver --mode full`; the
+no-comments sibling uses `--mode no-comments`. Substitute the exact isolated
+JSON path:
+
+```bash
+./.venv/bin/python agent/_shared/review_failure.py deliver \
+  --mode <full-or-no-comments> --input <failure-json-path>
+```
+
+Exit 1 is the expected result because the review failed. Return the helper's
+stdout verbatim; stderr already reports a preserved local payload if GitHub
+delivery also fails. The helper puts `## Provider incidents` first, writes the
+local report before external delivery, posts a top-level COMMENT review in full
+mode, and writes the canonical blocking HEAD sentinel in no-comments mode.
+Do not enter ordinary Step 7 after this helper runs.
+
 ## Step 1: Resolve the PR
 
 Determine the PR number:
@@ -138,7 +191,9 @@ Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
 exact failure diagnostic or allocation reason,
 not a generic summary. Include one row per attempt, including retries and
 verification passes. Precede the table with one sentence counting successful,
-failed, retried, and rejected attempts. If the pipeline must fail closed, print the audit table before stopping even though no sentinel is written.
+failed, retried, and rejected attempts. If the pipeline must fail closed, pass
+the table to the terminal failure-delivery helper; never merely print the audit
+and stop.
 
 Use the tested routing helper as the single source of model candidates,
 availability filtering, thinking levels, and allocation reasons. Count changed
@@ -148,7 +203,7 @@ logic. Pass each detected signal with `--risk` and one `--skill` argument per
 selected checklist:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py plan \
+./.venv/bin/python agent/_shared/pi_review_routing.py plan \
   --skill correctness-review --skill code-health \
   --changed-lines "$changed_lines" --risk concurrency
 ```
@@ -183,11 +238,11 @@ the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
 extract its final assistant text deterministically, then validate that file:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py extract-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py extract-report \
   <output-file> --output <report-path>
-python3 agent/_shared/pi_review_routing.py validate-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py validate-report \
   <report-path> --skill <skill-name> --target <PR-or-branch-label>
-python3 agent/_shared/pi_review_routing.py transcript-stats <output-file>
+./.venv/bin/python agent/_shared/pi_review_routing.py transcript-stats <output-file>
 ```
 
 Use `transcript-stats` for the audit's elapsed, turns, and cumulative-token
@@ -199,8 +254,9 @@ directly to `validate-report`. If extraction or validation fails, record
 `malformed report` and try the next candidate. This
 is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, stop before aggregation or delivery; never write a PASS sentinel
-after silently dropping the required Codex pass. If an OpenRouter pass exhausts
+candidates, stop before aggregation and invoke terminal failure delivery; never
+write a PASS sentinel after silently dropping the required Codex pass. If an
+OpenRouter pass exhausts
 its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
 `fallback_candidates`, continue the review with Codex-only findings, record the
 failed OpenRouter attempt chain in the audit, and add the exact sentence
@@ -231,7 +287,7 @@ Attribute findings from each successful report to the provider that actually
 produced it, including after same-provider fallback:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py provenance <effective-model>
+./.venv/bin/python agent/_shared/pi_review_routing.py provenance <effective-model>
 ```
 
 Merge duplicate findings using effective provenance. Findings independently
@@ -357,7 +413,7 @@ other `review_body` section, including the review lead-in, `## PR health`, and
 
 `review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
 
-**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 

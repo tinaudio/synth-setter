@@ -152,6 +152,11 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > ### Step 7: Render the findings — write the sentinel file **and** return the report
 >
+> A terminal failure after target resolution bypasses this ordinary renderer.
+> Follow the shared **Terminal failure delivery** section with
+> `--mode no-comments`; the helper writes the canonical blocking HEAD sentinel
+> and returns the exact failure report before exiting nonzero.
+>
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
 > `gh pr review` command. This step has zero GitHub side effects.
 >
