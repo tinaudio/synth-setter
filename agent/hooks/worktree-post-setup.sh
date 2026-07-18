@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PostToolUse hook: runs make link-plugins && make link-thoughts in every
-# new worktree after `git worktree add`. Fail-safe: exits 0 on any error — see #1343.
+# PostToolUse hook: installs Git hooks and links shared assets in every new
+# worktree after `git worktree add`. Fail-safe: exits 0 on any error — see #1343.
 set -euo pipefail
 
 # shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}
@@ -85,12 +85,17 @@ main() {
     exit 0
   fi
 
-  log "running make link-plugins && make link-thoughts && make link-skills in $wt_path"
+  log "installing Git hooks and linking shared assets in $wt_path"
   (
     cd "$wt_path"
-    make link-plugins && make link-thoughts && make link-skills
+    status=0
+    make install-git-hooks || status=1
+    make link-plugins || status=1
+    make link-thoughts || status=1
+    make link-skills || status=1
+    exit "$status"
   ) || {
-    log "make link-plugins/link-thoughts/link-skills failed in $wt_path (non-fatal)"
+    log "Git hook installation or shared-asset linking failed in $wt_path (non-fatal)"
   }
 }
 

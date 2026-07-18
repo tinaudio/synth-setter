@@ -837,9 +837,10 @@ devcontainer up --workspace-folder .
 ```bash
 # Inside the container, starting from the workspace root on main:
 git worktree add .claude/worktrees/my-feature -b feat/my-feature
-# Claude Code: link-plugins and link-thoughts run automatically via the PostToolUse hook.
-# Plain terminal (outside Claude Code): chain them manually:
-cd .claude/worktrees/my-feature && make link-plugins && make link-thoughts
+# Claude Code installs Git hooks and links shared assets via PostToolUse.
+# Plain terminal (outside Claude Code): run the setup targets manually:
+cd .claude/worktrees/my-feature
+make install-git-hooks link-plugins link-thoughts link-skills
 ```
 
 This is the supported local pattern. Mounting a worktree directly from the
@@ -867,9 +868,9 @@ the failure surfaces immediately rather than partway through `post-create`.
   gitignored, so `git worktree add` doesn't copy them). `make link-plugins`
   mirrors the primary checkout's `plugins/` entries into the worktree;
   `make link-thoughts` symlinks `thoughts/` to the primary's central copy.
-  Claude Code runs both automatically via `agent/hooks/worktree-post-setup.sh`
-  after every `git worktree add`; in a plain terminal, chain them onto the
-  spawn command manually.
+  Claude Code installs the Git hooks and links all shared assets via
+  `agent/hooks/worktree-post-setup.sh` after every `git worktree add`; in a
+  plain terminal, run the setup targets manually.
 
 ### B.3. macOS VM (Tart)
 

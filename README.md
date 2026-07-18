@@ -66,9 +66,8 @@ macOS the aggregate still succeeds with Surge XT alone; on non-x86_64 Linux
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 
-# 2. Install uv, create .venv (Python 3.12), install deps, register pre-commit
-#    (pre-commit install is skipped if core.hooksPath is set, e.g. in the dev
-#    container)
+# 2. Install uv, create .venv (Python 3.12), install deps, and register
+#    pre-commit plus pre-push enforcement hooks
 make install
 
 # 3. Activate the venv
