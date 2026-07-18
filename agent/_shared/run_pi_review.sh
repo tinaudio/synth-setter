@@ -12,6 +12,23 @@ usage() {
     >&2
 }
 
+resolve_review_python() {
+  if [[ -x ./.venv/bin/python ]]; then
+    printf '%s\n' ./.venv/bin/python
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+  echo "run_pi_review.sh requires either ./.venv/bin/python or python3 on PATH" >&2
+  return 1
+}
+
 #######################################
 # Validate a host request, then replace it with the shared Pi process.
 # Arguments:
@@ -61,6 +78,8 @@ only its specified deliverable."
   umask 077
   mkdir -p .agent-reviews
   echo "Live Pi transcript: ${transcript}" >&2
+  local review_python
+  review_python="$(resolve_review_python)"
   local final_output
   if ! final_output="$(
     pi \
@@ -72,7 +91,7 @@ only its specified deliverable."
       --thinking "${PI_REVIEW_THINKING}" \
       --no-session \
       "${prompt}" \
-      | ./.venv/bin/python agent/_shared/pi_review_routing.py stream-host \
+      | "${review_python}" agent/_shared/pi_review_routing.py stream-host \
         --transcript "${transcript}"
   )"; then
     echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
