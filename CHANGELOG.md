@@ -1,6 +1,70 @@
 # CHANGELOG
 
 
+## v10.0.4 (2026-07-18)
+
+### Automation
+
+- Keep Pi reviews alive through completion
+  ([#2125](https://github.com/tinaudio/synth-setter/pull/2125),
+  [`0f2c2cf`](https://github.com/tinaudio/synth-setter/commit/0f2c2cfd37baa893c8a2d1974048972c23295516))
+
+* fix(ci-automation): keep Pi reviews alive through completion
+
+* fix(ci-automation): format Pi review host contract
+
+### Bug Fixes
+
+- **ci-automation**: Enforce formatting before agent pushes
+  ([#2141](https://github.com/tinaudio/synth-setter/pull/2141),
+  [`9bc8f60`](https://github.com/tinaudio/synth-setter/commit/9bc8f6038b71576d06da45e087e3b8a3194fbfc5))
+
+* internal-fix(ci-automation): enforce formatting before pushes
+
+* test(ci-automation): exercise pre-push enforcement end to end
+
+* internal-fix(ci-automation): anchor hooks to primary environment
+
+### Chores
+
+- **ci-automation**: Default Pi to GPT-5.6 Sol
+  ([#2131](https://github.com/tinaudio/synth-setter/pull/2131),
+  [`c15a56d`](https://github.com/tinaudio/synth-setter/commit/c15a56d830e1638003cd2ac10158545656b26e3c))
+
+### Refactoring
+
+- **config**: Derive VST widths from ParamSpec
+  ([#2119](https://github.com/tinaudio/synth-setter/pull/2119),
+  [`76241de`](https://github.com/tinaudio/synth-setter/commit/76241dec88fc76f0505ab5e09867f24d682981b3))
+
+- **config**: Rename generic VST Hydra groups
+  ([#2062](https://github.com/tinaudio/synth-setter/pull/2062),
+  [`0805e94`](https://github.com/tinaudio/synth-setter/commit/0805e94241dfdb9f4682877d62ec09664683c297))
+
+* refactor(config): rename generic Hydra groups for VST
+
+Require active ParamSpecs for per-parameter metrics and the generic Flow-VAE model so neutral
+  configs cannot silently select Surge defaults.
+
+* test(config): preserve Surge job compatibility
+
+Keep the stable eval_surge alias for Surge-specific launch scripts and exercise active ParamSpec
+  callback wiring through real train and eval entrypoints.
+
+Refs #2018
+
+* fix(config): preserve VST config compatibility aliases
+
+Keep archived Surge group names as thin aliases, require concrete Flow-VAE experiments to select
+  their ParamSpec and output width, and pin callback wiring through real entrypoints.
+
+* fix(config): preserve Surge Flow-VAE alias defaults
+
+* test(config): cover VST alias compatibility
+
+* fix(config): correct Surge flow width to 92 (#2120)
+
+
 ## v10.0.3 (2026-07-17)
 
 ### Bug Fixes
