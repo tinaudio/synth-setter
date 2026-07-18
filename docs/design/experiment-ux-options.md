@@ -38,8 +38,9 @@ Each goal is testable.
 1. **One-selector training.** Normal local and GitHub/SkyPilot training require
    at most `experiment=<name>`:
    `synth-setter-train experiment=surge/flow_simple_440k`, or one `experiment`
-   workflow input. The experiment is the runnable recipe; dataset source,
-   render profile, and compute sizing are owned by the groups it selects.
+   workflow input. The experiment is the portable runnable recipe: it selects
+   dataset source and render profile and declares provider-neutral resource
+   requirements. The launcher selects the execution environment separately.
    Evaluation keeps its current explicit `ckpt_path` or W&B-backed experiment
    overlay until checkpoint UX is resolved in [#2136].
 2. **Dataset caches are validated and offline-first.** A file-backed experiment
@@ -224,9 +225,10 @@ can actually pay off:
 
 ## 4. The decision
 
-One combined design: lightweight reusable Hydra groups for data and execution,
-selected by runnable experiment configs; whole-root receipted hydration; shared
-preflight validation run by both launcher and worker; launcher-derived dispatch.
+One combined design: a reusable Hydra group for data selected by runnable
+experiment configs; provider-neutral resource requirements declared by those
+experiments; launcher-selected execution policy; whole-root receipted hydration;
+context-aware shared preflight; launcher-derived dispatch.
 
 ### 4.1 `training_data`: a reusable group owning dataset identity
 
@@ -251,40 +253,61 @@ dataset_root: ${paths.cache_dir}/datasets/${training_data.dataset_id}
   Scientific settings (cadence, monitors, render profile) live in experiment
   YAML — never in launch YAML.
 
-### 4.2 `execution`: operational compute policy, launcher-derived dispatch
+### 4.2 Portable resource requirements and launcher-selected execution
 
-A second lightweight group, `configs/execution/*.yaml`, owns **operational
-policy only**. Disk capacity has one authority: the selected compute template's
-`resources.disk_size`; the execution group supplies only sizing policy around
-that value:
+Experiments declare only provider-neutral minimum requirements, colocated with
+`experiment_meta` or inherited from a family base:
+
+```yaml
+experiment_meta:
+  entrypoint: train
+  resource_requirements:
+    accelerator: cuda
+    accelerator_memory_gb: 24
+    system_memory_gb: 64
+```
+
+A separate `configs/execution/*.yaml` group owns **site and provider policy**.
+It is selected by the launcher or workflow, never by the experiment:
 
 ```yaml
 # configs/execution/runpod_training.yaml   (illustrative)
+provider: runpod
 compute_template: src/synth_setter/configs/compute/runpod-training-template.yaml
 dataset_headroom_fraction: 0.20
 workspace_reserve_gb: 50
 ```
 
+The workflow's default execution environment preserves one-selector operation;
+an optional expert input can select another configured environment. Local runs
+do not select a cloud execution group. Disk capacity has one authority: the
+selected compute template's `resources.disk_size`; the launcher derives the
+required capacity from the dataset size, execution headroom policy, workspace
+reserve, and the experiment's resource requirements.
+
 Dispatch inverts today's flow. The train and eval workflows call
-`synth-setter-skypilot-launch --entrypoint <train|eval> --experiment <name>`.
+`synth-setter-skypilot-launch --entrypoint <train|eval> --experiment <name> --execution <environment>`, with `--execution` supplied by the workflow default.
 The launcher first requires its checkout SHA to equal the `WORKER_GIT_REF` it
 will forward, then composes the matching Hydra root (`train.yaml` or
 `eval.yaml`) and confirms `experiment_meta.entrypoint` agrees. It runs the
-shared preflight (§4.4) **before provisioning**, reads `execution:`, and builds
-the matching worker command itself. Consequences:
+cloud-dispatch preflight (§4.4) **before provisioning**, composes the selected
+execution policy, verifies that its template satisfies the experiment's
+requirements, and builds the matching worker command itself. Consequences:
 
 - Launch YAML (`configs/launch/*.yaml`) shrinks to site/operational policy
   (image tag, env file, tail) or disappears entirely; hand-written `cmd:` shell
   strings and their `${EXPERIMENT:-…}` indirection — the #2118 defect class —
   are deleted. Smoke variants become experiments (`…_smoke.yaml` with
   `max_steps: 10`), not launch files.
-- `train.yml` collapses to **one required `experiment` input**, plus one
-  optional expert input forwarding extra Hydra overrides. `eval.yml` adopts the
-  same experiment-derived dispatch but retains its current explicit
-  checkpoint/W&B selection until [#2136]; this overhaul does not promise
-  one-input evaluation.
+- `train.yml` collapses to **one required `experiment` input**. Optional expert
+  inputs select a non-default execution environment or forward extra Hydra
+  overrides. `eval.yml` adopts the same launcher-derived dispatch but retains
+  its current explicit checkpoint/W&B selection until [#2136]; this overhaul
+  does not promise one-input evaluation.
+- The same experiment remains portable across local, RunPod, and future
+  providers because it states requirements rather than a compute template.
 - The launcher refuses to provision unless it composed from the exact
-  `WORKER_GIT_REF` the worker will check out. The worker re-runs the same
+  `WORKER_GIT_REF` the worker will check out. The worker re-runs the appropriate
   preflight as defense in depth.
 
 ### 4.3 Whole-root hydration: one resumable copy, receipt written last
@@ -320,13 +343,12 @@ What hydration adds on top of the existing transfer:
 
 Full state machine and failure table: §6.
 
-### 4.4 Shared preflight validation
+### 4.4 Context-aware shared preflight validation
 
-One plain function on a composed cfg — `validate_experiment(cfg)` — run by the
-launcher **before provisioning** and re-run by the worker/CLI at startup:
+One shared validator operates on a composed cfg with an explicit execution
+context: local startup, cloud dispatch, or worker startup. All contexts enforce
+the same scientific invariants:
 
-- **Dataset completion**: remote `dataset.complete` exists (or a valid local
-  receipt is present).
 - **Spec agreement**: `training_data.param_spec_name` ==
   `datamodule.param_spec_name` == `render.param_spec_name` (where render is
   configured) — unconditional, not probe-gated as today (§2.5).
@@ -334,15 +356,30 @@ launcher **before provisioning** and re-run by the worker/CLI at startup:
   `resolve_param_spec(…).encoded_width`. Structural for `vst_*` groups since
   PR #2119's derived widths; the check stays as defense in depth for literal
   overrides and archived configs.
-- **Cloud disk capacity**: read the selected template's authoritative
-  `resources.disk_size` and require it to satisfy
-  `ceil(root_gb × (1 + dataset_headroom_fraction) + workspace_reserve_gb)`.
-  Measure the root live with `rclone size`; reject insufficient capacity before
-  provisioning and re-check usable filesystem space on the worker.
 
-Failure UX: a single-paragraph error naming the two conflicting values and the
-file that owns each — emitted by the launcher for cloud runs (nothing
-provisioned) and at CLI startup locally.
+Dataset availability depends on where the data will be consumed:
+
+- **Local startup** accepts a valid local receipt without R2 contact. Without a
+  receipt, it requires remote credentials and `dataset.complete` before
+  hydration.
+- **Cloud dispatch** always verifies remote `dataset.complete`, lists and sizes
+  the remote root with the credentials that will be forwarded to the worker,
+  and ignores any cache on the dispatch machine. That cache is not mounted into
+  a newly provisioned worker and cannot prove worker-side availability.
+- **Worker startup** accepts a valid cache on that worker; otherwise it requires
+  remote completion and credentials before hydration.
+
+Cloud dispatch also reads the selected template's authoritative
+`resources.disk_size`, verifies the provider template satisfies the experiment's
+provider-neutral resource requirements, and requires disk capacity of at least
+`ceil(root_gb × (1 + dataset_headroom_fraction) + workspace_reserve_gb)`.
+The launcher measures `root_gb` live with `rclone size`, rejects insufficient
+capacity before provisioning, and re-checks usable filesystem space on the
+worker.
+
+Failure UX: a single-paragraph error naming the conflicting values, their
+owners, and the execution context — emitted by the launcher for cloud runs
+(nothing provisioned) and at CLI startup locally.
 
 ### 4.5 Checkpoints: unchanged here, deferred to #2136
 
@@ -378,7 +415,8 @@ gh workflow run train.yml -f experiment=surge/flow_simple_440k
 # Evaluation still carries explicit checkpoint selection until #2136.
 synth-setter-eval experiment=surge/eval_ffn_4 ckpt_path=/path/to/model.ckpt
 
-# Expert escape hatch (optional workflow input; normal runs never set it).
+# Expert escape hatches (optional workflow inputs; normal runs never set them).
+gh workflow run train.yml -f experiment=… -f execution=oci_training
 gh workflow run train.yml -f experiment=… -f extra_overrides="trainer.max_steps=100"
 ```
 
@@ -452,11 +490,12 @@ the sequence stops. **This document's PR ships recommendations only — no code.
    Keep an explicit shrinking skip-list for known-broken files; fix or delete
    the `ksin_flow`/`ksin_ff` dangling references (§2.7). This is the tripwire
    that prevents every future #2118.
-3. **`internal-feat(training)`: establish shared preflight validation** — wire
-   `validate_experiment(cfg)` into worker/CLI startup for invariants available
-   on current configs (render/datamodule spec agreement and encoded width).
-   PR 4 extends it with `training_data` completion checks; PR 6 adds receipt
-   validation; PR 7 runs the complete preflight before provisioning.
+3. **`internal-feat(training)`: establish context-aware shared preflight** —
+   wire the validator into worker/CLI startup for invariants available on
+   current configs (render/datamodule spec agreement and encoded width). Define
+   explicit local, cloud-dispatch, and worker contexts. PR 4 extends it with
+   `training_data` completion checks; PR 6 adds receipt validation; PR 7 runs
+   cloud preflight against remote state before provisioning.
 4. **`feat(config)`: stable cache root + `training_data` group** —
    `paths.cache_dir` from `SYNTH_SETTER_CACHE_DIR`, `configs/training_data/`
    entries for the pinned roots, datamodule keys derived from
@@ -467,10 +506,13 @@ the sequence stops. **This document's PR ships recommendations only — no code.
 6. **`feat(data)`: receipted, locked whole-root hydration** (§4.3) — completion
    gate, per-identity flock, receipt-written-last on top of the existing
    `download_dir_no_overwrite` transfer; offline-first cache semantics.
-7. **`feat(compute)`: launcher-composed dispatch + `execution` group** (§4.2) —
-   `--entrypoint`/`--experiment`, pre-provision preflight, one-input training,
-   and experiment-derived eval dispatch with existing checkpoint selection;
-   delete per-run launch `cmd:`s.
+7. **`feat(compute)`: launcher-composed dispatch + execution policy** (§4.2) —
+   add provider-neutral resource requirements to experiments; select
+   `execution` from the workflow/launcher default rather than the experiment;
+   run remote-only availability and capacity checks before provisioning; keep
+   one-input training and existing eval checkpoint selection; delete per-run
+   launch `cmd:`s. Split template/resource validation from workflow migration
+   if this exceeds a focused PR.
 8. **`feat(training)` + `test`: TorchSynth AST/flow experiments and fixture**
    (§7), in 2–3 PRs (fixture + ffn/flow experiments, pretrained overlay, eval
    roundtrip). Independent; can proceed any time after PR 2.
@@ -483,10 +525,15 @@ Minimum useful first step = PRs 1–4. PRs 5–7 deliver the headline UX.
 ## 9. Success criteria
 
 - `gh workflow run train.yml -f experiment=…` with **no other inputs** launches
-  the 440k run successfully. Evaluation remains explicit about checkpoint
-  selection until [#2136].
+  the 440k run successfully using the workflow's default execution environment.
+  The same experiment composes locally without provider policy and can launch
+  through another configured environment with only `execution=<name>` changed.
+  Evaluation remains explicit about checkpoint selection until [#2136].
 - Second local run of a cached experiment performs **zero R2 operations**
   (assertable in tests by monkeypatching `r2_io` to raise).
+- Cloud dispatch performs remote completion and size checks even when the
+  dispatch machine has a valid cache; a missing or inaccessible remote root
+  fails before provisioning.
 - Every recipe marked runnable composes against its declared entrypoint in
   `make test-fast`; abstract family overlays are classified explicitly, and the
   temporary failure skip-list is enforced non-growing.
@@ -534,9 +581,10 @@ the spec schema is a maintenance tax where every new compatibility-relevant
 knob must be added or silently escapes validation — classic framework-building
 under YAGNI.
 
-**Option D — Launcher composes the experiment.** *Adopted* (§4.2), with the
-compute block factored into the reusable `execution` group rather than inlined
-per experiment.
+**Option D — Launcher composes the experiment.** *Adopted* (§4.2). Experiments
+declare provider-neutral resource requirements; the workflow/launcher selects a
+reusable `execution` policy separately so scientific recipes do not encode a
+provider or site.
 
 **Option E — Mounted/streaming R2 (no hydration).** Read splits directly from
 R2; no local copy, tiny disks. *Rejected for this overhaul*: unproven
@@ -571,6 +619,14 @@ unified runner CLI wrapping the existing entrypoints.
   checkout; forwarding another ref would validate one tree and run another.
   Mitigate by rejecting `git rev-parse HEAD != WORKER_GIT_REF` before compose or
   provisioning, then revalidate on the worker.
+- **Dispatch-cache false positive.** A receipt on the launcher says nothing
+  about a new worker. The cloud-dispatch context therefore ignores launcher
+  caches and verifies the remote marker, listing, size, and forwarded
+  credentials before provisioning.
+- **Resource-policy coupling.** Provider selection can leak into experiments
+  through convenient defaults. Exhaustive composition tests must prove that
+  runnable experiments contain only provider-neutral requirements and that
+  execution is supplied by the launcher.
 - **Receipt scheme vs. rclone semantics.** `--immutable` interacts subtly with
   resumed partial copies; needs dedicated tests for the crash → resume → READY
   path.
@@ -609,13 +665,18 @@ unified runner CLI wrapping the existing entrypoints.
 1. **Where does the cache root live on RunPod pods?** It must sit under the
    filesystem represented by the compute template's `resources.disk_size` for
    the capacity check to be truthful; confirm the mount layout during PR 7.
-2. **Should `execution` be selected by family bases or leaf experiments?**
-   Leaning bases with leaf overrides, to avoid ~80 copies of the same
-   selection.
-3. **Defaults-list threading**: `training_data` and `execution` must be
-   declared before `experiment` in both `train.yaml` and `eval.yaml`
-   (`eval.yaml:13-16` ordering rule); confirm no third root needs them
-   (`dataset.yaml` is producer-side and out of scope).
+2. **Where should provider-neutral requirements be inherited?** Prefer family
+   bases for shared accelerator and memory minima, with leaf overrides only
+   where measured needs differ.
+3. **How should the launcher select the default execution environment?** The
+   workflow should own the site default while the CLI requires an explicit
+   environment for cloud dispatch; confirm whether repository-local defaults
+   are useful outside CI.
+4. **Defaults-list threading**: `training_data` must be declared before
+   `experiment` in both `train.yaml` and `eval.yaml` (`eval.yaml:13-16`
+   ordering rule). `execution` is launcher-selected and should not be threaded
+   through local experiment composition; confirm no third root needs
+   `training_data` (`dataset.yaml` is producer-side and out of scope).
 
 ______________________________________________________________________
 
