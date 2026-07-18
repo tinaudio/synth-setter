@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784311883044,
+  "lastUpdate": 1784386892987,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9234,6 +9234,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03979682922363281,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0805e94241dfdb9f4682877d62ec09664683c297",
+          "message": "refactor(config): rename generic VST Hydra groups (#2062)\n\n* refactor(config): rename generic Hydra groups for VST\n\nRequire active ParamSpecs for per-parameter metrics and the generic Flow-VAE model so neutral configs cannot silently select Surge defaults.\n\n* test(config): preserve Surge job compatibility\n\nKeep the stable eval_surge alias for Surge-specific launch scripts and exercise active ParamSpec callback wiring through real train and eval entrypoints.\n\nRefs #2018\n\n* fix(config): preserve VST config compatibility aliases\n\nKeep archived Surge group names as thin aliases, require concrete Flow-VAE experiments to select their ParamSpec and output width, and pin callback wiring through real entrypoints.\n\nRefs #2018\n\n* fix(config): preserve Surge Flow-VAE alias defaults\n\n* test(config): cover VST alias compatibility\n\n* fix(config): correct Surge flow width to 92 (#2120)",
+          "timestamp": "2026-07-18T10:43:24-04:00",
+          "tree_id": "28542caadf53eba0891a671b71c7b3a1e44fd984",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0805e94241dfdb9f4682877d62ec09664683c297"
+        },
+        "date": 1784386891750,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.693601131439209,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.625135070718825,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03775380551815033,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.044641852378845215,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.464207410812378,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 6.843614067416667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.795793056488037,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.032391272075475,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.0402652733027935,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.044641852378845215,
             "unit": "1-cos"
           },
           {
