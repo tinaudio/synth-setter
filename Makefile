@@ -17,6 +17,9 @@ clean-logs: ## Clean logs
 format: ## Run pre-commit hooks
 	./.venv/bin/pre-commit run -a
 
+install-git-hooks: ## Install commit and push enforcement hooks
+	uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+
 GATE ?=
 count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
 	@scripts/ci/count_doc_noqa.sh $(if $(GATE),--gate,)
@@ -122,12 +125,8 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	else \
 		"$$UV" venv --python 3.12.13 --prompt synth-setter .venv; \
 	fi; \
-	"$$UV" pip install --python .venv/bin/python --group dev -e .; \
-	if [[ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]]; then \
-		echo "Skipping pre-commit install (core.hooksPath is set; run '.venv/bin/pre-commit install' manually if you want to override)."; \
-	else \
-		.venv/bin/pre-commit install; \
-	fi
+	"$$UV" pip install --python .venv/bin/python --group dev -e .
+	@$(MAKE) install-git-hooks
 	@echo ""
 	@echo "Next: source .venv/bin/activate"
 
