@@ -76,7 +76,7 @@ after an rclone download. A review against the pinned library
 
 ### Read path — training (local-first, map-style)
 
-- `LanceVSTDataModule` builds one sample-indexed `LanceMapDataset` per split.
+- `LanceVSTDataModule` builds one sample-indexed `LanceTensorMapDataset` per split.
 - Batched map fetches call `dataset.take(indices, columns=...)` once, preserving
   unsorted and duplicate indices while pushing column projection into Lance.
 - Each worker lazily reopens its process-local dataset handle; decoded Arrow
@@ -131,7 +131,7 @@ after an rclone download. A review against the pinned library
 
 - Local round-trip: `write_dataset` → `lance.dataset` preserves fixed-shape
   tensor values, row order, and the `synth_setter.shard_metadata` schema key.
-- `LanceMapDataset`: projected unsorted/duplicate takes, row order, tensor
+- `LanceTensorMapDataset`: projected unsorted/duplicate takes, row order, tensor
   shapes, and writable-copy guard.
 - `r2_storage_options()` builds the expected dict from monkeypatched env.
 - `iter_lance_column_rows` / validate over a local dataset directory.

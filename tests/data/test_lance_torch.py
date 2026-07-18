@@ -22,10 +22,10 @@ from torch.multiprocessing.spawn import spawn
 from torch.utils.data import DataLoader
 
 from synth_setter.data.lance_torch import (
-    LanceMapDataset,
+    LanceTensorMapDataset,
     _batch_to_shaped_tensors,
-    lance_iterable_dataloader,
-    lance_map_dataloader,
+    lance_tensor_iterable_dataloader,
+    lance_tensor_map_dataloader,
     map_dataloader_over,
 )
 from synth_setter.pipeline.data.lance_shard import write_lance_dataset
@@ -154,7 +154,7 @@ def _assert_short_final_batch(loader_factory: Callable[[Path], DataLoader], dest
 
 
 class TestMapDataloader:
-    """Behavior of ``lance_map_dataloader`` over a real local dataset."""
+    """Behavior of ``lance_tensor_map_dataloader`` over a real local dataset."""
 
     def test_batches_unshuffled_preserve_shapes_dtypes_and_values(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -164,7 +164,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, arrays = lance_dataset
-        loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=False)
+        loader = lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=False)
 
         batches = list(loader)
 
@@ -181,7 +181,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, _ = lance_dataset
-        loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE)
+        loader = lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE)
 
         assert len(loader.dataset) == ROWS  # type: ignore[arg-type]
 
@@ -198,7 +198,7 @@ class TestMapDataloader:
         dest, arrays = lance_dataset
         columns = list(arrays)
         indices = [3, 0, 7, 7, 1]
-        dataset = LanceMapDataset(dest, columns=columns)
+        dataset = LanceTensorMapDataset(dest, columns=columns)
         recorder = _TakeRecorder(lance.dataset(dest))
         monkeypatch.setattr(dataset, "_ds", recorder)
         monkeypatch.setattr(dataset, "_opening_pid", os.getpid())
@@ -222,7 +222,7 @@ class TestMapDataloader:
         :param monkeypatch: Fixture simulating a worker PID and recording the reopen.
         """
         dest, _ = lance_dataset
-        dataset = LanceMapDataset(dest, columns=["param_array"])
+        dataset = LanceTensorMapDataset(dest, columns=["param_array"])
         inherited = _TakeRecorder(lance.dataset(dest))
         reopened = _TakeRecorder(lance.dataset(dest))
         monkeypatch.setattr(dataset, "_ds", inherited)
@@ -244,7 +244,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, _ = lance_dataset
-        loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE, columns=["param_array"])
+        loader = lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE, columns=["param_array"])
 
         batch = next(iter(loader))
 
@@ -258,7 +258,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, arrays = lance_dataset
-        loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=True)
+        loader = lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=True)
 
         rows = _concat_batches(list(loader), "param_array")
 
@@ -274,7 +274,7 @@ class TestMapDataloader:
         """
         dest, _ = lance_dataset
 
-        _assert_first_batch_owns_writable_memory(lance_map_dataloader(dest, batch_size=BATCH_SIZE))
+        _assert_first_batch_owns_writable_memory(lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE))
 
     def test_single_item_indexing_returns_row_tensors(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -285,7 +285,7 @@ class TestMapDataloader:
         """
         dest, arrays = lance_dataset
 
-        item = LanceMapDataset(dest)[3]
+        item = LanceTensorMapDataset(dest)[3]
 
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
@@ -300,7 +300,7 @@ class TestMapDataloader:
         dest, _ = lance_dataset
 
         loader = map_dataloader_over(
-            LanceMapDataset(dest),
+            LanceTensorMapDataset(dest),
             batch_size=BATCH_SIZE,
             num_workers=0,
             persistent_workers=True,
@@ -315,7 +315,7 @@ class TestMapDataloader:
         :param tmp_path: Scratch dir for the 10-row dataset.
         """
         _assert_short_final_batch(
-            lambda dest: lance_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=False),
+            lambda dest: lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE, shuffle=False),
             tmp_path / "short.lance",
         )
 
@@ -327,7 +327,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, arrays = lance_dataset
-        dataset = LanceMapDataset(dest, columns=["param_array"])
+        dataset = LanceTensorMapDataset(dest, columns=["param_array"])
         loader = map_dataloader_over(
             dataset,
             batch_size=BATCH_SIZE,
@@ -350,7 +350,7 @@ class TestMapDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, arrays = lance_dataset
-        loader = lance_map_dataloader(
+        loader = lance_tensor_map_dataloader(
             dest,
             batch_size=BATCH_SIZE,
             num_workers=2,
@@ -366,7 +366,7 @@ class TestMapDataloader:
 
 
 class TestIterableDataloader:
-    """Behavior of ``lance_iterable_dataloader`` over a real local dataset."""
+    """Behavior of ``lance_tensor_iterable_dataloader`` over a real local dataset."""
 
     def test_batches_preserve_shapes_dtypes_and_values(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -376,7 +376,7 @@ class TestIterableDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, arrays = lance_dataset
-        loader = lance_iterable_dataloader(dest, batch_size=BATCH_SIZE)
+        loader = lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE)
 
         batches = list(loader)
 
@@ -393,7 +393,7 @@ class TestIterableDataloader:
         :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
         """
         dest, _ = lance_dataset
-        loader = lance_iterable_dataloader(dest, batch_size=BATCH_SIZE, columns=["mel_spec"])
+        loader = lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE, columns=["mel_spec"])
 
         batch = next(iter(loader))
 
@@ -409,7 +409,7 @@ class TestIterableDataloader:
         dest, _ = lance_dataset
 
         _assert_first_batch_owns_writable_memory(
-            lance_iterable_dataloader(dest, batch_size=BATCH_SIZE)
+            lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE)
         )
 
     def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
@@ -418,7 +418,7 @@ class TestIterableDataloader:
         :param tmp_path: Scratch dir for the 10-row dataset.
         """
         _assert_short_final_batch(
-            lambda dest: lance_iterable_dataloader(dest, batch_size=BATCH_SIZE),
+            lambda dest: lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE),
             tmp_path / "short.lance",
         )
 
@@ -448,7 +448,7 @@ class TestIterableDataloader:
         dest, _ = lance_dataset
 
         with pytest.raises(ValueError, match=match):
-            lance_iterable_dataloader(
+            lance_tensor_iterable_dataloader(
                 dest, batch_size=BATCH_SIZE, rank=rank, world_size=world_size
             )
 
@@ -462,7 +462,7 @@ class TestIterableDataloader:
         dest = tmp_path / "labels.lance"
         write_lance_dataset(dest, schema, [batch])
 
-        loader = lance_iterable_dataloader(dest, batch_size=2)
+        loader = lance_tensor_iterable_dataloader(dest, batch_size=2)
 
         with pytest.raises(TypeError, match="no tensor representation"):
             next(iter(loader))
@@ -484,7 +484,7 @@ class TestIterableDataloader:
         dest = tmp_path / "clap.lance"
         write_lance_dataset(dest, schema, [batch])
 
-        loader = lance_iterable_dataloader(dest, batch_size=BATCH_SIZE)
+        loader = lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE)
 
         read = _concat_batches(list(loader), "clap")
         np.testing.assert_array_equal(read, values)
@@ -500,7 +500,7 @@ class TestIterableDataloader:
         per_rank = [
             _concat_batches(
                 list(
-                    lance_iterable_dataloader(
+                    lance_tensor_iterable_dataloader(
                         dest,
                         batch_size=BATCH_SIZE,
                         columns=["param_array"],
@@ -531,8 +531,8 @@ def test_zero_row_dataset_yields_no_batches(tmp_path: Path) -> None:
     dest = tmp_path / "empty.lance"
     write_lance_dataset(dest, schema, [])
 
-    map_loader = lance_map_dataloader(dest, batch_size=BATCH_SIZE)
-    iterable_loader = lance_iterable_dataloader(dest, batch_size=BATCH_SIZE)
+    map_loader = lance_tensor_map_dataloader(dest, batch_size=BATCH_SIZE)
+    iterable_loader = lance_tensor_iterable_dataloader(dest, batch_size=BATCH_SIZE)
 
     assert len(map_loader.dataset) == 0  # type: ignore[arg-type]
     assert list(map_loader) == []
@@ -590,7 +590,7 @@ def _collect_ddp_rank_rows(rank: int, world_size: int, dataset_dir: str, out_dir
         init_method=f"file://{out_dir}/ddp_init",
     )
     try:
-        loader = lance_iterable_dataloader(
+        loader = lance_tensor_iterable_dataloader(
             dataset_dir, batch_size=BATCH_SIZE, columns=["param_array"]
         )
         rows = _concat_batches(list(loader), "param_array")

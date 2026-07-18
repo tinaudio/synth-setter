@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import ConditioningMode
-from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
+from synth_setter.data.lance_torch import LanceTensorMapDataset, map_dataloader_over
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
@@ -92,7 +92,7 @@ class PrepareBatchCollate:
     def __call__(self, batch: object) -> ModelBatch:
         """Convert stored Lance columns to the model batch contract.
 
-        :param batch: Pre-collated stored columns from :class:`LanceMapDataset`.
+        :param batch: Pre-collated stored columns from :class:`LanceTensorMapDataset`.
         :returns: Float32 model batch with generated noise.
         """
         columns = cast(dict[str, torch.Tensor], batch)
@@ -196,7 +196,7 @@ class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
     """Fold every requested sample index into the first full batch."""
 
     def __init__(
-        self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int
+        self, dataset: LanceTensorMapDataset | _FakeMapDataset, batch_size: int
     ) -> None:
         """Wrap a map dataset with first-batch index folding.
 
@@ -250,7 +250,7 @@ class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
         return {name: value[0] if value is not None else None for name, value in batch.items()}
 
 
-type _SplitDataset = LanceMapDataset | _FakeMapDataset
+type _SplitDataset = LanceTensorMapDataset | _FakeMapDataset
 
 
 @dataclass(frozen=True)
@@ -367,7 +367,7 @@ class LanceVSTDataModule(VSTDataModule):
             columns.append("audio")
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
-            dataset=LanceMapDataset(shard_path, columns=columns),
+            dataset=LanceTensorMapDataset(shard_path, columns=columns),
             collate=PrepareBatchCollate(
                 mean=mean,
                 std=std,
@@ -509,5 +509,5 @@ class LanceVSTDataModule(VSTDataModule):
                 delattr(self, name)
 
 
-SurgeXTDataset = LanceMapDataset
+SurgeXTDataset = LanceTensorMapDataset
 SurgeDataModule = LanceVSTDataModule

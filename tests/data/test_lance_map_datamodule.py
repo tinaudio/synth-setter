@@ -20,7 +20,7 @@ import torch
 from lightning import LightningModule, Trainer
 
 from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchCollate
-from synth_setter.data.lance_torch import LanceMapDataset
+from synth_setter.data.lance_torch import LanceTensorMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
 from tests.helpers.lance_fixtures import (
@@ -143,7 +143,7 @@ class TestPrepareBatchCollate:
     """The map path's per-batch semantics owner: a picklable bridge into ``prepare_batch``."""
 
     def _raw_batch(self, num_rows: int = 4) -> dict[str, torch.Tensor]:
-        """Build the pre-collated tensor dict ``LanceMapDataset.__getitems__`` yields.
+        """Build the pre-collated tensor dict ``LanceTensorMapDataset.__getitems__`` yields.
 
         :param num_rows: Batch size of the synthetic batch.
         :return: Column-name-to-tensor mapping matching the shard schema.
@@ -308,7 +308,7 @@ class TestLanceMapDataModuleSetup:
         )
         module.setup()
         try:
-            assert isinstance(module.train_dataset, LanceMapDataset)
+            assert isinstance(module.train_dataset, LanceTensorMapDataset)
             assert len(module.train_dataset) == 16
             assert module.train_dataloader().batch_size == 2
         finally:

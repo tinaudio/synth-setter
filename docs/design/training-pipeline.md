@@ -289,11 +289,15 @@ The best checkpoint is uploaded to R2 at train end and referenced by the `model-
 
 Datasets are Lance: `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
-(`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceMapDataset`
+(`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceTensorMapDataset`
 instances with standard PyTorch batching, shuffling, worker persistence, and Lightning DDP
-sampler replacement. `lance_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
+sampler replacement. `lance_tensor_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
 remains available for native sequential streaming with `batch_size=None`; both native factories
-accept `storage_options` for direct R2 reads. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
+accept `storage_options` for direct R2 reads. Distributed sharding in the iterable factory is
+batch-granular only (`ShardedBatchSampler`): beyond starving ranks on this pipeline's few-fragment
+splits, fragment-granular sharding is documented upstream
+([lance-distributed-training](https://github.com/lancedb/lance-distributed-training)) to deadlock
+DDP with an NCCL allreduce watchdog timeout when fragment sizes are uneven. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
 
 ```yaml

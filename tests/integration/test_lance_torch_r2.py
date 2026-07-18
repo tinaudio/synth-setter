@@ -14,7 +14,10 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.lance_torch import lance_iterable_dataloader, lance_map_dataloader
+from synth_setter.data.lance_torch import (
+    lance_tensor_iterable_dataloader,
+    lance_tensor_map_dataloader,
+)
 from synth_setter.pipeline import r2_io
 from tests.helpers.lance_torch_datasets import FIELD_SHAPES, write_random_lance_dataset
 
@@ -72,7 +75,7 @@ def test_iterable_dataloader_streams_lance_dataset_from_real_r2(
     :param r2_lance_dataset: Uploaded dataset URI and its source arrays.
     """
     s3_uri, arrays = r2_lance_dataset
-    loader = lance_iterable_dataloader(
+    loader = lance_tensor_iterable_dataloader(
         s3_uri, batch_size=8, storage_options=r2_io.r2_storage_options()
     )
 
@@ -92,7 +95,7 @@ def test_map_dataloader_reads_lance_dataset_from_real_r2(
     :param r2_lance_dataset: Uploaded dataset URI and its source arrays.
     """
     s3_uri, arrays = r2_lance_dataset
-    loader = lance_map_dataloader(
+    loader = lance_tensor_map_dataloader(
         s3_uri,
         batch_size=8,
         columns=["param_array"],

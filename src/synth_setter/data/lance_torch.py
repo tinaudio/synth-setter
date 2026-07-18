@@ -1,13 +1,16 @@
 """Native ``lance.torch`` dataloaders over Lance shard/split datasets.
 
 Thin factories over Lance's own PyTorch integration (``LanceDataset``,
-``SafeLanceDataset``, ``ShardedBatchSampler``). Both map and iterable loaders
-stream object storage natively: pass ``storage_options`` (see
-:func:`synth_setter.pipeline.r2_io.r2_storage_options`) with an ``s3://`` URI.
+``SafeLanceDataset``, ``ShardedBatchSampler``). ``tensor`` in the loader names
+is the conversion contract: every projected column must be a fixed-shape tensor
+or fixed-size-list type — scalar, string, binary, and blob columns raise.
+Both map and iterable loaders stream object storage natively: pass
+``storage_options`` (see :func:`synth_setter.pipeline.r2_io.r2_storage_options`)
+with an ``s3://`` URI.
 
 Typical usage::
 
-    loader = lance_map_dataloader("data/train.lance", batch_size=128, shuffle=True)
+    loader = lance_tensor_map_dataloader("data/train.lance", batch_size=128, shuffle=True)
     for batch in loader:  # {"mel_spec": (128, C, 128, F) tensor, ...}
         ...
 """
@@ -89,7 +92,7 @@ def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, dict[s
     return {"storage_options": storage_options} if storage_options else None
 
 
-class LanceMapDataset(SafeLanceDataset):
+class LanceTensorMapDataset(SafeLanceDataset):
     """Map-style dataset yielding dict-of-tensor items from a Lance dataset.
 
     Inherits ``SafeLanceDataset``'s worker-safe lazy open (each spawned worker
@@ -144,7 +147,7 @@ class LanceMapDataset(SafeLanceDataset):
 
 
 def _prebatched_collate(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Pass through a batch ``LanceMapDataset.__getitems__`` already collated.
+    """Pass through a batch ``LanceTensorMapDataset.__getitems__`` already collated.
 
     :param batch: Column dict built by the dataset's batched fetch.
     :returns: The batch as-is — module-level (not a lambda) so spawn workers can pickle it.
@@ -171,7 +174,7 @@ def map_dataloader_over(
     picklable when ``num_workers > 0``.
 
     :param dataset: Map-style dataset whose ``__getitems__`` pre-collates a
-        batch (:class:`LanceMapDataset` or a wrapper over one).
+        batch (:class:`LanceTensorMapDataset` or a wrapper over one).
     :param batch_size: Rows per yielded batch.
     :param num_workers: DataLoader worker processes; ``0`` loads in-process.
     :param shuffle: Whether to randomize sample order; ignored when ``sampler`` is set.
@@ -213,7 +216,7 @@ def map_dataloader_over(
     )
 
 
-def lance_map_dataloader(
+def lance_tensor_map_dataloader(
     uri: str | Path,
     *,
     batch_size: int,
@@ -245,7 +248,7 @@ def lance_map_dataloader(
         the final batch is shorter when the row count is not divisible by ``batch_size``.
         Worker persistence is disabled when ``num_workers`` is zero.
     """
-    dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
+    dataset = LanceTensorMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
         "lance map dataloader: uri=%s rows=%d columns=%s batch_size=%d num_workers=%d",
         uri,
@@ -267,7 +270,7 @@ def lance_map_dataloader(
     )
 
 
-def lance_iterable_dataloader(
+def lance_tensor_iterable_dataloader(
     uri: str | Path,
     *,
     batch_size: int,

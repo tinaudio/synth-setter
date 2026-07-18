@@ -17,7 +17,7 @@ import pytest
 # ``Surge*`` symbols are imported from the deprecated ``surge_*`` shim paths so a
 # broken shim fails collection; the concrete symbols come from the renamed modules.
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
-from synth_setter.data.lance_torch import LanceMapDataset
+from synth_setter.data.lance_torch import LanceTensorMapDataset
 from synth_setter.data.surge_datamodule import SurgeDataModule, SurgeXTDataset
 from synth_setter.data.vst_datamodule import SurgeDataModule as VSTPathSurgeDataModule
 from synth_setter.data.vst_datamodule import SurgeXTDataset as VSTPathSurgeXTDataset
@@ -55,9 +55,9 @@ def test_vst_flow_matching_import_does_not_initialize_data_vst_package() -> None
         (SurgeFakeOracleModule, VSTFakeOracleModule),
         (SurgeFlowVAEModule, VSTFlowVAEModule),
         (SurgeDataModule, LanceVSTDataModule),
-        (SurgeXTDataset, LanceMapDataset),
+        (SurgeXTDataset, LanceTensorMapDataset),
         (VSTPathSurgeDataModule, LanceVSTDataModule),
-        (VSTPathSurgeXTDataset, LanceMapDataset),
+        (VSTPathSurgeXTDataset, LanceTensorMapDataset),
     ],
 )
 def test_deprecated_alias_is_renamed_class(alias: type, renamed: type) -> None:

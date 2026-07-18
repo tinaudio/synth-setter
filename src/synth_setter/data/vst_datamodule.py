@@ -243,7 +243,7 @@ def __getattr__(name: str) -> object:
 
         return LanceVSTDataModule
     if name == "SurgeXTDataset":
-        from synth_setter.data.lance_torch import LanceMapDataset
+        from synth_setter.data.lance_torch import LanceTensorMapDataset
 
-        return LanceMapDataset
+        return LanceTensorMapDataset
     raise AttributeError(name)
