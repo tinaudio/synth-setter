@@ -442,7 +442,7 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
                 '"args":{"command":"printf secret-value"}}',
                 '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,'
                 '"delayMs":1000,"errorMessage":"Authorization: Custom secret-token; '
-                'X-Api-Key: backup-secret"}',
+                'API key is backup-secret; token expired: third-secret"}',
                 '{"type":"message_end","message":{"role":"assistant",'
                 '"content":[{"type":"text","text":"final report"}]}}',
             )
@@ -463,6 +463,7 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
     assert "<redacted>" in progress_text
     assert "secret-token" not in progress_text
     assert "backup-secret" not in progress_text
+    assert "third-secret" not in progress_text
     assert "secret-value" not in progress_text
 
 

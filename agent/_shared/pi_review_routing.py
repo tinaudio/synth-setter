@@ -420,7 +420,8 @@ def _redact_diagnostic(diagnostic: str) -> str:
         diagnostic,
     )
     return re.sub(
-        r"(?i)\b(bearer|api[-_ ]?key|token)([\s:=\"']+)\S+",
+        r"(?i)\b(bearer|api[-_ ]?key|token)\b"
+        r"((?:\s+(?:is|expired))?\s*[:=\"']*\s*)\S+",
         r"\1\2<redacted>",
         redacted,
     )
