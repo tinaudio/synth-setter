@@ -290,7 +290,7 @@ def make_lance_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    schema = lance_schema(dataset_field_shapes(render_cfg, len(param_spec)), meta)
+    schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
 
     fragments: list[lance.fragment.FragmentMetadata] = []
 

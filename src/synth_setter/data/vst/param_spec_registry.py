@@ -69,6 +69,15 @@ def resolve_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
         raise KeyError(param_spec_name) from None
 
 
+def resolve_param_spec_width(param_spec_name: str) -> int:
+    """Resolve a registry name to its complete encoded vector width.
+
+    :param param_spec_name: Runtime registry key.
+    :returns: Encoded synth-and-note width of the registered specification.
+    """
+    return resolve_param_spec(ParamSpecName(param_spec_name)).encoded_width
+
+
 def default_plugin_path() -> str:
     """Return ``$SYNTH_SETTER_PLUGIN_PATH`` if set and non-empty, else the bundled Surge XT path.
 

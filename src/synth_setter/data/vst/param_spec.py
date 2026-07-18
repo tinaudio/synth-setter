@@ -249,8 +249,13 @@ class ParamSpec:
     def note_param_length(self) -> int:
         return sum([len(p) for p in self.note_params])
 
-    def __len__(self):
+    @property
+    def encoded_width(self) -> int:
+        """Return the complete encoded synth-and-note vector width."""
         return self.synth_param_length + self.note_param_length
+
+    def __len__(self) -> int:
+        return self.encoded_width
 
     def sample(
         self, rng: np.random.Generator | None = None

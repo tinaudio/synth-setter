@@ -26,10 +26,11 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import seed_everything
 from omegaconf import DictConfig, open_dict
+from omegaconf.errors import InterpolationResolutionError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
-from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.data.vst import plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -225,8 +226,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
                 "trainer=cpu",
                 # The experiment defaults to mode=predict; this invariant is test-mode.
                 "mode=test",
-                f"model.net.d_out={len(param_specs['surge_4'])}",
-                "callbacks.log_per_param_mse.param_spec=surge_4",
+                "datamodule.param_spec_name=surge_4",
             ],
         )
 
@@ -384,17 +384,15 @@ def _compose_fake_oracle_eval_cfg(
 
     Drives the CPU production oracle config (``experiment/surge/fake_oracle.yaml``)
     rather than its MPS smoke sibling, so this composition is itself coverage of
-    that config. The ``render`` group is set inline to ``param_spec_name`` so the
-    oracle's ``${render.param_spec_name}``-keyed per-param-MSE callback matches the
-    rendered dataset's encoding width.
+    that config. ``param_spec_name`` selects the datamodule schema and matching render
+    group.
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         predict-mode ``PredictionWriter`` writes ``predictions/`` beneath it.
     :param dataset_root: Holds the ``{train,val,test}.lance`` splits + ``stats.npz``.
     :param mode: ``cfg.mode`` under test (``test`` / ``validate`` / ``val`` /
         ``predict`` / an unknown spelling).
-    :param param_spec_name: Param spec the dataset was rendered with; drives the
-        inline ``render`` group and the per-param-MSE callback's spec.
+    :param param_spec_name: Param spec selecting the dataset schema and render group.
     :param datamodule: Optional datamodule group override (e.g. ``surge_lance``);
         ``None`` keeps the experiment's default ``surge`` group.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
@@ -411,6 +409,7 @@ def _compose_fake_oracle_eval_cfg(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.param_spec_name = param_spec_name
         # None lets the datamodule derive ``test.<its shard suffix>`` under dataset_root.
         cfg.datamodule.predict_file = None
         cfg.datamodule.batch_size = 1
@@ -423,8 +422,7 @@ def _compose_fake_oracle_eval_cfg(
         # Pin the full split because surge/base bounds validation by batch count.
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
-        # Render group is null on fake_oracle; set it inline to the dataset's spec
-        # so render_vst has a config and the per-param-MSE labels line up.
+        # Render group is null on fake_oracle; set it inline to the dataset's spec.
         cfg.render = {
             "param_spec_name": param_spec_name,
             "plugin_state_path": str(plugin_state_paths[param_spec_name]),
@@ -689,16 +687,13 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     assert param_mse.item() == 0.0
 
 
-def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
+def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
     tmp_path: Path,
 ) -> None:
-    """An unregistered ``datamodule.param_spec_name`` fails fast through ``evaluate``.
+    """An unregistered ``datamodule.param_spec_name`` fails during model resolution.
 
-    ``LanceVSTDataModule.setup`` resolves ``param_spec_name`` to derive the
-    fake/real param width; an unknown spec must surface as a ``KeyError`` at the
-    ``evaluate`` entrypoint rather than a later opaque shape mismatch. Pins that the
-    registry-lookup contract is wired through the real eval entrypoint. The lookup
-    precedes any dataset open, so no dataset (and no fake plugin) is materialized.
+    The model width resolver rejects an unknown spec before model construction or
+    dataset access.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; the dataset root
         points at a nonexistent subdirectory that is never read.
@@ -709,7 +704,7 @@ def test_evaluate_unregistered_param_spec_name_raises_key_error_at_setup(
 
     HydraConfig().set_config(cfg)
     try:
-        with pytest.raises(KeyError, match="does_not_exist"):
+        with pytest.raises(InterpolationResolutionError, match="does_not_exist"):
             evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()

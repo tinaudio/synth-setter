@@ -1046,4 +1046,4 @@ class DatasetSpec(BaseModel):
         """
         from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-        return len(resolve_param_spec(self.render.param_spec_name))
+        return resolve_param_spec(self.render.param_spec_name).encoded_width

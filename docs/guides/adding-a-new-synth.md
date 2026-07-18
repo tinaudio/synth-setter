@@ -133,10 +133,11 @@ patch:
 | `obxf`                       | 94             | 187           |
 | `surge_xt`                   | 162            | 300           |
 
-The encoded width (`len(param_specs[name])`, the `num_params` the shard writer
-and models use) exceeds the curated count (`len(spec.synth_params)`) because
-onehot-encoded categoricals expand one parameter into several dimensions, and
-the note parameters add their own.
+The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
+(`len(spec.synth_params)`) because onehot-encoded categoricals expand one
+parameter into several dimensions, and the note parameters add their own. VST
+model configs resolve this width from `datamodule.param_spec_name`; experiments
+must not repeat it as a `num_params`, `d_out`, or `latent_dim` literal.
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.

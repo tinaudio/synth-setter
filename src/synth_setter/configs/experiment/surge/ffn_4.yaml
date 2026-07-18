@@ -11,13 +11,8 @@ experiment_name: surge-4-toy
 datamodule:
   param_spec_name: surge_4
 
-model:
-  net:
-    # len(param_specs["surge_4"]): the spec's encoded width.
-    d_out: 7
-
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: surge_4
+    param_spec: ${datamodule.param_spec_name}
   plot_proj_ii: null

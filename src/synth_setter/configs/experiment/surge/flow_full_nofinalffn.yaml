@@ -10,7 +10,6 @@ run_name: flow-nofinalffn
 experiment_name: surge-full-onehot
 
 model:
-  num_params: 300
   vector_field:
     projection:
       final_ffn: false
@@ -21,4 +20,4 @@ tags:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: surge_xt
+    param_spec: ${datamodule.param_spec_name}

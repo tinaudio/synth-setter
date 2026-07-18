@@ -16,7 +16,6 @@ import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.eval import _maybe_upload_output_dir
-from synth_setter.data.vst import param_specs
 
 
 def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConfig:
@@ -193,8 +192,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
             # render defaults to null and is read only in mode=predict's
             # postprocessing, so mode=test needs no render group.
             "hydra.job.chdir=false",
-            f"model.net.d_out={len(param_specs['surge_4'])}",
-            "callbacks.log_per_param_mse.param_spec=surge_4",
+            "datamodule.param_spec_name=surge_4",
             "datamodule.download_dataset_root_uri=r2://intermediate-data/dataset",
             f"datamodule.dataset_root={dataset_root}",
             f"datamodule.predict_file={dataset_root}/test.lance",
@@ -255,8 +253,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
             "trainer=cpu",
             "mode=test",
             "hydra.job.chdir=false",
-            f"model.net.d_out={len(param_specs['surge_4'])}",
-            "callbacks.log_per_param_mse.param_spec=surge_4",
+            "datamodule.param_spec_name=surge_4",
             f"datamodule.dataset_root={surge_xt_smoke_datasets}",
             f"datamodule.predict_file={surge_xt_smoke_datasets}/test.lance",
             "datamodule.batch_size=1",

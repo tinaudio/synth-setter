@@ -45,7 +45,7 @@ vector_field:
   zero_init: false
   outer_residual: false
 
-num_params: 92
+num_params: ${param_spec_width:${datamodule.param_spec_name}}
 
 # training
 cfg_dropout_rate: 0.1

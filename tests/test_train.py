@@ -325,8 +325,8 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
 def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     """Templated ``_build_surge_xt_smoke_cfg`` propagates the param spec for every supported spec.
 
-    The propagation reaches both ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``
-    — guards against the surge_4-only hardcodes the fixture used to carry.
+    The datamodule selection drives both ``model.net.d_out`` and
+    ``callbacks.log_per_param_mse.param_spec``.
 
     Calls the builder directly (not the ``cfg_surge_xt_global`` fixture) and pins
     ``accelerator="cpu"``: the cfg-shape contract is accelerator-independent and going
@@ -342,6 +342,7 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
         param_spec_name=param_spec_name,
         experiment=_ORACLE_EXPERIMENT,
     )
+    assert cfg.datamodule.param_spec_name == param_spec_name
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
 
@@ -413,6 +414,40 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
     HydraConfig().set_config(cfg)
     with pytest.raises(ValueError, match="param_spec_name"):
         train(cfg)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model_group", ["vst_flow", "vst_flowmlp"])
+def test_train_surge_simple_flow_default_width_matches_fake_batch(
+    tmp_path: Path, model_group: str
+) -> None:
+    """Train one step with each canonical flow group's default encoded width.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    :param model_group: Canonical flow model group under test.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="surge_simple",
+        model_group=model_group,
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.test = False
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        if model_group == "vst_flow":
+            cfg.model.vector_field.d_ff = 32
+            cfg.model.vector_field.projection.num_tokens = 8
+        else:
+            cfg.model.vector_field.d_enc = 32
+
+    assert cfg.model.num_params == len(param_specs["surge_simple"])
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
 
 
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:

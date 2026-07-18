@@ -11,7 +11,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationToMissingValueError
 
-from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -157,8 +156,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     fixture_cfg = _build_surge_xt_smoke_cfg(
         accelerator="mps", param_spec_name="surge_4", experiment=experiment
     )
-    fixture_d_out = fixture_cfg.model.net.d_out
-    fixture_param_spec = fixture_cfg.callbacks.log_per_param_mse.param_spec
+    fixture_param_spec = fixture_cfg.datamodule.param_spec_name
     GlobalHydra.instance().clear()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -167,8 +165,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             return_hydra_config=False,
             overrides=[
                 f"experiment={test_mps_yaml}",
-                f"model.net.d_out={fixture_d_out}",
-                f"callbacks.log_per_param_mse.param_spec={fixture_param_spec}",
+                f"datamodule.param_spec_name={fixture_param_spec}",
             ],
         )
     GlobalHydra.instance().clear()
@@ -222,6 +219,50 @@ def test_vst_model_group_composes(model_name: str) -> None:
     )
 
     assert cfg.model._target_.startswith("synth_setter.models.vst_")
+
+
+@pytest.mark.parametrize(
+    ("model_name", "width_path"),
+    [
+        ("vst_fake_oracle", "net.d_out"),
+        ("vst_ffn", "net.d_out"),
+        ("vst_flow", "num_params"),
+        ("vst_flow", "vector_field.projection.num_params"),
+        ("vst_flowmlp", "num_params"),
+        ("vst_flowmlp", "vector_field.n_params"),
+        ("vst_flowvae", "net.decoder.latent_dim"),
+        ("vst_flowvae", "net.encoder.latent_dim"),
+        ("vst_flowvae", "net.latent_dim"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("param_spec_name", "expected_width"),
+    [("obxf", 187), ("surge_4", 7), ("surge_simple", 92), ("surge_xt", 300)],
+)
+def test_vst_model_width_derives_from_active_param_spec(
+    model_name: str,
+    width_path: str,
+    param_spec_name: str,
+    expected_width: int,
+) -> None:
+    """Every VST model dimension follows the active ParamSpec's encoded width.
+
+    :param model_name: Canonical Hydra model-group name.
+    :param width_path: Model config path containing an encoded width.
+    :param param_spec_name: Active datamodule registry key.
+    :param expected_width: Registered spec's encoded width.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            f"datamodule.param_spec_name={param_spec_name}",
+            f"model={model_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert OmegaConf.select(cfg.model, width_path) == expected_width
 
 
 @pytest.mark.parametrize(
@@ -287,7 +328,7 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
             "vst_flowvae_module.VSTFlowVAEModule",
             "net.latent_dim",
             92,
-            "surge_xt",
+            "surge_simple",
             True,
             2e-4,
         ),
@@ -321,20 +362,6 @@ def test_legacy_surge_model_group_composes_canonical_defaults(
     assert legacy_cfg.model.compile is expected_compile
     assert legacy_cfg.model.optimizer.lr == expected_learning_rate
     assert OmegaConf.select(legacy_cfg.model, "param_spec") == expected_param_spec
-
-
-@pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp", "surge_flow", "surge_flowmlp"])
-def test_surge_simple_flow_model_width_matches_param_spec(model_name: str) -> None:
-    """Flow model groups match the active Surge-simple encoded width.
-
-    :param model_name: Canonical or legacy Hydra model-group name.
-    """
-    cfg = _compose(
-        "train.yaml",
-        ["datamodule=surge_simple", f"model={model_name}", "trainer=cpu"],
-    )
-
-    assert cfg.model.num_params == len(param_specs[cfg.datamodule.param_spec_name])
 
 
 @pytest.mark.parametrize(

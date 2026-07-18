@@ -50,6 +50,7 @@ class VSTFlowMatchingModule(LightningModule):
         vector_field: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
+        num_params: int,
         conditioning: ConditioningMode = "mel",
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
@@ -59,7 +60,6 @@ class VSTFlowMatchingModule(LightningModule):
         test_sample_steps: int = 100,
         test_cfg_strength: float = 4.0,
         compile: bool = False,
-        num_params: int = 90,
     ):
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
 
@@ -68,6 +68,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
+        :param num_params: Parameter-vector width the field operates on.
         :param conditioning: Which batch key conditions the field (``"mel"`` or ``"m2l"``).
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
@@ -77,7 +78,6 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sample_steps: RK4 integration steps used at test.
         :param test_cfg_strength: Classifier-free-guidance strength at test.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :param num_params: Parameter-vector width the field operates on.
         """
         super().__init__()
 

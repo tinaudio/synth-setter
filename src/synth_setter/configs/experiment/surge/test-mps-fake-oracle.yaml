@@ -41,11 +41,6 @@ evaluation:
 model:
   compile: false
   scheduler: null
-  net:
-    # Mandatory override — must equal the encoded width of the param_spec used by the run.
-    # The smoke fixture passes ``len(param_specs["surge_4"])``; production callers should
-    # set this to ``len(param_specs[<their-spec>])`` via the CLI override.
-    d_out: ???
 
 datamodule:
   batch_size: 1
@@ -69,10 +64,7 @@ trainer:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    # Mandatory override — must equal the ``param_spec_name`` the run is wired for
-    # (paired with ``model.net.d_out`` above). The smoke fixture passes ``"surge_4"``;
-    # production callers should supply ``<their-spec>`` via the CLI.
-    param_spec: ???
+    param_spec: ${datamodule.param_spec_name}
   plot_proj_ii: null
   model_checkpoint:
     save_last: true

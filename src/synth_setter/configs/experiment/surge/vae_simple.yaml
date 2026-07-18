@@ -5,11 +5,6 @@ defaults:
   - override /model: vst_flowvae
   - _self_
 
-model:
-  net:
-    latent_dim: 92
-  param_spec: surge_simple
-
 experiment_name: surge-simple-onehot
 run_name: vae
 

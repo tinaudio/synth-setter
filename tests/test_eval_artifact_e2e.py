@@ -27,7 +27,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
-from synth_setter.data.vst import param_specs
 from synth_setter.workspace import operator_workspace
 from tests.helpers.wandb_offline import read_run_binary
 
@@ -62,8 +61,7 @@ def _compose_offline_wandb_eval_cfg(
                 # The experiment defaults to mode=predict; the artifact path is mode-agnostic
                 # and test-mode gives a deterministic zero param_mse without rendering.
                 "mode=test",
-                f"model.net.d_out={len(param_specs['surge_4'])}",
-                "callbacks.log_per_param_mse.param_spec=surge_4",
+                "datamodule.param_spec_name=surge_4",
             ],
         )
     with open_dict(cfg):

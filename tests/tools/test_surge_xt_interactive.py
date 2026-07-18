@@ -976,12 +976,10 @@ class _RecordingSubprocessRunner:
 class TestRunPredict:
     """Tests for ``_run_predict``'s eval-CLI invocation and Hydra overrides."""
 
-    def test_passes_d_out_override_and_absolute_paths(self, surge_xt_interactive) -> None:
-        """Override ``model.net.d_out`` from ``param_spec_name`` and pass absolute paths.
+    def test_passes_param_spec_and_absolute_paths(self, surge_xt_interactive: ModuleType) -> None:
+        """Select the datamodule ParamSpec and pass absolute paths.
 
-        ``model.net.d_out`` must be overridden (otherwise the ``???`` sentinel in
-        ``surge/test.yaml`` would error), and all paths must be absolute (otherwise Hydra's
-        ``chdir`` would break relative refs).
+        :param surge_xt_interactive: Lazily imported interactive module fixture.
         """
         # Use relative paths so the test fails if .resolve() is dropped.
         ckpt = Path("relative/ckpt.ckpt")
@@ -1004,9 +1002,8 @@ class TestRunPredict:
         args = runner.calls[0]
         assert "experiment=surge/test" in args
         assert "mode=predict" in args
-        # d_out must equal len(param_specs[SURGE_SIMPLE]) = synth+note width.
-        expected_d_out = len(param_specs[SURGE_SIMPLE])
-        assert f"model.net.d_out={expected_d_out}" in args
+        assert f"datamodule.param_spec_name={SURGE_SIMPLE}" in args
+        assert not any(arg.startswith("model.net.d_out=") for arg in args)
         # Every path-bearing override must be absolute.
         for prefix, original in (
             ("ckpt_path=", ckpt),

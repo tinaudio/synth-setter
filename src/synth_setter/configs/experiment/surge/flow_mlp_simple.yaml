@@ -8,8 +8,5 @@ defaults:
 experiment_name: surge-simple-onehot
 run_name: flowmlp
 
-model:
-  num_params: 92
-
 callbacks:
   plot_proj_ii: null

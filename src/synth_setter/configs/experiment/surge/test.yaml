@@ -26,12 +26,6 @@ test: false
 model:
   compile: false
   scheduler: null
-  net:
-    # Mandatory override — must equal the encoded width of the param_spec used by the run.
-    # Set this to ``len(param_specs[<spec-name>])`` via the CLI override (e.g.
-    # ``model.net.d_out=92`` for ``surge_simple`` or ``model.net.d_out=300`` for ``surge_xt``).
-    # ``src/synth_setter/tools/surge_xt_interactive.py`` injects this automatically from ``--param-spec-name``.
-    d_out: ???
 
 datamodule:
   batch_size: 1
