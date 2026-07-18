@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import shutil
 
 import numpy as np
 from loguru import logger
@@ -281,6 +282,13 @@ def make_lance_dataset(
         record_batch_from_arrays,
     )
 
+    if isinstance(lance_dir, str) and "://" in lance_dir:
+        target_dir: Path | str = lance_dir
+    else:
+        target_dir = Path(lance_dir)
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
@@ -296,7 +304,7 @@ def make_lance_dataset(
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch))
+        fragments.append(lance_fragment(target_dir, schema, record_batch))
 
     # Commit only after a clean render: orphaned fragment data files from a failed
     # run stay uncommitted (no dataset manifest references them).
@@ -308,5 +316,5 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
         flush_batch=_flush,
     )
-    commit_lance_dataset(lance_dir, schema, fragments)
+    commit_lance_dataset(target_dir, schema, fragments)
     return metrics
