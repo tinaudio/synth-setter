@@ -18,6 +18,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 import sh
 from pydantic import BaseModel, Field, model_validator
@@ -44,6 +45,7 @@ PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
+_OPENROUTER_SETUP = "authenticate with `/login openrouter`"
 
 _DEEP_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
@@ -142,11 +144,23 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
         :type: _TranscriptUsage | None
 
         Optional provider token accounting.
+
+    .. attribute :: provider
+        :type: str | None
+
+        Effective provider for host lifecycle events.
+
+    .. attribute :: model
+        :type: str | None
+
+        Effective model for host lifecycle events.
     """
 
     role: str
     content: str | list[_TranscriptContentBlock]
     usage: _TranscriptUsage | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
@@ -182,6 +196,54 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
         if self.message is None and not self.type:
             raise ValueError("Transcript row requires a message or event type")
         return self
+
+
+class _HostEvent(BaseModel, strict=True, extra="ignore"):
+    """Validated trust-boundary shape for one Pi host JSON event.
+
+    .. attribute :: type
+        :type: str
+
+        Event discriminator.
+
+    .. attribute :: message
+        :type: _TranscriptMessage | None
+
+        Message lifecycle payload.
+
+    .. attribute :: tool_name
+        :type: str | None
+
+        Tool lifecycle name.
+
+    .. attribute :: is_error
+        :type: bool | None
+
+        Whether tool execution failed.
+
+    .. attribute :: attempt
+        :type: int | None
+
+        Current provider retry number.
+
+    .. attribute :: max_attempts
+        :type: int | None
+
+        Provider retry limit.
+
+    .. attribute :: error_message
+        :type: str | None
+
+        Provider retry diagnostic.
+    """
+
+    type: str
+    message: _TranscriptMessage | None = None
+    tool_name: str | None = Field(default=None, alias="toolName")
+    is_error: bool | None = Field(default=None, alias="isError")
+    attempt: int | None = None
+    max_attempts: int | None = Field(default=None, alias="maxAttempts")
+    error_message: str | None = Field(default=None, alias="errorMessage")
 
 
 class WorkerReport(BaseModel, strict=True, extra="forbid"):
@@ -335,6 +397,77 @@ def _transcript_entries(transcript: Path) -> list[_TranscriptEntry]:
     ]
 
 
+def _message_text(message: _TranscriptMessage) -> str:
+    """Return concatenated text blocks from one Pi message.
+
+    :param message: Validated Pi message.
+    :returns: Plain text content in block order.
+    """
+    if isinstance(message.content, str):
+        return message.content
+    return "".join(block.text or "" for block in message.content if block.type == "text")
+
+
+def _redact_diagnostic(diagnostic: str) -> str:
+    """Remove credential-shaped values from a provider diagnostic.
+
+    :param diagnostic: Raw retry diagnostic emitted by Pi.
+    :returns: Diagnostic safe for the terminal progress stream.
+    """
+    redacted = re.sub(
+        r"(?i)\b(authorization)(\s*:\s*)(?:bearer\s+)?\S+",
+        r"\1\2<redacted>",
+        diagnostic,
+    )
+    return re.sub(
+        r"(?i)\b(bearer|api[-_ ]?key|token)([\s:=\"']+)\S+",
+        r"\1\2<redacted>",
+        redacted,
+    )
+
+
+def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> str:
+    """Persist Pi JSON events live and emit a sanitized progress projection.
+
+    :param source: Pi's newline-delimited JSON event stream.
+    :param transcript: Destination for the authoritative raw event stream.
+    :param progress: Terminal stream for sanitized lifecycle updates.
+    :returns: Final assistant text for the host caller.
+    :raises ValueError: If an event is malformed or no final response exists.
+    """
+    final_text = ""
+    with transcript.open("w") as transcript_file:
+        for raw_line in source:
+            transcript_file.write(raw_line)
+            transcript_file.flush()
+            if not raw_line.strip():
+                continue
+            event = _HostEvent.model_validate_json(raw_line)
+            if event.type == "message_start" and event.message is not None:
+                message = event.message
+                if message.role == "assistant" and message.provider and message.model:
+                    progress.write(f"[pi-review] {message.provider}/{message.model} started\n")
+            elif event.type == "tool_execution_start" and event.tool_name:
+                progress.write(f"[pi-review] tool {event.tool_name} started\n")
+            elif event.type == "tool_execution_end" and event.tool_name:
+                outcome = "failed" if event.is_error else "finished"
+                progress.write(f"[pi-review] tool {event.tool_name} {outcome}\n")
+            elif event.type == "auto_retry_start":
+                attempt = event.attempt if event.attempt is not None else "?"
+                maximum = event.max_attempts if event.max_attempts is not None else "?"
+                diagnostic = _redact_diagnostic(event.error_message or "unknown error")
+                progress.write(f"[pi-review] retry {attempt}/{maximum}: {diagnostic}\n")
+            elif event.type == "message_end" and event.message is not None:
+                if event.message.role == "assistant":
+                    text = _message_text(event.message)
+                    if text.strip():
+                        final_text = text
+            progress.flush()
+    if not final_text:
+        raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")
+    return final_text
+
+
 def _structured_report_markdown(text: str) -> str | None:
     """Remove narration surrounding one structured worker report.
 
@@ -428,11 +561,7 @@ def extract_report(transcript: Path) -> str:
     for entry in _transcript_entries(transcript):
         if entry.message is None or entry.message.role != "assistant":
             continue
-        content = entry.message.content
-        if isinstance(content, str):
-            text = content
-        else:
-            text = "".join(block.text or "" for block in content if block.type == "text")
+        text = _message_text(entry.message)
         if not text.strip():
             continue
         saw_assistant_text = True
@@ -601,8 +730,8 @@ def build_review_plan(
     :param risk_reasons: Named risk signals detected in the diff.
     :param available_models: Canonical selectors from Pi's model registry.
     :returns: Two ordered passes per skill, preserving the supplied skill order.
-    :raises ValueError: If no skills are selected, inputs are invalid, or Codex authentication is
-        missing.
+    :raises ValueError: If no skills are selected, inputs are invalid, or a required provider is
+        absent from Pi's registry.
     """
     if not skills:
         raise ValueError("skills must be non-empty")
@@ -612,6 +741,7 @@ def build_review_plan(
     if unknown:
         raise ValueError(f"Unknown review skill(s): {', '.join(unknown)}")
     _require_codex(available_models)
+    _require_openrouter(available_models)
     plan: list[ReviewPass] = []
     for skill in skills:
         is_deep = skill in DEEP_SKILLS
@@ -692,6 +822,18 @@ def _require_codex(available_models: AbstractSet[str]) -> None:
         raise ValueError(f"No openai-codex models available; {_CODEX_SETUP}; credentials required")
 
 
+def _require_openrouter(available_models: AbstractSet[str]) -> None:
+    """Require OpenRouter registration before expanding free-model candidates.
+
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :raises ValueError: If OpenRouter has no registered model.
+    """
+    if not any(model.startswith("openrouter/") for model in available_models):
+        raise ValueError(
+            f"No OpenRouter models available; {_OPENROUTER_SETUP}; credentials required"
+        )
+
+
 def _thinking_for(
     skill: str,
     *,
@@ -751,6 +893,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "provenance", help="print provenance for an effective model"
     )
     provenance.add_argument("model")
+    stream = subparsers.add_parser(
+        "stream-host", help="persist Pi host JSON while reporting safe progress"
+    )
+    stream.add_argument("--transcript", type=Path, required=True)
     return parser
 
 
@@ -806,6 +952,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "provenance":
         sys.stdout.write(f"{provenance_for_model(args.model)}\n")
+        return 0
+    if args.command == "stream-host":
+        sys.stdout.write(f"{stream_host_events(sys.stdin, args.transcript, sys.stderr)}\n")
         return 0
     raise AssertionError(f"Unhandled command: {args.command}")
 

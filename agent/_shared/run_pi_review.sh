@@ -56,14 +56,22 @@ and do not invoke run_pi_review.sh again. Follow the skill exactly and return \
 only its specified deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
-  exec pi \
+  local transcript
+  transcript=".agent-reviews/pi-review-host.$(date -u +%Y%m%dT%H%M%SZ).$$.jsonl"
+  umask 077
+  mkdir -p .agent-reviews
+  echo "Live Pi transcript: ${transcript}" >&2
+  pi \
     -p \
     --approve \
+    --mode json \
     --provider "${PI_REVIEW_PROVIDER}" \
     --model "${PI_REVIEW_MODEL}" \
     --thinking "${PI_REVIEW_THINKING}" \
     --no-session \
-    "${prompt}"
+    "${prompt}" \
+    | ./.venv/bin/python agent/_shared/pi_review_routing.py stream-host \
+      --transcript "${transcript}"
 }
 
 main "$@"

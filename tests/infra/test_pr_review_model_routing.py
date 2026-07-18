@@ -296,6 +296,14 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "fallback_candidates" in text
     assert "Codex fallback" in text
     assert "OpenRouter failed; only Codex ran." in text
+    assert "## Provider incidents" in text
+    assert re.search(
+        r"authentication.*quota/capacity.*before every\s+other `review_body` section",
+        text,
+        re.DOTALL,
+    )
+    assert re.search(r"one bullet per\s+affected attempt", text)
+    assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
     assert "claude -p --dangerously-skip-permissions" in text
     assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
@@ -303,7 +311,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path) -> None:
-    """Prove launcher output is withheld until the delayed child completes.
+    """Persist a live JSON transcript and return only Pi's final response.
 
     :param tmp_path: Temporary directory containing the fake Pi executable.
     """
@@ -312,42 +320,37 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        "printf '%s\\n' \"${SYNTH_SETTER_PI_REVIEW:-unset}\"\n"
-        "printf '%s\\n' \"$@\"\n"
-        "sleep 0.2\n"
-        "printf 'pi-complete\\n'\n"
+        '[[ "${SYNTH_SETTER_PI_REVIEW:-}" == 1 ]]\n'
+        "[[ \" $* \" == *' --mode json '* ]]\n"
+        "[[ \" $* \" == *' --no-session '* ]]\n"
+        "[[ \" $* \" == *'PR #2052'* ]]\n"
+        'printf \'{"type":"message_start","message":{"role":"assistant",\'\n'
+        'printf \'"content":[],"provider":"openai-codex",\'\n'
+        'printf \'"model":"gpt-5.6-terra"}}\\n\'\n'
+        'printf \'{"type":"message_end","message":{"role":"assistant",\'\n'
+        'printf \'"content":[{"type":"text","text":"pi-complete"}]}}\\n\'\n'
     )
     pi.chmod(0o755)
 
-    started_at = time.monotonic()
+    stderr = io.BytesIO()
     result = sh.Command(str(launcher))(
         "repo-review-full",
         "--target",
         "2052",
         _cwd=REPO_ROOT,
         _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _err=stderr,
     )
-    elapsed = time.monotonic() - started_at
-
-    lines = str(result).splitlines()
-    assert lines[0] == "1"
-    assert lines[1:10] == [
-        "-p",
-        "--approve",
-        "--provider",
-        "openai-codex",
-        "--model",
-        "gpt-5.6-terra",
-        "--thinking",
-        "medium",
-        "--no-session",
-    ]
-    prompt = lines[10]
-    assert "repo-review-full" in prompt
-    assert "PR #2052" in prompt
-    assert "SYNTH_SETTER_PI_REVIEW=1" in prompt
-    assert lines[11] == "pi-complete"
-    assert elapsed >= 0.2
+    assert str(result).strip() == "pi-complete"
+    stderr_text = stderr.getvalue().decode()
+    match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr_text)
+    assert match is not None
+    transcript = REPO_ROOT / match.group(1)
+    try:
+        assert transcript.read_text().count("message_") == 2
+        assert "openai-codex/gpt-5.6-terra started" in stderr_text
+    finally:
+        transcript.unlink(missing_ok=True)
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
