@@ -259,6 +259,14 @@ def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
 
 
+def test_pi_project_explore_agent_is_disabled() -> None:
+    """Keep Tintin's unbounded built-in Explore agent unavailable in this repo."""
+    text = (REPO_ROOT / ".pi" / "agents" / "Explore.md").read_text()
+    _, frontmatter, _ = text.split("---", 2)
+
+    assert yaml.safe_load(frontmatter) == {"enabled": False}
+
+
 def test_pi_project_append_system_forbids_anthropic_agents() -> None:
     """Tell Pi sessions and project subagents not to select Anthropic models."""
     text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
@@ -281,6 +289,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
+    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
+    assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
+    assert "python3 agent/_shared/pi_review_routing.py" not in text
+    assert "Insert a `## PR health` section after the `## Provider incidents`" in text
+    assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
@@ -291,11 +304,21 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "max_turns: <plan.max_turns>" in text
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
     assert "turn budget exhausted" in text
-    assert re.search(r"print\s+the audit table before stopping", text)
+    assert "review_failure.py deliver" in text
+    assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
+    assert re.search(r"never merely print the audit\s+and stop", text)
     assert "secondary_fallback_candidates" in text
     assert "fallback_candidates" in text
     assert "Codex fallback" in text
     assert "OpenRouter failed; only Codex ran." in text
+    assert "## Provider incidents" in text
+    assert re.search(
+        r"authentication.*quota/capacity.*before every\s+other `review_body` section",
+        text,
+        re.DOTALL,
+    )
+    assert re.search(r"one bullet per\s+affected attempt", text)
+    assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
     assert "claude -p --dangerously-skip-permissions" in text
     assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
@@ -303,7 +326,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path) -> None:
-    """Prove launcher output is withheld until the delayed child completes.
+    """Persist a live JSON transcript and return only Pi's final response.
 
     :param tmp_path: Temporary directory containing the fake Pi executable.
     """
@@ -312,42 +335,69 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        "printf '%s\\n' \"${SYNTH_SETTER_PI_REVIEW:-unset}\"\n"
-        "printf '%s\\n' \"$@\"\n"
-        "sleep 0.2\n"
-        "printf 'pi-complete\\n'\n"
+        '[[ "${SYNTH_SETTER_PI_REVIEW:-}" == 1 ]]\n'
+        "[[ \" $* \" == *' --mode json '* ]]\n"
+        "[[ \" $* \" == *' --no-session '* ]]\n"
+        "[[ \" $* \" == *'PR #2052'* ]]\n"
+        'printf \'{"type":"message_start","message":{"role":"assistant",\'\n'
+        'printf \'"content":[],"provider":"openai-codex",\'\n'
+        'printf \'"model":"gpt-5.6-terra"}}\\n\'\n'
+        'printf \'{"type":"message_end","message":{"role":"assistant",\'\n'
+        'printf \'"content":[{"type":"text","text":"pi-complete"}]}}\\n\'\n'
     )
     pi.chmod(0o755)
 
-    started_at = time.monotonic()
+    stderr = io.BytesIO()
     result = sh.Command(str(launcher))(
         "repo-review-full",
         "--target",
         "2052",
         _cwd=REPO_ROOT,
         _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _err=stderr,
     )
-    elapsed = time.monotonic() - started_at
+    assert str(result).strip() == "pi-complete"
+    stderr_text = stderr.getvalue().decode()
+    match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr_text)
+    assert match is not None
+    transcript = REPO_ROOT / match.group(1)
+    try:
+        assert transcript.read_text().count("message_") == 2
+        assert "openai-codex/gpt-5.6-terra started" in stderr_text
+    finally:
+        transcript.unlink(missing_ok=True)
 
-    lines = str(result).splitlines()
-    assert lines[0] == "1"
-    assert lines[1:10] == [
-        "-p",
-        "--approve",
-        "--provider",
-        "openai-codex",
-        "--model",
-        "gpt-5.6-terra",
-        "--thinking",
-        "medium",
-        "--no-session",
-    ]
-    prompt = lines[10]
-    assert "repo-review-full" in prompt
-    assert "PR #2052" in prompt
-    assert "SYNTH_SETTER_PI_REVIEW=1" in prompt
-    assert lines[11] == "pi-complete"
-    assert elapsed >= 0.2
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: Path) -> None:
+    """Keep a failed Pi run from publishing an intermediate assistant message.
+
+    :param tmp_path: Temporary directory containing the failing fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        'echo \'{"type":"message_end","message":{"role":"assistant",'
+        '"content":"intermediate"}}\'\n'
+        "exit 7\n"
+    )
+    pi.chmod(0o755)
+    stdout = io.BytesIO()
+    stderr = io.BytesIO()
+
+    with pytest.raises(sh.ErrorReturnCode):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            _cwd=REPO_ROOT,
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+            _out=stdout,
+            _err=stderr,
+        )
+
+    assert stdout.getvalue() == b""
+    assert "Pi review host failed; inspect live transcript:" in stderr.getvalue().decode()
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -505,8 +555,12 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
         '"text":"structured report"}}\'\n'
     )
     codex.chmod(0o755)
+    shadowed_python = tmp_path / "python3"
+    shadowed_python.write_text("#!/bin/bash\nexit 1\n")
+    shadowed_python.chmod(0o755)
 
-    result = sh.Command(str(launcher))(
+    result = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",
@@ -536,7 +590,8 @@ def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path)
     )
     codex.chmod(0o755)
 
-    result = sh.Command(str(launcher))(
+    result = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",
@@ -848,7 +903,8 @@ def test_codex_review_python_launcher_signal_terminates_process_group(tmp_path: 
     )
     codex.chmod(0o755)
 
-    process = sh.Command(str(launcher))(
+    process = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",

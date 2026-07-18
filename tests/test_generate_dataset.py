@@ -692,6 +692,11 @@ def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
     assert spec.render.plugin_path == "torchsynth"
     backend_index = captured_renderer_argv.index("--renderer_backend")
     assert captured_renderer_argv[backend_index + 1] == "torchsynth"
+    # Dispatch must survive any worker cwd: the renderer script argv entry is
+    # import-anchored, so it is an absolute path to a real file.
+    script = next(a for a in captured_renderer_argv if a.endswith("generate_vst_dataset.py"))
+    assert Path(script).is_absolute()
+    assert Path(script).is_file()
     shard = spec.shards[0]
     # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
     staging = (

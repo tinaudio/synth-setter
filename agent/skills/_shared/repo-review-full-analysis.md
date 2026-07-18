@@ -11,8 +11,66 @@ orchestrator brief.
 `agent/_shared/run_pi_review.sh`, so every harness uses the same flat Tintin
 fan-out. Tintin intentionally removes its `Agent` tool from spawned subagents.
 
+The launcher persists Pi's host JSON events under `.agent-reviews/`, prints the
+exact live transcript path before review work starts, and sends sanitized
+model, tool, and retry lifecycle updates to stderr. Treat the JSONL as the
+authoritative host audit and the launcher's stdout as the final deliverable.
+
 You MUST complete every step below in order, then return to your orchestrator
 brief's Step 7 for the final delivery step.
+
+## Terminal failure delivery
+
+After Step 1 resolves the target and origin HEAD, route every terminal failure
+through the tested failure-delivery helper. This includes planner/provider
+preflight errors, authentication failures, exhausted required passes, malformed
+report exhaustion, aggregation errors, and ordinary Step 7 delivery errors.
+Every terminal failure uses this delivery helper; never merely print the audit
+and stop.
+
+Before returning from a terminal failure, write one isolated JSON object with
+this strict shape:
+
+```json
+{
+  "target": "PR #<N> or branch <head_ref>",
+  "head": "<40-character origin HEAD>",
+  "stage": "<failed pipeline stage>",
+  "diagnostic": "<exact terminal diagnostic>",
+  "repo": "tinaudio/synth-setter",
+  "pr_number": 123,
+  "transcript_paths": ["<preserved host or worker transcript>"],
+  "provider_incidents": [
+    {
+      "model": "<exact provider/model selector>",
+      "category": "quota/capacity",
+      "diagnostic": "<exact provider diagnostic>"
+    }
+  ],
+  "audit_markdown": "<accumulated attempt audit table, possibly empty>",
+  "partial_findings": ["<validated partial finding summary>"]
+}
+```
+
+Use JSON `null` for both `repo` and `pr_number` in local-branch mode. Use an
+empty list or empty string for unavailable partial audit fields; never invent
+an attempt, incident, finding, or transcript.
+
+`repo-review-full` invokes `review_failure.py deliver --mode full`; the
+no-comments sibling uses `--mode no-comments`. Substitute the exact isolated
+JSON path:
+
+```bash
+./.venv/bin/python agent/_shared/review_failure.py deliver \
+  --mode <full-or-no-comments> --input <failure-json-path>
+```
+
+Exit 1 is the expected result because the review failed. Return the helper's
+stdout verbatim; stderr already reports a preserved local payload if GitHub
+delivery also fails. The helper puts `## Provider incidents` first, writes the
+local report before external delivery, posts a top-level COMMENT review in full
+mode, and writes the canonical blocking HEAD sentinel in no-comments mode.
+Do not enter ordinary Step 7 after this helper runs.
 
 ## Step 1: Resolve the PR
 
@@ -133,7 +191,9 @@ Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
 exact failure diagnostic or allocation reason,
 not a generic summary. Include one row per attempt, including retries and
 verification passes. Precede the table with one sentence counting successful,
-failed, retried, and rejected attempts. If the pipeline must fail closed, print the audit table before stopping even though no sentinel is written.
+failed, retried, and rejected attempts. If the pipeline must fail closed, pass
+the table to the terminal failure-delivery helper; never merely print the audit
+and stop.
 
 Use the tested routing helper as the single source of model candidates,
 availability filtering, thinking levels, and allocation reasons. Count changed
@@ -143,7 +203,7 @@ logic. Pass each detected signal with `--risk` and one `--skill` argument per
 selected checklist:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py plan \
+./.venv/bin/python agent/_shared/pi_review_routing.py plan \
   --skill correctness-review --skill code-health \
   --changed-lines "$changed_lines" --risk concurrency
 ```
@@ -151,10 +211,10 @@ python3 agent/_shared/pi_review_routing.py plan \
 The command runs `pi --list-models` and returns JSON with two logical passes per
 skill, the ordered available primary `candidates`, skipped `unavailable` models,
 OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
-Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
-OpenRouter is optional because its pass can degrade through the secondary
-free-model tier and then the returned Codex fallback. Record skipped candidates
-in the audit with no agent id or transcript.
+Codex `fallback_candidates`, `thinking`, and `reason`. Both providers must be
+registered with Pi. If either provider is absent, stop on the planner's single
+provider-level error instead of expanding every configured model into audit
+rows. Record individually skipped models only when their provider is present.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
@@ -178,11 +238,11 @@ the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
 extract its final assistant text deterministically, then validate that file:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py extract-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py extract-report \
   <output-file> --output <report-path>
-python3 agent/_shared/pi_review_routing.py validate-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py validate-report \
   <report-path> --skill <skill-name> --target <PR-or-branch-label>
-python3 agent/_shared/pi_review_routing.py transcript-stats <output-file>
+./.venv/bin/python agent/_shared/pi_review_routing.py transcript-stats <output-file>
 ```
 
 Use `transcript-stats` for the audit's elapsed, turns, and cumulative-token
@@ -194,8 +254,9 @@ directly to `validate-report`. If extraction or validation fails, record
 `malformed report` and try the next candidate. This
 is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, stop before aggregation or delivery; never write a PASS sentinel
-after silently dropping the required Codex pass. If an OpenRouter pass exhausts
+candidates, stop before aggregation and invoke terminal failure delivery; never
+write a PASS sentinel after silently dropping the required Codex pass. If an
+OpenRouter pass exhausts
 its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
 `fallback_candidates`, continue the review with Codex-only findings, record the
 failed OpenRouter attempt chain in the audit, and add the exact sentence
@@ -226,7 +287,7 @@ Attribute findings from each successful report to the provider that actually
 produced it, including after same-provider fallback:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py provenance <effective-model>
+./.venv/bin/python agent/_shared/pi_review_routing.py provenance <effective-model>
 ```
 
 Merge duplicate findings using effective provenance. Findings independently
@@ -333,9 +394,26 @@ Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-proje
 
 Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
 
+Before writing any other `review_body` content, inspect the audit rows for
+`authentication` and `quota/capacity` statuses. If either status occurred,
+begin `review_body` with `## Provider incidents`, followed by one bullet per
+affected attempt in attempt order:
+
+```markdown
+## Provider incidents
+
+- **authentication** — openrouter/example-model: exact provider diagnostic
+- **quota/capacity** — openai-codex/example-model: exact provider diagnostic
+```
+
+Preserve the exact model selector and diagnostic; deduplicate only identical
+status/model/diagnostic triples. This incident summary must appear before every
+other `review_body` section, including the review lead-in, `## PR health`, and
+`## Pi review audit`. Omit it only when neither status occurred.
+
 `review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
 
-**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
@@ -351,7 +429,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, prepend `OpenRouter failed; only Codex ran.` to the non-health portion of `review_body`.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, add `OpenRouter failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 

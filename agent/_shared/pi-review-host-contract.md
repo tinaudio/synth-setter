@@ -19,8 +19,10 @@ review work in the host harness.
 4. Claude Code must set Bash `run_in_background: true`, then call `TaskOutput`
    with a `600000` ms timeout repeatedly until Pi exits. Codex must use one
    foreground blocking call; if the tool yields a shell session, poll that
-   session until Pi exits.
+   session until Pi exits. The launcher prints its live JSONL transcript path
+   and sanitized lifecycle updates to stderr; these are monitoring output, not
+   the review deliverable.
 
 5. Never return a monitoring status while Pi is running. After Pi exits, return
-   its deliverable verbatim. Do not launch native Claude or Codex review
+   its stdout deliverable verbatim. Do not launch native Claude or Codex review
    workers.

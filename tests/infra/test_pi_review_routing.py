@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -18,6 +19,7 @@ from agent._shared.pi_review_routing import (
     parse_worker_report,
     provenance_for_model,
     report_is_parseable,
+    stream_host_events,
     transcript_stats,
 )
 
@@ -193,28 +195,21 @@ def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
         )
 
 
-def test_build_review_plan_missing_openrouter_uses_codex_fallback() -> None:
-    """Keep both logical passes when OpenRouter has no registered models."""
+def test_build_review_plan_missing_openrouter_raises_provider_error() -> None:
+    """Reject the plan once when OpenRouter is absent from Pi's registry."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
         if not model.startswith("openrouter/")
     }
 
-    plan = build_review_plan(
-        ["code-health"],
-        changed_lines=300,
-        risk_reasons=(),
-        available_models=available,
-    )
-
-    assert [item.pass_name for item in plan] == ["codex", "openrouter"]
-    assert plan[1].candidates == ()
-    assert plan[1].secondary_fallback_candidates == ()
-    assert plan[1].fallback_candidates == (
-        "openai-codex/gpt-5.6-sol",
-        "openai-codex/gpt-5.6-terra",
-    )
+    with pytest.raises(ValueError, match=r"OpenRouter.*credentials required"):
+        build_review_plan(
+            ["code-health"],
+            changed_lines=300,
+            risk_reasons=(),
+            available_models=available,
+        )
 
 
 def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
@@ -431,6 +426,62 @@ def test_transcript_stats_marks_partial_usage_unknown(tmp_path: Path) -> None:
     assert transcript_stats(transcript).cumulative_tokens is None
 
 
+def test_stream_host_events_persists_live_json_and_reports_safe_progress(
+    tmp_path: Path,
+) -> None:
+    """Persist host events while exposing progress without tool arguments.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        "\n".join(
+            (
+                '{"type":"message_start","message":{"role":"assistant",'
+                '"content":[],"provider":"openrouter","model":"free-model"}}',
+                '{"type":"tool_execution_start","toolName":"bash",'
+                '"args":{"command":"printf secret-value"}}',
+                '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,'
+                '"delayMs":1000,"errorMessage":"Authorization: Custom secret-token; '
+                'API key is backup-secret; token expired: third-secret"}',
+                '{"type":"message_end","message":{"role":"assistant",'
+                '"content":[{"type":"text","text":"final report"}]}}',
+            )
+        )
+        + "\n"
+    )
+    transcript = tmp_path / "host.jsonl"
+    progress = io.StringIO()
+
+    final_text = stream_host_events(source, transcript, progress)
+
+    assert final_text == "final report"
+    assert transcript.read_text() == source.getvalue()
+    progress_text = progress.getvalue()
+    assert "openrouter/free-model started" in progress_text
+    assert "tool bash started" in progress_text
+    assert "retry 1/3" in progress_text
+    assert "<redacted>" in progress_text
+    assert "secret-token" not in progress_text
+    assert "backup-secret" not in progress_text
+    assert "third-secret" not in progress_text
+    assert "secret-value" not in progress_text
+
+
+def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> None:
+    """Reject stale intermediate text when the terminal response is empty.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"intermediate report"}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":[]}}\n'
+    )
+
+    with pytest.raises(ValueError, match="no final assistant text"):
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+
 def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     """Extract only final assistant text from Tintin JSONL.
 
@@ -453,6 +504,23 @@ def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     assert report.startswith("## code-health review — smoke")
     assert "noise" not in report
     assert "hidden" not in report
+
+
+def test_extract_report_empty_terminal_assistant_raises(tmp_path: Path) -> None:
+    """Reject earlier report text when the terminal assistant message is empty.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"## code-health review — smoke\\n\\n'
+        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
+        '### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":[]}}\n'
+    )
+
+    with pytest.raises(ValueError, match="has no assistant text"):
+        extract_report(transcript)
 
 
 def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) -> None:
@@ -716,6 +784,33 @@ def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> N
         )
 
     assert b"pi --list-models failed: registry unavailable" in error.value.stderr
+
+
+def test_plan_cli_real_process_missing_openrouter_fails_once(tmp_path: Path) -> None:
+    """Stop before expanding model candidates when OpenRouter is unregistered.
+
+    :param tmp_path: Temporary location for the fake executable.
+    """
+    pi = tmp_path / "pi"
+    codex_models = "openai-codex  gpt-5.6-terra  372K  128K  yes  yes\n"
+    pi.write_text(f"#!/bin/sh\nprintf '%s' '{codex_models}'\n")
+    pi.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    with pytest.raises(sh.ErrorReturnCode) as error:
+        sh.Command(sys.executable)(
+            script,
+            "plan",
+            "--skill",
+            "code-health",
+            "--changed-lines",
+            "20",
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+
+    stderr = error.value.stderr.decode()
+    assert stderr.count("No OpenRouter models available") == 1
+    assert "openrouter/cohere/north-mini-code:free" not in stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:

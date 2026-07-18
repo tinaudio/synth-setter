@@ -56,6 +56,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >   BLOCK (any `[*:block]`, including folded PR-health BLOCKs), else `COMMENT`
 >   if any WARN exists, else `APPROVE`. The self-review COMMENT fallback (when
 >   the bot is the PR author) is automatic in `post_review.py`.
+> - On any terminal failure after target resolution, follow the shared
+>   **Terminal failure delivery** section with `--mode full`. Its top-level
+>   COMMENT review replaces ordinary Step 7; do not invoke `post_review.py`
+>   afterward.
 >
 > **Step 7 — submit the review.**
 >
