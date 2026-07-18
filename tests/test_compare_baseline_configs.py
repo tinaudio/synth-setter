@@ -430,6 +430,10 @@ def test_normalize_for_compare_accepts_persistent_workers_resource_drift() -> No
     """Worker persistence is an accepted config difference pending #2149."""
     baseline = {"datamodule": {"persistent_workers": False}, "model": {"hidden_size": 512}}
     current = {"datamodule": {"persistent_workers": True}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
 def test_normalize_for_compare_accepts_wandb_resume_observability_drift() -> None:
     """W&B resume mode does not change model behavior."""
     baseline = {"logger": {"wandb": {"resume": None}}, "model": {"hidden_size": 512}}
