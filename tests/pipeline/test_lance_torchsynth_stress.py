@@ -179,6 +179,7 @@ def test_make_lance_dataset_failed_rerun_preserves_existing_dataset_and_clean_re
 
     assert fragment_calls == 2
     np.testing.assert_array_equal(_read_params(shard), first)
+    assert list(tmp_path.glob("shard.lance.tmp-*")) == []
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
@@ -212,6 +213,8 @@ def test_make_lance_dataset_failed_promotion_restores_existing_dataset(
         make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
 
     np.testing.assert_array_equal(_read_params(shard), first)
+    assert list(tmp_path.glob("shard.lance.tmp-*")) == []
+    assert list(tmp_path.glob("shard.lance.backup-*")) == []
 
 
 def test_make_lance_dataset_invalid_fixed_params_length_leaves_no_temp_dir(

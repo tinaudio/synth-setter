@@ -82,6 +82,25 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _staged_shard_dir(fake_r2_remote: Path, spec: DatasetSpec, shard_id: int) -> Path:
+    """Return one shard's worker-staging directory inside the fake R2 root.
+
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param spec: Dataset spec that defines the staging layout.
+    :param shard_id: Logical shard whose staging directory is requested.
+    :returns: Filesystem path mirroring ``spec.r2.shard_staging_dir_uri(shard_id)``.
+    """
+    return (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard_id:06d}"
+    )
+
+
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     cfg_dataset: DictConfig,
 ) -> None:
@@ -699,15 +718,7 @@ def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
     assert Path(script).is_file()
     shard = spec.shards[0]
     # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
-    staging = (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard.shard_id:06d}"
-    )
+    staging = _staged_shard_dir(fake_r2_remote, spec, shard.shard_id)
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
@@ -732,27 +743,36 @@ def test_from_hydra_torchsynth_rerun_after_invalidated_stage_succeeds_with_new_s
     from_hydra(cfg_dataset_torchsynth)
 
     shard = first_spec.shards[0]
-    staging = (
-        fake_r2_remote
-        / first_spec.r2.bucket
-        / first_spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard.shard_id:06d}"
+    local_shard = Path(cfg_dataset_torchsynth.paths.output_dir) / shard.filename
+    first_rows = (
+        lance.dataset(str(local_shard))
+        .to_table(columns=["param_array"])
+        .column("param_array")
+        .combine_chunks()
+        .to_numpy_ndarray()
     )
+    staging = _staged_shard_dir(fake_r2_remote, first_spec, shard.shard_id)
     first_valid = next(staging.glob("*.valid"))
     first_valid.unlink()
     assert not shard_has_complete_attempt(first_spec, shard.shard_id)
 
     with open_dict(cfg_dataset_torchsynth):
-        cfg_dataset_torchsynth.base_seed += 1
+        cfg_dataset_torchsynth.train_val_test_seeds[0] += 7
     rerun_spec = spec_from_cfg(cfg_dataset_torchsynth)
+    assert rerun_spec.shards[0].seed != first_spec.shards[0].seed
     from_hydra(cfg_dataset_torchsynth)
 
     second_valid = next(staging.glob("*.valid"))
+    second_rows = (
+        lance.dataset(str(local_shard))
+        .to_table(columns=["param_array"])
+        .column("param_array")
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
     assert second_valid.name != first_valid.name
     assert shard_has_complete_attempt(rerun_spec, shard.shard_id)
+    assert not np.array_equal(first_rows, second_rows)
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(

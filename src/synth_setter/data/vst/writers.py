@@ -248,7 +248,7 @@ def _render_in_batches(
 
 
 def _cleanup_staged_lance_dir(staged_dir: Path) -> None:
-    """Best-effort cleanup for a staged dataset directory.
+    """Remove a temporary dataset directory after a failed write or rollback.
 
     :param staged_dir: Temporary dataset directory to remove.
     """
@@ -257,7 +257,7 @@ def _cleanup_staged_lance_dir(staged_dir: Path) -> None:
     except FileNotFoundError:
         return
     except OSError as exc:
-        logger.warning(f"failed to remove staged Lance dir {staged_dir}: {exc}")
+        logger.warning("failed to remove staged Lance dir {}: {}", staged_dir, exc)
 
 
 
