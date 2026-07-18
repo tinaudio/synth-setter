@@ -459,11 +459,9 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                 progress.write(f"[pi-review] retry {attempt}/{maximum}: {diagnostic}\n")
             elif event.type == "message_end" and event.message is not None:
                 if event.message.role == "assistant":
-                    text = _message_text(event.message)
-                    if text.strip():
-                        final_text = text
+                    final_text = _message_text(event.message)
             progress.flush()
-    if not final_text:
+    if not final_text.strip():
         raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")
     return final_text
 

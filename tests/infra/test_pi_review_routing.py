@@ -464,6 +464,21 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
     assert "secret-value" not in progress_text
 
 
+def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> None:
+    """Reject stale intermediate text when the terminal response is empty.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"intermediate report"}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":[]}}\n'
+    )
+
+    with pytest.raises(ValueError, match="no final assistant text"):
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+
 def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     """Extract only final assistant text from Tintin JSONL.
 
