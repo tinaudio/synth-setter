@@ -2,7 +2,7 @@
 
 defaults:
   - /experiment/surge/base
-  - override /model: surge_flowmlp
+  - override /model: vst_flowmlp
   - _self_
 
 experiment_name: surge-simple-onehot

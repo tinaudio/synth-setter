@@ -51,18 +51,29 @@ class TestModelConfigAcceptsEveryConfig:
         assert parsed.target_
 
 
-class TestSurgeModelTargetsResolve:
+class TestVSTModelTargetsResolve:
     """Each renamed ``VST*`` ``_target_`` string must resolve to a real class."""
 
     @pytest.mark.parametrize(
         "model_name",
-        ["surge_ffn", "surge_flow", "surge_flowmlp", "surge_fake_oracle", "surge_flowvae"],
+        [
+            "surge_fake_oracle",
+            "surge_ffn",
+            "surge_flow",
+            "surge_flowmlp",
+            "surge_flowvae",
+            "vst_fake_oracle",
+            "vst_ffn",
+            "vst_flow",
+            "vst_flowmlp",
+            "vst_flowvae",
+        ],
     )
     def test_target_resolves_to_class(self, model_name: str) -> None:
         """``hydra.utils.get_class`` resolves the composed ``_target_`` string.
 
-        Guards the hand-edited class paths in the renamed model YAMLs — a typo
-        passes schema validation (``extra="allow"``) and fails only at launch.
+        Guards the hand-edited class paths in the model YAMLs — a typo passes
+        schema validation (``extra="allow"``) and fails only at launch.
 
         :param model_name: Parametrized YAML stem under ``configs/model/``.
         """

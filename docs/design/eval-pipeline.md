@@ -80,8 +80,8 @@ the checkpoint, so training composes the experiment without ever resolving a W&B
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml
 defaults:
   - override /datamodule: surge_simple
-  - override /model: surge_flow
-  - override /callbacks: eval_surge
+  - override /model: vst_flow
+  - override /callbacks: eval_vst
 
 experiment_name: flow_simple
 model:

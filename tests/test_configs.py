@@ -9,7 +9,9 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import InterpolationToMissingValueError
 
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -201,6 +203,219 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],
+)
+def test_vst_model_group_composes(model_name: str) -> None:
+    """Each synth-neutral VST model group composes successfully.
+
+    :param model_name: Hydra model group selected for the composition.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            f"model={model_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.model._target_.startswith("synth_setter.models.vst_")
+
+
+@pytest.mark.parametrize(
+    ("experiment", "param_spec", "latent_dim"),
+    [("vae_simple", "surge_simple", 92), ("vae_full", "surge_xt", 300)],
+)
+def test_vst_flowvae_experiment_couples_spec_and_output_width(
+    experiment: str, param_spec: str, latent_dim: int
+) -> None:
+    """Concrete Flow-VAE experiments pair each ParamSpec with its encoded width.
+
+    :param experiment: Surge experiment basename.
+    :param param_spec: Expected concrete ParamSpec.
+    :param latent_dim: Expected network output width.
+    """
+    cfg = _compose("train.yaml", [f"experiment=surge/{experiment}", "trainer=cpu"])
+
+    assert cfg.model.param_spec == param_spec
+    assert cfg.model.net.latent_dim == latent_dim
+
+
+@pytest.mark.parametrize(
+    (
+        "legacy_name",
+        "target_suffix",
+        "expected_path",
+        "expected_value",
+        "expected_param_spec",
+        "expected_compile",
+        "expected_learning_rate",
+    ),
+    [
+        (
+            "surge_fake_oracle",
+            "vst_fake_oracle_module.VSTFakeOracleModule",
+            "net.d_out",
+            92,
+            None,
+            False,
+            1e-4,
+        ),
+        ("surge_ffn", "vst_ff_module.VSTFeedForwardModule", "net.d_out", 92, None, True, 1e-4),
+        (
+            "surge_flow",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            92,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowmlp",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            92,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowvae",
+            "vst_flowvae_module.VSTFlowVAEModule",
+            "net.latent_dim",
+            92,
+            "surge_xt",
+            True,
+            2e-4,
+        ),
+    ],
+)
+def test_legacy_surge_model_group_composes_canonical_defaults(
+    legacy_name: str,
+    target_suffix: str,
+    expected_path: str,
+    expected_value: int,
+    expected_param_spec: str | None,
+    expected_compile: bool,
+    expected_learning_rate: float,
+) -> None:
+    """Each legacy model selection composes the canonical VST defaults.
+
+    :param legacy_name: Legacy Hydra model-group name.
+    :param target_suffix: Canonical VST target expected after composition.
+    :param expected_path: Config field containing the canonical default.
+    :param expected_value: Expected canonical default.
+    :param expected_param_spec: Default ParamSpec, when applicable.
+    :param expected_compile: Expected torch.compile default.
+    :param expected_learning_rate: Expected optimizer learning-rate default.
+    """
+    legacy_cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", f"model={legacy_name}", "trainer=cpu"],
+    )
+    assert legacy_cfg.model._target_.endswith(target_suffix)
+    assert OmegaConf.select(legacy_cfg.model, expected_path) == expected_value
+    assert legacy_cfg.model.compile is expected_compile
+    assert legacy_cfg.model.optimizer.lr == expected_learning_rate
+    assert OmegaConf.select(legacy_cfg.model, "param_spec") == expected_param_spec
+
+
+@pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp", "surge_flow", "surge_flowmlp"])
+def test_surge_simple_flow_model_width_matches_param_spec(model_name: str) -> None:
+    """Flow model groups match the active Surge-simple encoded width.
+
+    :param model_name: Canonical or legacy Hydra model-group name.
+    """
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", f"model={model_name}", "trainer=cpu"],
+    )
+
+    assert cfg.model.num_params == len(param_specs[cfg.datamodule.param_spec_name])
+
+
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_vst", "model_checkpoint"), ("eval_vst", "prediction_writer")],
+)
+def test_vst_callback_group_composes(callbacks_name: str, expected_callback: str) -> None:
+    """Each synth-neutral VST callback group composes successfully.
+
+    :param callbacks_name: Hydra callback group selected for the composition.
+    :param expected_callback: Callback key expected in the composed group.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            f"callbacks={callbacks_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert expected_callback in cfg.callbacks
+
+
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_surge", "model_checkpoint"), ("eval_surge", "prediction_writer")],
+)
+def test_legacy_surge_callback_alias_composes_vst_callbacks(
+    callbacks_name: str, expected_callback: str
+) -> None:
+    """Historical callback selections resolve canonical VST callbacks.
+
+    :param callbacks_name: Historical Hydra callback-group name.
+    :param expected_callback: Canonical callback expected after composition.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            f"callbacks={callbacks_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert expected_callback in cfg.callbacks
+
+
+def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
+    """The VST per-parameter callback resolves the active datamodule spec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_mini",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+
+
+def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
+    """The VST per-parameter callback rejects an unset ParamSpec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=vst",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    with pytest.raises(InterpolationToMissingValueError, match="param_spec_name"):
+        OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
+
+
 def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
     """The surge family validates a bounded sample and enables the probe when usable."""
     cfg = _compose("train.yaml", ["experiment=surge/flow_simple"])
@@ -263,7 +478,7 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     # eval.yaml defaults logger to null; the experiment must re-select the
     # wandb group or base.yaml's logger.wandb fragment dangles.
     assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
-    # eval_surge callbacks: the prediction writer must be present.
+    # eval_vst callbacks: the prediction writer must be present.
     assert "prediction_writer" in cfg.callbacks
 
 

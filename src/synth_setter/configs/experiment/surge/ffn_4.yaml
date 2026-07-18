@@ -2,7 +2,7 @@
 
 defaults:
   - /experiment/surge/base
-  - override /model: surge_ffn
+  - override /model: vst_ffn
   - override /datamodule: surge_lance
   - _self_
 

@@ -1,0 +1,42 @@
+defaults:
+  - encoder: ast_for_mlp
+  - _self_
+
+_target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
+
+warmup_steps: 0
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: ${trainer.max_steps}
+  eta_min: ${mul:${model.optimizer.lr},1e-2}
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+
+vector_field:
+  _target_: synth_setter.models.components.residual_mlp.ConditionalResidualMLP
+  n_params: ${model.num_params}
+  d_model: 768
+  d_enc: 256
+  conditioning_dim: ${model.encoder.d_model}
+  num_layers: 9
+
+# training
+cfg_dropout_rate: 0.1
+
+num_params: 92
+
+rectified_sigma_min: 0.0
+
+# sampling
+validation_sample_steps: 50
+validation_cfg_strength: 2.0
+test_sample_steps: 200
+test_cfg_strength: 2.0
+
+# compile model for faster training with pytorch 2.0
+compile: true

@@ -15,12 +15,12 @@ class VSTFlowVAEModule(LightningModule):
         net: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
+        param_spec: str,
         compile: bool = False,
         warmup_steps: int = 15_000,
         beta_max: float = 0.2,
         beta_start: float = 0.1,
         beta_warmup_steps: int = 60_000,
-        param_spec: str = "surge_xt",
     ):
         """Wire the Flow-VAE net and persist the loss/schedule hyperparameters.
 
@@ -28,12 +28,12 @@ class VSTFlowVAEModule(LightningModule):
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
+        :param param_spec: Registry key naming the param spec the loss decodes against.
         :param compile: Whether to ``torch.compile`` the net during fit setup.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param beta_max: Final KL weight after beta warmup.
         :param beta_start: Initial KL weight at step 0.
         :param beta_warmup_steps: Steps over which beta ramps from start to max.
-        :param param_spec: Registry key naming the param spec the loss decodes against.
         """
         super().__init__()
 

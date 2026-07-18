@@ -5,7 +5,7 @@
 
 defaults:
   - override /datamodule: surge_simple
-  - override /callbacks: default_surge
+  - override /callbacks: default_vst
   - override /trainer: gpu
   - _self_
 
@@ -35,9 +35,7 @@ trainer:
   # The batch limit applies per rank; row count depends on world size and batch size.
   limit_val_batches: 20
   precision: bf16-mixed
-  # Surge model configs interpolate ${trainer.max_steps} into the
-  # CosineAnnealingLR scheduler's T_max, so max_steps must be set for any
-  # surge_* model run. The values below are the default for surge experiments.
+  # VST schedulers use trainer.max_steps for CosineAnnealingLR.T_max.
   min_steps: 1_000_000
   max_steps: 1_000_000
   log_every_n_steps: 100

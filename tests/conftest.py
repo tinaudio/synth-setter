@@ -22,6 +22,7 @@ from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
+from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
@@ -44,6 +45,19 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
+
+
+def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
+    """Assert that a trainer's per-parameter MSE callback uses its active VST spec.
+
+    :param trainer: Lightning trainer constructed by the entrypoint.
+    :param param_spec_name: Registry key expected by the callback.
+    """
+    mse_callbacks = [
+        callback for callback in trainer.callbacks if isinstance(callback, LogPerParamMSE)
+    ]
+    assert len(mse_callbacks) == 1
+    assert mse_callbacks[0].param_spec is param_specs[param_spec_name]
 
 
 def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> float:
@@ -625,7 +639,7 @@ def _build_surge_xt_smoke_cfg(
             overrides=[
                 f"experiment={experiment}",
                 f"datamodule={datamodule_group}",
-                "callbacks=[default_surge,eval_surge]",
+                "callbacks=[default_vst,eval_vst]",
             ],
         )
         TRAINING_STEPS = 1
@@ -678,7 +692,12 @@ def _build_surge_xt_smoke_cfg(
     return cfg
 
 
-def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
+def build_fake_train_cfg(
+    output_dir: Path,
+    param_spec_name: str,
+    model_group: str = "vst_fake_oracle",
+    callbacks_group: str = "default_vst",
+) -> DictConfig:
     """Compose a one-step CPU fake-mode train cfg wired to ``param_spec_name``.
 
     Drives ``datamodule.fake=true`` so no dataset is read; the fake batch width comes
@@ -691,13 +710,20 @@ def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
     :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         the fake param width and the per-param-MSE callback's spec.
+    :param model_group: Hydra model group to compose.
+    :param callbacks_group: Hydra callbacks group to compose.
     :returns: Resolved one-step fake-mode train DictConfig.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", "trainer=cpu"],
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "trainer=cpu",
+                f"model={model_group}",
+                f"callbacks={callbacks_group}",
+            ],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -711,6 +737,8 @@ def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
             cfg.trainer.max_steps = 1
             cfg.trainer.limit_val_batches = 0
             cfg.logger = None
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
             # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
             # concretely — this train path composes no render group.
             cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
@@ -1562,7 +1590,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
-# surge_ffn's AST net hard-codes the production mel shape and channel count, so the
+# vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
 _LANCE_SMOKE_NUM_PARAMS = 16
@@ -1622,7 +1650,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=surge_ffn", "trainer=cpu"],
+            overrides=["datamodule=surge_lance", "model=vst_ffn", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -1633,7 +1661,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             if "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
             cfg.trainer.fast_dev_run = True
-            # Not a loop bound under fast_dev_run — surge_ffn's scheduler resolves
+            # Not a loop bound under fast_dev_run — vst_ffn's scheduler resolves
             # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
             cfg.trainer.max_steps = 1
             cfg.datamodule.dataset_root = str(dataset_root)

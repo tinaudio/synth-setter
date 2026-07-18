@@ -785,7 +785,11 @@ class ValAudioProbe(Callback):
 class LogPerParamMSE(Callback):
     """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
 
-    def __init__(self, param_spec: str = "surge_simple"):
+    def __init__(self, param_spec: str):
+        """Select the ParamSpec whose dimension names label emitted metrics.
+
+        :param param_spec: Registered ParamSpec name for validation outputs.
+        """
         super().__init__()
         self.param_spec = param_specs[param_spec]
 

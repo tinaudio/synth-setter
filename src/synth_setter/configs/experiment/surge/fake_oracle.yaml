@@ -2,9 +2,9 @@
 
 defaults:
   - surge/base
-  - override /model: surge_fake_oracle
+  - override /model: vst_fake_oracle
   - override /datamodule: surge
-  - override /callbacks: eval_surge
+  - override /callbacks: eval_vst
   - override /trainer: cpu
   - _self_
 

@@ -34,7 +34,7 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests.conftest import REAL_VST_VARIANTS
+from tests.conftest import REAL_VST_VARIANTS, assert_log_per_param_mse_wired
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
@@ -895,9 +895,11 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
 
     HydraConfig().set_config(cfg)
     try:
-        metric_dict, _ = evaluate(cfg)
+        metric_dict, object_dict = evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
+
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_4")
 
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)

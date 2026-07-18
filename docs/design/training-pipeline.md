@@ -80,7 +80,7 @@ ______________________________________________________________________
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
 defaults:
   - override /datamodule: surge_simple
-  - override /model: surge_flow
+  - override /model: vst_flow
   - override /callbacks: default
 
 experiment_name: flow_simple

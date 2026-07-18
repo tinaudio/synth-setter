@@ -90,6 +90,7 @@ def _flowvae_module() -> VSTFlowVAEModule:
         net=torch.nn.Linear(1, 1),
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
+        param_spec="surge_simple",
         compile=True,
     )
 

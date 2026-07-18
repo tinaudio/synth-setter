@@ -7,10 +7,10 @@
 # no logger, no test stage.
 
 defaults:
-  - override /model: surge_ffn
+  - override /model: vst_ffn
   - override /datamodule: surge
   - override /trainer: cpu
-  - override /callbacks: [default_surge, eval_surge]
+  - override /callbacks: [default_vst, eval_vst]
   - _self_
 
 run_name: ffn

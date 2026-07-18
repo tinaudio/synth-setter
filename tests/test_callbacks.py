@@ -13,11 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+import pytest
 from lightning.pytorch import Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
-from synth_setter.utils.callbacks import _log_figure
+from synth_setter.utils.callbacks import LogPerParamMSE, _log_figure
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -112,6 +113,12 @@ def _trainer(
     :returns: The fake narrowed to ``Trainer`` for the call site's type checker.
     """
     return cast("Trainer", _FakeTrainer(loggers, global_step, is_global_zero))
+
+
+def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
+    """Per-parameter metric labels require callers to select a ParamSpec."""
+    with pytest.raises(TypeError, match="param_spec"):
+        LogPerParamMSE()  # type: ignore[call-arg]
 
 
 def test_log_figure_routes_to_wandb_logger_when_only_wandb_logger_present():
