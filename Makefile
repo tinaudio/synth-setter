@@ -126,7 +126,11 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 		"$$UV" venv --python 3.12.13 --prompt synth-setter .venv; \
 	fi; \
 	"$$UV" pip install --python .venv/bin/python --group dev -e .
-	@$(MAKE) install-git-hooks
+	@if [[ -n "$$(git config --get core.hooksPath 2>/dev/null)" ]]; then \
+		echo "Skipping Git hook installation because core.hooksPath is set."; \
+	else \
+		$(MAKE) install-git-hooks; \
+	fi
 	@echo ""
 	@echo "Next: source .venv/bin/activate"
 
