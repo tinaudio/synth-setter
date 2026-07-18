@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import shutil
+import tempfile
 
 import numpy as np
 from loguru import logger
@@ -293,25 +294,33 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
-
-    if lance_path.exists():
-        shutil.rmtree(lance_path)
-
-    fragments: list[lance.fragment.FragmentMetadata] = []
-
-    def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-        record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_path, schema, record_batch))
-
-    # Commit only after a clean render: orphaned fragment data files from a failed
-    # run stay uncommitted (no dataset manifest references them).
-    metrics = _render_in_batches(
-        render_cfg=render_cfg,
-        param_spec=param_spec,
-        start_idx=start_idx,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-        flush_batch=_flush,
+    lance_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = Path(
+        tempfile.mkdtemp(dir=lance_path.parent, prefix=f".{lance_path.name}.tmp-")
     )
-    commit_lance_dataset(lance_path, schema, fragments)
-    return metrics
+
+    try:
+        fragments: list[lance.fragment.FragmentMetadata] = []
+
+        def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
+            record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+            fragments.append(lance_fragment(staging_path, schema, record_batch))
+
+        # Commit only after a clean render: orphaned fragment data files from a failed
+        # run stay uncommitted (no dataset manifest references them).
+        metrics = _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=param_spec,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+            flush_batch=_flush,
+        )
+        commit_lance_dataset(staging_path, schema, fragments)
+        if lance_path.exists():
+            shutil.rmtree(lance_path)
+        staging_path.rename(lance_path)
+        return metrics
+    finally:
+        if staging_path.exists():
+            shutil.rmtree(staging_path, ignore_errors=True)
