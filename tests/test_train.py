@@ -660,10 +660,10 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
     reads end-to-end through the in-process ``train(cfg)`` entrypoint with
     spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Also pins the
-    Dataset-API migration's two e2e-visible contracts on the live datamodule:
-    splits open as directory datasets, and a column accepts unsorted fancy
-    indices returning rows in the requested order.
+    fixture. Also pins e2e-visible contracts on the live datamodule:
+    splits open as directory datasets, a column accepts unsorted fancy indices
+    returning rows in the requested order, and worker persistence stays off by
+    default for the published baseline compose path.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     """
@@ -676,6 +676,7 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+    assert object_dict["datamodule"].persistent_workers is False
 
 
 @pytest.mark.dataloader_multiprocess

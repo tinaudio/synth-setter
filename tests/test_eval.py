@@ -907,17 +907,18 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
 
 
 def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
-    """The datamodule eval instantiates carries the RAM-bounded worker default.
+    """The eval entrypoint keeps the VST datamodule on the intended worker defaults.
 
     ``num_workers`` is applied per dataloader, so a run holding both a test and a
     predict loader doubles the live worker count. Lance workers are ~1.4 GB each,
     and the previous default of 11 put a 32 GB host past its RAM plus swap
-    (#1916).
+    (#1916). The same resolved runtime config should leave ``persistent_workers``
+    off so the published baseline compose path does not silently drift.
 
     Instantiates the datamodule the way ``evaluate`` does rather than asserting
-    the composed dict, so the default is checked where it is consumed. Composed
-    explicitly rather than via ``cfg_eval``: that fixture pins ``num_workers``
-    itself, so nothing else here would catch the default drifting back up.
+    the composed dict, so the defaults are checked where they are consumed.
+    Composed explicitly rather than via ``cfg_eval``: that fixture pins
+    ``num_workers`` itself, so nothing else here would catch the default drifting.
     """
     GlobalHydra.instance().clear()
     try:
@@ -937,3 +938,4 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     finally:
         GlobalHydra.instance().clear()
     assert datamodule.num_workers == 4
+    assert datamodule.persistent_workers is False
