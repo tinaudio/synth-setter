@@ -18,7 +18,9 @@ format: ## Run pre-commit hooks
 	./.venv/bin/pre-commit run -a
 
 install-git-hooks: ## Install commit and push enforcement hooks
-	uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+	@common_dir=$$(git rev-parse --git-common-dir); \
+	primary_root=$$(cd "$$common_dir/.." && pwd); \
+	uv run --project "$$primary_root" pre-commit install --hook-type pre-commit --hook-type pre-push
 
 GATE ?=
 count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
