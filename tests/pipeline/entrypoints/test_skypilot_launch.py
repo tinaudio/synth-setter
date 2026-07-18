@@ -1694,6 +1694,18 @@ class TestCheckedInLaunchConfigs:
         assert "training.val_audio_probe=true" in tokens
         assert "training.upload_checkpoints_during_training=true" in tokens
 
+    def test_flow_simple_440k_template_reserves_dataset_headroom(self) -> None:
+        """Ensure the finalized dataset leaves sufficient working reserve."""
+        cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod-flow-simple-440k.yaml")
+
+        assert cfg.compute_template is not None
+        template = self._REPO_ROOT / cfg.compute_template
+        resources = yaml.safe_load(template.read_text(encoding="utf-8"))["resources"]
+        dataset_size_bytes = 1_116_619_342_038
+        working_reserve_bytes = 100 * 1024**3
+        provisioned_bytes = resources["disk_size"] * 1024**3
+        assert provisioned_bytes - dataset_size_bytes >= working_reserve_bytes
+
     def test_default_train_config_lets_experiment_select_datamodule(self) -> None:
         """The generic train launcher leaves the datamodule contract to the experiment."""
         cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod.yaml")
