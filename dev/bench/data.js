@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784386892987,
+  "lastUpdate": 1784386895116,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16051,6 +16051,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.602868981200004,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0805e94241dfdb9f4682877d62ec09664683c297",
+          "message": "refactor(config): rename generic VST Hydra groups (#2062)\n\n* refactor(config): rename generic Hydra groups for VST\n\nRequire active ParamSpecs for per-parameter metrics and the generic Flow-VAE model so neutral configs cannot silently select Surge defaults.\n\n* test(config): preserve Surge job compatibility\n\nKeep the stable eval_surge alias for Surge-specific launch scripts and exercise active ParamSpec callback wiring through real train and eval entrypoints.\n\nRefs #2018\n\n* fix(config): preserve VST config compatibility aliases\n\nKeep archived Surge group names as thin aliases, require concrete Flow-VAE experiments to select their ParamSpec and output width, and pin callback wiring through real entrypoints.\n\nRefs #2018\n\n* fix(config): preserve Surge Flow-VAE alias defaults\n\n* test(config): cover VST alias compatibility\n\n* fix(config): correct Surge flow width to 92 (#2120)",
+          "timestamp": "2026-07-18T10:43:24-04:00",
+          "tree_id": "28542caadf53eba0891a671b71c7b3a1e44fd984",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0805e94241dfdb9f4682877d62ec09664683c297"
+        },
+        "date": 1784386894656,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.2262601852417,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 15.735586235821247,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08424250781536102,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006855368614196777,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2240500450134277,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 8.3521077762,
             "unit": "seconds"
           }
         ]
