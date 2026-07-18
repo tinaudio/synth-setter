@@ -284,6 +284,8 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text
+    assert "Insert a `## PR health` section after the `## Provider incidents`" in text
+    assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
