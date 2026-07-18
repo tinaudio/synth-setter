@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from shutil import rmtree
 
 import numpy as np
 from loguru import logger
@@ -281,9 +282,15 @@ def make_lance_dataset(
         record_batch_from_arrays,
     )
 
+    lance_path = Path(lance_dir)
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
+    if lance_path.exists():
+        if lance_path.is_dir():
+            rmtree(lance_path)
+        else:
+            lance_path.unlink()
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
