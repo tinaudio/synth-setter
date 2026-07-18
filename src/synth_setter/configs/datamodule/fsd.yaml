@@ -5,3 +5,4 @@ num_workers: 4
 segment_length_seconds: 4.0
 shuffle: true
 stats_file: ???
+param_spec_name: surge_xt

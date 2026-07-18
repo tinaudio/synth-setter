@@ -8,10 +8,10 @@ batch, committed as one dataset at the end.
 from __future__ import annotations
 
 import shutil
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
-import shutil
-import tempfile
+from uuid import uuid4
 
 import numpy as np
 from loguru import logger
@@ -84,6 +84,77 @@ def _validate_fixed_params_lengths(
                 "for a dataset copy, the source shard's row count must equal "
                 "samples_per_shard"
             )
+
+
+def _cleanup_dataset_tree(path: Path, *, context: str) -> None:
+    """Remove a local staged/backup dataset tree, logging cleanup failures.
+
+    :param path: Local dataset directory to remove.
+    :param context: Human-readable cleanup context for the warning log.
+    """
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(
+            "failed to clean up {context} at {path}: {err}",
+            context=context,
+            path=path,
+            err=exc,
+        )
+
+
+def _is_remote_lance_uri(lance_dir: Path | str) -> bool:
+    """Return whether ``lance_dir`` names a remote URI rather than a local path.
+
+    :param lance_dir: Destination passed to :func:`make_lance_dataset`.
+    :returns: ``True`` for URI-shaped string destinations such as ``s3://...``.
+    """
+    return isinstance(lance_dir, str) and "://" in lance_dir
+
+
+def _restore_local_backup_if_needed(lance_path: Path) -> None:
+    """Recover or prune orphaned backup shards left by interrupted local publishes.
+
+    :param lance_path: Final local dataset directory.
+    :raises RuntimeError: More than one orphaned backup exists for a missing shard.
+    """
+    backups = sorted(lance_path.parent.glob(f"{lance_path.name}.backup-*"))
+    if lance_path.exists():
+        for backup in backups:
+            _cleanup_dataset_tree(backup, context="orphaned lance dataset backup")
+        return
+    if len(backups) > 1:
+        raise RuntimeError(
+            f"multiple orphaned lance backups found for {lance_path}: {backups}"
+        )
+    if backups:
+        backups[0].replace(lance_path)
+
+
+def _publish_local_lance_dataset(lance_path: Path, staged_path: Path) -> None:
+    """Replace a committed local shard only after its staged successor is ready.
+
+    :param lance_path: Published local dataset directory.
+    :param staged_path: Fully committed replacement dataset in a temp sibling dir.
+    """
+    _restore_local_backup_if_needed(lance_path)
+    backup_path: Path | None = None
+    if lance_path.exists():
+        backup_path = lance_path.with_name(f"{lance_path.name}.backup-{uuid4().hex}")
+        lance_path.replace(backup_path)
+    replaced = False
+    try:
+        staged_path.replace(lance_path)
+        replaced = True
+    finally:
+        if not replaced:
+            _cleanup_dataset_tree(staged_path, context="staged lance dataset")
+            if backup_path is not None and backup_path.exists():
+                backup_path.replace(lance_path)
+    if backup_path is not None:
+        _cleanup_dataset_tree(backup_path, context="previous lance dataset backup")
 
 
 def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -> AudioRenderer:
@@ -257,8 +328,9 @@ def make_lance_dataset(
 ) -> RenderRejectionMetrics:
     """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
-    Not resumable: any dataset already at ``lance_dir`` is overwritten on each
-    run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
+    Not resumable: local dataset directories already at ``lance_dir`` are
+    replaced on each run. Audio is stored as ``float16``; ``mel_spec`` and
+    ``param_array`` stay
     ``float32``. The shard metadata is embedded in Arrow schema metadata so
     validation and finalize recover the sidecar payload at read time. Each
     render batch becomes one Lance fragment, committed as one dataset at the end.
@@ -272,6 +344,7 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     :returns: Counts of silent and clipped draws rejected across the shard.
+    :raises TypeError: Local staging unexpectedly resolved to a non-path destination.
     """
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
@@ -284,15 +357,16 @@ def make_lance_dataset(
         record_batch_from_arrays,
     )
 
-    # Fragment writes into an existing committed dataset adopt its schema (Lance
-    # append mode), so the documented overwrite must start from a clean directory.
-    if Path(lance_dir).exists():
-        shutil.rmtree(lance_dir)
+    destination = str(lance_dir)
+    local_lance_path: Path | None = None
+    if not _is_remote_lance_uri(lance_dir):
+        local_lance_path = Path(lance_dir)
+        local_lance_path.parent.mkdir(parents=True, exist_ok=True)
+        _restore_local_backup_if_needed(local_lance_path)
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
-    lance_path = Path(lance_dir)
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
@@ -300,20 +374,25 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
-    lance_path.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = Path(
-        tempfile.mkdtemp(dir=lance_path.parent, prefix=f".{lance_path.name}.tmp-")
-    )
+    staging_destination: Path | str = destination
+    if local_lance_path is not None:
+        staging_destination = Path(
+            tempfile.mkdtemp(
+                dir=local_lance_path.parent,
+                prefix=f".{local_lance_path.name}.tmp-",
+            )
+        )
 
+    fragments: list[lance.fragment.FragmentMetadata] = []
+
+    def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
+        record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+        fragments.append(lance_fragment(staging_destination, schema, record_batch))
+
+    render_committed = False
     try:
-        fragments: list[lance.fragment.FragmentMetadata] = []
-
-        def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-            record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-            fragments.append(lance_fragment(staging_path, schema, record_batch))
-
-        # Commit only after a clean render: orphaned fragment data files from a failed
-        # run stay uncommitted (no dataset manifest references them).
+        # Commit only after a clean render: failed runs leave no new manifest, and
+        # local reruns keep the last committed shard until the replacement is ready.
         metrics = _render_in_batches(
             render_cfg=render_cfg,
             param_spec=param_spec,
@@ -322,11 +401,14 @@ def make_lance_dataset(
             fixed_note_params_list=fixed_note_params_list,
             flush_batch=_flush,
         )
-        commit_lance_dataset(staging_path, schema, fragments)
-        if lance_path.exists():
-            shutil.rmtree(lance_path)
-        staging_path.rename(lance_path)
-        return metrics
+        commit_lance_dataset(staging_destination, schema, fragments)
+        render_committed = True
     finally:
-        if staging_path.exists():
-            shutil.rmtree(staging_path, ignore_errors=True)
+        if not render_committed and isinstance(staging_destination, Path):
+            _cleanup_dataset_tree(staging_destination, context="staged lance dataset")
+
+    if local_lance_path is not None:
+        if not isinstance(staging_destination, Path):
+            raise TypeError("local lance staging destination must be a Path")
+        _publish_local_lance_dataset(local_lance_path, staging_destination)
+    return metrics

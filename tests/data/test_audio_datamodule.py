@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from pedalboard.io import AudioFile
 
-from synth_setter.data.audio_datamodule import AudioFolderDataset
+from synth_setter.data.audio_datamodule import AudioDataModule, AudioFolderDataset
 
 
 def _write_wav(path: Path, seconds: float = 0.5, sample_rate: int = 44100) -> Path:
@@ -59,3 +59,34 @@ def test_empty_root_yields_empty_dataset(tmp_path: Path) -> None:
     dataset = AudioFolderDataset(root=str(tmp_path))
 
     assert len(dataset) == 0
+
+
+def test_predict_dataloader_param_spec_name_keeps_audio_batches_unchanged(
+    tmp_path: Path,
+) -> None:
+    """``param_spec_name`` is accepted as metadata without altering audio batches.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    _write_wav(tmp_path / "capture.wav")
+
+    baseline = AudioDataModule(root=str(tmp_path), batch_size=1, shuffle=False)
+    baseline.setup(stage="predict")
+    baseline_batch = next(iter(baseline.predict_dataloader()))
+
+    with_spec = AudioDataModule(
+        root=str(tmp_path),
+        batch_size=1,
+        shuffle=False,
+        param_spec_name="surge_xt",
+    )
+    with_spec.setup(stage="predict")
+    with_spec_batch = next(iter(with_spec.predict_dataloader()))
+
+    assert with_spec.param_spec_name == "surge_xt"
+    assert baseline_batch["audio"].shape == with_spec_batch["audio"].shape
+    assert baseline_batch["mel_spec"].shape == with_spec_batch["mel_spec"].shape
+    assert np.array_equal(baseline_batch["audio"].numpy(), with_spec_batch["audio"].numpy())
+    assert np.array_equal(
+        baseline_batch["mel_spec"].numpy(), with_spec_batch["mel_spec"].numpy()
+    )

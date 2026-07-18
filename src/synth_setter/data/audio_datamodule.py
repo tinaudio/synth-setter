@@ -143,7 +143,8 @@ class AudioDataModule(LightningDataModule):
         num_workers: int = 0,
         shuffle: bool = True,
         stats_file: str | None = None,
-    ):
+        param_spec_name: str | None = None,
+    ) -> None:
         super().__init__()
 
         self.root = root
@@ -152,6 +153,7 @@ class AudioDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.shuffle = shuffle
         self.stats_file = stats_file
+        self.param_spec_name = param_spec_name
 
     def setup(self, stage: str | None = None):
         self.predict_dataset = AudioFolderDataset(

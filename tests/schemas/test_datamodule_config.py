@@ -86,6 +86,23 @@ class TestSurgeDatamoduleOverlays:
         assert subtree["_target_"].endswith("VSTDataModule")
 
 
+class TestAudioPredictDatamoduleOverlays:
+    """Audio predict datamodules carry the surge spec metadata required by model configs."""
+
+    @pytest.mark.parametrize("datamodule_name", ["fsd", "nsynth"])
+    def test_audio_predict_datamodule_declares_surge_xt_param_spec(
+        self, datamodule_name: str
+    ) -> None:
+        """Audio predict configs declare the ``surge_xt`` param spec for checkpoint resolution.
+
+        :param datamodule_name: Audio datamodule YAML stem under ``configs/datamodule/``.
+        """
+        subtree = compose_subtree("datamodule", datamodule_name)
+
+        assert subtree["param_spec_name"] == "surge_xt"
+        assert subtree["_target_"].endswith("AudioDataModule")
+
+
 class TestParamSpecNameIsExplicit:
     """``param_spec_name`` must be chosen deliberately, never inherited from a base default."""
 
