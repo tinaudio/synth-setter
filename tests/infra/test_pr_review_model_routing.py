@@ -505,8 +505,12 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
         '"text":"structured report"}}\'\n'
     )
     codex.chmod(0o755)
+    shadowed_python = tmp_path / "python3"
+    shadowed_python.write_text("#!/bin/bash\nexit 1\n")
+    shadowed_python.chmod(0o755)
 
-    result = sh.Command(str(launcher))(
+    result = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",
@@ -536,7 +540,8 @@ def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path)
     )
     codex.chmod(0o755)
 
-    result = sh.Command(str(launcher))(
+    result = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",
@@ -848,7 +853,8 @@ def test_codex_review_python_launcher_signal_terminates_process_group(tmp_path: 
     )
     codex.chmod(0o755)
 
-    process = sh.Command(str(launcher))(
+    process = sh.Command(sys.executable)(
+        str(launcher),
         "pr-review-worker-fast",
         "--prompt",
         "routing probe",
