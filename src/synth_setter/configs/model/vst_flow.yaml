@@ -45,7 +45,7 @@ vector_field:
   zero_init: false
   outer_residual: false
 
-num_params: 90
+num_params: 92
 
 # training
 cfg_dropout_rate: 0.1

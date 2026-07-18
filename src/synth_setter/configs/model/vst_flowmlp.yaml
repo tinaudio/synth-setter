@@ -28,7 +28,7 @@ vector_field:
 # training
 cfg_dropout_rate: 0.1
 
-num_params: 90
+num_params: 92
 
 rectified_sigma_min: 0.0
 
