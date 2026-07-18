@@ -247,8 +247,8 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "changed paths" in prompt
 
 
-def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
-    """Keep project-local Pi defaults scoped away from Anthropic."""
+def test_pi_project_settings_pin_review_pool_providers_only() -> None:
+    """Keep project-local Pi defaults scoped to the review pool, away from Anthropic."""
     settings = json.loads((REPO_ROOT / ".pi" / "settings.json").read_text())
 
     assert settings["defaultProvider"] == "openai-codex"
@@ -256,6 +256,7 @@ def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
     assert settings["enabledModels"]
     assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
     assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
+    assert "kimi-coding/k3" in settings["enabledModels"]
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
 
 
@@ -275,6 +276,7 @@ def test_pi_project_append_system_forbids_anthropic_agents() -> None:
     assert "Do not select Anthropic providers or models" in text
     assert "Do not launch subagents" in text
     assert "openai-codex" in text
+    assert "kimi-coding" in text
     assert "openrouter" in text
 
 
@@ -297,7 +299,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "run_in_background: true" in text
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
-    assert "OpenRouter-only findings never enter aggregation directly" in text
+    assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
     assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
@@ -307,10 +309,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert "secondary_fallback_candidates" in text
     assert "fallback_candidates" in text
     assert "Codex fallback" in text
-    assert "OpenRouter failed; only Codex ran." in text
+    assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
     assert re.search(
         r"authentication.*quota/capacity.*before every\s+other `review_body` section",

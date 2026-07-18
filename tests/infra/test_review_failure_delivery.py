@@ -293,7 +293,7 @@ def test_missing_provider_planner_failure_reaches_blocking_delivery(
         env=environment,
     )
     assert planner.returncode != 0
-    assert "No OpenRouter models available" in planner.stderr
+    assert "No free-pool models available" in planner.stderr
 
     request = _request().model_copy(
         update={
@@ -326,7 +326,7 @@ def test_missing_provider_planner_failure_reaches_blocking_delivery(
     assert delivery.returncode == 1
     sentinel = tmp_path / "reviews" / f"repo-review-full-no-comments.{_HEAD}.md"
     assert "**[repo-review-full-no-comments:block]**" in sentinel.read_text()
-    assert "No OpenRouter models available" in delivery.stdout
+    assert "No free-pool models available" in delivery.stdout
 
 
 def test_failure_delivery_cli_reports_original_and_post_failures(

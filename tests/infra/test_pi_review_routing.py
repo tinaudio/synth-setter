@@ -26,44 +26,17 @@ from agent._shared.pi_review_routing import (
 AVAILABLE_MODELS = """\
 openai-codex  gpt-5.6-sol    372K  128K  yes  yes
 openai-codex  gpt-5.6-terra  372K  128K  yes  yes
-openrouter    cohere/north-mini-code:free  256K  64K  yes  no
-openrouter    google/gemma-4-31b-it:free  262.1K  32.8K  yes  yes
-openrouter    google/gemma-4-26b-a4b-it:free  131.1K  32.8K  yes  yes
+kimi-coding   k3  256K  128K  yes  yes
 openrouter    nvidia/nemotron-3-ultra-550b-a55b:free  1M  65.5K  yes  no
 openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
-openrouter    nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free  256K  65.5K  yes  yes
-openrouter    openai/gpt-oss-20b:free  131.1K  32.8K  yes  no
-openrouter    poolside/laguna-m.1:free  262.1K  32.8K  yes  no
-openrouter    nvidia/nemotron-3-nano-30b-a3b:free  256K  4.1K  yes  no
 openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
 """
 
-DEEP_PRIMARY_OPENROUTER_MODELS = (
+# Fixed ordered second-pass pool. Its first model is a non-OpenRouter provider,
+# so routing and provenance must not assume every non-Codex candidate is OpenRouter.
+FREE_POOL_MODELS = (
+    "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "openrouter/openai/gpt-oss-20b:free",
-)
-DEEP_SECONDARY_OPENROUTER_MODELS = (
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    "openrouter/tencent/hy3:free",
-)
-STANDARD_PRIMARY_OPENROUTER_MODELS = (
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/openai/gpt-oss-20b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-)
-STANDARD_SECONDARY_OPENROUTER_MODELS = (
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free",
 )
 
@@ -73,8 +46,10 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     assert parse_available_models(AVAILABLE_MODELS) == {
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
-        *DEEP_PRIMARY_OPENROUTER_MODELS,
-        *DEEP_SECONDARY_OPENROUTER_MODELS,
+        "kimi-coding/k3",
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/tencent/hy3:free",
     }
 
 
@@ -89,19 +64,16 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
 
     assert [(item.skill, item.pass_name, item.thinking) for item in plan] == [
         ("correctness-review", "codex", "high"),
-        ("correctness-review", "openrouter", "high"),
+        ("correctness-review", "free-pool", "high"),
         ("comment-hygiene", "codex", "low"),
-        ("comment-hygiene", "openrouter", "low"),
+        ("comment-hygiene", "free-pool", "low"),
     ]
     assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].candidates == DEEP_PRIMARY_OPENROUTER_MODELS
-    assert plan[1].secondary_fallback_candidates == DEEP_SECONDARY_OPENROUTER_MODELS
-    assert plan[3].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS
-    assert plan[3].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS
+    assert plan[1].candidates == FREE_POOL_MODELS
+    assert plan[3].candidates == FREE_POOL_MODELS
     assert all(
         model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
     )
-    assert all(model.startswith("openrouter/") for item in plan[1::2] for model in item.candidates)
     assert all(
         model.startswith("openai-codex/")
         for item in plan[1::2]
@@ -163,10 +135,10 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
-def test_build_review_plan_skips_unavailable_candidates_across_both_tiers() -> None:
-    """Drop retired free models while keeping deterministic primary and secondary tiers."""
+def test_build_review_plan_skips_unavailable_free_pool_candidates() -> None:
+    """Drop retired free-pool models while preserving the fixed attempt order."""
     available = parse_available_models(AVAILABLE_MODELS)
-    available.remove("openrouter/cohere/north-mini-code:free")
+    available.remove("kimi-coding/k3")
     available.remove("openrouter/tencent/hy3:free")
 
     plan = build_review_plan(
@@ -176,10 +148,9 @@ def test_build_review_plan_skips_unavailable_candidates_across_both_tiers() -> N
         available_models=available,
     )
 
-    assert plan[1].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS[1:]
-    assert plan[1].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS[:-1]
+    assert plan[1].candidates == ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",)
     assert plan[1].unavailable == (
-        "openrouter/cohere/north-mini-code:free",
+        "kimi-coding/k3",
         "openrouter/tencent/hy3:free",
     )
 
@@ -195,15 +166,15 @@ def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
         )
 
 
-def test_build_review_plan_missing_openrouter_raises_provider_error() -> None:
-    """Reject the plan once when OpenRouter is absent from Pi's registry."""
+def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
+    """Reject the plan once when no free-pool model is registered with Pi."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
-        if not model.startswith("openrouter/")
+        if model.startswith("openai-codex/")
     }
 
-    with pytest.raises(ValueError, match=r"OpenRouter.*credentials required"):
+    with pytest.raises(ValueError, match=r"free-pool.*credentials required"):
         build_review_plan(
             ["code-health"],
             changed_lines=300,
@@ -258,6 +229,7 @@ def test_provenance_for_model_uses_effective_provider() -> None:
     """Attribute fallback findings to the model that produced the report."""
     assert provenance_for_model("openai-codex/gpt-5.6-sol") == "codex"
     assert provenance_for_model("openrouter/openrouter/free") == "openrouter"
+    assert provenance_for_model("kimi-coding/k3") == "kimi-coding"
 
 
 @pytest.mark.parametrize(
@@ -753,13 +725,11 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     )
 
     stats = json.loads(str(python(script, "transcript-stats", transcript)))
-    provenance = str(
-        python(script, "provenance", "openrouter/cohere/north-mini-code:free")
-    ).strip()
+    provenance = str(python(script, "provenance", "kimi-coding/k3")).strip()
 
     assert report.read_text().startswith("## code-health review — smoke")
     assert stats["turns"] == 1
-    assert provenance == "openrouter"
+    assert provenance == "kimi-coding"
 
 
 def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:
@@ -786,8 +756,8 @@ def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> N
     assert b"pi --list-models failed: registry unavailable" in error.value.stderr
 
 
-def test_plan_cli_real_process_missing_openrouter_fails_once(tmp_path: Path) -> None:
-    """Stop before expanding model candidates when OpenRouter is unregistered.
+def test_plan_cli_real_process_missing_free_pool_fails_once(tmp_path: Path) -> None:
+    """Stop before expanding model candidates when no free-pool model is registered.
 
     :param tmp_path: Temporary location for the fake executable.
     """
@@ -809,8 +779,8 @@ def test_plan_cli_real_process_missing_openrouter_fails_once(tmp_path: Path) -> 
         )
 
     stderr = error.value.stderr.decode()
-    assert stderr.count("No OpenRouter models available") == 1
-    assert "openrouter/cohere/north-mini-code:free" not in stderr
+    assert stderr.count("No free-pool models available") == 1
+    assert "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free" not in stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
@@ -834,7 +804,4 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"] == list(STANDARD_PRIMARY_OPENROUTER_MODELS)
-    assert payload[1]["secondary_fallback_candidates"] == list(
-        STANDARD_SECONDARY_OPENROUTER_MODELS
-    )
+    assert payload[1]["candidates"] == list(FREE_POOL_MODELS)

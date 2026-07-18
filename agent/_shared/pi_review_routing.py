@@ -45,7 +45,7 @@ PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
-_OPENROUTER_SETUP = "authenticate with `/login openrouter`"
+_FREE_POOL_SETUP = "authenticate with `/login kimi-coding` or `/login openrouter`"
 
 _DEEP_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
@@ -55,37 +55,17 @@ _STANDARD_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
 )
-# Keep the routed OpenRouter review pool pinned to exact live free-model IDs.
-# These lists intentionally exclude Anthropic-backed aliases and generic routers
-# such as ``openrouter/free`` so the audit can report the exact reviewed model.
-_DEEP_OPENROUTER_PRIMARY_CANDIDATES = (
+# Fixed ordered second-pass pool tried in exactly this order. Its providers span
+# ``kimi-coding`` and ``openrouter``, so routing and provenance must not assume
+# every non-Codex candidate is OpenRouter. Pinned to exact live model IDs so the
+# audit can report the exact reviewed model.
+_FREE_POOL_CANDIDATES = (
+    "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "openrouter/openai/gpt-oss-20b:free",
-)
-_DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free",
 )
-_STANDARD_OPENROUTER_PRIMARY_CANDIDATES = (
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/openai/gpt-oss-20b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-)
-_STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    "openrouter/tencent/hy3:free",
-)
+# Derived so provenance stays the single source of truth for the pool's providers.
+_FREE_POOL_PROVIDERS = frozenset(model.split("/", 1)[0] for model in _FREE_POOL_CANDIDATES)
 _REQUIRED_REPORT_HEADINGS = (
     "### BLOCK findings",
     "### WARN findings",
@@ -319,7 +299,7 @@ class ReviewPass:
     .. attribute :: pass_name
         :type: str
 
-        Logical Codex or OpenRouter pass.
+        Logical ``codex`` or ``free-pool`` pass.
 
     .. attribute :: candidates
         :type: tuple[str, ...]
@@ -331,17 +311,11 @@ class ReviewPass:
 
         Configured models absent from Pi's registry.
 
-    .. attribute :: secondary_fallback_candidates
-        :type: tuple[str, ...]
-
-        Same-provider OpenRouter free models reserved for the secondary fallback
-        tier after the primary free-model tier is exhausted.
-
     .. attribute :: fallback_candidates
         :type: tuple[str, ...]
 
-        Codex models used only after an OpenRouter pass exhausts both free-model
-        tiers. The orchestrator reorders them around the effective Codex-pass model.
+        Codex models used only after a free-pool pass exhausts its candidates.
+        The orchestrator reorders them around the effective Codex-pass model.
 
     .. attribute :: thinking
         :type: str
@@ -363,7 +337,6 @@ class ReviewPass:
     pass_name: str
     candidates: tuple[str, ...]
     unavailable: tuple[str, ...]
-    secondary_fallback_candidates: tuple[str, ...]
     fallback_candidates: tuple[str, ...]
     thinking: str
     reason: str
@@ -612,14 +585,15 @@ def provenance_for_model(model: str) -> str:
     """Return finding provenance from the model that produced it.
 
     :param model: Canonical ``provider/model-id`` selector.
-    :returns: ``codex`` or ``openrouter``.
+    :returns: ``codex`` for Codex models, else the free-pool provider
+        (``kimi-coding`` or ``openrouter``).
     :raises ValueError: If the provider is outside the review policy.
     """
     provider = model.split("/", 1)[0]
     if provider == "openai-codex":
         return "codex"
-    if provider == "openrouter":
-        return "openrouter"
+    if provider in _FREE_POOL_PROVIDERS:
+        return provider
     raise ValueError(f"Unsupported Pi review provider: {provider}")
 
 
@@ -741,21 +715,17 @@ def build_review_plan(
     if unknown:
         raise ValueError(f"Unknown review skill(s): {', '.join(unknown)}")
     _require_codex(available_models)
-    _require_openrouter(available_models)
+    _require_free_pool(available_models)
+    # The free pool is a single fixed tuple, so its availability split is invariant
+    # across skills; only the Codex candidates vary with each skill's depth.
+    free_pool_candidates, free_pool_unavailable = _available_and_unavailable(
+        _FREE_POOL_CANDIDATES,
+        available_models,
+    )
     plan: list[ReviewPass] = []
     for skill in skills:
         is_deep = skill in DEEP_SKILLS
         codex_configured = _DEEP_CODEX_CANDIDATES if is_deep else _STANDARD_CODEX_CANDIDATES
-        openrouter_primary_configured = (
-            _DEEP_OPENROUTER_PRIMARY_CANDIDATES
-            if is_deep
-            else _STANDARD_OPENROUTER_PRIMARY_CANDIDATES
-        )
-        openrouter_secondary_configured = (
-            _DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
-            if is_deep
-            else _STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
-        )
         thinking, reason = _thinking_for(
             skill,
             changed_lines=changed_lines,
@@ -767,42 +737,27 @@ def build_review_plan(
         )
         if not codex_candidates:
             raise ValueError(f"No available models remain for {skill}/codex")
+        # Bind pass names to locals; a string literal on ``pass_name=`` trips ruff S106.
         codex_label = "codex"
+        free_pool_label = "free-pool"
         plan.append(
             ReviewPass(
                 skill=skill,
                 pass_name=codex_label,
                 candidates=codex_candidates,
                 unavailable=codex_unavailable,
-                secondary_fallback_candidates=(),
                 fallback_candidates=(),
                 thinking=thinking,
                 reason=reason,
                 max_turns=PI_REVIEW_MAX_TURNS,
             )
         )
-        openrouter_candidates, openrouter_primary_unavailable = _available_and_unavailable(
-            openrouter_primary_configured,
-            available_models,
-        )
-        (
-            openrouter_secondary_candidates,
-            openrouter_secondary_unavailable,
-        ) = _available_and_unavailable(
-            openrouter_secondary_configured,
-            available_models,
-        )
-        openrouter_label = "openrouter"
         plan.append(
             ReviewPass(
                 skill=skill,
-                pass_name=openrouter_label,
-                candidates=openrouter_candidates,
-                unavailable=(
-                    *openrouter_primary_unavailable,
-                    *openrouter_secondary_unavailable,
-                ),
-                secondary_fallback_candidates=openrouter_secondary_candidates,
+                pass_name=free_pool_label,
+                candidates=free_pool_candidates,
+                unavailable=free_pool_unavailable,
                 fallback_candidates=tuple(reversed(codex_candidates)),
                 thinking=thinking,
                 reason=reason,
@@ -822,15 +777,15 @@ def _require_codex(available_models: AbstractSet[str]) -> None:
         raise ValueError(f"No openai-codex models available; {_CODEX_SETUP}; credentials required")
 
 
-def _require_openrouter(available_models: AbstractSet[str]) -> None:
-    """Require OpenRouter registration before expanding free-model candidates.
+def _require_free_pool(available_models: AbstractSet[str]) -> None:
+    """Require at least one registered free-pool model before planning the second pass.
 
     :param available_models: Canonical selectors returned by Pi's model registry.
-    :raises ValueError: If OpenRouter has no registered model.
+    :raises ValueError: If no free-pool candidate is registered.
     """
-    if not any(model.startswith("openrouter/") for model in available_models):
+    if not any(model in available_models for model in _FREE_POOL_CANDIDATES):
         raise ValueError(
-            f"No OpenRouter models available; {_OPENROUTER_SETUP}; credentials required"
+            f"No free-pool models available; {_FREE_POOL_SETUP}; credentials required"
         )
 
 

@@ -34,9 +34,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   every `git commit`; don't ignore it.
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned `openrouter/*:free` review pool only. Do not
-  select Anthropic models or launch Anthropic-backed Pi subagents; keep
-  `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
+  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
+  models only. Do not select Anthropic models or launch Anthropic-backed Pi
+  subagents; keep `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`, and Pi agent
+  briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 
@@ -209,7 +210,7 @@ Local skills wrap the review workflow:
 
 Claude Code and Codex invoke the shared Pi-native review launcher. Pi uses
 Tintin's flat `pr-review-worker` fan-out; the shared analysis owns dynamic
-Codex/OpenRouter allocation, Codex fallback, and transcript audit rows while
+Codex/free-pool allocation, Codex fallback, and transcript audit rows while
 preserving the same finding and sentinel contracts.
 
 See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)

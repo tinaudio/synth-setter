@@ -5,15 +5,8 @@
   "enabledModels": [
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/openai/gpt-oss-20b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free"
   ]
 }
