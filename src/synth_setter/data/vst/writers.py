@@ -36,6 +36,41 @@ from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
+def _remove_dataset_path(path: Path) -> None:
+    """Remove one staged or committed Lance dataset path.
+
+    :param path: Dataset directory or symlink target to remove.
+    """
+    if path.is_dir() and not path.is_symlink():
+        rmtree(path)
+    else:
+        path.unlink()
+
+
+def _promote_staged_lance_dataset(staging_path: Path, lance_path: Path) -> None:
+    """Replace ``lance_path`` with a committed staged dataset, restoring on failure.
+
+    :param staging_path: Newly committed sibling dataset directory.
+    :param lance_path: Public destination path to replace.
+    :raises OSError: Dataset promotion fails after rollback attempts.
+    """
+    backup_root: Path | None = None
+    backup_path: Path | None = None
+    if lance_path.exists() or lance_path.is_symlink():
+        backup_root = Path(mkdtemp(prefix=f"{lance_path.name}.backup.", dir=lance_path.parent))
+        backup_path = backup_root / lance_path.name
+        lance_path.replace(backup_path)
+    try:
+        staging_path.replace(lance_path)
+    except OSError:
+        if backup_path is not None and backup_path.exists():
+            backup_path.replace(lance_path)
+        raise
+    finally:
+        if backup_root is not None and backup_root.exists():
+            rmtree(backup_root)
+
+
 def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
     """Stack rendered samples into writer-field arrays.
 
@@ -301,7 +336,6 @@ def make_lance_dataset(
     lance_path.parent.mkdir(parents=True, exist_ok=True)
     staging_path = Path(mkdtemp(prefix=f"{lance_path.name}.", dir=lance_path.parent))
     fragments: list[lance.fragment.FragmentMetadata] = []
-    promoted = False
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
@@ -319,14 +353,8 @@ def make_lance_dataset(
             flush_batch=_flush,
         )
         commit_lance_dataset(staging_path, schema, fragments)
-        if lance_path.exists():
-            if lance_path.is_dir():
-                rmtree(lance_path)
-            else:
-                lance_path.unlink()
-        staging_path.replace(lance_path)
-        promoted = True
+        _promote_staged_lance_dataset(staging_path, lance_path)
         return metrics
     finally:
-        if not promoted and staging_path.exists():
-            rmtree(staging_path)
+        if staging_path.exists():
+            _remove_dataset_path(staging_path)
