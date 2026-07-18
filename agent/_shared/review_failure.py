@@ -237,8 +237,8 @@ def _write_report(path: Path, report: str) -> None:
     )
     temporary_path = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w") as report_file:
+            os.fchmod(report_file.fileno(), 0o600)
             report_file.write(report)
             report_file.flush()
             os.fsync(report_file.fileno())

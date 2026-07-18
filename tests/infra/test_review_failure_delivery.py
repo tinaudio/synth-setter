@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from errno import EBADF
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,34 @@ def test_deliver_failure_no_comments_replaces_sentinel_atomically(
 
     assert sentinel.read_text() == "prior complete sentinel"
     assert list(tmp_path.iterdir()) == [sentinel]
+
+
+def test_deliver_failure_closes_temporary_descriptor_when_chmod_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close the raw temporary descriptor when permission setup fails.
+
+    :param tmp_path: Temporary review directory.
+    :param monkeypatch: Replaces the descriptor permission boundary.
+    """
+    observed_descriptor: int | None = None
+
+    def fail_fchmod(descriptor: int, mode: int) -> None:
+        nonlocal observed_descriptor
+        del mode
+        observed_descriptor = descriptor
+        raise OSError("chmod failed")
+
+    monkeypatch.setattr(os, "fchmod", fail_fchmod)
+
+    with pytest.raises(OSError, match="chmod failed"):
+        deliver_failure(_request(), mode="no-comments", review_dir=tmp_path)
+
+    assert observed_descriptor is not None
+    with pytest.raises(OSError) as error:
+        os.fstat(observed_descriptor)
+    assert error.value.errno == EBADF
 
 
 def test_deliver_failure_full_posts_blocking_review_after_persisting(
