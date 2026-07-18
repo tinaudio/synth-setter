@@ -223,7 +223,7 @@ def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
     settings = json.loads((REPO_ROOT / ".pi" / "settings.json").read_text())
 
     assert settings["defaultProvider"] == "openai-codex"
-    assert settings["defaultModel"] == "gpt-5.6-terra"
+    assert settings["defaultModel"] == "gpt-5.6-sol"
     assert settings["enabledModels"]
     assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
     assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
