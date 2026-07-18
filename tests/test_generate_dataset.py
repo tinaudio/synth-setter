@@ -716,7 +716,7 @@ def test_from_hydra_torchsynth_rerun_after_invalidated_stage_succeeds_with_new_s
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A forced torchsynth rerun overwrites the local shard instead of tripping stale schema drift.
+    """A forced torchsynth rerun overwrites the local shard cleanly.
 
     :param cfg_dataset_torchsynth: Hydra cfg composed from the torchsynth smoke experiment.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.

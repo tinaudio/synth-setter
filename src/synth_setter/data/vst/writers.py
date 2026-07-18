@@ -7,10 +7,10 @@ batch, committed as one dataset at the end.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
 import shutil
 import tempfile
+from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 from loguru import logger
@@ -247,6 +247,45 @@ def _render_in_batches(
     )
 
 
+def _cleanup_staged_lance_dir(staged_dir: Path) -> None:
+    """Best-effort cleanup for a staged dataset directory.
+
+    :param staged_dir: Temporary dataset directory to remove.
+    """
+    try:
+        shutil.rmtree(staged_dir)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(f"failed to remove staged Lance dir {staged_dir}: {exc}")
+
+
+
+def _publish_staged_lance_dir(staged_dir: Path, target_dir: Path) -> None:
+    """Swap a staged dataset into place and restore the prior shard on failure.
+
+    :param staged_dir: Freshly committed replacement dataset.
+    :param target_dir: Live dataset path to overwrite.
+    :raises OSError: Promotion fails after the prior shard has been moved aside.
+    """
+    backup_dir: Path | None = None
+    if target_dir.exists():
+        backup_dir = Path(
+            tempfile.mkdtemp(prefix=f"{target_dir.name}.backup-", dir=target_dir.parent)
+        )
+        backup_dir.rmdir()
+        target_dir.replace(backup_dir)
+    try:
+        staged_dir.replace(target_dir)
+    except OSError:
+        if backup_dir is not None and backup_dir.exists():
+            backup_dir.replace(target_dir)
+        raise
+    if backup_dir is not None:
+        _cleanup_staged_lance_dir(backup_dir)
+
+
+
 def make_lance_dataset(
     lance_dir: Path | str,
     render_cfg: RenderConfig,
@@ -285,9 +324,6 @@ def make_lance_dataset(
 
     target_dir = Path(lance_dir)
     target_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(
-        tempfile.mkdtemp(prefix=f"{target_dir.name}.tmp-", dir=target_dir.parent)
-    )
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
@@ -299,7 +335,9 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
-
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=f"{target_dir.name}.tmp-", dir=target_dir.parent)
+    )
     fragments: list[lance.fragment.FragmentMetadata] = []
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
@@ -322,9 +360,7 @@ def make_lance_dataset(
         committed = True
     finally:
         if not committed:
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            _cleanup_staged_lance_dir(staging_dir)
 
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    staging_dir.replace(target_dir)
+    _publish_staged_lance_dir(staging_dir, target_dir)
     return metrics

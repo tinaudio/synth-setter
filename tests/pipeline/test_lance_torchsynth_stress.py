@@ -187,6 +187,51 @@ def test_make_lance_dataset_failed_rerun_preserves_existing_dataset_and_clean_re
     assert not np.array_equal(second, first)
 
 
+def test_make_lance_dataset_failed_promotion_restores_existing_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A promotion failure keeps the last committed shard readable.
+
+    :param tmp_path: Destination directory for the shard.
+    :param monkeypatch: Injects a staging-directory promotion failure.
+    """
+    shard = tmp_path / "shard.lance"
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    first = _read_params(shard)
+
+    real_replace = Path.replace
+
+    def _fail_staging_replace(self: Path, target: Path) -> Path:
+        if ".tmp-" in self.name:
+            raise OSError("injected promotion failure")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _fail_staging_replace)
+    with pytest.raises(OSError, match="injected promotion failure"):
+        make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+
+    np.testing.assert_array_equal(_read_params(shard), first)
+
+
+def test_make_lance_dataset_invalid_fixed_params_length_leaves_no_temp_dir(
+    tmp_path: Path,
+) -> None:
+    """Validation failure does not leak a temporary shard directory.
+
+    :param tmp_path: Destination directory for the shard.
+    """
+    shard = tmp_path / "shard.lance"
+    with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
+        make_lance_dataset(
+            shard,
+            _torchsynth_render_cfg(samples_per_shard=2),
+            fixed_synth_params_list=[{}],
+        )
+
+    assert list(tmp_path.glob("shard.lance.tmp-*")) == []
+
+
 def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:
     """Distinct per-shard seeds draw fully distinct parameter rows.
 
