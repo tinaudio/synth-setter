@@ -354,6 +354,38 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: Path) -> None:
+    """Keep a failed Pi run from publishing an intermediate assistant message.
+
+    :param tmp_path: Temporary directory containing the failing fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        'echo \'{"type":"message_end","message":{"role":"assistant",'
+        '"content":"intermediate"}}\'\n'
+        "exit 7\n"
+    )
+    pi.chmod(0o755)
+    stdout = io.BytesIO()
+    stderr = io.BytesIO()
+
+    with pytest.raises(sh.ErrorReturnCode):
+        sh.Command(str(launcher))(
+            "repo-review-full-no-comments",
+            _cwd=REPO_ROOT,
+            _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+            _out=stdout,
+            _err=stderr,
+        )
+
+    assert stdout.getvalue() == b""
+    assert "Pi review host failed; inspect live transcript:" in stderr.getvalue().decode()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_rejects_nested_session(tmp_path: Path) -> None:
     """Stop a child Pi session from recursively launching the harness.
 

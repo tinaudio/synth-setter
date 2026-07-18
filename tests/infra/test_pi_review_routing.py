@@ -441,7 +441,8 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
                 '{"type":"tool_execution_start","toolName":"bash",'
                 '"args":{"command":"printf secret-value"}}',
                 '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,'
-                '"delayMs":1000,"errorMessage":"Authorization: Bearer secret-token"}',
+                '"delayMs":1000,"errorMessage":"Authorization: Custom secret-token; '
+                'X-Api-Key: backup-secret"}',
                 '{"type":"message_end","message":{"role":"assistant",'
                 '"content":[{"type":"text","text":"final report"}]}}',
             )
@@ -461,6 +462,7 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
     assert "retry 1/3" in progress_text
     assert "<redacted>" in progress_text
     assert "secret-token" not in progress_text
+    assert "backup-secret" not in progress_text
     assert "secret-value" not in progress_text
 
 
@@ -501,6 +503,23 @@ def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
     assert report.startswith("## code-health review — smoke")
     assert "noise" not in report
     assert "hidden" not in report
+
+
+def test_extract_report_empty_terminal_assistant_raises(tmp_path: Path) -> None:
+    """Reject earlier report text when the terminal assistant message is empty.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    transcript.write_text(
+        '{"message":{"role":"assistant","content":"## code-health review — smoke\\n\\n'
+        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
+        '### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":[]}}\n'
+    )
+
+    with pytest.raises(ValueError, match="has no assistant text"):
+        extract_report(transcript)
 
 
 def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) -> None:

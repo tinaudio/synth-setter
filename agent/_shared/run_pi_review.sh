@@ -61,17 +61,24 @@ only its specified deliverable."
   umask 077
   mkdir -p .agent-reviews
   echo "Live Pi transcript: ${transcript}" >&2
-  pi \
-    -p \
-    --approve \
-    --mode json \
-    --provider "${PI_REVIEW_PROVIDER}" \
-    --model "${PI_REVIEW_MODEL}" \
-    --thinking "${PI_REVIEW_THINKING}" \
-    --no-session \
-    "${prompt}" \
-    | ./.venv/bin/python agent/_shared/pi_review_routing.py stream-host \
-      --transcript "${transcript}"
+  local final_output
+  if ! final_output="$(
+    pi \
+      -p \
+      --approve \
+      --mode json \
+      --provider "${PI_REVIEW_PROVIDER}" \
+      --model "${PI_REVIEW_MODEL}" \
+      --thinking "${PI_REVIEW_THINKING}" \
+      --no-session \
+      "${prompt}" \
+      | ./.venv/bin/python agent/_shared/pi_review_routing.py stream-host \
+        --transcript "${transcript}"
+  )"; then
+    echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
+    return 1
+  fi
+  printf '%s\n' "${final_output}"
 }
 
 main "$@"

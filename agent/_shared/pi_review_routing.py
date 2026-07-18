@@ -415,7 +415,7 @@ def _redact_diagnostic(diagnostic: str) -> str:
     :returns: Diagnostic safe for the terminal progress stream.
     """
     redacted = re.sub(
-        r"(?i)\b(authorization)(\s*:\s*)(?:bearer\s+)?\S+",
+        r"(?i)\b(authorization)(\s*:\s*)[^\r\n;,]+",
         r"\1\2<redacted>",
         diagnostic,
     )
@@ -551,24 +551,25 @@ def extract_report(transcript: Path) -> str:
     """Extract the final assistant Markdown from a Tintin transcript.
 
     :param transcript: Tintin JSONL output path returned by ``Agent``.
-    :returns: Final non-empty assistant text.
+    :returns: Structured text from the terminal assistant message.
     :raises ValueError: If no assistant report text exists.
     """
     latest = ""
-    saw_assistant_text = False
+    terminal_has_text = False
     for entry in _transcript_entries(transcript):
         if entry.message is None or entry.message.role != "assistant":
             continue
         text = _message_text(entry.message)
+        terminal_has_text = bool(text.strip())
         if not text.strip():
+            latest = ""
             continue
-        saw_assistant_text = True
         structured = _structured_report_markdown(text)
         latest = structured or ""
     if not latest:
         detail = (
             "final assistant text is not a report"
-            if saw_assistant_text
+            if terminal_has_text
             else "has no assistant text"
         )
         raise ValueError(f"Transcript {detail}: {transcript}")
