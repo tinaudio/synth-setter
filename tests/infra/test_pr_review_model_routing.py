@@ -12,6 +12,7 @@ import runpy
 import shutil
 import signal
 import sys
+import textwrap
 import time
 import tomllib
 from pathlib import Path
@@ -23,6 +24,7 @@ import yaml
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_REVIEW_HOST_L1_COMPLETION_TIMEOUT_SECONDS = 600
 
 
 def _process_state(pid: int) -> str | None:
@@ -184,7 +186,7 @@ def test_full_review_skills_route_external_harnesses_through_pi() -> None:
         assert "run_codex_review_agent.sh" not in text
 
     contract = " ".join((REPO_ROOT / contract_path).read_text().split())
-    assert contract.count("agent/_shared/run_pi_review.sh") == 1
+    assert contract.count("agent/_shared/run_pi_review.sh") == 2
     assert "run_in_background" in contract
     assert "TaskOutput" in contract
     assert "600000" in contract
@@ -211,8 +213,14 @@ def test_native_review_orchestrators_delegate_to_pi() -> None:
     contract = " ".join((REPO_ROOT / contract_path).read_text().split())
     assert 'append `--target "$n"`' in contract.lower()
     assert "[1-9][0-9]*" in contract
-    assert '--target "$N"' in contract
-    assert "Run exactly one command" in contract
+    assert 'command=(agent/_shared/run_pi_review.sh "$skill")' in contract
+    assert 'command=(agent/_shared/run_pi_review.sh "$skill" --target "$N")' in contract
+    assert "unset any inherited `n`" in contract.lower()
+    assert "[[ ${N+x} ]]" in contract
+    assert "-v N" not in contract
+    assert '"${command[@]}"' in contract
+    assert "repo-review-full-no-comments" in contract
+    assert "run exactly one command" in contract.lower()
     assert "foreground blocking call" in contract
     assert "yields a shell session" in contract
 
@@ -277,6 +285,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     ).read_text()
 
     assert "pi_review_routing.py plan" in text
+    assert "pi_review_routing.py fallback" in text
     assert "pi_review_routing.py extract-report" in text
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
@@ -294,7 +303,13 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"print\s+the audit table before stopping", text)
     assert "secondary_fallback_candidates" in text
     assert "fallback_candidates" in text
+    assert "codex_fallback_statuses" in text
+    assert "`audit_detail`" in text
     assert "Codex fallback" in text
+    assert re.search(r"every OpenRouter\s+failure class", text)
+    assert "All statuses use the one runtime transition command below" in text
+    assert "status-specific launch paths" in text
+    assert "failures do not trigger the cross-provider fallback" not in text
     assert "OpenRouter failed; only Codex ran." in text
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
     assert "claude -p --dangerously-skip-permissions" in text
@@ -1164,12 +1179,25 @@ def _prepare_review_host_l1_project(tmp_path: Path) -> None:
     launcher = tmp_path / "agent" / "_shared" / "run_pi_review.sh"
     launcher.parent.mkdir(parents=True)
     launcher.write_text(
-        "#!/bin/bash\n"
-        "set -euo pipefail\n"
-        "printf '%s\\n' \"$*\" >> .host-invocations\n"
-        "[[ \"$*\" == 'repo-review-full-no-comments --target 2125' ]]\n"
-        "sleep 2\n"
-        "printf 'PI_HOST_L1_COMPLETE\\n'\n"
+        textwrap.dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+            printf 'argc=%s\\n' "$#" >> .host-attempts
+            printf 'arg=%s\\n' "$@" >> .host-attempts
+            [[ "$#" -eq 1 || "$#" -eq 3 ]]
+            [[ "$1" == repo-review-full || "$1" == repo-review-full-no-comments ]]
+            if [[ "$#" -eq 3 ]]; then
+              [[ "$2" == --target && "$3" == 2125 ]]
+            fi
+            printf 'argc=%s\\n' "$#" >> .host-invocations
+            printf 'arg=%s\\n' "$@" >> .host-invocations
+            touch .pi-started
+            sleep 2
+            touch .pi-complete
+            printf 'PI_HOST_L1_COMPLETE\\n'
+            """
+        )
     )
     launcher.chmod(0o755)
     for relative_path in (
@@ -1182,38 +1210,75 @@ def _prepare_review_host_l1_project(tmp_path: Path) -> None:
         shutil.copy2(REPO_ROOT / relative_path, destination)
 
 
-def _run_review_host_l1(host: str, tmp_path: Path) -> str:
-    """Run one real host with its committed orchestrator definition.
+def _review_host_l1_prompt(skill: str, target: str | None) -> str:
+    """Build an unambiguous configured-host request.
 
-    :param host: Authenticated CLI host under test.
-    :param tmp_path: Prepared temporary project.
-    :returns: Host CLI output.
+    :param skill: Complete review skill value.
+    :param target: PR target text supplied to the configured orchestrator, if any.
+    :returns: Prompt that preserves the complete skill and target values.
     """
-    sh = importlib.import_module("sh")
-    prompt = (
-        "Run repo-review-full-no-comments for PR 2125. Follow the configured "
+    if target is None:
+        return (
+            f"The complete literal review skill is `{skill}`. No PR target was supplied. "
+            "Follow the configured pr-review-orchestrator exactly and return only its "
+            "deliverable."
+        )
+    target_codepoints = " ".join(f"U+{ord(character):04X}" for character in target)
+    return (
+        f"The complete literal review skill is `{skill}` and the complete literal "
+        f"PR target is `{target}`, including every character inside each pair of "
+        f"backticks. The target codepoints in order are {target_codepoints}; spaces "
+        "are data, not formatting. Treat each as one value. Follow the configured "
         "pr-review-orchestrator exactly and return only its deliverable."
     )
-    command = sh.Command(shutil.which(host))
-    if host == "claude":
-        return str(
-            command(
-                "-p",
-                "--dangerously-skip-permissions",
-                "--no-session-persistence",
-                "--agent",
-                "pr-review-orchestrator",
-                "--output-format",
-                "text",
-                prompt,
-                _cwd=tmp_path,
-                _timeout=180,
-            )
-        )
 
+
+def _run_claude_review_host_l1(
+    tmp_path: Path,
+    prompt: str,
+    timeout_seconds: int,
+) -> str:
+    """Run Claude with its committed orchestrator definition.
+
+    :param tmp_path: Prepared temporary project.
+    :param prompt: Complete host request.
+    :param timeout_seconds: Maximum host CLI runtime for this request.
+    :returns: Claude CLI output.
+    """
+    sh = importlib.import_module("sh")
+    return str(
+        sh.Command(shutil.which("claude"))(
+            "-p",
+            "--dangerously-skip-permissions",
+            "--no-session-persistence",
+            "--agent",
+            "pr-review-orchestrator",
+            "--output-format",
+            "text",
+            prompt,
+            _cwd=tmp_path,
+            _env={**os.environ, "N": "999"},
+            _timeout=timeout_seconds,
+        )
+    )
+
+
+def _run_codex_review_host_l1(
+    tmp_path: Path,
+    prompt: str,
+    timeout_seconds: int,
+) -> str:
+    """Run Codex with its committed orchestrator definition.
+
+    :param tmp_path: Prepared temporary project.
+    :param prompt: Complete host request.
+    :param timeout_seconds: Maximum host CLI runtime for this request.
+    :returns: Codex CLI output.
+    """
+    sh = importlib.import_module("sh")
     config = tomllib.loads((tmp_path / ".codex/agents/pr-review-orchestrator.toml").read_text())
     return str(
-        command(
+        sh.Command(shutil.which("codex"))(
             "exec",
             "--skip-git-repo-check",
             "--dangerously-bypass-approvals-and-sandbox",
@@ -1223,36 +1288,188 @@ def _run_review_host_l1(host: str, tmp_path: Path) -> str:
             f"developer_instructions={json.dumps(config['developer_instructions'])}",
             prompt,
             _cwd=tmp_path,
-            _timeout=180,
+            _env={**os.environ, "N": "999"},
+            _timeout=timeout_seconds,
         )
     )
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("host", ("claude", "codex"))
-def test_review_host_real_cli_waits_for_delayed_pi(
+def _run_review_host_l1(
     host: str,
     tmp_path: Path,
-) -> None:
-    """Prove each configured host returns after exactly one delayed Pi command.
+    *,
+    target: str | None = "2125",
+    skill: str = "repo-review-full-no-comments",
+    timeout_seconds: int = _REVIEW_HOST_L1_COMPLETION_TIMEOUT_SECONDS,
+) -> str:
+    """Run one real host with its committed orchestrator definition.
 
     :param host: Authenticated CLI host under test.
-    :param tmp_path: Temporary project containing the delayed fake Pi launcher.
+    :param tmp_path: Prepared temporary project.
+    :param target: PR target text supplied to the configured orchestrator, if any.
+    :param skill: Review skill text supplied to the configured orchestrator.
+    :param timeout_seconds: Maximum host CLI runtime for this request.
+    :returns: Host CLI output.
+    :raises ValueError: If ``host`` is not a supported configured CLI.
+    """
+    prompt = _review_host_l1_prompt(skill, target)
+    if host == "claude":
+        return _run_claude_review_host_l1(tmp_path, prompt, timeout_seconds)
+    if host == "codex":
+        return _run_codex_review_host_l1(tmp_path, prompt, timeout_seconds)
+    raise ValueError(f"unsupported review host: {host}")
+
+
+def _require_review_host_l1(host: str) -> None:
+    """Require the opt-in flag and an installed authenticated host.
+
+    :param host: CLI host required by the L1 test.
     """
     if os.environ.get("RUN_REVIEW_HOST_L1") != "1":
-        pytest.skip("set RUN_REVIEW_HOST_L1=1 for the authenticated L1 host eval")
+        pytest.skip(
+            "run `RUN_REVIEW_HOST_L1=1 uv run pytest "
+            "tests/infra/test_pr_review_model_routing.py -k review_host_real_cli`"
+        )
     if shutil.which(host) is None:
         pytest.skip(f"{host} CLI is unavailable")
 
+
+@pytest.mark.slow
+@pytest.mark.parametrize("host", ("claude", "codex"))
+@pytest.mark.parametrize(
+    "case",
+    (
+        (
+            "repo-review-full-no-comments",
+            "2125",
+            [
+                "argc=3",
+                "arg=repo-review-full-no-comments",
+                "arg=--target",
+                "arg=2125",
+            ],
+        ),
+        (
+            "repo-review-full-no-comments",
+            None,
+            ["argc=1", "arg=repo-review-full-no-comments"],
+        ),
+        (
+            "repo-review-full",
+            "2125",
+            ["argc=3", "arg=repo-review-full", "arg=--target", "arg=2125"],
+        ),
+        ("unknown-review", "2125", None),
+        ("repo-review-full-no-comments", "0", None),
+        ("repo-review-full-no-comments", " 2125", None),
+        ("repo-review-full-no-comments", "2125 ", None),
+        ("repo-review-full-no-comments", "2125x", None),
+    ),
+)
+def test_review_host_real_cli_enforces_pi_contract(
+    host: str,
+    case: tuple[str, str | None, list[str] | None],
+    tmp_path: Path,
+) -> None:
+    """Prove each configured host enforces every Pi launch branch.
+
+    :param host: Authenticated CLI host under test.
+    :param case: Requested skill, optional target, and exact expected launcher arguments.
+    :param tmp_path: Temporary project containing the delayed fake Pi launcher.
+    """
+    _require_review_host_l1(host)
+
+    skill, target, expected = case
     _prepare_review_host_l1_project(tmp_path)
     started_at = time.monotonic()
-    result = _run_review_host_l1(host, tmp_path)
+    result = _run_review_host_l1(
+        host,
+        tmp_path,
+        skill=skill,
+        target=target,
+        timeout_seconds=(60 if expected is None else _REVIEW_HOST_L1_COMPLETION_TIMEOUT_SECONDS),
+    )
+
+    if expected is None:
+        assert not (tmp_path / ".host-attempts").exists()
+        assert not (tmp_path / ".host-invocations").exists()
+        assert not (tmp_path / ".pi-started").exists()
+        assert not (tmp_path / ".pi-complete").exists()
+        assert "PI_HOST_L1_COMPLETE" not in result
+        return
 
     assert time.monotonic() - started_at >= 2
+    assert (tmp_path / ".pi-started").exists()
+    assert (tmp_path / ".pi-complete").exists()
     assert "PI_HOST_L1_COMPLETE" in result
-    assert (tmp_path / ".host-invocations").read_text().splitlines() == [
-        "repo-review-full-no-comments --target 2125"
-    ]
+    assert (tmp_path / ".host-attempts").read_text().splitlines() == expected
+    assert (tmp_path / ".host-invocations").read_text().splitlines() == expected
+
+
+@pytest.mark.slow
+def test_pi_fallback_l1_launches_codex_and_audits_transition() -> None:
+    """Exercise the shared failure-class transition through the real Pi fan-out."""
+    if os.environ.get("RUN_PI_REVIEW_FALLBACK_L1") != "1":
+        pytest.skip(
+            "run `RUN_PI_REVIEW_FALLBACK_L1=1 uv run pytest "
+            "tests/infra/test_pr_review_model_routing.py "
+            "-k pi_fallback_l1_launches_codex`"
+        )
+    if shutil.which("pi") is None:
+        pytest.skip("Pi CLI is unavailable")
+
+    sh = importlib.import_module("sh")
+    head = str(sh.git("rev-parse", "HEAD", _cwd=REPO_ROOT)).strip()
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
+    sentinel = REPO_ROOT / f".agent-reviews/repo-review-full-no-comments.{head}.md"
+    original_sentinel = sentinel.read_bytes() if sentinel.exists() else None
+    try:
+        result = str(
+            sh.Command(str(launcher))(
+                "repo-review-full-no-comments",
+                _cwd=REPO_ROOT,
+                _env={**os.environ, "OPENROUTER_API_KEY": "invalid-l1-credential"},
+                _timeout=_REVIEW_HOST_L1_COMPLETION_TIMEOUT_SECONDS,
+            )
+        )
+        assert sentinel.exists()
+        assert f"Reviewed at: {head}" in result
+        assert sentinel.read_text() == result
+
+        table_rows = [
+            [cell.strip() for cell in line.strip("|").split("|")]
+            for line in result.splitlines()
+            if line.startswith("|") and "---" not in line
+        ]
+        header, *attempts = table_rows
+        skill_index = header.index("Skill")
+        pass_index = header.index("Pass")
+        model_index = header.index("Model")
+        status_index = header.index("Status")
+        transcript_index = header.index("Transcript")
+        detail_index = header.index("Detail")
+        authentication_rows = [
+            row
+            for row in attempts
+            if row[pass_index] == "openrouter" and row[status_index] == "authentication"
+        ]
+        assert authentication_rows
+        for failed in authentication_rows:
+            failed_index = attempts.index(failed)
+            fallback = next(
+                row
+                for row in attempts[failed_index + 1 :]
+                if row[skill_index] == failed[skill_index]
+                and row[pass_index] == failed[pass_index]
+                and row[model_index].startswith("openai-codex/")
+            )
+            assert fallback[transcript_index] not in {"", "-"}
+            assert fallback[detail_index] == "Codex fallback after OpenRouter authentication"
+    finally:
+        if original_sentinel is None:
+            sentinel.unlink(missing_ok=True)
+        else:
+            sentinel.write_bytes(original_sentinel)
 
 
 def test_opencode_config_reviewer_agent_denies_mutations() -> None:

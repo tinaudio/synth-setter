@@ -12,6 +12,7 @@ import sh
 
 from agent._shared.pi_review_routing import (
     build_review_plan,
+    codex_fallback_candidates,
     extract_report,
     main,
     parse_available_models,
@@ -64,6 +65,15 @@ STANDARD_SECONDARY_OPENROUTER_MODELS = (
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free",
 )
+EXPECTED_CODEX_FALLBACK_STATUSES = (
+    "unavailable",
+    "quota/capacity",
+    "authentication",
+    "tool/checklist error",
+    "command timeout",
+    "turn budget exhausted",
+    "malformed report",
+)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -104,6 +114,49 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         model.startswith("openai-codex/")
         for item in plan[1::2]
         for model in item.fallback_candidates
+    )
+    assert plan[0].codex_fallback_statuses == ()
+    assert plan[1].codex_fallback_statuses == EXPECTED_CODEX_FALLBACK_STATUSES
+
+
+@pytest.mark.parametrize(
+    "status",
+    EXPECTED_CODEX_FALLBACK_STATUSES,
+)
+def test_codex_fallback_candidates_routes_every_openrouter_failure(status: str) -> None:
+    """Route every declared OpenRouter failure status to Codex.
+
+    :param status: Failed OpenRouter attempt status.
+    """
+    plan = build_review_plan(
+        ["code-health"],
+        changed_lines=20,
+        risk_reasons=(),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert codex_fallback_candidates(
+        plan[1].fallback_candidates, status, "openai-codex/gpt-5.6-sol"
+    ) == (
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
+    )
+
+
+def test_codex_fallback_candidates_keeps_success_on_openrouter() -> None:
+    """Do not route a successful OpenRouter pass to Codex."""
+    plan = build_review_plan(
+        ["code-health"],
+        changed_lines=20,
+        risk_reasons=(),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert (
+        codex_fallback_candidates(
+            plan[1].fallback_candidates, "success", "openai-codex/gpt-5.6-sol"
+        )
+        == ()
     )
 
 
@@ -743,3 +796,90 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     assert payload[1]["secondary_fallback_candidates"] == list(
         STANDARD_SECONDARY_OPENROUTER_MODELS
     )
+    assert payload[1]["codex_fallback_statuses"] == list(EXPECTED_CODEX_FALLBACK_STATUSES)
+
+
+@pytest.mark.parametrize(
+    "status",
+    EXPECTED_CODEX_FALLBACK_STATUSES,
+)
+def test_fallback_cli_routes_openrouter_failure_to_codex(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    """Exercise the runtime fallback decision and audit payload.
+
+    :param tmp_path: Temporary location for the fake Pi registry command.
+    :param status: Failed OpenRouter attempt status.
+    """
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    result = sh.Command(sys.executable)(
+        script,
+        "fallback",
+        "--status",
+        status,
+        "--effective-codex-model",
+        "openai-codex/gpt-5.6-sol",
+        "--candidate",
+        "openai-codex/gpt-5.6-sol",
+        "--candidate",
+        "openai-codex/gpt-5.6-terra",
+        _env={"PATH": str(tmp_path)},
+    )
+
+    assert json.loads(str(result)) == {
+        "candidates": [
+            "openai-codex/gpt-5.6-terra",
+            "openai-codex/gpt-5.6-sol",
+        ],
+        "audit_detail": f"Codex fallback after OpenRouter {status}",
+    }
+
+
+def test_fallback_cli_rejects_non_codex_planned_candidate(tmp_path: Path) -> None:
+    """Reject a fallback transition that escapes the Codex provider.
+
+    :param tmp_path: Empty path used to isolate the subprocess environment.
+    """
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    with pytest.raises(sh.ErrorReturnCode) as error:
+        sh.Command(sys.executable)(
+            script,
+            "fallback",
+            "--status",
+            "quota/capacity",
+            "--effective-codex-model",
+            "openai-codex/gpt-5.6-sol",
+            "--candidate",
+            "anthropic/claude-opus-4-6",
+            "--candidate",
+            "openai-codex/gpt-5.6-sol",
+            _env={"PATH": str(tmp_path)},
+        )
+
+    assert b"Fallback candidates must use openai-codex" in error.value.stderr
+
+
+def test_fallback_cli_rejects_effective_model_outside_plan(tmp_path: Path) -> None:
+    """Fail closed when the effective Codex model is absent from the plan.
+
+    :param tmp_path: Empty path used to isolate the subprocess environment.
+    """
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
+
+    with pytest.raises(sh.ErrorReturnCode) as error:
+        sh.Command(sys.executable)(
+            script,
+            "fallback",
+            "--status",
+            "quota/capacity",
+            "--effective-codex-model",
+            "openai-codex/gpt-5.6-sol",
+            "--candidate",
+            "openai-codex/gpt-5.6-terra",
+            _env={"PATH": str(tmp_path)},
+        )
+
+    assert b"Effective Codex model is not a fallback candidate" in error.value.stderr

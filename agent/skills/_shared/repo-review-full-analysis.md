@@ -151,7 +151,8 @@ python3 agent/_shared/pi_review_routing.py plan \
 The command runs `pi --list-models` and returns JSON with two logical passes per
 skill, the ordered available primary `candidates`, skipped `unavailable` models,
 OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
-Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
+Codex `fallback_candidates`, `codex_fallback_statuses`, `thinking`, and `reason`.
+Codex is required.
 OpenRouter is optional because its pass can degrade through the secondary
 free-model tier and then the returned Codex fallback. Record skipped candidates
 in the audit with no agent id or transcript.
@@ -167,11 +168,37 @@ Codex fallback. If an OpenRouter pass has no free candidates, or every primary
 and secondary candidate exhausts quota/capacity, move the successful Codex pass's effective
 model to the end of `fallback_candidates`, then launch a fresh worker
 with the first model. This prefers a distinct fallback even when the Codex pass
-reached its own fallback. Continue through that bounded Codex sequence only for
-the same availability failures. Record each launch as `Codex fallback` in the
-audit detail. Never resume a failed session under a different model.
-Authentication, tool/checklist, malformed-report, timeout, and turn-budget
-failures do not trigger the cross-provider fallback.
+reached its own fallback. Continue through that bounded Codex sequence for the
+same availability failures and for a malformed Codex report, as detailed below.
+Record each launch as `Codex fallback` in the audit detail. Never resume a
+failed session under a different model.
+Treat the returned `codex_fallback_statuses` as authoritative: every OpenRouter
+failure class triggers the cross-provider Codex fallback.
+All statuses use the one runtime transition command below; do not create
+status-specific launch paths.
+For authentication, tool/checklist, malformed-report, command-timeout, and
+turn-budget failures, skip the remaining OpenRouter candidates and start the
+bounded Codex fallback immediately. Availability failures may first exhaust the
+same-provider candidates as described above. If the failing attempt is already
+Codex, apply the Codex retry and fail-closed rules below instead of starting
+another logical pass.
+
+When an OpenRouter failure is ready for cross-provider fallback, do not query
+the model registry again or select the Codex model from prose or memory. Run the
+tested runtime transition command with each `fallback_candidates` entry from
+the original validated plan, in its original order:
+
+```bash
+python3 agent/_shared/pi_review_routing.py fallback \
+  --status "<normalized-status>" \
+  --effective-codex-model "<successful-codex-pass-model>" \
+  --candidate "<planned-candidate-1>" \
+  [--candidate "<planned-candidate-N>" ...]
+```
+
+Launch the returned first `candidates` entry and copy the returned
+`audit_detail` into its audit row. Continue through the returned bounded
+candidate sequence under the Codex retry rules below.
 
 A completed worker is not successful until its final assistant Markdown passes
 the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
@@ -191,11 +218,13 @@ turns, not generated output, so label it exactly as the table does.
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
 directly to `validate-report`. If extraction or validation fails, record
-`malformed report` and try the next candidate. This
-is a bounded report-quality retry, not a quota classification. Authentication,
-tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, stop before aggregation or delivery; never write a PASS sentinel
-after silently dropping the required Codex pass. If an OpenRouter pass exhausts
+`malformed report`. An OpenRouter malformed report moves immediately to its
+Codex fallback; a Codex malformed report tries its next candidate. This is a
+bounded report-quality retry, not a quota classification. Authentication, tool,
+and checklist errors stop immediately only for Codex attempts; those errors on
+OpenRouter move to its Codex fallback. If a Codex pass exhausts its candidates,
+stop before aggregation or delivery; never write a PASS sentinel after silently
+dropping the required Codex pass. If an OpenRouter pass exhausts
 its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
 `fallback_candidates`, continue the review with Codex-only findings, record the
 failed OpenRouter attempt chain in the audit, and add the exact sentence

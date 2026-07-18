@@ -41,9 +41,19 @@ SUPPORTED_SKILLS = frozenset(
     }
 )
 PI_REVIEW_MAX_TURNS = 12
+OPENROUTER_CODEX_FALLBACK_STATUSES = (
+    "unavailable",
+    "quota/capacity",
+    "authentication",
+    "tool/checklist error",
+    "command timeout",
+    "turn budget exhausted",
+    "malformed report",
+)
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
+_OPENROUTER_LABEL = "openrouter"
 
 _DEEP_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
@@ -281,6 +291,11 @@ class ReviewPass:
         Codex models used only after an OpenRouter pass exhausts both free-model
         tiers. The orchestrator reorders them around the effective Codex-pass model.
 
+    .. attribute :: codex_fallback_statuses
+        :type: tuple[str, ...]
+
+        Attempt statuses that route an OpenRouter logical pass to Codex.
+
     .. attribute :: thinking
         :type: str
 
@@ -303,6 +318,7 @@ class ReviewPass:
     unavailable: tuple[str, ...]
     secondary_fallback_candidates: tuple[str, ...]
     fallback_candidates: tuple[str, ...]
+    codex_fallback_statuses: tuple[str, ...]
     thinking: str
     reason: str
     max_turns: int
@@ -646,6 +662,7 @@ def build_review_plan(
                 unavailable=codex_unavailable,
                 secondary_fallback_candidates=(),
                 fallback_candidates=(),
+                codex_fallback_statuses=(),
                 thinking=thinking,
                 reason=reason,
                 max_turns=PI_REVIEW_MAX_TURNS,
@@ -662,11 +679,10 @@ def build_review_plan(
             openrouter_secondary_configured,
             available_models,
         )
-        openrouter_label = "openrouter"
         plan.append(
             ReviewPass(
                 skill=skill,
-                pass_name=openrouter_label,
+                pass_name=_OPENROUTER_LABEL,
                 candidates=openrouter_candidates,
                 unavailable=(
                     *openrouter_primary_unavailable,
@@ -674,12 +690,44 @@ def build_review_plan(
                 ),
                 secondary_fallback_candidates=openrouter_secondary_candidates,
                 fallback_candidates=tuple(reversed(codex_candidates)),
+                codex_fallback_statuses=OPENROUTER_CODEX_FALLBACK_STATUSES,
                 thinking=thinking,
                 reason=reason,
                 max_turns=PI_REVIEW_MAX_TURNS,
             )
         )
     return plan
+
+
+def codex_fallback_candidates(
+    fallback_candidates: Sequence[str],
+    status: str,
+    effective_codex_model: str,
+) -> tuple[str, ...]:
+    """Return the Codex transition for one failed logical pass.
+
+    :param fallback_candidates: Codex candidates from the original validated plan.
+    :param status: Normalized audit status for the failed attempt.
+    :param effective_codex_model: Model that completed the logical Codex pass.
+    :returns: Ordered Codex candidates, or no transition for this pass and status.
+    :raises ValueError: If the fallback plan contains a non-Codex model or omits the effective
+        Codex model.
+    """
+    if status not in OPENROUTER_CODEX_FALLBACK_STATUSES:
+        return ()
+    non_codex_candidates = [
+        model for model in fallback_candidates if not model.startswith("openai-codex/")
+    ]
+    if non_codex_candidates:
+        raise ValueError(f"Fallback candidates must use openai-codex: {non_codex_candidates}")
+    if effective_codex_model not in fallback_candidates:
+        raise ValueError(
+            f"Effective Codex model is not a fallback candidate: {effective_codex_model}"
+        )
+    return (
+        *(model for model in fallback_candidates if model != effective_codex_model),
+        effective_codex_model,
+    )
 
 
 def _require_codex(available_models: AbstractSet[str]) -> None:
@@ -732,6 +780,12 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--skill", action="append", required=True)
     plan.add_argument("--changed-lines", type=int, required=True)
     plan.add_argument("--risk", action="append", default=[])
+    fallback = subparsers.add_parser(
+        "fallback", help="print the Codex transition for an OpenRouter failure"
+    )
+    fallback.add_argument("--candidate", action="append", required=True)
+    fallback.add_argument("--status", required=True, choices=OPENROUTER_CODEX_FALLBACK_STATUSES)
+    fallback.add_argument("--effective-codex-model", required=True)
     extract = subparsers.add_parser(
         "extract-report", help="write final assistant Markdown from Tintin JSONL"
     )
@@ -754,10 +808,10 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_plan(args: argparse.Namespace) -> None:
-    """Build and print a plan from parsed CLI arguments.
+def _registered_models() -> set[str]:
+    """Read the available models from Pi.
 
-    :param args: Parsed ``plan`` arguments.
+    :returns: Canonical model selectors registered with Pi.
     :raises RuntimeError: If Pi is missing or cannot list models.
     """
     pi_executable = shutil.which("pi")
@@ -768,13 +822,41 @@ def _print_plan(args: argparse.Namespace) -> None:
     except sh.ErrorReturnCode as error:
         stderr = error.stderr.decode(errors="replace").strip()
         raise RuntimeError(f"pi --list-models failed: {stderr}") from error
+    return parse_available_models(model_output)
+
+
+def _print_plan(args: argparse.Namespace) -> None:
+    """Build and print a plan from parsed CLI arguments.
+
+    :param args: Parsed ``plan`` arguments.
+    """
     plan = build_review_plan(
         args.skill,
         changed_lines=args.changed_lines,
         risk_reasons=args.risk,
-        available_models=parse_available_models(model_output),
+        available_models=_registered_models(),
     )
     sys.stdout.write(f"{json.dumps([asdict(item) for item in plan], indent=2)}\n")
+
+
+def _print_fallback(args: argparse.Namespace) -> None:
+    """Print the runtime Codex transition and its audit detail.
+
+    :param args: Parsed ``fallback`` arguments.
+    :raises RuntimeError: If the planned pass has no Codex transition.
+    """
+    candidates = codex_fallback_candidates(
+        args.candidate,
+        args.status,
+        args.effective_codex_model,
+    )
+    if not candidates:
+        raise RuntimeError(f"No Codex fallback for OpenRouter status: {args.status}")
+    payload = {
+        "candidates": candidates,
+        "audit_detail": f"Codex fallback after OpenRouter {args.status}",
+    }
+    sys.stdout.write(f"{json.dumps(payload, indent=2)}\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -787,6 +869,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "plan":
         _print_plan(args)
+        return 0
+    if args.command == "fallback":
+        _print_fallback(args)
         return 0
     if args.command == "extract-report":
         args.output.write_text(f"{extract_report(args.transcript)}\n")
