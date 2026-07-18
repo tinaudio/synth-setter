@@ -56,6 +56,9 @@ and do not invoke run_pi_review.sh again. Follow the skill exactly and return \
 only its specified deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
+  hash -r
+  local pi_bin
+  pi_bin="$(command -v pi)"
   local transcript
   transcript=".agent-reviews/pi-review-host.$(date -u +%Y%m%dT%H%M%SZ).$$.jsonl"
   umask 077
@@ -63,7 +66,7 @@ only its specified deliverable."
   echo "Live Pi transcript: ${transcript}" >&2
   local final_output
   if ! final_output="$(
-    pi \
+    "${pi_bin}" \
       -p \
       --approve \
       --mode json \
