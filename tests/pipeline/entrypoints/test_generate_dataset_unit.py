@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.cli.generate_dataset import (
+    _RENDERER_SCRIPT,
     _dispatch_shards,
     _dispatch_shards_from_claims,
     _dispatch_shards_parallel,
@@ -815,10 +816,13 @@ class TestRun(RenderSeamFixtures):
         args = renderer_calls[0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
-            assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            renderer_script = Path(args[2])
         else:
             assert VST_HEADLESS_WRAPPER not in args
-            assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+            renderer_script = Path(args[1])
+        assert renderer_script.as_posix().endswith("synth_setter/data/vst/generate_vst_dataset.py")
+        assert renderer_script.is_absolute()
+        assert renderer_script.is_file()
 
     def test_uploads_shard_to_r2_after_generation(
         self,
@@ -1992,7 +1996,65 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
+        assert Path(args[1]) == _RENDERER_SCRIPT
+        assert _RENDERER_SCRIPT.is_file()
+
+    def test_script_path_resolves_from_any_working_directory(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Shard dispatch survives a cwd far from the repo root (import-anchored script path).
+
+        The script argv entry must resolve to an existing absolute file
+        regardless of process cwd — e.g. under ``fake_r2_remote``'s ``chdir``.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Working directory unrelated to the repo checkout.
+        :param monkeypatch: Changes the process cwd for the call.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        args = build_generate_args(spec, spec.shards[0], tmp_path / "out")
+
+        assert Path(args[1]).is_absolute()
+        assert Path(args[1]).is_file()
+
+    def test_missing_renderer_script_raises_at_build_time(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A vanished renderer script fails loudly at arg-build, not inside a worker.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Holds the nonexistent script path.
+        :param monkeypatch: Points the module at the nonexistent script.
+        """
+        from synth_setter.cli import generate_dataset
+
+        missing_script = tmp_path / "gone.py"
+        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", missing_script)
+
+        with pytest.raises(RuntimeError, match=f"renderer script not found: {missing_script}"):
+            build_generate_args(spec, spec.shards[0], tmp_path / "out")
+
+    def test_renderer_script_directory_raises_at_build_time(
+        self, spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A renderer directory fails at arg-build rather than reaching a worker.
+
+        :param spec: Smoke dataset spec fixture.
+        :param tmp_path: Holds the directory substituted for the script.
+        :param monkeypatch: Points the module at the substituted directory.
+        """
+        from synth_setter.cli import generate_dataset
+
+        renderer_directory = tmp_path / "renderer"
+        renderer_directory.mkdir()
+        monkeypatch.setattr(generate_dataset, "_RENDERER_SCRIPT", renderer_directory)
+
+        with pytest.raises(
+            RuntimeError,
+            match=f"renderer script not found: {renderer_directory}",
+        ):
+            build_generate_args(spec, spec.shards[0], tmp_path / "out")
 
 
 # ---------------------------------------------------------------------------
