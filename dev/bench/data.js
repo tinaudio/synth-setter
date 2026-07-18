@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784415913419,
+  "lastUpdate": 1784415915686,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16194,6 +16194,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 8.3521077762,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "934c30103b4910dbb17ca017dc84c68adc9d5459",
+          "message": "fix(data-pipeline): clear stale datasets before overwrite shard writes (#2165)\n\n* fix(data-pipeline): clear stale datasets before overwrite shard writes\n\nmake_lance_dataset documents non-resumable overwrite, but fragment writes\ninto an existing committed dataset adopt its schema (Lance append mode),\nwhich the #2109 write-time guard now correctly rejects — reruns over an\nexisting shard failed with a stale-schema mismatch. Remove any existing\ndataset directory before rendering so the overwrite starts clean.\n\nAlso drop the loader=\"map\" argument the #2065 stress test passed to\nLanceVSTDataModule; #2075 removed that parameter, which crossed #2065 in\nflight and broke pyright on main.\n\nFixes #2153\n\n* docs: map tests/pipeline/** into the testing-primer doc sources\n\nRefs #2153",
+          "timestamp": "2026-07-18T18:40:47-04:00",
+          "tree_id": "fe63b821a06180cde59d3b93f33ec49eb669bbc2",
+          "url": "https://github.com/tinaudio/synth-setter/commit/934c30103b4910dbb17ca017dc84c68adc9d5459"
+        },
+        "date": 1784415915189,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.899781703948975,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.038939230367541,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08698496222496033,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002011120319366455,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.17460298538208,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.558557579700004,
             "unit": "seconds"
           }
         ]
