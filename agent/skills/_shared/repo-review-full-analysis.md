@@ -11,6 +11,11 @@ orchestrator brief.
 `agent/_shared/run_pi_review.sh`, so every harness uses the same flat Tintin
 fan-out. Tintin intentionally removes its `Agent` tool from spawned subagents.
 
+The launcher persists Pi's host JSON events under `.agent-reviews/`, prints the
+exact live transcript path before review work starts, and sends sanitized
+model, tool, and retry lifecycle updates to stderr. Treat the JSONL as the
+authoritative host audit and the launcher's stdout as the final deliverable.
+
 You MUST complete every step below in order, then return to your orchestrator
 brief's Step 7 for the final delivery step.
 
@@ -151,10 +156,10 @@ python3 agent/_shared/pi_review_routing.py plan \
 The command runs `pi --list-models` and returns JSON with two logical passes per
 skill, the ordered available primary `candidates`, skipped `unavailable` models,
 OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
-Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
-OpenRouter is optional because its pass can degrade through the secondary
-free-model tier and then the returned Codex fallback. Record skipped candidates
-in the audit with no agent id or transcript.
+Codex `fallback_candidates`, `thinking`, and `reason`. Both providers must be
+registered with Pi. If either provider is absent, stop on the planner's single
+provider-level error instead of expanding every configured model into audit
+rows. Record individually skipped models only when their provider is present.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
@@ -333,6 +338,23 @@ Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-proje
 
 Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
 
+Before writing any other `review_body` content, inspect the audit rows for
+`authentication` and `quota/capacity` statuses. If either status occurred,
+begin `review_body` with `## Provider incidents`, followed by one bullet per
+affected attempt in attempt order:
+
+```markdown
+## Provider incidents
+
+- **authentication** — openrouter/example-model: exact provider diagnostic
+- **quota/capacity** — openai-codex/example-model: exact provider diagnostic
+```
+
+Preserve the exact model selector and diagnostic; deduplicate only identical
+status/model/diagnostic triples. This incident summary must appear before every
+other `review_body` section, including the review lead-in, `## PR health`, and
+`## Pi review audit`. Omit it only when neither status occurred.
+
 `review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
@@ -351,7 +373,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, prepend `OpenRouter failed; only Codex ran.` to the non-health portion of `review_body`.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, add `OpenRouter failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 
