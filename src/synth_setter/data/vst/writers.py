@@ -7,6 +7,7 @@ batch, committed as one dataset at the end.
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -280,6 +281,11 @@ def make_lance_dataset(
         lance_schema,
         record_batch_from_arrays,
     )
+
+    # Fragment writes into an existing committed dataset adopt its schema (Lance
+    # append mode), so the documented overwrite must start from a clean directory.
+    if Path(lance_dir).exists():
+        shutil.rmtree(lance_dir)
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()

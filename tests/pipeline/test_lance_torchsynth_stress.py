@@ -263,7 +263,6 @@ def _assert_map_loader_round_trip(
         param_spec_name=param_spec_name,
         batch_size=4,
         num_workers=0,
-        loader="map",
     )
     datamodule.setup()
     encoded_width = len(resolve_param_spec(param_spec_name))

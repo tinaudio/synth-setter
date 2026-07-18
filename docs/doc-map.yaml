@@ -395,6 +395,8 @@ docs:
         covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
+      - pattern: "tests/pipeline/**"
+        covers: "Lance pipeline stress/integration coverage — shard claims, resume, partitioning, dataset lineage, spec/R2 IO, torchsynth-backed stress suite"
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
       - pattern: "tests/helpers/lance_fixtures.py"
