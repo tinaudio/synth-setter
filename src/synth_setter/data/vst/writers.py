@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from shutil import rmtree
+from tempfile import mkdtemp
 
 import numpy as np
 from loguru import logger
@@ -270,6 +271,8 @@ def make_lance_dataset(
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
     :returns: Counts of silent and clipped draws rejected across the shard.
+    :raises ValueError: ``lance_dir`` does not end in ``.lance``, or fixed-params
+        inputs do not cover the requested shard rows.
     """
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
@@ -283,14 +286,11 @@ def make_lance_dataset(
     )
 
     lance_path = Path(lance_dir)
+    if lance_path.suffix != ".lance":
+        raise ValueError(f"lance_dir must end in .lance, got {lance_path}")
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
-    if lance_path.exists():
-        if lance_path.is_dir():
-            rmtree(lance_path)
-        else:
-            lance_path.unlink()
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
@@ -298,22 +298,35 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
-
+    lance_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = Path(mkdtemp(prefix=f"{lance_path.name}.", dir=lance_path.parent))
     fragments: list[lance.fragment.FragmentMetadata] = []
+    promoted = False
 
     def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
         record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch))
+        fragments.append(lance_fragment(staging_path, schema, record_batch))
 
-    # Commit only after a clean render: orphaned fragment data files from a failed
-    # run stay uncommitted (no dataset manifest references them).
-    metrics = _render_in_batches(
-        render_cfg=render_cfg,
-        param_spec=param_spec,
-        start_idx=start_idx,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-        flush_batch=_flush,
-    )
-    commit_lance_dataset(lance_dir, schema, fragments)
-    return metrics
+    try:
+        # Commit only after a clean render: orphaned fragment data files from a failed
+        # run stay uncommitted (no dataset manifest references them).
+        metrics = _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=param_spec,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+            flush_batch=_flush,
+        )
+        commit_lance_dataset(staging_path, schema, fragments)
+        if lance_path.exists():
+            if lance_path.is_dir():
+                rmtree(lance_path)
+            else:
+                lance_path.unlink()
+        staging_path.replace(lance_path)
+        promoted = True
+        return metrics
+    finally:
+        if not promoted and staging_path.exists():
+            rmtree(staging_path)

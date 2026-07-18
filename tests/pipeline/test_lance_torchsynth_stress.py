@@ -142,6 +142,36 @@ def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path
     assert not np.array_equal(first, second)
 
 
+def test_make_lance_dataset_rerun_removes_stale_files(tmp_path: Path) -> None:
+    """A rerun drops stale files from the previous dataset directory.
+
+    :param tmp_path: Destination directory for the shard.
+    """
+    shard = tmp_path / "shard.lance"
+
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    stale_file = shard / "data" / "stale.bin"
+    stale_file.write_text("stale")
+
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+
+    assert not stale_file.exists()
+
+
+def test_make_lance_dataset_existing_file_path_is_replaced(tmp_path: Path) -> None:
+    """A stale file at the target path is replaced by the rendered dataset.
+
+    :param tmp_path: Destination directory for the shard.
+    """
+    shard = tmp_path / "shard.lance"
+    shard.write_text("stale")
+
+    make_lance_dataset(shard, _torchsynth_render_cfg())
+
+    assert shard.is_dir()
+    assert _read_params(shard).shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+
+
 def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,12 +205,49 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
         make_lance_dataset(shard, _torchsynth_render_cfg())
 
     assert fragment_calls == 2
-    assert any((shard / "data").iterdir())
-    assert not any((shard / "_versions").glob("*.manifest"))
+    assert not shard.exists()
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg())
     assert _read_params(shard).shape == (6, len(TORCHSYNTH_ADSR_PARAM_SPEC))
+
+
+def test_make_lance_dataset_failed_rerun_preserves_existing_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed rerun leaves the previously committed dataset intact.
+
+    :param tmp_path: Destination directory for the shard.
+    :param monkeypatch: Injects a failure after the first real fragment flush.
+    """
+    from synth_setter.pipeline.data import lance_shard
+
+    shard = tmp_path / "shard.lance"
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    first = _read_params(shard)
+    real_lance_fragment = lance_shard.lance_fragment
+    fragment_calls = 0
+
+    def _fail_after_first_fragment(
+        uri: Path | str,
+        schema: pa.Schema,
+        batch: pa.RecordBatch | Iterable[pa.RecordBatch],
+        *,
+        storage_options: dict[str, str] | None = None,
+    ) -> lance.fragment.FragmentMetadata:
+        nonlocal fragment_calls
+        fragment_calls += 1
+        if fragment_calls > 1:
+            raise RuntimeError("injected fragment failure")
+        return real_lance_fragment(uri, schema, batch, storage_options=storage_options)
+
+    monkeypatch.setattr(lance_shard, "lance_fragment", _fail_after_first_fragment)
+    with pytest.raises(RuntimeError, match="injected fragment failure"):
+        make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+
+    assert fragment_calls == 2
+    assert np.array_equal(_read_params(shard), first)
 
 
 def test_shard_seeds_isolate_rows_across_shards(tmp_path: Path) -> None:
