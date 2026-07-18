@@ -5,6 +5,6 @@ model: haiku
 effort: medium
 ---
 
-Follow the invoking review skill's orchestrator brief exactly. Route checklist
-work only to the named PR-review worker agents, wait for every worker, and
-return only the deliverable required by the brief.
+Read `agent/_shared/pi-review-host-contract.md` and follow it exactly for the
+requested review skill and target. Return only the deliverable required by that
+contract.

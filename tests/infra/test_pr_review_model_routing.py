@@ -145,7 +145,7 @@ def test_review_roles_pin_provider_models_and_effort() -> None:
         assert codex["developer_instructions"]
         assert (codex["model"], codex["model_reasoning_effort"]) == providers["codex"]
         if role == "pr-review-orchestrator":
-            assert "never invoke the top-level review skill" in codex["developer_instructions"]
+            assert "pi-review-host-contract.md" in codex["developer_instructions"]
         else:
             assert (
                 "always return the requested structured report" in codex["developer_instructions"]
@@ -176,16 +176,45 @@ def test_codex_review_roles_are_registered_with_nested_fanout() -> None:
 
 def test_full_review_skills_route_external_harnesses_through_pi() -> None:
     """Keep Claude and Codex on the same Pi-native review implementation."""
+    contract_path = "agent/_shared/pi-review-host-contract.md"
     for skill in ("repo-review-full", "repo-review-full-no-comments"):
         text = (REPO_ROOT / "agent" / "skills" / skill / "SKILL.md").read_text()
         assert "SYNTH_SETTER_PI_REVIEW" in text
-        assert "run_pi_review.sh" in text
+        assert contract_path in text
         assert "run_codex_review_agent.sh" not in text
-        assert "Claude Code" in text
-        assert "Codex" in text
-        assert "foreground Bash" in text
-        assert "600000" in text
-        assert "not use background execution" in text
+
+    contract = " ".join((REPO_ROOT / contract_path).read_text().split())
+    assert contract.count("agent/_shared/run_pi_review.sh") == 1
+    assert "run_in_background" in contract
+    assert "TaskOutput" in contract
+    assert "600000" in contract
+    assert "until Pi exits" in contract
+
+
+def test_native_review_orchestrators_delegate_to_pi() -> None:
+    """Require both host entrypoints to launch exactly one blocking Pi process.
+
+    Authenticated host completion is an L1 `/pr-checkbox` check because CI cannot invoke the
+    installed Claude and Codex accounts.
+    """
+    orchestrators = (
+        REPO_ROOT / ".claude" / "agents" / "pr-review-orchestrator.md",
+        REPO_ROOT / ".codex" / "agents" / "pr-review-orchestrator.toml",
+    )
+
+    contract_path = "agent/_shared/pi-review-host-contract.md"
+    for orchestrator in orchestrators:
+        text = " ".join(orchestrator.read_text().split())
+        assert contract_path in text
+        assert "native review worker" not in text
+
+    contract = " ".join((REPO_ROOT / contract_path).read_text().split())
+    assert 'append `--target "$n"`' in contract.lower()
+    assert "[1-9][0-9]*" in contract
+    assert '--target "$N"' in contract
+    assert "Run exactly one command" in contract
+    assert "foreground blocking call" in contract
+    assert "yields a shell session" in contract
 
 
 def test_review_fanout_promotes_deep_checklists() -> None:
@@ -273,8 +302,8 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: Path) -> None:
-    """Invoke the shared Pi harness with a target and child-session marker.
+def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path) -> None:
+    """Prove launcher output is withheld until the delayed child completes.
 
     :param tmp_path: Temporary directory containing the fake Pi executable.
     """
@@ -282,10 +311,15 @@ def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: P
     launcher = REPO_ROOT / "agent" / "_shared" / "run_pi_review.sh"
     pi = tmp_path / "pi"
     pi.write_text(
-        "#!/bin/bash\nprintf '%s\\n' \"${SYNTH_SETTER_PI_REVIEW:-unset}\"\nprintf '%s\\n' \"$@\"\n"
+        "#!/bin/bash\n"
+        "printf '%s\\n' \"${SYNTH_SETTER_PI_REVIEW:-unset}\"\n"
+        "printf '%s\\n' \"$@\"\n"
+        "sleep 0.2\n"
+        "printf 'pi-complete\\n'\n"
     )
     pi.chmod(0o755)
 
+    started_at = time.monotonic()
     result = sh.Command(str(launcher))(
         "repo-review-full",
         "--target",
@@ -293,6 +327,7 @@ def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: P
         _cwd=REPO_ROOT,
         _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
     )
+    elapsed = time.monotonic() - started_at
 
     lines = str(result).splitlines()
     assert lines[0] == "1"
@@ -311,6 +346,8 @@ def test_pi_review_launcher_runs_targeted_skill_with_recursion_guard(tmp_path: P
     assert "repo-review-full" in prompt
     assert "PR #2052" in prompt
     assert "SYNTH_SETTER_PI_REVIEW=1" in prompt
+    assert lines[11] == "pi-complete"
+    assert elapsed >= 0.2
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -1117,6 +1154,105 @@ def test_opencode_shell_launcher_real_cli_returns_model_text() -> None:
     )
 
     assert "OK" in str(result)
+
+
+def _prepare_review_host_l1_project(tmp_path: Path) -> None:
+    """Install the real host contracts beside a delayed fake Pi launcher.
+
+    :param tmp_path: Temporary project to populate.
+    """
+    launcher = tmp_path / "agent" / "_shared" / "run_pi_review.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> .host-invocations\n"
+        "[[ \"$*\" == 'repo-review-full-no-comments --target 2125' ]]\n"
+        "sleep 2\n"
+        "printf 'PI_HOST_L1_COMPLETE\\n'\n"
+    )
+    launcher.chmod(0o755)
+    for relative_path in (
+        Path("agent/_shared/pi-review-host-contract.md"),
+        Path(".claude/agents/pr-review-orchestrator.md"),
+        Path(".codex/agents/pr-review-orchestrator.toml"),
+    ):
+        destination = tmp_path / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative_path, destination)
+
+
+def _run_review_host_l1(host: str, tmp_path: Path) -> str:
+    """Run one real host with its committed orchestrator definition.
+
+    :param host: Authenticated CLI host under test.
+    :param tmp_path: Prepared temporary project.
+    :returns: Host CLI output.
+    """
+    sh = importlib.import_module("sh")
+    prompt = (
+        "Run repo-review-full-no-comments for PR 2125. Follow the configured "
+        "pr-review-orchestrator exactly and return only its deliverable."
+    )
+    command = sh.Command(shutil.which(host))
+    if host == "claude":
+        return str(
+            command(
+                "-p",
+                "--dangerously-skip-permissions",
+                "--no-session-persistence",
+                "--agent",
+                "pr-review-orchestrator",
+                "--output-format",
+                "text",
+                prompt,
+                _cwd=tmp_path,
+                _timeout=180,
+            )
+        )
+
+    config = tomllib.loads((tmp_path / ".codex/agents/pr-review-orchestrator.toml").read_text())
+    return str(
+        command(
+            "exec",
+            "--skip-git-repo-check",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--model",
+            config["model"],
+            "--config",
+            f"developer_instructions={json.dumps(config['developer_instructions'])}",
+            prompt,
+            _cwd=tmp_path,
+            _timeout=180,
+        )
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("host", ("claude", "codex"))
+def test_review_host_real_cli_waits_for_delayed_pi(
+    host: str,
+    tmp_path: Path,
+) -> None:
+    """Prove each configured host returns after exactly one delayed Pi command.
+
+    :param host: Authenticated CLI host under test.
+    :param tmp_path: Temporary project containing the delayed fake Pi launcher.
+    """
+    if os.environ.get("RUN_REVIEW_HOST_L1") != "1":
+        pytest.skip("set RUN_REVIEW_HOST_L1=1 for the authenticated L1 host eval")
+    if shutil.which(host) is None:
+        pytest.skip(f"{host} CLI is unavailable")
+
+    _prepare_review_host_l1_project(tmp_path)
+    started_at = time.monotonic()
+    result = _run_review_host_l1(host, tmp_path)
+
+    assert time.monotonic() - started_at >= 2
+    assert "PI_HOST_L1_COMPLETE" in result
+    assert (tmp_path / ".host-invocations").read_text().splitlines() == [
+        "repo-review-full-no-comments --target 2125"
+    ]
 
 
 def test_opencode_config_reviewer_agent_denies_mutations() -> None:
