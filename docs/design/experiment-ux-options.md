@@ -3,7 +3,7 @@
 > **Status**: Accepted recommendation (maintainer-reviewed; this PR changes documentation only — implementation lands as the PR sequence in §8)
 > **Author**: ktinubu@ (agent-drafted)
 > **Last Updated**: 2026-07-18
-> **Tracking**: [#2122](https://github.com/tinaudio/synth-setter/issues/2122) (one-experiment UX blocker), with [#2118](https://github.com/tinaudio/synth-setter/issues/2118), [#1357](https://github.com/tinaudio/synth-setter/issues/1357), [#1741](https://github.com/tinaudio/synth-setter/issues/1741); checkpoint identity deferred to [#2136](https://github.com/tinaudio/synth-setter/issues/2136)
+> **Tracking**: [#2118](https://github.com/tinaudio/synth-setter/issues/2118), [#1357](https://github.com/tinaudio/synth-setter/issues/1357), and [#1741](https://github.com/tinaudio/synth-setter/issues/1741); checkpoint identity deferred to [#2136](https://github.com/tinaudio/synth-setter/issues/2136)
 
 Design decision for the "select one experiment and go" UX. §4 is the combined
 design the maintainers accepted; §8 is its rollout as small independently
@@ -69,7 +69,7 @@ Each goal is testable.
 
 **Explicitly out of scope:** checkpoint configuration, caching, and identity.
 Current checkpoint behavior is preserved unchanged; the known problems are
-deferred to [#2136](https://github.com/tinaudio/synth-setter/issues/2136) (§4.6).
+deferred to [#2136](https://github.com/tinaudio/synth-setter/issues/2136) (§4.5).
 
 ## 2. Current state
 
@@ -94,7 +94,7 @@ Grounded in the tree at the time of writing; file references are load-bearing.
   `resolve_param_spec(self.param_spec_name).encoded_width`
   (`src/synth_setter/data/lance_datamodule.py:402`). Coherence between model and
   datamodule width is therefore structural for the `vst_*` model groups; the
-  preflight width check (§4.5) remains as defense in depth for literal overrides
+  preflight width check (§4.4) remains as defense in depth for literal overrides
   and archived configs.
 
 ### 2.2 Dispatch
@@ -127,13 +127,6 @@ Grounded in the tree at the time of writing; file references are load-bearing.
   therefore contains **no duplicate committed copy** of the data — the root's
   total size ≈ the training payload plus small metadata (sidecars, shard
   markers, worker reports), which is acceptable transfer/disk overhead.
-- **The legacy pinned July 6 440k root**
-  `r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/`
-  predates that layout: it holds finalized `train/val/test.lance` **and**
-  top-level source `shard-*.lance` datasets, measuring ~1.016 TiB, while
-  `runpod-training-template.yaml` requests `disk_size: 750` — whole-root
-  hydration overflows the disk before training starts ([#2122]). §4.4 resolves
-  this.
 - `datamodule.dataset_root` defaults to `${paths.output_dir}/data`
   (`configs/datamodule/vst.yaml:2`), i.e. **under Hydra's per-run output dir** —
   the same dataset re-downloads every run ([#1357]). RunPod launches only get a
@@ -165,7 +158,7 @@ Grounded in the tree at the time of writing; file references are load-bearing.
 
 This overhaul **changes none of this**. The mutable-reference and unvalidated-
 cache problems are tracked in
-[#2136](https://github.com/tinaudio/synth-setter/issues/2136); see §4.6 for the
+[#2136](https://github.com/tinaudio/synth-setter/issues/2136); see §4.5 for the
 constraints its eventual solution must satisfy.
 
 ### 2.5 Validation
@@ -200,7 +193,6 @@ any failure surfaces **after** provisioning and hydration.
 | Defect                                                                                                                                                                                                                                                         | Evidence                                                                                                                               | Tracking          |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `train-runpod-smoke.yaml:23` and `train-runpod-flow-simple-440k.yaml:13` pass `datamodule=surge_lance_map`, deleted by PR #2075 — worker-side Hydra composition fails                                                                                          | no `configs/datamodule/surge_lance_map.yaml` exists; `tests/pipeline/entrypoints/test_skypilot_launch.py:1686` asserts the stale value | [#2118]           |
-| Legacy 440k whole-root hydration (~1.016 TiB incl. top-level `shard-*.lance`) overflows the 750 GB training template disk                                                                                                                                      | `configs/compute/runpod-training-template.yaml`; §2.3                                                                                  | [#2122]           |
 | `dataset_root` per-run default defeats cache reuse                                                                                                                                                                                                             | `configs/datamodule/vst.yaml:2`                                                                                                        | [#1357]           |
 | Six experiment files reference model groups that do not exist (`ksin_flow`, `ksin_ff`): `experiment/time_weighting.yaml`, `experiment/flow_size/base.yaml` (and its leaves), `experiment/ksin_ood/{flow,mlp_mse,mlp_chamfer,mlp_sort}.yaml` — none can compose | `configs/model/` contains only `ffn/flow*/flowmlp/surge_*/vst_*`; verified by grep                                                     | new — file as Bug |
 | No unconditional preflight: spec coherence is probe-gated, dataset completion and disk capacity are never checked                                                                                                                                              | §2.5                                                                                                                                   | this design       |
@@ -278,7 +270,7 @@ Dispatch inverts today's flow. The train and eval workflows call
 The launcher first requires its checkout SHA to equal the `WORKER_GIT_REF` it
 will forward, then composes the matching Hydra root (`train.yaml` or
 `eval.yaml`) and confirms `experiment_meta.entrypoint` agrees. It runs the
-shared preflight (§4.5) **before provisioning**, reads `execution:`, and builds
+shared preflight (§4.4) **before provisioning**, reads `execution:`, and builds
 the matching worker command itself. Consequences:
 
 - Launch YAML (`configs/launch/*.yaml`) shrinks to site/operational policy
@@ -302,8 +294,8 @@ the whole root is approximately the training payload — **hydrate all of it**
 with the existing single `rclone copy --immutable --checksum` invocation
 (`download_dir_no_overwrite`). No consumer prefixes, no selective
 include/exclude machinery: metadata is acceptable overhead, and selective
-hydration would add a permanent artifact-layout contract to serve what is
-fundamentally a legacy-root problem (§4.4).
+hydration would add a permanent artifact-layout contract without removing a
+second committed data copy.
 
 What hydration adds on top of the existing transfer:
 
@@ -328,26 +320,7 @@ What hydration adds on top of the existing transfer:
 
 Full state machine and failure table: §6.
 
-### 4.4 The legacy July 6 440k root
-
-The pinned July 6 root is pre-fragment-native: it carries top-level
-`shard-*.lance` source datasets beside the finalized splits and measures
-~1.016 TiB (§2.3). The resolution is an **ops choice, not permanent
-machinery** — one of:
-
-1. **Move the 440k launch to a fragment-native root**: republish the finalized
-   artifacts (or regenerate through the current fragment-native pipeline) under
-   a new immutable identity, and repoint `training_data/surge_simple_440k` at
-   it. Preferred: every pinned root then has the same shape and cost profile.
-2. **Provision enough disk**: select or update a compute template whose single
-   authoritative `resources.disk_size` covers the measured root, 20% dataset
-   headroom, and 50 GiB workspace reserve — at least ~1.27 TiB before any
-   additional provider/filesystem margin.
-
-Either closes [#2122]. Building permanent selective-download machinery to
-preserve the legacy layout is explicitly rejected.
-
-### 4.5 Shared preflight validation
+### 4.4 Shared preflight validation
 
 One plain function on a composed cfg — `validate_experiment(cfg)` — run by the
 launcher **before provisioning** and re-run by the worker/CLI at startup:
@@ -371,7 +344,7 @@ Failure UX: a single-paragraph error naming the two conflicting values and the
 file that owns each — emitted by the launcher for cloud runs (nothing
 provisioned) and at CLI startup locally.
 
-### 4.6 Checkpoints: unchanged here, deferred to #2136
+### 4.5 Checkpoints: unchanged here, deferred to #2136
 
 This overhaul makes **no** checkpoint config, cache, or identity changes;
 current `${wandb:…}` resolution, `.cache/checkpoints` reuse, auto-resume, and
@@ -393,7 +366,7 @@ registry sketch is preserved in §10 (Option B, checkpoint half).
 # then runs offline on every subsequent invocation.
 synth-setter-train experiment=surge/flow_simple_440k
 
-# Local eval — checkpoint handling unchanged (ckpt_path / ${wandb:…}, see §4.6).
+# Local eval — checkpoint handling unchanged (ckpt_path / ${wandb:…}, see §4.5).
 synth-setter-eval experiment=surge/eval_ffn_4 ckpt_path=…
 
 # Advanced users: plain Hydra overrides still work.
@@ -470,45 +443,42 @@ real-checkpoint AST downloads in default CI (kept behind an opt-in marker).
 Small, independently shippable PRs; each leaves the repo strictly better even if
 the sequence stops. **This document's PR ships recommendations only — no code.**
 
-01. **`fix(training)`: repoint smoke/440k launches to existing datamodule
-    groups** — closes [#2118]; also fix the launcher test pinning the stale value
-    (`test_skypilot_launch.py:1686`).
-02. **`test(configs)`: entrypoint-aware exhaustive experiment composition** —
-    add `experiment_meta.entrypoint` to runnable recipes, auto-discover them,
-    and compose each only against its owning `train`, `eval`, or `dataset` root.
-    Keep an explicit shrinking skip-list for known-broken files; fix or delete
-    the `ksin_flow`/`ksin_ff` dangling references (§2.7). This is the tripwire
-    that prevents every future #2118.
-03. **`internal-feat(training)`: establish shared preflight validation** — wire
-    `validate_experiment(cfg)` into worker/CLI startup for invariants available
-    on current configs (render/datamodule spec agreement and encoded width).
-    PR 4 extends it with `training_data` completion checks; PR 6 adds receipt
-    validation; PR 8 runs the complete preflight before provisioning.
-04. **`feat(config)`: stable cache root + `training_data` group** —
-    `paths.cache_dir` from `SYNTH_SETTER_CACHE_DIR`, `configs/training_data/`
-    entries for the pinned roots, datamodule keys derived from
-    `${training_data.*}`; closes [#1357].
-05. **`refactor(training)`: move scientific knobs out of launch YAML** — new
-    `surge/flow_simple_440k.yaml` experiment selects its `training_data` pin and
-    owns cadence/monitor knobs; launch `cmd:` shrinks to `experiment=` only.
-06. **`feat(data)`: receipted, locked whole-root hydration** (§4.3) — completion
-    gate, per-identity flock, receipt-written-last on top of the existing
-    `download_dir_no_overwrite` transfer; offline-first cache semantics.
-07. **Legacy 440k resolution** (§4.4) — republish/repoint to a fragment-native
-    root (preferred) or select a compute template with sufficient
-    `resources.disk_size`; whichever is chosen closes [#2122].
-08. **`feat(compute)`: launcher-composed dispatch + `execution` group** (§4.2) —
-    `--entrypoint`/`--experiment`, pre-provision preflight, one-input training,
-    and experiment-derived eval dispatch with existing checkpoint selection;
-    delete per-run launch `cmd:`s.
-09. **`feat(training)` + `test`: TorchSynth AST/flow experiments and fixture**
-    (§7), in 2–3 PRs (fixture + ffn/flow experiments, pretrained overlay, eval
-    roundtrip). Independent; can proceed any time after PR 2.
-10. **`docs`: update operational references with each implementation** — keep
-    `training-pipeline.md` §6.1 and `configuration-reference.md` synchronized as
-    the code PRs land.
+1. **`fix(training)`: repoint smoke/440k launches to existing datamodule
+   groups** — closes [#2118]; also fix the launcher test pinning the stale value
+   (`test_skypilot_launch.py:1686`).
+2. **`test(configs)`: entrypoint-aware exhaustive experiment composition** —
+   add `experiment_meta.entrypoint` to runnable recipes, auto-discover them,
+   and compose each only against its owning `train`, `eval`, or `dataset` root.
+   Keep an explicit shrinking skip-list for known-broken files; fix or delete
+   the `ksin_flow`/`ksin_ff` dangling references (§2.7). This is the tripwire
+   that prevents every future #2118.
+3. **`internal-feat(training)`: establish shared preflight validation** — wire
+   `validate_experiment(cfg)` into worker/CLI startup for invariants available
+   on current configs (render/datamodule spec agreement and encoded width).
+   PR 4 extends it with `training_data` completion checks; PR 6 adds receipt
+   validation; PR 7 runs the complete preflight before provisioning.
+4. **`feat(config)`: stable cache root + `training_data` group** —
+   `paths.cache_dir` from `SYNTH_SETTER_CACHE_DIR`, `configs/training_data/`
+   entries for the pinned roots, datamodule keys derived from
+   `${training_data.*}`; closes [#1357].
+5. **`refactor(training)`: move scientific knobs out of launch YAML** — new
+   `surge/flow_simple_440k.yaml` experiment selects its `training_data` pin and
+   owns cadence/monitor knobs; launch `cmd:` shrinks to `experiment=` only.
+6. **`feat(data)`: receipted, locked whole-root hydration** (§4.3) — completion
+   gate, per-identity flock, receipt-written-last on top of the existing
+   `download_dir_no_overwrite` transfer; offline-first cache semantics.
+7. **`feat(compute)`: launcher-composed dispatch + `execution` group** (§4.2) —
+   `--entrypoint`/`--experiment`, pre-provision preflight, one-input training,
+   and experiment-derived eval dispatch with existing checkpoint selection;
+   delete per-run launch `cmd:`s.
+8. **`feat(training)` + `test`: TorchSynth AST/flow experiments and fixture**
+   (§7), in 2–3 PRs (fixture + ffn/flow experiments, pretrained overlay, eval
+   roundtrip). Independent; can proceed any time after PR 2.
+9. **`docs`: update operational references with each implementation** — keep
+   `training-pipeline.md` §6.1 and `configuration-reference.md` synchronized as
+   the code PRs land.
 
-Minimum useful first step = PRs 1–4. PRs 5–8 deliver the headline UX.
+Minimum useful first step = PRs 1–4. PRs 5–7 deliver the headline UX.
 
 ## 9. Success criteria
 
@@ -525,9 +495,8 @@ Minimum useful first step = PRs 1–4. PRs 5–8 deliver the headline UX.
   training crash; cloud failures occur **before provisioning**.
 - `grep -R 'trainer\.\|datamodule\.\|render=' src/synth_setter/configs/launch/`
   returns nothing (no scientific defaults in launch YAML).
-- The 440k launch hydrates a root that fits its provisioned disk with recorded
-  headroom (via §4.4 option 1 or 2), verified by the launcher's live
-  `rclone size` preflight.
+- The 440k launch hydrates its whole root within provisioned disk plus recorded
+  headroom, verified by the launcher's live `rclone size` preflight.
 - AST-FF, flow+AST, and pretrained-AST wiring each have a green CPU test that
   runs without a VST host.
 - Checkpoint behavior is byte-for-byte unchanged by this effort (no config,
@@ -555,12 +524,12 @@ bytes. *Rejected for datasets*: a second source of truth beside R2 that can
 drift (the architecture docs' "R2 as source of truth" principle), and the live
 `rclone size` preflight gets the disk check without it. *Checkpoint half
 deferred* to [#2136]; any registry there must integrate with W&B artifacts as
-the discovery/lineage/promotion surface (§4.6) rather than bypass it.
+the discovery/lineage/promotion surface (§4.5) rather than bypass it.
 
 **Option C — Frozen ExperimentSpec (compile-then-run trust boundary).** A
 pydantic spec capturing the compatibility surface, frozen to JSON at dispatch,
 re-validated on the worker. *Rejected*: launcher-side compose + shared preflight
-(§4.2/§4.5) delivers the pre-provision validation at a fraction of the cost;
+(§4.2/§4.4) delivers the pre-provision validation at a fraction of the cost;
 the spec schema is a maintenance tax where every new compatibility-relevant
 knob must be added or silently escapes validation — classic framework-building
 under YAGNI.
@@ -610,7 +579,7 @@ unified runner CLI wrapping the existing entrypoints.
   clear retryable error, not skip the check.
 - **Scope creep toward a frozen spec.** The spec-freeze temptation returns with
   every new validation; the guard is that the preflight stays one plain
-  function on a composed cfg (§4.5).
+  function on a composed cfg (§4.4).
 - **TorchSynth fixture cost.** Rendering even dozens of 4 s samples at 44.1 kHz
   on CPU must stay within `test-fast` budget; shrink duration/sample-rate in
   the fixture spec if needed (spec identity is test-local, so this is safe).
@@ -618,14 +587,13 @@ unified runner CLI wrapping the existing entrypoints.
 ## 12. Non-goals
 
 - **Any checkpoint config/cache/identity change** — deferred wholesale to
-  [#2136](https://github.com/tinaudio/synth-setter/issues/2136) (§4.6).
+  [#2136](https://github.com/tinaudio/synth-setter/issues/2136) (§4.5).
 - A unified runner CLI; the existing `synth-setter-train` / `synth-setter-eval`
   / `synth-setter-skypilot-launch` entrypoints stay.
 - A frozen ExperimentSpec / compile-then-run trust boundary (Option C).
 - Mounted/streaming R2 training (Option E stays [#1800]).
 - Consumer-prefix artifact layouts or selective include/exclude hydration
-  (§4.3), and permanent machinery to preserve the legacy July 6 root layout
-  (§4.4).
+  (§4.3).
 - A generic artifact framework or checked-in dataset registry while the pinned
   dataset count stays in single digits.
 - RunPod network volumes, persistent-volume management, or long-lived cluster
@@ -638,22 +606,16 @@ unified runner CLI wrapping the existing entrypoints.
 
 ## 13. Open questions
 
-1. **Legacy 440k: republish vs. disk bump** (§4.4) — an ops/maintainer choice
-   that gates rollout PR 7. Republishing is preferred; the disk bump is the
-   fallback if republication is expensive.
-2. **Where does the cache root live on RunPod pods?** It must sit under the
+1. **Where does the cache root live on RunPod pods?** It must sit under the
    filesystem represented by the compute template's `resources.disk_size` for
-   the capacity check to be truthful; confirm the mount layout during PR 8.
-3. **Should `execution` be selected by family bases or leaf experiments?**
+   the capacity check to be truthful; confirm the mount layout during PR 7.
+2. **Should `execution` be selected by family bases or leaf experiments?**
    Leaning bases with leaf overrides, to avoid ~80 copies of the same
    selection.
-4. **Defaults-list threading**: `training_data` and `execution` must be
+3. **Defaults-list threading**: `training_data` and `execution` must be
    declared before `experiment` in both `train.yaml` and `eval.yaml`
    (`eval.yaml:13-16` ordering rule); confirm no third root needs them
    (`dataset.yaml` is producer-side and out of scope).
-5. **Do any other pinned roots predate fragment-native finalize?** The July 6
-   440k root is the known case; audit remaining pinned URIs (e.g. the 1k smoke
-   root) so PR 7 covers every legacy-layout root at once.
 
 ______________________________________________________________________
 
