@@ -1133,6 +1133,9 @@ class TestLanceTarget:
             monkeypatch.delenv("RCLONE_CONFIG_R2_TYPE", raising=False)
         else:
             monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", remote_type)
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://r2.example")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://r2.example")
