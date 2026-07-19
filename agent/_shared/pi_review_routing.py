@@ -249,8 +249,9 @@ class WorkerFinding(BaseModel, strict=True, extra="forbid"):
         :raises ValueError: If the path or description is empty or unsafe.
         """
         path = Path(self.path)
-        if not self.path.strip() or path.is_absolute() or ".." in path.parts:
-            raise ValueError("Finding path must be repository-relative")
+        is_canonical = path.as_posix() == self.path and "\\" not in self.path
+        if not self.path.strip() or path.is_absolute() or ".." in path.parts or not is_canonical:
+            raise ValueError("Finding path must be canonical and repository-relative")
         if not self.description.strip():
             raise ValueError("Finding description must be non-empty")
         return self

@@ -303,6 +303,9 @@ def test_report_is_parseable_accepts_structured_json() -> None:
         '{"severity":"warn","path":"../example.py","line":42,'
         '"description":"Defect."}],"what_looks_good":["Clear."]}',
         '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"./src/example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
         '{"severity":"warn","path":"src/example.py","line":0,'
         '"description":"Defect."}],"what_looks_good":["Clear."]}',
         '{"skill":"code-health","target":"PR #1","findings":['

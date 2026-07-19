@@ -213,8 +213,8 @@ skill, the ordered available `candidates`, skipped `unavailable` models,
 cross-provider Codex `fallback_candidates`, `thinking`, and `reason`. Codex and
 the free pool must both be registered with Pi. If either is absent, stop on the
 planner's single provider-level error instead of expanding every configured
-model into audit rows. Record individually skipped models only when the free
-pool has at least one registered model.
+model into audit rows. Record individually skipped models only after both Codex
+and the free pool pass provider preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
