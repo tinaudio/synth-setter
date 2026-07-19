@@ -55,17 +55,12 @@ _STANDARD_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
 )
-# Fixed ordered second-pass pool tried in exactly this order. Its providers span
-# ``kimi-coding`` and ``openrouter``, so routing and provenance must not assume
-# every non-Codex candidate is OpenRouter. Pinned to exact live model IDs so the
-# audit can report the exact reviewed model.
+# Keep this ordered pool pinned so audit provenance records each provider and exact model.
 _FREE_POOL_CANDIDATES = (
     "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/tencent/hy3:free",
 )
-# Derived so provenance stays the single source of truth for the pool's providers.
-_FREE_POOL_PROVIDERS = frozenset(model.split("/", 1)[0] for model in _FREE_POOL_CANDIDATES)
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -533,16 +528,15 @@ def provenance_for_model(model: str) -> str:
     """Return finding provenance from the model that produced it.
 
     :param model: Canonical ``provider/model-id`` selector.
-    :returns: ``codex`` for Codex models, else the free-pool provider
-        (``kimi-coding`` or ``openrouter``).
-    :raises ValueError: If the provider is outside the review policy.
+    :returns: ``codex`` for Codex models, else the pinned free-pool provider.
+    :raises ValueError: If the model is outside the review policy.
     """
     provider = model.split("/", 1)[0]
     if provider == "openai-codex":
         return "codex"
-    if provider in _FREE_POOL_PROVIDERS:
+    if model in _FREE_POOL_CANDIDATES:
         return provider
-    raise ValueError(f"Unsupported Pi review provider: {provider}")
+    raise ValueError(f"Unsupported Pi review model: {model}")
 
 
 def parse_worker_report(report: str, *, expected_skill: str, expected_target: str) -> WorkerReport:
@@ -594,6 +588,79 @@ def _available_and_unavailable(
     return available, unavailable
 
 
+def _codex_candidates_for_skill(
+    skill: str,
+    available_models: AbstractSet[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return available and unavailable Codex candidates for one checklist.
+
+    :param skill: Authoritative checklist name.
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :returns: Available and unavailable Codex selectors in policy order.
+    :raises ValueError: If no configured Codex candidate is available.
+    """
+    configured = _DEEP_CODEX_CANDIDATES if skill in DEEP_SKILLS else _STANDARD_CODEX_CANDIDATES
+    candidates, unavailable = _available_and_unavailable(configured, available_models)
+    if not candidates:
+        raise ValueError(f"No available models remain for {skill}/codex")
+    return candidates, unavailable
+
+
+def _review_passes_for_skill(
+    skill: str,
+    *,
+    changed_lines: int,
+    risk_reasons: Sequence[str],
+    available_models: AbstractSet[str],
+    free_pool_candidates: tuple[str, ...],
+    free_pool_unavailable: tuple[str, ...],
+) -> tuple[ReviewPass, ReviewPass]:
+    """Build the paired Codex and free-pool passes for one checklist.
+
+    :param skill: Authoritative checklist name.
+    :param changed_lines: Total added and deleted lines in the diff.
+    :param risk_reasons: Named risk signals detected in the diff.
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :param free_pool_candidates: Registered free-pool selectors in policy order.
+    :param free_pool_unavailable: Unregistered free-pool selectors in policy order.
+    :returns: Paired Codex and free-pool passes.
+    """
+    thinking, reason = _thinking_for(
+        skill,
+        changed_lines=changed_lines,
+        risk_reasons=risk_reasons,
+    )
+    codex_candidates, codex_unavailable = _codex_candidates_for_skill(
+        skill,
+        available_models,
+    )
+    # Bind pass names to locals; a string literal on ``pass_name=`` trips ruff S106.
+    codex_label = "codex"
+    free_pool_label = "free-pool"
+    return (
+        ReviewPass(
+            skill=skill,
+            pass_name=codex_label,
+            candidates=codex_candidates,
+            unavailable=codex_unavailable,
+            fallback_candidates=(),
+            thinking=thinking,
+            reason=reason,
+            max_turns=PI_REVIEW_MAX_TURNS,
+        ),
+        ReviewPass(
+            skill=skill,
+            pass_name=free_pool_label,
+            candidates=free_pool_candidates,
+            unavailable=free_pool_unavailable,
+            fallback_candidates=tuple(reversed(codex_candidates)),
+            thinking=thinking,
+            reason=reason,
+            max_turns=PI_REVIEW_MAX_TURNS,
+        ),
+    )
+
+
 def build_review_plan(
     skills: Sequence[str],
     *,
@@ -626,49 +693,18 @@ def build_review_plan(
         _FREE_POOL_CANDIDATES,
         available_models,
     )
-    plan: list[ReviewPass] = []
-    for skill in skills:
-        is_deep = skill in DEEP_SKILLS
-        codex_configured = _DEEP_CODEX_CANDIDATES if is_deep else _STANDARD_CODEX_CANDIDATES
-        thinking, reason = _thinking_for(
+    return [
+        review_pass
+        for skill in skills
+        for review_pass in _review_passes_for_skill(
             skill,
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
+            available_models=available_models,
+            free_pool_candidates=free_pool_candidates,
+            free_pool_unavailable=free_pool_unavailable,
         )
-        codex_candidates, codex_unavailable = _available_and_unavailable(
-            codex_configured,
-            available_models,
-        )
-        if not codex_candidates:
-            raise ValueError(f"No available models remain for {skill}/codex")
-        # Bind pass names to locals; a string literal on ``pass_name=`` trips ruff S106.
-        codex_label = "codex"
-        free_pool_label = "free-pool"
-        plan.append(
-            ReviewPass(
-                skill=skill,
-                pass_name=codex_label,
-                candidates=codex_candidates,
-                unavailable=codex_unavailable,
-                fallback_candidates=(),
-                thinking=thinking,
-                reason=reason,
-                max_turns=PI_REVIEW_MAX_TURNS,
-            )
-        )
-        plan.append(
-            ReviewPass(
-                skill=skill,
-                pass_name=free_pool_label,
-                candidates=free_pool_candidates,
-                unavailable=free_pool_unavailable,
-                fallback_candidates=tuple(reversed(codex_candidates)),
-                thinking=thinking,
-                reason=reason,
-                max_turns=PI_REVIEW_MAX_TURNS,
-            )
-        )
-    return plan
+    ]
 
 
 def _require_codex(available_models: AbstractSet[str]) -> None:

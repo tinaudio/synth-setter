@@ -222,15 +222,18 @@ Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 the failure and launch a fresh worker with the next candidate in the pass.
 Codex-pass candidates are always `openai-codex/*`; free-pool candidates span
 `kimi-coding/*` and `openrouter/*` in their fixed order. Exhaust the free-pool
-`candidates` in order before attempting any Codex fallback. If a free-pool pass
-has no available candidates, or every candidate exhausts quota/capacity, move the
-successful Codex pass's effective model to the end of `fallback_candidates`, then
-launch a fresh worker with the first model. This prefers a distinct fallback even
-when the Codex pass reached its own fallback. Continue through that bounded Codex
-sequence only for the same availability failures. Record each launch as
-`Codex fallback` in the audit detail. Never resume a failed session under a
-different model. Authentication, tool/checklist, malformed-report, timeout, and
-turn-budget failures do not trigger the cross-provider fallback.
+`candidates` in order before attempting any Codex fallback. If a free-pool attempt
+fails authentication, record it, skip remaining candidates from that provider,
+and continue with the next candidate from a different free-pool provider. Stop
+when no different free-pool provider remains; authentication never triggers Codex fallback.
+If a free-pool pass has no available candidates, or every candidate exhausts
+quota/capacity, move the successful Codex pass's effective model to the end of
+`fallback_candidates`, then launch a fresh worker with the first model. This
+prefers a distinct fallback even when the Codex pass reached its own fallback.
+Continue through that bounded Codex sequence only for the same availability
+failures. Record each launch as `Codex fallback` in the audit detail. Never resume
+a failed session under a different model. Tool/checklist, malformed-report,
+timeout, and turn-budget failures do not trigger the cross-provider fallback.
 
 A completed worker is not successful until its final assistant JSON passes
 the report contract. The `Output file` is Tintin JSONL audit data, not the
@@ -253,9 +256,10 @@ Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
 directly to `validate-report`. `extract-report` only selects terminal assistant
 text; it never repairs worker formatting. If extraction or strict JSON validation
 fails, record `malformed report` and try the next candidate. This
-is a bounded report-quality retry, not a quota classification. Authentication,
-tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, stop before aggregation and invoke terminal failure delivery; never
+is a bounded report-quality retry, not a quota classification. Authentication
+errors follow the provider-aware free-pool rule above; tool and checklist errors
+stop immediately. If a Codex pass exhausts its candidates, stop before aggregation
+and invoke terminal failure delivery; never
 write a PASS sentinel after silently dropping the required Codex pass. If a
 free-pool pass exhausts its `candidates` and bounded Codex `fallback_candidates`,
 continue the review with Codex-only findings, record the failed free-pool attempt

@@ -135,6 +135,22 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
+def test_build_review_plan_uses_remaining_codex_candidate_as_free_pool_fallback() -> None:
+    """Preserve paired fallback behavior when one Codex model is unavailable."""
+    available = parse_available_models(AVAILABLE_MODELS)
+    available.remove("openai-codex/gpt-5.6-terra")
+
+    codex_pass, free_pool_pass = build_review_plan(
+        ["code-health"],
+        changed_lines=300,
+        risk_reasons=(),
+        available_models=available,
+    )
+
+    assert codex_pass.candidates == ("openai-codex/gpt-5.6-sol",)
+    assert free_pool_pass.fallback_candidates == codex_pass.candidates
+
+
 def test_build_review_plan_skips_unavailable_free_pool_candidates() -> None:
     """Drop retired free-pool models while preserving the fixed attempt order."""
     available = parse_available_models(AVAILABLE_MODELS)
@@ -226,10 +242,29 @@ def test_build_review_plan_invalid_input_raises(
 
 
 def test_provenance_for_model_uses_effective_provider() -> None:
-    """Attribute fallback findings to the model that produced the report."""
+    """Attribute pinned review models to the provider that produced the report."""
     assert provenance_for_model("openai-codex/gpt-5.6-sol") == "codex"
-    assert provenance_for_model("openrouter/openrouter/free") == "openrouter"
+    assert (
+        provenance_for_model("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free") == "openrouter"
+    )
     assert provenance_for_model("kimi-coding/k3") == "kimi-coding"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "kimi-coding/other",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/paid-model",
+    ],
+)
+def test_provenance_for_model_unpinned_free_pool_model_raises(model: str) -> None:
+    """Reject selectors outside the exact pinned free-pool policy.
+
+    :param model: Unpinned selector using an otherwise allowed provider.
+    """
+    with pytest.raises(ValueError, match="Unsupported Pi review model"):
+        provenance_for_model(model)
 
 
 def test_report_is_parseable_accepts_structured_json() -> None:
