@@ -238,10 +238,12 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "max_turns" not in worker
     assert "model" not in worker
     assert "thinking" not in worker
-    assert "structured report" in prompt.lower()
-    assert "### BLOCK findings" in prompt
-    assert "### WARN findings" in prompt
-    assert "### What looks good" in prompt
+    prompt_flat = " ".join(prompt.split())
+    assert "exactly one JSON object" in prompt_flat
+    assert '"severity": "block or warn"' in prompt
+    assert '"line": 42' in prompt
+    assert '"what_looks_good"' in prompt
+    assert "no Markdown fence or surrounding prose" in prompt_flat
     assert "Never run `find`" in prompt
     assert "60-second timeout" in prompt
     assert "changed paths" in prompt
@@ -291,6 +293,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
+    assert "extract its terminal assistant text without interpreting it" in text
+    assert '"severity": "block"' in text
+    assert "The worker does not render Markdown or attach provenance" in text
     assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text

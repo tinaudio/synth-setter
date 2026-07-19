@@ -232,9 +232,10 @@ sequence only for the same availability failures. Record each launch as
 different model. Authentication, tool/checklist, malformed-report, timeout, and
 turn-budget failures do not trigger the cross-provider fallback.
 
-A completed worker is not successful until its final assistant Markdown passes
-the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
-extract its final assistant text deterministically, then validate that file:
+A completed worker is not successful until its final assistant JSON passes
+the report contract. The `Output file` is Tintin JSONL audit data, not the
+worker result; extract its terminal assistant text without interpreting it, then
+validate the extracted JSON:
 
 ```bash
 ./.venv/bin/python agent/_shared/pi_review_routing.py extract-report \
@@ -249,8 +250,9 @@ columns. The token number is explicitly cumulative processed context across
 turns, not generated output, so label it exactly as the table does.
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
-directly to `validate-report`. If extraction or validation fails, record
-`malformed report` and try the next candidate. This
+directly to `validate-report`. `extract-report` only selects terminal assistant
+text; it never repairs worker formatting. If extraction or strict JSON validation
+fails, record `malformed report` and try the next candidate. This
 is a bounded report-quality retry, not a quota classification. Authentication,
 tool, and checklist errors stop immediately. If a Codex pass exhausts its
 candidates, stop before aggregation and invoke terminal failure delivery; never
@@ -323,32 +325,31 @@ contract below is unchanged for both.
 must fetch the required upstream pages through read-only Bash commands within
 the same 60-second command deadline. `correctness-review` needs no web access.
 
-Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
+Each agent returns one JSON object and no surrounding prose. Agents work independently — they should not coordinate.
 
 ### Per-agent output contract
 
-Each agent returns a Markdown block:
-
+```json
+{
+  "skill": "<skill-name>",
+  "target": "PR #<N>",
+  "findings": [
+    {
+      "severity": "block",
+      "path": "<repository-relative changed path>",
+      "line": 42,
+      "description": "<self-contained failure scenario or concern>"
+    }
+  ],
+  "what_looks_good": ["<positive evidence from the diff>"]
+}
 ```
-## <skill-name> review — PR #<N>
 
-### BLOCK findings
-1. **<path>:<line>** — <description>
-
-### WARN findings
-1. **<path>:<line>** — <description>
-
-### What looks good
-- ...
-```
-
-Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
-
-Each finding ends with `codex`, a free-pool provider (`kimi-coding` or `openrouter`), or `both` provenance.
+`severity` is exactly `block` or `warn`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
 
 ## Step 5: Aggregate findings
 
-Once every parallel agent returns, parse each report's BLOCK and WARN findings. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+Once every parallel agent returns, ingest each validated worker result's structured `findings`. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
 
 Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
 

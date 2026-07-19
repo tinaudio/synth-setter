@@ -232,111 +232,103 @@ def test_provenance_for_model_uses_effective_provider() -> None:
     assert provenance_for_model("kimi-coding/k3") == "kimi-coding"
 
 
+def test_report_is_parseable_accepts_structured_json() -> None:
+    """Accept a complete structured worker result."""
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "PR #1",
+            "findings": [],
+            "what_looks_good": ["Clear data flow."],
+        }
+    )
+
+    assert report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
+
+
 @pytest.mark.parametrize(
-    ("report", "expected"),
+    "report",
     [
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            True,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n"
-            "1. **src/example.py:42** — A concrete defect.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            True,
-        ),
-        ("No output.", False),
-        ("## Summary\n- No findings.", False),
-        (
-            "## code-health review — PR #1\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "> ### BLOCK findings\nNone.\n\n"
-            "> ### WARN findings\nNone.\n\n"
-            "> ### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n1. Missing path and line.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "Unexpected preface.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n"
-            "1. **src/example.py:42** — A concrete defect.\n"
-            "Unstructured continuation.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
+        "No output.",
+        "## code-health review — PR #1",
+        '{"skill":"code-health","target":"PR #1","findings":[],"what_looks_good":[]}',
+        '{"skill":"code-health","target":"PR #1","findings":[],'
+        '"what_looks_good":["Clear."],"unexpected":true}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"BLOCK","path":"src/example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":"42",'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"../example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":0,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":42,'
+        '"description":" "}],"what_looks_good":["Clear."]}',
     ],
 )
-def test_report_is_parseable_requires_structured_contract(report: str, expected: bool) -> None:
-    """Reject empty or structurally incomplete worker reports.
+def test_report_is_parseable_rejects_invalid_structured_json(report: str) -> None:
+    """Reject non-JSON and structurally invalid worker results.
 
-    :param report: Candidate worker report.
-    :param expected: Whether the report satisfies the contract.
+    :param report: Invalid candidate worker result.
     """
-    assert (
-        report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
-        is expected
+    assert not report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
     )
 
 
 def test_parse_worker_report_returns_validated_boundary_model() -> None:
     """Return typed report data after structural validation."""
-    report = (
-        "## code-health review — PR #1\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\nNone.\n\n"
-        "### What looks good\n- Clear."
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "PR #1",
+            "findings": [
+                {
+                    "severity": "warn",
+                    "path": "src/example.py",
+                    "line": 42,
+                    "description": "A concrete concern.",
+                }
+            ],
+            "what_looks_good": ["Clear data flow."],
+        }
     )
 
     parsed = parse_worker_report(report, expected_skill="code-health", expected_target="PR #1")
 
     assert parsed.skill == "code-health"
     assert parsed.target == "PR #1"
+    assert parsed.findings[0].line == 42
+    assert parsed.findings[0].severity == "warn"
 
 
 def test_report_is_parseable_rejects_wrong_skill_or_target() -> None:
-    """Prevent a valid report for another checklist from entering the merge."""
-    report = (
-        "## python-style review — PR #1\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\nNone.\n\n"
-        "### What looks good\n- Clear."
+    """Prevent a valid result for another assignment from entering the merge."""
+    report = json.dumps(
+        {
+            "skill": "python-style",
+            "target": "PR #1",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
     )
 
-    assert not report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
+    assert not report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
     assert not report_is_parseable(
         report.replace("python-style", "code-health"),
         expected_skill="code-health",
@@ -454,201 +446,98 @@ def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> N
         stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
 
 
-def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
+def test_extract_report_returns_terminal_assistant_text_without_interpretation(
+    tmp_path: Path,
+) -> None:
     """Extract only final assistant text from Tintin JSONL.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
+    final_result = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "smoke",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
+    )
     transcript.write_text(
         '{"type":"session_start","sessionId":"metadata-only"}\n'
         '{"message":{"role":"assistant","content":[{"type":"text","text":"draft"}]}}\n'
         '{"message":{"role":"toolResult","content":[{"type":"text","text":"noise"}]}}\n'
-        '{"message":{"role":"assistant","content":['
-        '{"type":"thinking","thinking":"hidden"},'
-        '{"type":"text","text":"## code-health review — smoke\\n\\n'
-        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
-        '### What looks good\\n- Clear."}]}}\n'
+        + json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "hidden"},
+                        {"type": "text", "text": final_result},
+                    ],
+                }
+            }
+        )
+        + "\n"
     )
 
-    report = extract_report(transcript)
-
-    assert report.startswith("## code-health review — smoke")
-    assert "noise" not in report
-    assert "hidden" not in report
+    assert extract_report(transcript) == final_result
 
 
 def test_extract_report_empty_terminal_assistant_raises(tmp_path: Path) -> None:
-    """Reject earlier report text when the terminal assistant message is empty.
+    """Reject earlier output when the terminal assistant message is empty.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"## code-health review — smoke\\n\\n'
-        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":"provisional"}}\n'
         '{"message":{"role":"assistant","content":[]}}\n'
     )
 
-    with pytest.raises(ValueError, match="has no assistant text"):
+    with pytest.raises(ValueError, match="terminal assistant text"):
         extract_report(transcript)
 
 
-def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) -> None:
-    """Keep the structured report when a model wraps it in narration.
+def test_extract_report_leaves_narrated_output_for_validation(tmp_path: Path) -> None:
+    """Keep extraction independent from the worker-result schema.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    narrated = 'Result: {"skill":"code-health"}'
+    transcript.write_text(
+        json.dumps({"message": {"role": "assistant", "content": narrated}}) + "\n"
+    )
+
+    extracted = extract_report(transcript)
+
+    assert extracted == narrated
+    assert not report_is_parseable(
+        extracted,
+        expected_skill="code-health",
+        expected_target="smoke",
+    )
+
+
+def test_extract_report_returns_final_retraction_for_validation(tmp_path: Path) -> None:
+    """Do not reuse an earlier result after the worker retracts it.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"analysis\\n\\n'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\n1. **src/example.py:10-12** — Defect.\\n"
-        "```python\\n1. **src/fake.py:99-100** — Example.\\n```\\n"
-        "- **src/bullet.py:20-22** — Bullet.\\n\\n"
-        '### What looks good\\n- Clear.\\n\\nclosing"}}\n'
+        '{"message":{"role":"assistant","content":"provisional"}}\n'
+        '{"message":{"role":"assistant","content":"Tool failure; retract result."}}\n'
     )
 
-    report = extract_report(transcript)
+    extracted = extract_report(transcript)
 
-    assert report == (
-        "## code-health review — smoke\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\n"
-        "1. **src/example.py:10** — [reported range 10-12] Defect.\n"
-        "2. **src/bullet.py:20** — [reported range 20-22] Bullet.\n\n"
-        "### What looks good\n- Clear."
+    assert extracted == "Tool failure; retract result."
+    assert not report_is_parseable(
+        extracted,
+        expected_skill="code-health",
+        expected_target="smoke",
     )
-
-
-@pytest.mark.parametrize(
-    "malformed_line",
-    [
-        "**src/missing-number.py:20** — Missing list number.",
-        "2. **src/missing-description.py:30** —",
-    ],
-)
-def test_extract_report_rejects_malformed_finding_like_line(
-    tmp_path: Path, malformed_line: str
-) -> None:
-    """Fail closed instead of dropping or merging malformed findings.
-
-    :param tmp_path: Temporary location for a transcript.
-    :param malformed_line: Finding-like row that violates the report contract.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\n1. **src/valid.py:10** — Valid.\\n"
-        f'{malformed_line}\\n\\n### What looks good\\n- Clear."}}}}\n'
-    )
-
-    with pytest.raises(ValueError, match="malformed finding-like line"):
-        extract_report(transcript)
-
-
-def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
-    tmp_path: Path,
-) -> None:
-    """Produce a valid contract after a narrated mixed-style findings section.
-
-    :param tmp_path: Temporary location for a transcript.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nThe following were observed.\\n"
-        "- **src/first.py:10** — First finding.\\n"
-        "2. **src/second.py:20** — Second finding.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
-    )
-
-    report = extract_report(transcript)
-
-    assert report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
-    assert "The following were observed." not in report
-    assert "1. **src/first.py:10** — First finding." in report
-    assert "2. **src/second.py:20** — Second finding." in report
-
-
-def test_extract_report_cli_normalizes_narrated_mixed_findings(tmp_path: Path) -> None:
-    """Write a valid canonical report from a narrated worker transcript.
-
-    :param tmp_path: Temporary location for transcript and report files.
-    """
-    transcript = tmp_path / "worker.jsonl"
-    report = tmp_path / "worker.md"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nThe following were observed.\\n"
-        "- **src/first.py:10** — First finding.\\n"
-        "2. **src/second.py:20** — Second finding.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
-    )
-    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
-    python = sh.Command(sys.executable)
-
-    python(script, "extract-report", transcript, "--output", report)
-    python(
-        script,
-        "validate-report",
-        report,
-        "--skill",
-        "code-health",
-        "--target",
-        "smoke",
-    )
-
-    assert report.read_text() == (
-        "## code-health review — smoke\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\n"
-        "1. **src/first.py:10** — First finding.\n"
-        "2. **src/second.py:20** — Second finding.\n\n"
-        "### What looks good\n- Clear.\n"
-    )
-
-
-def test_extract_report_rejects_duplicate_heading_after_good_section(
-    tmp_path: Path,
-) -> None:
-    """Keep duplicate headings visible so validation rejects the report.
-
-    :param tmp_path: Temporary location for a transcript.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear.\\n\\n"
-        '### BLOCK findings\\n1. **src/hidden.py:9** — Hidden."}}\n'
-    )
-
-    report = extract_report(transcript)
-
-    assert not report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
-    assert "src/hidden.py:9" in report
-
-
-def test_extract_report_requires_final_assistant_report(tmp_path: Path) -> None:
-    """Reject an earlier provisional report followed by a final retraction.
-
-    :param tmp_path: Temporary location for a transcript.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}}\n'
-        '{"message":{"role":"assistant","content":"Tool failure; retract the report."}}\n'
-    )
-
-    with pytest.raises(ValueError, match="final assistant text is not a report"):
-        extract_report(transcript)
 
 
 def test_extract_report_rejects_untyped_metadata_event(tmp_path: Path) -> None:
@@ -680,7 +569,7 @@ def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path
 
     :param tmp_path: Temporary location for worker output.
     """
-    report = tmp_path / "report.md"
+    report = tmp_path / "report.json"
     report.write_text("No output.")
 
     assert (
@@ -704,11 +593,23 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     :param tmp_path: Temporary location for transcript and report files.
     """
     transcript = tmp_path / "worker.jsonl"
-    report = tmp_path / "worker.md"
+    report = tmp_path / "worker.json"
+    result = {
+        "skill": "code-health",
+        "target": "smoke",
+        "findings": [],
+        "what_looks_good": ["Clear."],
+    }
     transcript.write_text(
-        '{"message":{"role":"assistant","content":[{"type":"text","text":'
-        '"## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n'
-        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}]}}\n'
+        json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": json.dumps(result)}],
+                }
+            }
+        )
+        + "\n"
     )
     script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
     python = sh.Command(sys.executable)
@@ -727,7 +628,7 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     stats = json.loads(str(python(script, "transcript-stats", transcript)))
     provenance = str(python(script, "provenance", "kimi-coding/k3")).strip()
 
-    assert report.read_text().startswith("## code-health review — smoke")
+    assert json.loads(report.read_text()) == result
     assert stats["turns"] == 1
     assert provenance == "kimi-coding"
 

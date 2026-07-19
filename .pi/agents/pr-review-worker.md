@@ -21,23 +21,27 @@ repository files, but it still must not use filesystem-wide discovery. Set a
 60-second timeout on every Bash tool call and stop rather than broadening the
 search when a command reaches that limit.
 
-Always return the requested structured report, even when there are no findings.
-Use the assigned skill and target in the title, then these exact ordered
-headings; do not rename, quote, or omit them:
+Return exactly one JSON object in the final assistant message, with no Markdown
+fence or surrounding prose:
 
-```markdown
-## <skill> review — <target>
-
-### BLOCK findings
-None.
-
-### WARN findings
-None.
-
-### What looks good
-- <evidence>
+```json
+{
+  "skill": "<assigned skill>",
+  "target": "<assigned target>",
+  "findings": [
+    {
+      "severity": "block or warn",
+      "path": "<repository-relative changed path>",
+      "line": 42,
+      "description": "<self-contained failure scenario or concern>"
+    }
+  ],
+  "what_looks_good": ["<positive evidence from the diff>"]
+}
 ```
 
-Replace `None.` with `1. **path:line** — description` findings when
-needed. Cite repository-relative paths and changed lines. Never edit files,
-post GitHub comments, spawn another agent, or broaden into another checklist.
+Use an empty `findings` array when there are no findings. `line` is one positive
+integer changed-line anchor, never a string or range. Keep `what_looks_good`
+non-empty. The orchestrator derives model provenance and renders Markdown; do
+not add either to worker data. Never edit files, post GitHub comments, spawn
+another agent, or broaden into another checklist.

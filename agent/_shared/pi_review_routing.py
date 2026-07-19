@@ -18,7 +18,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 
 import sh
 from pydantic import BaseModel, Field, model_validator
@@ -66,15 +66,6 @@ _FREE_POOL_CANDIDATES = (
 )
 # Derived so provenance stays the single source of truth for the pool's providers.
 _FREE_POOL_PROVIDERS = frozenset(model.split("/", 1)[0] for model in _FREE_POOL_CANDIDATES)
-_REQUIRED_REPORT_HEADINGS = (
-    "### BLOCK findings",
-    "### WARN findings",
-    "### What looks good",
-)
-_REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
-_FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
-_RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-(\d+)(\*\* — \S.+)$")
-_BULLET_FINDING = re.compile(r"^- \*\*(.+:)(\d+)(?:-(\d+))?\*\* — (\S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -226,8 +217,52 @@ class _HostEvent(BaseModel, strict=True, extra="ignore"):
     error_message: str | None = Field(default=None, alias="errorMessage")
 
 
+class WorkerFinding(BaseModel, strict=True, extra="forbid"):
+    """One structured finding returned by a review worker.
+
+    .. attribute :: severity
+        :type: Literal["block", "warn"]
+
+        Merge severity assigned by the checklist.
+
+    .. attribute :: path
+        :type: str
+
+        Repository-relative changed file path.
+
+    .. attribute :: line
+        :type: int
+
+        Positive changed-line anchor.
+
+    .. attribute :: description
+        :type: str
+
+        Self-contained failure scenario or concern.
+    """
+
+    severity: Literal["block", "warn"]
+    path: str
+    line: int = Field(gt=0)
+    description: str
+
+    @model_validator(mode="after")
+    def _require_content(self) -> WorkerFinding:
+        """Reject findings that cannot be anchored or explained.
+
+        :returns: Validated finding.
+        :raises ValueError: If the path or description is empty or unsafe.
+        """
+        path = Path(self.path)
+        if not self.path.strip() or path.is_absolute() or ".." in path.parts:
+            raise ValueError("Finding path must be repository-relative")
+        if not self.description.strip():
+            raise ValueError("Finding description must be non-empty")
+        return self
+
+
 class WorkerReport(BaseModel, strict=True, extra="forbid"):
-    """Validated worker-report fields consumed by aggregation.
+    """Structured worker result consumed by aggregation.
 
     .. attribute :: skill
         :type: str
@@ -239,27 +274,34 @@ class WorkerReport(BaseModel, strict=True, extra="forbid"):
 
         Assigned PR or branch label.
 
-    .. attribute :: block_findings
-        :type: tuple[str, ...]
+    .. attribute :: findings
+        :type: tuple[WorkerFinding, ...]
 
-        Validated blocking-finding rows.
-
-    .. attribute :: warn_findings
-        :type: tuple[str, ...]
-
-        Validated warning-finding rows.
+        Typed blocking and warning findings.
 
     .. attribute :: what_looks_good
         :type: tuple[str, ...]
 
-        Evidence bullets from the worker.
+        Positive evidence from the reviewed diff.
     """
 
     skill: str
     target: str
-    block_findings: tuple[str, ...]
-    warn_findings: tuple[str, ...]
+    findings: tuple[WorkerFinding, ...]
     what_looks_good: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _require_content(self) -> WorkerReport:
+        """Reject reports without assignment identity or positive evidence.
+
+        :returns: Validated worker report.
+        :raises ValueError: If identity or positive evidence is empty.
+        """
+        if not self.skill.strip() or not self.target.strip():
+            raise ValueError("Worker report identity must be non-empty")
+        if not self.what_looks_good or any(not item.strip() for item in self.what_looks_good):
+            raise ValueError("Worker report requires positive evidence")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,113 +482,19 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
     return final_text
 
 
-def _structured_report_markdown(text: str) -> str | None:
-    """Remove narration surrounding one structured worker report.
-
-    :param text: Assistant text that may wrap a report in prose.
-    :returns: Structured Markdown, or ``None`` when no report title exists.
-    """
-    lines = text.strip().splitlines()
-    start = next(
-        (index for index, line in enumerate(lines) if _REPORT_TITLE.fullmatch(line)),
-        None,
-    )
-    if start is None:
-        return None
-    report_lines = lines[start:]
-    if any(report_lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
-        return "\n".join(report_lines).strip()
-    indices = [report_lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
-    if indices != sorted(indices):
-        return "\n".join(report_lines).strip()
-
-    block_lines = _normalized_finding_lines(report_lines[indices[0] + 1 : indices[1]])
-    warn_lines = _normalized_finding_lines(report_lines[indices[1] + 1 : indices[2]])
-    good_lines = [line for line in report_lines[indices[2] + 1 :] if line.startswith("- ")]
-    sections = (
-        ("### BLOCK findings", block_lines),
-        ("### WARN findings", warn_lines),
-        ("### What looks good", good_lines),
-    )
-    output = [report_lines[0]]
-    for heading, content in sections:
-        output.extend(("", heading, *content))
-    return "\n".join(output).strip()
-
-
-def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
-    """Keep contract findings and anchor ranges at their first changed line.
-
-    :param lines: Raw lines from a BLOCK or WARN section.
-    :returns: Canonical finding lines with surrounding narration removed.
-    :raises ValueError: If a finding-like line violates the report contract.
-    """
-    normalized: list[str] = []
-    in_fence = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if not stripped:
-            continue
-        if stripped in {"None", "None.", "- None", "- None."}:
-            normalized.append("None.")
-            continue
-        if _FINDING.fullmatch(stripped):
-            normalized.append(stripped)
-            continue
-        ranged = _RANGED_FINDING.fullmatch(stripped)
-        if ranged is not None:
-            prefix, start, end, suffix = ranged.groups()
-            normalized.append(
-                f"{prefix}{start}{suffix.replace(' — ', f' — [reported range {start}-{end}] ', 1)}"
-            )
-            continue
-        bullet = _BULLET_FINDING.fullmatch(stripped)
-        if bullet is not None:
-            path, start, end, description = bullet.groups()
-            range_note = f"[reported range {start}-{end}] " if end is not None else ""
-            normalized.append(
-                f"{len(normalized) + 1}. **{path}{start}** — {range_note}{description}"
-            )
-            continue
-        if "**" in stripped:
-            raise ValueError(f"malformed finding-like line: {stripped}")
-    return [
-        re.sub(r"^\d+\.", f"{index}.", finding) if _FINDING.fullmatch(finding) else finding
-        for index, finding in enumerate(normalized, start=1)
-    ]
-
-
 def extract_report(transcript: Path) -> str:
-    """Extract the final assistant Markdown from a Tintin transcript.
+    """Extract the terminal assistant text from a Tintin transcript.
 
     :param transcript: Tintin JSONL output path returned by ``Agent``.
-    :returns: Structured text from the terminal assistant message.
-    :raises ValueError: If no assistant report text exists.
+    :returns: Uninterpreted text from the terminal assistant message.
+    :raises ValueError: If the terminal assistant message has no text.
     """
-    latest = ""
-    terminal_has_text = False
+    latest: str | None = None
     for entry in _transcript_entries(transcript):
-        if entry.message is None or entry.message.role != "assistant":
-            continue
-        text = _message_text(entry.message)
-        terminal_has_text = bool(text.strip())
-        if not text.strip():
-            latest = ""
-            continue
-        structured = _structured_report_markdown(text)
-        latest = structured or ""
+        if entry.message is not None and entry.message.role == "assistant":
+            latest = _message_text(entry.message).strip()
     if not latest:
-        detail = (
-            "final assistant text is not a report"
-            if terminal_has_text
-            else "has no assistant text"
-        )
-        raise ValueError(f"Transcript {detail}: {transcript}")
+        raise ValueError(f"Transcript has no terminal assistant text: {transcript}")
     return latest
 
 
@@ -598,53 +546,24 @@ def provenance_for_model(model: str) -> str:
 
 
 def parse_worker_report(report: str, *, expected_skill: str, expected_target: str) -> WorkerReport:
-    """Parse a structurally valid worker report into its boundary model.
+    """Parse a worker's structured JSON result into its boundary model.
 
-    :param report: Worker Markdown output.
+    :param report: Worker JSON output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
     :returns: Validated report data consumed by aggregation.
-    :raises ValueError: If identity or report structure is invalid.
+    :raises ValueError: If JSON, identity, or report fields are invalid.
     """
-    lines = report.strip().splitlines()
-    if not lines:
-        raise ValueError("Worker report is empty")
-    title = _REPORT_TITLE.fullmatch(lines[0])
-    if (
-        title is None
-        or title.group("skill") != expected_skill
-        or title.group("target") != expected_target
-    ):
+    parsed = WorkerReport.model_validate_json(report)
+    if parsed.skill != expected_skill or parsed.target != expected_target:
         raise ValueError("Worker report identity does not match its assignment")
-    if any(lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
-        raise ValueError("Worker report headings are missing or duplicated")
-    indices = [lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
-    if indices != sorted(indices) or any(line.strip() for line in lines[1 : indices[0]]):
-        raise ValueError("Worker report headings are out of order")
-
-    block_lines = lines[indices[0] + 1 : indices[1]]
-    warn_lines = lines[indices[1] + 1 : indices[2]]
-    good_lines = [line for line in lines[indices[2] + 1 :] if line.strip()]
-    if not (
-        _findings_section_is_valid(block_lines)
-        and _findings_section_is_valid(warn_lines)
-        and bool(good_lines)
-        and all(line.startswith("- ") and len(line) > 2 for line in good_lines)
-    ):
-        raise ValueError("Worker report sections are malformed")
-    return WorkerReport(
-        skill=title.group("skill"),
-        target=title.group("target"),
-        block_findings=tuple(line for line in block_lines if line.strip()),
-        warn_findings=tuple(line for line in warn_lines if line.strip()),
-        what_looks_good=tuple(good_lines),
-    )
+    return parsed
 
 
 def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
-    """Return whether a worker report satisfies the merge contract.
+    """Return whether a worker result satisfies the merge contract.
 
-    :param report: Worker Markdown output.
+    :param report: Worker JSON output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
     :returns: Whether identity and ordered sections are structurally valid.
@@ -658,21 +577,6 @@ def report_is_parseable(report: str, *, expected_skill: str, expected_target: st
     except ValueError:
         return False
     return True
-
-
-def _findings_section_is_valid(lines: Sequence[str]) -> bool:
-    """Return whether a findings section satisfies the worker-report contract.
-
-    :param lines: Raw non-heading lines from one findings section.
-    :returns: Whether the section is empty-free and contains valid finding rows.
-    """
-    content = [line for line in lines if line.strip()]
-    if content in (["None."], ["None"], ["- None."], ["- None"]):
-        return True
-    if not content:
-        return False
-
-    return all(_FINDING.fullmatch(line) for line in content)
 
 
 def _available_and_unavailable(
@@ -830,12 +734,12 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--changed-lines", type=int, required=True)
     plan.add_argument("--risk", action="append", default=[])
     extract = subparsers.add_parser(
-        "extract-report", help="write final assistant Markdown from Tintin JSONL"
+        "extract-report", help="write terminal assistant text from Tintin JSONL"
     )
     extract.add_argument("transcript", type=Path)
     extract.add_argument("--output", type=Path, required=True)
     validate = subparsers.add_parser(
-        "validate-report", help="check a worker report's section contract"
+        "validate-report", help="check a worker result's JSON contract"
     )
     validate.add_argument("path", type=Path)
     validate.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
