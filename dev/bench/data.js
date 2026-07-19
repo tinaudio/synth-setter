@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784417339062,
+  "lastUpdate": 1784450010447,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -9486,6 +9486,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03601020574569702,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45d8718389c80cd266b403bd1102f9220962f9fb",
+          "message": "chore(models): keyword-only num_params + spec-width test hardening (#2154)\n\n* fix(models): make VSTFlowMatchingModule num_params keyword-only\n\n#2119 moved num_params into conditioning's old fifth positional slot, so a\nstale positional caller would silently train at a bogus width; everything\nafter scheduler is now keyword-only, with a regression test pinning the\nTypeError.\n\nAlso applies the remaining #2119 review findings: an instantiated FlowVAE\nforward test at the odd obxf width, registry-parameterized width coverage,\nfinite-loss and seeded assertions for the fake-mode flow train tests\n(seed now set by the shared cfg builders), removal of a cast(Any, ...),\nand content-bearing rewrites of name-restating test docstrings.\n\nFixes #2152\n\n* style(models): drop historical narration from review-added comments\n\nPre-PR review flagged the migration story and literal test values as\ncomment-hygiene violations; the contracts stay, the history moves here.\n\nRefs #2152\n\n* docs: list shared finite-loss assertion helpers in doc-map conftest entry\n\nRefs #2152",
+          "timestamp": "2026-07-19T04:04:24-04:00",
+          "tree_id": "2ec2260aa65c2eac46a4f96cabf4cb5cebab11c2",
+          "url": "https://github.com/tinaudio/synth-setter/commit/45d8718389c80cd266b403bd1102f9220962f9fb"
+        },
+        "date": 1784450008821,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.419094562530518,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.405529479477554,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.034776851534843445,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.03432166576385498,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6426901817321777,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.444791111416663,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.615246772766113,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.866552571402862,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.036270324140787125,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.048301875591278076,
             "unit": "1-cos"
           },
           {
