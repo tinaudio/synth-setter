@@ -2,7 +2,7 @@
 
 ``make_lance_dataset`` is the sole entrypoint dispatched by the renderer CLI on
 the output suffix; it writes a Lance dataset directory, one fragment per render
-batch, committed as one dataset at the end.
+batch, committed as one dataset and compacted to a single fragment at the end.
 """
 
 from __future__ import annotations
