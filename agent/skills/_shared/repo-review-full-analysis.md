@@ -201,8 +201,10 @@ deferred skill/pass/model rows, and fingerprints for every foreground finding.
 The launcher validates it and starts detached aftercare. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
-(`skill`, `pass_name`, exact `model`, `thinking`), and
-`foreground_fingerprints`. Aftercare may post only **late Codex-verified
+(`skill`, `pass_name`, `origin`, exact `model`, effective foreground
+`verification_model`, and `thinking`), and `foreground_fingerprints`. Use
+`origin: primary` for independent provider coverage and `origin: codex-fallback`
+only after the free pool exhausted. Aftercare may post only **late Codex-verified
 findings** against the unchanged PR head, following
 `agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot
 create aftercare manifests because there is no PR to receive late comments.

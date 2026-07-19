@@ -20,6 +20,7 @@ from unittest import mock
 import pytest
 import yaml
 
+from agent._shared.run_pi_review_aftercare import AftercareManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -400,6 +401,68 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -> None:
+    """Drive foreground completion through the real detached-handoff path.
+
+    :param tmp_path: Temporary fake Pi executable and aftercare marker.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
+    marker = tmp_path / "aftercare-ran"
+    manifest_path_file = tmp_path / "manifest-path"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        'if [[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]; then\n'
+        '  touch "${AFTERCARE_MARKER}"\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf \'%s\\n\' "${PI_REVIEW_AFTERCARE_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
+        "cat > \"${PI_REVIEW_AFTERCARE_MANIFEST}\" <<'JSON'\n"
+        '{"version":1,"mode":"no-comments","repo":"tinaudio/synth-setter",'
+        '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
+        '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
+        '"origin":"primary","model":"kimi-coding/k3",'
+        '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
+        '"foreground_fingerprints":[]}\n'
+        "JSON\n"
+        'printf \'%s\\n\' \'{"type":"message_end","message":{"role":"assistant",'
+        '"content":"foreground-complete"}}\'\n'
+    )
+    pi.chmod(0o755)
+
+    stderr = io.BytesIO()
+    result = sh.Command(str(launcher))(
+        "repo-review-full-no-comments",
+        "--target",
+        "2174",
+        _cwd=REPO_ROOT,
+        _env={
+            **os.environ,
+            "AFTERCARE_MARKER": str(marker),
+            "MANIFEST_PATH_FILE": str(manifest_path_file),
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        },
+        _err=stderr,
+    )
+    manifest = Path(manifest_path_file.read_text().strip())
+    transcript_match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr.getvalue().decode())
+    assert transcript_match is not None
+    transcript = Path(transcript_match.group(1))
+    try:
+        deadline = time.monotonic() + 2
+        while not marker.exists() and time.monotonic() < deadline:
+            pass
+        assert str(result).strip() == "foreground-complete"
+        assert marker.exists()
+    finally:
+        manifest.unlink(missing_ok=True)
+        manifest.with_suffix(".log").unlink(missing_ok=True)
+        transcript.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: Path) -> None:
     """Keep a failed Pi run from publishing an intermediate assistant message.
 
@@ -470,6 +533,37 @@ def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
         )
 
 
+def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
+    """Distinguish independent free-pool coverage from an explicit Codex fallback."""
+    base = {
+        "version": 1,
+        "mode": "no-comments",
+        "repo": "tinaudio/synth-setter",
+        "pr_number": 2174,
+        "base_sha": "a" * 40,
+        "head_sha": "b" * 40,
+        "target": "PR #2174",
+        "foreground_fingerprints": [],
+    }
+    primary = {
+        "skill": "correctness-review",
+        "pass_name": "free-pool",
+        "origin": "primary",
+        "model": "openai-codex/gpt-5.6-sol",
+        "verification_model": "openai-codex/gpt-5.6-sol",
+        "thinking": "high",
+    }
+
+    with pytest.raises(ValueError, match="origin does not match"):
+        AftercareManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
+
+    fallback = {**primary, "origin": "codex-fallback"}
+    manifest = AftercareManifest.model_validate_json(
+        json.dumps({**base, "deferred_passes": [fallback]})
+    )
+    assert manifest.deferred_passes[0].origin == "codex-fallback"
+
+
 def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
     """Keep deferred second passes auditable after the foreground host exits."""
     launcher = (REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text()
@@ -515,7 +609,9 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
                     {
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
+                        "origin": "primary",
                         "model": "kimi-coding/k3",
+                        "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }
                 ],

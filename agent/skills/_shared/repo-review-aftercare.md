@@ -28,8 +28,9 @@ Codex-verified findings against the exact reviewed PR head.
    resumed result remains invalid, record it and stop that pass.
 
 5. Codex-origin findings need no extra verification. Send every free-pool-only
-   candidate to one Codex verification worker using the foreground Codex model
-   recorded by the manifest. Keep only findings it reproduces from the diff.
+   candidate to one Codex verification worker using that row's exact
+   `verification_model`, which records the effective foreground Codex model for
+   the skill. Keep only findings it reproduces from the diff.
 
 6. Fingerprint each retained finding with
    `pi_review_routing.py finding-fingerprint`. Remove fingerprints listed in

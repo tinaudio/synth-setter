@@ -181,7 +181,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > ```bash
 > ./.venv/bin/python agent/_shared/pi_review_render.py \
 >   --payload <exact-findings-json-path> \
->   --target <PR-or-branch-label> --skill-count <K> \
+>   --target <PR-or-branch-label> --reviewed-head <head-sha> --skill-count <K> \
 >   --next-step <caller-specific-tip> --remove-payload
 > ```
 >

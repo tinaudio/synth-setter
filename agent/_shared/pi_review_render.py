@@ -143,6 +143,51 @@ def _validated_payload(payload: ReviewPayload | Mapping[str, object]) -> ReviewP
     return ReviewPayload.model_validate_json(json.dumps(payload))
 
 
+def _finding_lines(findings: tuple[ReviewFinding, ...]) -> list[str]:
+    """Group findings into canonical path sections.
+
+    :param findings: Aggregated findings in review order.
+    :returns: Markdown lines for all inline findings.
+    """
+    grouped: dict[str, list[ReviewFinding]] = {}
+    for finding in findings:
+        grouped.setdefault(finding.path, []).append(finding)
+    lines: list[str] = []
+    for path, path_findings in grouped.items():
+        lines.append(f"### `{path}`")
+        lines.extend(f"- **L{finding.line}** — {finding.body}" for finding in path_findings)
+        lines.append("")
+    return lines
+
+
+def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
+    """Render deterministic severity and progress summary lines.
+
+    :param review: Validated aggregate payload.
+    :param context: Reviewed Git and progress state.
+    :returns: Markdown lines for the summary section.
+    """
+    blocks = sum(":block]" in finding.body for finding in review.findings)
+    warns = sum(":warn]" in finding.body for finding in review.findings)
+    lines = [
+        "## Summary",
+        "",
+        f"- {blocks} BLOCK, {warns} WARN across {context.skill_count} skills",
+        f"- Reviewed at: {context.head_sha}",
+        "- Progress: "
+        f"branch {context.head_ref}; HEAD {context.head_sha}; "
+        f"upstream {context.upstream_sha}; worktree {context.worktree_state}; "
+        f"unchanged review count {context.unchanged_count}.",
+        f"- {context.next_step}",
+    ]
+    if context.unchanged_count > 0:
+        lines.append(
+            "- Possible review loop: make coherent remediation durable or report the blocker "
+            "before retrying."
+        )
+    return lines
+
+
 def render_markdown(
     payload: ReviewPayload | Mapping[str, object], *, context: RenderContext
 ) -> str:
@@ -153,12 +198,6 @@ def render_markdown(
     :returns: Canonical Markdown sentinel content.
     """
     review = _validated_payload(payload)
-    grouped: dict[str, list[ReviewFinding]] = {}
-    for finding in review.findings:
-        grouped.setdefault(finding.path, []).append(finding)
-
-    blocks = sum(":block]" in finding.body for finding in review.findings)
-    warns = sum(":warn]" in finding.body for finding in review.findings)
     lines = [
         f"# repo-review-full-no-comments — {context.target}",
         "",
@@ -166,30 +205,9 @@ def render_markdown(
         "",
         "## Inline findings (would be posted by `/repo-review-full`)",
         "",
+        *_finding_lines(review.findings),
+        *_summary_lines(review, context),
     ]
-    for path, findings in grouped.items():
-        lines.append(f"### `{path}`")
-        lines.extend(f"- **L{finding.line}** — {finding.body}" for finding in findings)
-        lines.append("")
-
-    lines.extend(
-        [
-            "## Summary",
-            "",
-            f"- {blocks} BLOCK, {warns} WARN across {context.skill_count} skills",
-            f"- Reviewed at: {context.head_sha}",
-            "- Progress: "
-            f"branch {context.head_ref}; HEAD {context.head_sha}; "
-            f"upstream {context.upstream_sha}; worktree {context.worktree_state}; "
-            f"unchanged review count {context.unchanged_count}.",
-            f"- {context.next_step}",
-        ]
-    )
-    if context.unchanged_count > 0:
-        lines.append(
-            "- Possible review loop: make coherent remediation durable or report the blocker "
-            "before retrying."
-        )
     return "\n".join(lines) + "\n"
 
 
@@ -246,52 +264,90 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _progress_state(head_sha: str, upstream_sha: str, status: str) -> str:
+    """Build the compact progress identity for one worktree state.
+
+    :param head_sha: Current commit SHA.
+    :param upstream_sha: Current upstream SHA or ``none``.
+    :param status: Git porcelain status.
+    :returns: Stable progress-state string.
+    """
+    status_digest = hashlib.sha256(status.encode()).hexdigest()
+    return f"{head_sha}|{upstream_sha}|{status_digest}"
+
+
+def _read_progress(path: Path) -> tuple[int, str]:
+    """Read prior progress, treating malformed advisory state as absent.
+
+    :param path: Per-branch progress path.
+    :returns: Prior unchanged count and state identity.
+    """
+    if not path.exists():
+        return 0, ""
+    fields = path.read_text().strip().split(" ", 1)
+    if len(fields) != 2:
+        return 0, ""
+    try:
+        return int(fields[0]), fields[1]
+    except ValueError:
+        return 0, ""
+
+
+def _progress_count(payload: ReviewPayload, head_ref: str, current_state: str) -> int:
+    """Persist and return the repeated non-progress review count.
+
+    :param payload: Validated aggregate payload.
+    :param head_ref: Current branch name.
+    :param current_state: Current progress identity.
+    :returns: Updated unchanged review count.
+    """
+    progress_key = hashlib.sha256(f"{head_ref}\n".encode()).hexdigest()
+    progress_path = Path(
+        f".agent-reviews/repo-review-full-no-comments-progress.{progress_key}.txt"
+    )
+    previous_count, previous_state = _read_progress(progress_path)
+    is_non_pass = bool(payload.findings) or "[pr-health]" in payload.review_body
+    unchanged_count = previous_count + 1 if is_non_pass and current_state == previous_state else 0
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(f"{unchanged_count} {current_state}\n")
+    return unchanged_count
+
+
 def resolve_context(
     payload: ReviewPayload,
     *,
+    reviewed_head: str,
     target: str,
     skill_count: int,
     next_step: str,
 ) -> RenderContext:
-    """Derive review progress and Git state for deterministic rendering.
+    """Derive review progress and reject delivery-time HEAD drift.
 
     :param payload: Validated aggregate payload.
+    :param reviewed_head: Exact commit reviewed by every foreground worker.
     :param target: Human-readable PR or branch label.
     :param skill_count: Number of selected checklists.
     :param next_step: Caller-specific follow-up guidance.
     :returns: Render context persisted in the report summary.
+    :raises ValueError: If the worktree HEAD changed after worker assignment.
     """
     head_sha = _git("rev-parse", "HEAD")
+    if head_sha != reviewed_head:
+        raise ValueError("Reviewed HEAD changed before delivery")
     head_ref = _git("branch", "--show-current")
     try:
         upstream_sha = _git("rev-parse", "@{upstream}")
     except RuntimeError:
         upstream_sha = "none"
     status = _git("status", "--porcelain")
-    worktree_state = "dirty" if status else "clean"
-    state_digest = hashlib.sha256(status.encode()).hexdigest()
-    current_state = f"{head_sha}|{upstream_sha}|{state_digest}"
-    progress_key = hashlib.sha256(f"{head_ref}\n".encode()).hexdigest()
-    progress_path = Path(
-        f".agent-reviews/repo-review-full-no-comments-progress.{progress_key}.txt"
-    )
-    previous_count = 0
-    previous_state = ""
-    if progress_path.exists():
-        previous = progress_path.read_text().strip().split(" ", 1)
-        if len(previous) == 2:
-            previous_count = int(previous[0])
-            previous_state = previous[1]
-    is_non_pass = bool(payload.findings) or "[pr-health]" in payload.review_body
-    unchanged_count = previous_count + 1 if is_non_pass and current_state == previous_state else 0
-    progress_path.parent.mkdir(parents=True, exist_ok=True)
-    progress_path.write_text(f"{unchanged_count} {current_state}\n")
+    current_state = _progress_state(head_sha, upstream_sha, status)
+    unchanged_count = _progress_count(payload, head_ref, current_state)
     return RenderContext(
         target=target,
         head_sha=head_sha,
         head_ref=head_ref,
         upstream_sha=upstream_sha,
-        worktree_state=worktree_state,
+        worktree_state="dirty" if status else "clean",
         unchanged_count=unchanged_count,
         skill_count=skill_count,
         next_step=next_step,
@@ -306,6 +362,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--reviewed-head", required=True)
     parser.add_argument("--skill-count", type=int, required=True)
     parser.add_argument("--next-step", required=True)
     parser.add_argument("--output", type=Path)
@@ -323,6 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload = ReviewPayload.model_validate_json(args.payload.read_text())
     context = resolve_context(
         payload,
+        reviewed_head=args.reviewed_head,
         target=args.target,
         skill_count=args.skill_count,
         next_step=args.next_step,

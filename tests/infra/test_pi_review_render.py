@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
 
+import pytest
 import sh
 
-from agent._shared.pi_review_render import RenderContext, render_markdown, render_payload
+from agent._shared.pi_review_render import (
+    RenderContext,
+    ReviewPayload,
+    render_markdown,
+    render_payload,
+    resolve_context,
+)
 
 
 def test_render_markdown_groups_findings_and_preserves_audit() -> None:
@@ -50,6 +58,76 @@ def test_render_markdown_groups_findings_and_preserves_audit() -> None:
     assert "Reviewed at: " + "a" * 40 in report
 
 
+def _init_git_repo(path: Path) -> str:
+    """Create one committed repository and return its HEAD.
+
+    :param path: Empty repository directory.
+    :returns: Full commit SHA.
+    """
+    git = sh.Command("git")
+    git("init", "-q", path)
+    git("-C", path, "config", "user.email", "test@example.com")
+    git("-C", path, "config", "user.name", "Test")
+    (path / "tracked.txt").write_text("content\n")
+    git("-C", path, "add", "tracked.txt")
+    git("-C", path, "commit", "-qm", "test: initialize")
+    return str(git("-C", path, "rev-parse", "HEAD")).strip()
+
+
+def test_resolve_context_reviewed_head_drift_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refuse to stamp a sentinel for a commit workers did not review.
+
+    :param tmp_path: Temporary Git repository.
+    :param monkeypatch: Changes the current directory to that repository.
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    payload = ReviewPayload.model_validate_json(
+        '{"pr_number":1,"repo":"owner/repo","review_body":"Audit.","findings":[]}'
+    )
+
+    with pytest.raises(ValueError, match="Reviewed HEAD changed before delivery"):
+        resolve_context(
+            payload,
+            reviewed_head="f" * 40,
+            target="PR #1",
+            skill_count=1,
+            next_step="Done.",
+        )
+
+
+def test_resolve_context_corrupt_progress_treated_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep advisory progress corruption from blocking review delivery.
+
+    :param tmp_path: Temporary Git repository.
+    :param monkeypatch: Changes the current directory to that repository.
+    """
+    head = _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    branch = str(sh.Command("git")("branch", "--show-current")).strip()
+    key = hashlib.sha256(f"{branch}\n".encode()).hexdigest()
+    progress = tmp_path / f".agent-reviews/repo-review-full-no-comments-progress.{key}.txt"
+    progress.parent.mkdir()
+    progress.write_text("not-an-integer corrupt\n")
+    payload = ReviewPayload.model_validate_json(
+        '{"pr_number":1,"repo":"owner/repo","review_body":"Audit.","findings":[]}'
+    )
+
+    context = resolve_context(
+        payload,
+        reviewed_head=head,
+        target="PR #1",
+        skill_count=1,
+        next_step="Done.",
+    )
+
+    assert context.unchanged_count == 0
+
+
 def test_renderer_cli_real_process_writes_report(tmp_path: Path) -> None:
     """Execute the documented script-path entrypoint used by the host.
 
@@ -75,6 +153,8 @@ def test_renderer_cli_real_process_writes_report(tmp_path: Path) -> None:
         payload_path,
         "--target",
         "PR #2174",
+        "--reviewed-head",
+        str(sh.Command("git")("rev-parse", "HEAD")).strip(),
         "--skill-count",
         "1",
         "--next-step",

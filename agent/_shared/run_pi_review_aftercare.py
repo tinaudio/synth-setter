@@ -41,10 +41,20 @@ class DeferredPass(BaseModel, strict=True, extra="forbid"):
 
         Logical review pass.
 
+    .. attribute :: origin
+        :type: Literal["primary", "codex-fallback"]
+
+        Whether this model is the pass's independent provider or an exhausted-pool fallback.
+
     .. attribute :: model
         :type: str
 
         Exact pinned model selector.
+
+    .. attribute :: verification_model
+        :type: str
+
+        Effective foreground Codex model used to verify free-pool findings.
 
     .. attribute :: thinking
         :type: str
@@ -54,7 +64,9 @@ class DeferredPass(BaseModel, strict=True, extra="forbid"):
 
     skill: str = Field(min_length=1)
     pass_name: Literal["codex", "free-pool"]
+    origin: Literal["primary", "codex-fallback"]
     model: str = Field(min_length=1)
+    verification_model: str = Field(min_length=1)
     thinking: Literal["low", "medium", "high"]
 
     @model_validator(mode="after")
@@ -67,9 +79,15 @@ class DeferredPass(BaseModel, strict=True, extra="forbid"):
         if self.model not in _PINNED_MODELS:
             raise ValueError("Deferred pass model is outside the pinned review pool")
         is_codex = self.model.startswith("openai-codex/")
+        verification_is_codex = self.verification_model.startswith("openai-codex/")
+        if self.verification_model not in _PINNED_MODELS or not verification_is_codex:
+            raise ValueError("Deferred pass requires a pinned Codex verification model")
         codex_label = "codex"
-        if self.pass_name == codex_label and not is_codex:
-            raise ValueError("Deferred Codex pass requires an openai-codex model")
+        expected_codex_origin = self.pass_name == codex_label or self.origin == "codex-fallback"
+        if is_codex != expected_codex_origin:
+            raise ValueError("Deferred pass model origin does not match its provider family")
+        if self.pass_name == codex_label and self.origin != "primary":
+            raise ValueError("Deferred Codex pass cannot be labeled as a fallback")
         return self
 
 
