@@ -317,7 +317,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
     assert "max_turns: <plan.max_turns>" in text
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
-    assert "turn budget exhausted" in text
+    assert re.search(
+        r"Gracefully wrapped `steered` attempts proceed to report\s+validation",
+        text,
+    )
+    assert re.search(r"hard-aborted\s+turn-budget result is a failed attempt", text)
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)

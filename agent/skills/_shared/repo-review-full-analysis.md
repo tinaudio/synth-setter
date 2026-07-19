@@ -168,10 +168,9 @@ inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
 paths. It must never recursively discover files or checklists, search above the
 current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
 assigned `tdd-refactor` pass may search tracked files with `git grep` and
-`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool
-call has a 60-second timeout. A command timeout or
-turn budget exhausted result is a failed attempt, never a partial success; add
-its exact diagnostic to the audit and retry through the candidate sequence.
+`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool call has a 60-second timeout. A command timeout or hard-aborted
+turn-budget result is a failed attempt; add its exact diagnostic to the audit and
+retry through the candidate sequence. Gracefully wrapped `steered` attempts proceed to report validation and count as successful when their final JSON passes the contract. Record `success` with the wrap-up detail in the audit.
 
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
@@ -233,7 +232,8 @@ prefers a distinct fallback even when the Codex pass reached its own fallback.
 Continue through that bounded Codex sequence only for the same availability
 failures. Record each launch as `Codex fallback` in the audit detail. Never resume
 a failed session under a different model. Tool/checklist, malformed-report,
-timeout, and turn-budget failures do not trigger the cross-provider fallback.
+timeout, and hard-aborted turn-budget failures do not trigger the cross-provider
+fallback.
 
 A completed worker is not successful until its final assistant JSON passes
 the report contract. The `Output file` is Tintin JSONL audit data, not the
