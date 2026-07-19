@@ -142,6 +142,32 @@ def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path
     assert not np.array_equal(first, second)
 
 
+def test_make_lance_dataset_rerun_failure_preserves_existing_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed rerun leaves the previous committed dataset readable in place.
+
+    :param tmp_path: Destination directory for the shard.
+    :param monkeypatch: Replaces the final commit with a deterministic failure.
+    """
+    from synth_setter.pipeline.data import lance_shard
+
+    shard = tmp_path / "shard.lance"
+
+    make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1757))
+    first = _read_params(shard)
+
+    def _fail_commit(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(lance_shard, "commit_lance_dataset", _fail_commit)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        make_lance_dataset(shard, _torchsynth_render_cfg(base_seed=1758))
+
+    np.testing.assert_array_equal(_read_params(shard), first)
+
+
 def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,8 +201,8 @@ def test_make_lance_dataset_failure_after_fragment_commits_nothing_and_rerun_rec
         make_lance_dataset(shard, _torchsynth_render_cfg())
 
     assert fragment_calls == 2
-    assert any((shard / "data").iterdir())
-    assert not any((shard / "_versions").glob("*.manifest"))
+    assert not shard.exists()
+    assert not list(tmp_path.glob(".shard.lance.tmp-*"))
 
     monkeypatch.setattr(lance_shard, "lance_fragment", real_lance_fragment)
     make_lance_dataset(shard, _torchsynth_render_cfg())

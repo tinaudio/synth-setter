@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         resolve_param_spec(typed)
         resolve_param_spec(plain)  # pyright: ignore[reportArgumentType]
 
+
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _BUNDLED_PATH = "plugins/Surge XT.vst3"
 
@@ -94,7 +95,7 @@ def test_param_spec_widths_match_known_values() -> None:
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:
-    """The registry width resolver returns the selected spec's encoded width."""
+    """Pins the width the ``param_spec_width`` Hydra resolver injects into model configs."""
     assert resolve_param_spec_width("surge_simple") == 92
 
 

@@ -167,8 +167,12 @@ def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     :param context: Reviewed Git and progress state.
     :returns: Markdown lines for the summary section.
     """
-    blocks = sum(":block]" in finding.body for finding in review.findings)
-    warns = sum(":warn]" in finding.body for finding in review.findings)
+    blocks = review.review_body.count(":block]") + sum(
+        ":block]" in finding.body for finding in review.findings
+    )
+    warns = review.review_body.count(":warn]") + sum(
+        ":warn]" in finding.body for finding in review.findings
+    )
     lines = [
         "## Summary",
         "",
@@ -334,9 +338,12 @@ def _progress_count(payload: ReviewPayload, head_ref: str, current_state: str) -
     progress_path = Path(
         f".agent-reviews/repo-review-full-no-comments-progress.{progress_key}.txt"
     )
-    previous_count, previous_state = _read_progress(progress_path)
     is_non_pass = bool(payload.findings) or "[pr-health]" in payload.review_body
-    unchanged_count = previous_count + 1 if is_non_pass and current_state == previous_state else 0
+    if not is_non_pass:
+        progress_path.unlink(missing_ok=True)
+        return 0
+    previous_count, previous_state = _read_progress(progress_path)
+    unchanged_count = previous_count + 1 if current_state == previous_state else 0
     progress_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path.write_text(f"{unchanged_count} {current_state}\n")
     return unchanged_count

@@ -50,6 +50,8 @@ class VSTFlowMatchingModule(LightningModule):
         vector_field: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
+        # Keyword-only: a stale positional caller would silently train at a bogus width.
+        *,
         num_params: int,
         conditioning: ConditioningMode = "mel",
         warmup_steps: int = 5000,

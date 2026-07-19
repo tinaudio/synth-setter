@@ -5,12 +5,14 @@ from typing import Any
 
 import hydra
 import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationToMissingValueError
 
+from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -235,34 +237,42 @@ def test_vst_model_group_composes(model_name: str) -> None:
         ("vst_flowvae", "net.latent_dim"),
     ],
 )
-@pytest.mark.parametrize(
-    ("param_spec_name", "expected_width"),
-    [("obxf", 187), ("surge_4", 7), ("surge_simple", 92), ("surge_xt", 300)],
-)
+# One non-default spec suffices: which spec is active doesn't change whether a config
+# path interpolates the resolver. Exact per-spec widths are pinned in
+# tests/data/vst/test_param_spec_registry.py.
 def test_vst_model_width_derives_from_active_param_spec(
     model_name: str,
     width_path: str,
-    param_spec_name: str,
-    expected_width: int,
 ) -> None:
-    """Every VST model dimension follows the active ParamSpec's encoded width.
-
-    :param model_name: Canonical Hydra model-group name.
-    :param width_path: Model config path containing an encoded width.
-    :param param_spec_name: Active datamodule registry key.
-    :param expected_width: Registered spec's encoded width.
-    """
     cfg = _compose(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            f"datamodule.param_spec_name={param_spec_name}",
+            "datamodule.param_spec_name=obxf",
             f"model={model_name}",
             "trainer=cpu",
         ],
     )
 
-    assert OmegaConf.select(cfg.model, width_path) == expected_width
+    assert OmegaConf.select(cfg.model, width_path) == resolve_param_spec_width("obxf")
+
+
+# Parameterized over the live registry so newly registered synths are covered
+# automatically; one representative width path suffices since path wiring is
+# spec-independent (covered above).
+@pytest.mark.parametrize("param_spec_name", sorted(param_specs))
+def test_vst_model_width_resolves_for_every_registered_spec(param_spec_name: str) -> None:
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            f"datamodule.param_spec_name={param_spec_name}",
+            "model=vst_ffn",
+            "trainer=cpu",
+        ],
+    )
+
+    assert OmegaConf.select(cfg.model, "net.d_out") == resolve_param_spec_width(param_spec_name)
 
 
 @pytest.mark.parametrize(
@@ -282,6 +292,37 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
 
     assert cfg.model.param_spec == param_spec
     assert cfg.model.net.latent_dim == latent_dim
+
+
+def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
+    """A composed Flow-VAE net predicts at the resolver-derived width, not just configures it.
+
+    Config-value assertions can't catch a decoder or regression flow that ignores
+    ``latent_dim``, so this instantiates the ``obxf`` (187-wide, odd — never a flow-VAE
+    experiment default) composition and forwards a random-weight batch. Flow depth and
+    hidden dims are shrunk for CPU speed; they don't affect output width.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=obxf",
+            "model=vst_flowvae",
+            "trainer=cpu",
+            "+model.net.latent_flow_num_layers=2",
+            "+model.net.latent_flow_hidden_dim=16",
+            "+model.net.regression_flow_num_layers=2",
+            "+model.net.regression_flow_hidden_dim=16",
+        ],
+    )
+
+    net = hydra.utils.instantiate(cfg.model.net)
+    net.eval()
+    with torch.no_grad():
+        out = net(torch.randn(2, 2, 128, 401))
+
+    assert out.x_hat.shape == (2, 187)
+    assert out.y_hat.shape == (2, 2, 128, 401)
 
 
 @pytest.mark.parametrize(

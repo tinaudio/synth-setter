@@ -58,6 +58,30 @@ def test_render_markdown_groups_findings_and_preserves_audit() -> None:
     assert "Reviewed at: " + "a" * 40 in report
 
 
+def test_render_markdown_counts_pr_health_severities() -> None:
+    """Include non-diff PR-health failures in the summary counts."""
+    payload = {
+        "pr_number": 2174,
+        "repo": "tinaudio/synth-setter",
+        "review_body": "**[repo-review-full:block]** [pr-health] Merge conflict.",
+        "findings": [],
+    }
+    context = RenderContext(
+        target="PR #2174",
+        head_sha="a" * 40,
+        head_ref="fix/review",
+        upstream_sha="a" * 40,
+        worktree_state="clean",
+        unchanged_count=0,
+        skill_count=1,
+        next_step="Resolve the conflict.",
+    )
+
+    report = render_markdown(payload, context=context)
+
+    assert "1 BLOCK, 0 WARN across 1 skills" in report
+
+
 def _init_git_repo(path: Path) -> str:
     """Create one committed repository and return its HEAD.
 
@@ -123,6 +147,42 @@ def test_resolve_context_corrupt_progress_treated_as_absent(
         target="PR #1",
         skill_count=1,
         next_step="Done.",
+    )
+
+    assert context.unchanged_count == 0
+
+
+def test_resolve_context_pass_then_failure_starts_unchanged_count_at_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not count a passing review as prior unchanged failure state.
+
+    :param tmp_path: Temporary Git repository.
+    :param monkeypatch: Changes the current directory to that repository.
+    """
+    head = _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    passing = ReviewPayload.model_validate_json(
+        '{"pr_number":1,"repo":"owner/repo","review_body":"PASS.","findings":[]}'
+    )
+    failing = ReviewPayload.model_validate_json(
+        '{"pr_number":1,"repo":"owner/repo",'
+        '"review_body":"**[review:block]** [pr-health] Conflict.","findings":[]}'
+    )
+
+    resolve_context(
+        passing,
+        reviewed_head=head,
+        target="PR #1",
+        skill_count=1,
+        next_step="Done.",
+    )
+    context = resolve_context(
+        failing,
+        reviewed_head=head,
+        target="PR #1",
+        skill_count=1,
+        next_step="Fix.",
     )
 
     assert context.unchanged_count == 0

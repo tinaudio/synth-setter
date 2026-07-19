@@ -1,6 +1,109 @@
 # CHANGELOG
 
 
+## v10.0.6 (2026-07-18)
+
+### Bug Fixes
+
+- **data-pipeline**: Clear stale datasets before overwrite shard writes
+  ([#2165](https://github.com/tinaudio/synth-setter/pull/2165),
+  [`934c301`](https://github.com/tinaudio/synth-setter/commit/934c30103b4910dbb17ca017dc84c68adc9d5459))
+
+* fix(data-pipeline): clear stale datasets before overwrite shard writes
+
+make_lance_dataset documents non-resumable overwrite, but fragment writes into an existing committed
+  dataset adopt its schema (Lance append mode), which the #2109 write-time guard now correctly
+  rejects — reruns over an existing shard failed with a stale-schema mismatch. Remove any existing
+  dataset directory before rendering so the overwrite starts clean.
+
+Also drop the loader="map" argument the #2065 stress test passed to LanceVSTDataModule; #2075
+  removed that parameter, which crossed #2065 in flight and broke pyright on main.
+
+Fixes #2153
+
+* docs: map tests/pipeline/** into the testing-primer doc sources
+
+Refs #2153
+
+### Chores
+
+- **ci-automation**: Deliver terminal Pi review failure audits
+  ([#2166](https://github.com/tinaudio/synth-setter/pull/2166),
+  [`1202fb6`](https://github.com/tinaudio/synth-setter/commit/1202fb6b2fbd135758c5c16e2a6bc3b7e7c61dd4))
+
+* internal-fix(ci-automation): fail once on missing review provider
+
+* internal-fix(ci-automation): require terminal Pi response text
+
+* internal-fix(ci-automation): harden Pi review streaming
+
+* internal-fix(ci-automation): redact provider credential phrases
+
+* internal-fix(ci-automation): deliver terminal review failures
+
+* internal-fix(ci-automation): close failed audit descriptors
+
+* internal-fix(ci-automation): order review incident summaries
+
+### Internal-Feat
+
+- **automation**: Preflight providers and stream Pi review audits
+  ([#2155](https://github.com/tinaudio/synth-setter/pull/2155),
+  [`71b55a8`](https://github.com/tinaudio/synth-setter/commit/71b55a81981e814172287a99bf6d1c33f47c7b4f))
+
+* internal-fix(ci-automation): fail once on missing review provider
+
+* internal-fix(ci-automation): require terminal Pi response text
+
+* internal-fix(ci-automation): harden Pi review streaming
+
+* internal-fix(ci-automation): redact provider credential phrases
+
+### Internal-Fix
+
+- **test**: Accept persistent worker config drift
+  ([#2151](https://github.com/tinaudio/synth-setter/pull/2151),
+  [`2bdb69a`](https://github.com/tinaudio/synth-setter/commit/2bdb69a14f55630b8ff002c4b2373c9f918b2c7e))
+
+### Testing
+
+- **data-pipeline**: Stress Lance with torchsynth end to end
+  ([#2065](https://github.com/tinaudio/synth-setter/pull/2065),
+  [`6de7d88`](https://github.com/tinaudio/synth-setter/commit/6de7d88dedc628cc74ccf1ab204fe6e6ab3e5be1))
+
+* test(data-pipeline): lance stress suite driven by the torchsynth backend
+
+Real-render stress coverage the VST path cannot afford: batch/shard boundary sweep,
+  overwrite-not-append reruns, failed-render commits-nothing recovery, cross-shard seed isolation,
+  and a slow full round-trip (from_hydra worker subprocesses -> fake-R2 staging -> finalize commit +
+  stats.npz -> map-loader datamodule epoch).
+
+The suite's first catch: build_generate_args resolved the renderer script repo-root-relative, so
+  shard dispatch broke from any other cwd — now import-anchored (the un-stubbed from_hydra dispatch
+  path had no coverage).
+
+Refs #1757
+
+* test(data-pipeline): address stress-branch review findings
+
+Pin the import-anchored renderer script path by suffix (two argv tests pinned the old
+  repo-root-relative literal), add a cwd-independence regression test for build_generate_args,
+  narrow the missing-dataset assertion to ValueError, extract the Hydra compose helper from the
+  round-trip test, and tighten docstrings.
+
+* test(data-pipeline): stress-branch round-2 review fixes
+
+Assert the dispatched renderer script path is absolute and real in the canonical from_hydra e2e,
+  check the audio column's dtype/rows in the boundary sweep, and reword the cwd regression docstring
+  to the current contract.
+
+* test(data-pipeline): address stress-suite review warnings
+
+* test(data-pipeline): address PR 2065 review feedback
+
+* test(data-pipeline): tighten Lance stress review coverage
+
+
 ## v10.0.5 (2026-07-18)
 
 ### Automation

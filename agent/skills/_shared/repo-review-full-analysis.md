@@ -188,9 +188,12 @@ pass. Prefer Codex: collect the Codex agents together with
 `get_subagent_result(wait: true)`, then inspect every free-pool agent with
 `get_subagent_result(wait: false)` rather than joining the slowest free-pool
 worker. If a Codex attempt fails but its free-pool peer has a valid report, that
-report satisfies the foreground floor; its findings remain provisional until
-Codex verification and therefore move to aftercare rather than entering the
-foreground aggregation unverified.
+report satisfies the foreground floor, but its findings remain provisional and
+must not enter the foreground aggregation. Add a deferred `codex-verification`
+row for that skill using its exact `verification_model`; aftercare performs a
+fresh independent Codex review because the foreground Codex pass did not
+complete. The provisional free-pool report itself is not treated as verified or
+silently promoted.
 
 As soon as every skill meets the floor, take exactly one non-blocking snapshot
 of all second passes with `get_subagent_result(wait: false)`. Never poll them a
@@ -215,8 +218,8 @@ with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `origin: primary` for independent provider coverage and `origin: codex-fallback`
 only after the free pool exhausted. Aftercare may post only **late Codex-verified
 findings** against the unchanged PR head, following
-`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot
-create aftercare manifests because there is no PR to receive late comments.
+`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot create aftercare manifests because they lack a
+stable remote PR/head delivery boundary.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
 inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist

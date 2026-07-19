@@ -2,8 +2,9 @@
 
 Process only the deferred passes in the manifest named by the launch prompt. This
 session is an asynchronous supplement to a foreground review that already met
-its one-valid-report-per-skill quality floor. It may post only genuinely new,
-Codex-verified findings against the exact reviewed PR head.
+its one-valid-report-per-skill quality floor. Full-review mode may post only
+genuinely new, Codex-verified findings against the exact reviewed PR head;
+no-comments mode records them without GitHub writes.
 
 1. Validate the manifest before using it:
 
@@ -38,11 +39,13 @@ Codex-verified findings against the exact reviewed PR head.
    If no findings remain, record `complete` and exit without GitHub writes.
 
 7. Re-fetch `headRefOid` immediately before delivery. On any head or PR-state
-   drift, record `stale` and post nothing. Otherwise submit one `COMMENT` review
-   through `agent/skills/_shared/post_review.py`. Its body must say that these
-   are late Codex-verified findings from deferred review aftercare and include
-   the originating skill/model audit rows. Never approve or request changes
-   from aftercare; each finding remains an unresolved inline thread.
+   drift, record `stale` and post nothing. For `mode: "no-comments"`, record the
+   retained late findings in the result and perform no GitHub writes. For
+   `mode: "full"`, submit one `COMMENT` review through
+   `agent/skills/_shared/post_review.py`. Its body must say that these are late
+   Codex-verified findings from deferred review aftercare and include the
+   originating skill/model audit rows. Never approve or request changes from
+   aftercare; each finding remains an unresolved inline thread.
 
 8. Write the final state (`complete`, `stale`, or `failed`), audit rows, posted
    review URL, and completion timestamp atomically to `<manifest>.result.json`.

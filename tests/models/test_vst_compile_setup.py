@@ -1,7 +1,6 @@
 """Regression tests for compile-enabled VST module stage transitions."""
 
 from functools import partial
-from typing import Any, cast
 
 import pytest
 import torch
@@ -68,14 +67,24 @@ def test_feed_forward_setup_fit_then_test_compiles_net_once() -> None:
 
 def test_flow_matching_constructor_without_num_params_raises_type_error() -> None:
     """Flow models require an explicit target width from configuration."""
-    constructor = cast(Any, VSTFlowMatchingModule)
-
     with pytest.raises(TypeError, match="num_params"):
-        constructor(
+        VSTFlowMatchingModule(  # pyright: ignore[reportCallIssue]
             encoder=torch.nn.Linear(1, 1),
             vector_field=torch.nn.Linear(1, 1),
             optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
             scheduler=None,  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_flow_matching_constructor_num_params_positional_raises_type_error() -> None:
+    """A positional fifth argument must fail to prevent a bogus training width."""
+    with pytest.raises(TypeError, match="positional"):
+        VSTFlowMatchingModule(
+            torch.nn.Linear(1, 1),
+            torch.nn.Linear(1, 1),
+            partial(torch.optim.Adam, lr=1e-3),
+            None,
+            1,  # pyright: ignore[reportCallIssue]
         )
 
 
