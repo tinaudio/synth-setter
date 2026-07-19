@@ -262,6 +262,13 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
 
 
+def test_pi_project_subagents_allow_twenty_concurrent_workers() -> None:
+    """Allow twenty Pi review workers to bypass Tintin's default queue."""
+    settings = json.loads((REPO_ROOT / ".pi" / "subagents.json").read_text())
+
+    assert settings == {"maxConcurrent": 20}
+
+
 def test_pi_project_explore_agent_is_disabled() -> None:
     """Keep Tintin's unbounded built-in Explore agent unavailable in this repo."""
     text = (REPO_ROOT / ".pi" / "agents" / "Explore.md").read_text()
