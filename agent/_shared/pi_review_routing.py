@@ -9,6 +9,7 @@ For example, inspect one checklist's available passes with::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -22,6 +23,9 @@ from typing import Literal, TextIO
 
 import sh
 from pydantic import BaseModel, Field, model_validator
+
+_REPORT_KEYS = frozenset({"findings", "skill", "target", "what_looks_good"})
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
@@ -250,7 +254,13 @@ class WorkerFinding(BaseModel, strict=True, extra="forbid"):
         """
         path = Path(self.path)
         is_canonical = path.as_posix() == self.path and "\\" not in self.path
-        if not self.path.strip() or path.is_absolute() or ".." in path.parts or not is_canonical:
+        if (
+            not self.path.strip()
+            or self.path == "."
+            or path.is_absolute()
+            or ".." in path.parts
+            or not is_canonical
+        ):
             raise ValueError("Finding path must be canonical and repository-relative")
         if not self.description.strip():
             raise ValueError("Finding description must be non-empty")
@@ -478,12 +488,65 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
     return final_text
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build one JSON object while rejecting ambiguous duplicate keys.
+
+    :param pairs: Decoder-preserved object members in source order.
+    :returns: Object mapping when every key is unique.
+    :raises ValueError: If a key appears more than once.
+    """
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _strict_json_loads(value: str) -> object:
+    """Decode JSON without last-write-wins duplicate-key behavior.
+
+    :param value: Candidate JSON text.
+    :returns: Decoded JSON value.
+    :raises ValueError: If syntax or object keys are invalid.
+    """
+    try:
+        return json.loads(value, object_pairs_hook=_reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid worker JSON: {error.msg}") from error
+
+
+def _extract_report_envelope(value: str) -> str:
+    """Strip harmless text when one report-shaped JSON object is present.
+
+    :param value: Terminal worker text that may contain narration or a Markdown fence.
+    :returns: Unique report object, or unchanged text for correction when none is complete.
+    :raises ValueError: If competing report objects make the result ambiguous.
+    """
+    decoder = json.JSONDecoder(object_pairs_hook=_reject_duplicate_keys)
+    candidates: list[str] = []
+    for start, character in enumerate(value):
+        if character != "{":
+            continue
+        try:
+            decoded, end = decoder.raw_decode(value, start)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(decoded, dict) and frozenset(decoded) == _REPORT_KEYS:
+            candidates.append(value[start:end])
+    if not candidates:
+        return value.strip()
+    if len(candidates) > 1:
+        raise ValueError("Terminal assistant text contains multiple worker JSON objects")
+    return candidates[0]
+
+
 def extract_report(transcript: Path) -> str:
-    """Extract the terminal assistant text from a Tintin transcript.
+    """Extract one unambiguous worker JSON object from a Tintin transcript.
 
     :param transcript: Tintin JSONL output path returned by ``Agent``.
-    :returns: Uninterpreted text from the terminal assistant message.
-    :raises ValueError: If the terminal assistant message has no text.
+    :returns: Unique JSON object, or raw terminal text for same-session correction.
+    :raises ValueError: If the terminal assistant message is empty or contains competing reports.
     """
     latest: str | None = None
     for entry in _transcript_entries(transcript):
@@ -491,7 +554,7 @@ def extract_report(transcript: Path) -> str:
             latest = _message_text(entry.message).strip()
     if not latest:
         raise ValueError(f"Transcript has no terminal assistant text: {transcript}")
-    return latest
+    return _extract_report_envelope(latest)
 
 
 def transcript_stats(transcript: Path) -> TranscriptStats:
@@ -525,6 +588,29 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
     )
 
 
+def finding_fingerprint(
+    *, skill: str, severity: str, path: str, line: int, description: str
+) -> str:
+    """Return a stable identity for foreground/aftercare finding deduplication.
+
+    :param skill: Checklist that produced the finding.
+    :param severity: Finding severity.
+    :param path: Repository-relative finding path.
+    :param line: Positive finding anchor.
+    :param description: Self-contained finding text.
+    :returns: Lowercase SHA-256 digest of normalized finding content.
+    """
+    normalized = {
+        "description": " ".join(description.split()),
+        "line": line,
+        "path": path,
+        "severity": severity,
+        "skill": skill,
+    }
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def provenance_for_model(model: str) -> str:
     """Return finding provenance from the model that produced it.
 
@@ -549,10 +635,98 @@ def parse_worker_report(report: str, *, expected_skill: str, expected_target: st
     :returns: Validated report data consumed by aggregation.
     :raises ValueError: If JSON, identity, or report fields are invalid.
     """
-    parsed = WorkerReport.model_validate_json(report)
+    strict_json = json.dumps(_strict_json_loads(report))
+    parsed = WorkerReport.model_validate_json(strict_json)
     if parsed.skill != expected_skill or parsed.target != expected_target:
         raise ValueError("Worker report identity does not match its assignment")
     return parsed
+
+
+def report_repair_prompt(report: str, *, expected_skill: str, expected_target: str) -> str:
+    """Build a format-only correction prompt for the worker that wrote a bad report.
+
+    :param report: Extracted report text that failed validation.
+    :param expected_skill: Checklist assigned to the worker.
+    :param expected_target: Target assigned to the worker.
+    :returns: Prompt suitable for one same-session resume turn.
+    """
+    try:
+        parse_worker_report(
+            report,
+            expected_skill=expected_skill,
+            expected_target=expected_target,
+        )
+    except ValueError as error:
+        diagnostic = str(error)
+    else:
+        diagnostic = "The report is already valid; return it unchanged."
+    return (
+        "Correct only the structured report from your preceding response. "
+        "Do not repeat the review or use tools. Do not add, remove, or reinterpret findings. "
+        f"The assigned skill is {expected_skill!r} and target is {expected_target!r}. "
+        f"Validation diagnostic: {diagnostic}\n"
+        "Return exactly one JSON object with no Markdown fence or surrounding prose:\n"
+        f"{report.strip()}"
+    )
+
+
+def build_worker_prompt(
+    *,
+    skill: str,
+    target: str,
+    repo: str,
+    base_sha: str,
+    head_sha: str,
+    changed_paths: Sequence[str],
+) -> str:
+    """Build one deterministic, bounded assignment shared by both model passes.
+
+    :param skill: Authoritative checklist name.
+    :param target: Assigned PR or branch label.
+    :param repo: GitHub repository in ``owner/name`` form.
+    :param base_sha: Full base commit SHA.
+    :param head_sha: Full reviewed commit SHA.
+    :param changed_paths: Repository-relative paths in the reviewed diff.
+    :returns: Complete worker prompt stored outside the host model response.
+    :raises ValueError: If assignment identity, SHAs, or paths are invalid.
+    """
+    if skill not in SUPPORTED_SKILLS:
+        raise ValueError(f"Unknown review skill: {skill}")
+    if not target.strip() or not repo.strip() or not changed_paths:
+        raise ValueError("Worker assignment identity and changed paths must be non-empty")
+    if not _SHA_RE.fullmatch(base_sha) or not _SHA_RE.fullmatch(head_sha):
+        raise ValueError("Worker assignment requires full lowercase commit SHAs")
+    for changed_path in changed_paths:
+        path = Path(changed_path)
+        if path.is_absolute() or path.as_posix() != changed_path or ".." in path.parts:
+            raise ValueError("Worker assignment paths must be canonical and repository-relative")
+    skill_instruction = (
+        f"Invoke the tinaudio-synth-setter-skills:{skill} skill via the Skill tool."
+    )
+    if skill in DEEP_SKILLS:
+        skill_instruction = (
+            f"Invoke the repo-local {skill} skill by reading agent/skills/{skill}/SKILL.md."
+        )
+    paths = "\n".join(f"- {path}" for path in changed_paths)
+    return f"""Review assignment
+Target: {target}
+Repository: {repo}
+Base SHA: {base_sha}
+Head SHA: {head_sha}
+Skill: {skill}
+
+{skill_instruction}
+Inspect only `git diff {base_sha}..{head_sha} -- <changed paths>` and explicit checklist paths.
+Do not recursively discover files, inspect caches, dependencies, sibling worktrees, or modify state.
+Every Bash call has a 60-second timeout.
+
+Changed paths:
+{paths}
+
+Return exactly one JSON object and no surrounding prose:
+{{"skill":"{skill}","target":"{target}","findings":[{{"severity":"block or warn","path":"repository-relative changed path","line":42,"description":"self-contained concern"}}],"what_looks_good":["positive evidence"]}}
+Use an empty findings array when appropriate. Keep what_looks_good non-empty and string values under 1500 words total.
+"""
 
 
 def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
@@ -561,7 +735,7 @@ def report_is_parseable(report: str, *, expected_skill: str, expected_target: st
     :param report: Worker JSON output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
-    :returns: Whether identity and ordered sections are structurally valid.
+    :returns: Whether identity and structured fields satisfy the worker-result schema.
     """
     try:
         parse_worker_report(
@@ -771,7 +945,7 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--changed-lines", type=int, required=True)
     plan.add_argument("--risk", action="append", default=[])
     extract = subparsers.add_parser(
-        "extract-report", help="write terminal assistant text from Tintin JSONL"
+        "extract-report", help="write the unique worker JSON object from Tintin JSONL"
     )
     extract.add_argument("transcript", type=Path)
     extract.add_argument("--output", type=Path, required=True)
@@ -781,6 +955,22 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("path", type=Path)
     validate.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
     validate.add_argument("--target", required=True)
+    repair = subparsers.add_parser(
+        "repair-prompt", help="build one same-session format-correction prompt"
+    )
+    repair.add_argument("path", type=Path)
+    repair.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    repair.add_argument("--target", required=True)
+    worker_prompt = subparsers.add_parser(
+        "worker-prompt", help="write a deterministic review-worker assignment"
+    )
+    worker_prompt.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    worker_prompt.add_argument("--target", required=True)
+    worker_prompt.add_argument("--repo", required=True)
+    worker_prompt.add_argument("--base-sha", required=True)
+    worker_prompt.add_argument("--head-sha", required=True)
+    worker_prompt.add_argument("--changed-path", action="append", required=True)
+    worker_prompt.add_argument("--output", type=Path, required=True)
     stats = subparsers.add_parser(
         "transcript-stats", help="print Tintin runtime-budget statistics as JSON"
     )
@@ -789,6 +979,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "provenance", help="print provenance for an effective model"
     )
     provenance.add_argument("model")
+    fingerprint = subparsers.add_parser(
+        "finding-fingerprint", help="print a stable finding identity"
+    )
+    fingerprint.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    fingerprint.add_argument("--severity", required=True, choices=("block", "warn"))
+    fingerprint.add_argument("--path", required=True)
+    fingerprint.add_argument("--line", required=True, type=int)
+    fingerprint.add_argument("--description", required=True)
     stream = subparsers.add_parser(
         "stream-host", help="persist Pi host JSON while reporting safe progress"
     )
@@ -843,11 +1041,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             else 1
         )
+    if args.command == "repair-prompt":
+        sys.stdout.write(
+            f"{report_repair_prompt(args.path.read_text(), expected_skill=args.skill, expected_target=args.target)}\n"
+        )
+        return 0
+    if args.command == "worker-prompt":
+        args.output.write_text(
+            build_worker_prompt(
+                skill=args.skill,
+                target=args.target,
+                repo=args.repo,
+                base_sha=args.base_sha,
+                head_sha=args.head_sha,
+                changed_paths=args.changed_path,
+            )
+        )
+        return 0
     if args.command == "transcript-stats":
         sys.stdout.write(f"{json.dumps(asdict(transcript_stats(args.transcript)), indent=2)}\n")
         return 0
     if args.command == "provenance":
         sys.stdout.write(f"{provenance_for_model(args.model)}\n")
+        return 0
+    if args.command == "finding-fingerprint":
+        sys.stdout.write(
+            f"{finding_fingerprint(skill=args.skill, severity=args.severity, path=args.path, line=args.line, description=args.description)}\n"
+        )
         return 0
     if args.command == "stream-host":
         sys.stdout.write(f"{stream_host_events(sys.stdin, args.transcript, sys.stderr)}\n")

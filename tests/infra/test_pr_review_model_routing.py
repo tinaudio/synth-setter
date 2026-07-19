@@ -300,17 +300,24 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
-    assert "extract its terminal assistant text without interpreting it" in text
+    assert "extract a unique worker JSON object from harmless surrounding prose" in text
     assert '"severity": "block"' in text
     assert "The worker does not render Markdown or attach provenance" in text
-    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
+    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 7
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    assert "480-second foreground deadline" in text
+    assert "one validated report per selected skill" in text
+    assert "resume the same worker once" in text
+    assert "Do not repeat the review" in text
+    assert "defer the unfinished second pass to aftercare" in text
+    assert re.search(r"late Codex-verified\s+findings", text)
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
+    assert "get_subagent_result(wait: false)" in text
     assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
@@ -380,7 +387,8 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
     stderr_text = stderr.getvalue().decode()
     match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr_text)
     assert match is not None
-    transcript = REPO_ROOT / match.group(1)
+    transcript = Path(match.group(1))
+    assert transcript.is_absolute()
     try:
         assert transcript.read_text().count("message_") == 2
         assert "openai-codex/gpt-5.6-terra started" in stderr_text
@@ -459,6 +467,78 @@ def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
         )
 
 
+def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
+    """Keep deferred second passes auditable after the foreground host exits."""
+    launcher = (REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text()
+    aftercare = (REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py").read_text()
+
+    assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
+    assert "run_pi_review_aftercare.py" in launcher
+    assert "start_new_session" in aftercare
+    assert "openai-codex" in aftercare
+    assert "gpt-5.6-terra" in aftercare
+    assert "anthropic" not in aftercare.lower()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
+    """Drive the real aftercare entrypoint through manifest validation and process launch.
+
+    :param tmp_path: Temporary directory containing the fake Pi executable.
+    """
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py"
+    manifest = REPO_ROOT / ".agent-reviews/test-aftercare-manifest.json"
+    marker = tmp_path / "aftercare-ran"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        '[[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]\n'
+        '[[ -z "${SYNTH_SETTER_PI_REVIEW:-}" ]]\n'
+        f"touch {marker}\n"
+    )
+    pi.chmod(0o755)
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mode": "no-comments",
+                "repo": "tinaudio/synth-setter",
+                "pr_number": 2174,
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "target": "PR #2174",
+                "deferred_passes": [
+                    {
+                        "skill": "correctness-review",
+                        "pass_name": "free-pool",
+                        "model": "kimi-coding/k3",
+                        "thinking": "high",
+                    }
+                ],
+                "foreground_fingerprints": [],
+            }
+        )
+    )
+    try:
+        sh = importlib.import_module("sh")
+        result = sh.Command(sys.executable)(
+            launcher,
+            manifest,
+            _cwd=REPO_ROOT,
+            _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+        pid = int(str(result))
+        deadline = time.monotonic() + 2
+        while not marker.exists() and time.monotonic() < deadline:
+            pass
+        assert marker.exists()
+        _assert_process_terminated(pid, timeout=2)
+    finally:
+        manifest.unlink(missing_ok=True)
+        manifest.with_suffix(".log").unlink(missing_ok=True)
+
+
 def test_no_comments_review_uses_isolated_findings_path() -> None:
     """Prevent concurrent reviews from sharing one global findings file."""
     text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
@@ -467,7 +547,8 @@ def test_no_comments_review_uses_isolated_findings_path() -> None:
     assert "review_sentinel.py findings" in text
     assert str(fixed_findings_path) not in text
     assert "exact printed path" in text
-    assert "remove that exact file" in text
+    assert "pi_review_render.py" in text
+    assert "--remove-payload" in text
 
 
 def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
@@ -476,8 +557,8 @@ def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
 
     assert "If `is_zero_diff == true`" in text
     assert "A non-zero diff with no findings" in text
-    assert 'findings_json_path="${findings_json_path:-}"' in text
-    assert "if `findings_json_path` is non-empty" in text
+    assert "pi_review_render.py" in text
+    assert "complete `## Pi review audit`" in text
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:

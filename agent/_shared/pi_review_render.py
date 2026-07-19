@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""Render Pi no-comments payloads without host-model Markdown reconstruction."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+from agent._shared.review_sentinel import make_review_path
+
+
+class ReviewFinding(BaseModel, strict=True, extra="forbid"):
+    """One already-aggregated inline finding.
+
+    .. attribute :: path
+        :type: str
+
+        Repository-relative file path.
+
+    .. attribute :: line
+        :type: int
+
+        Positive right-side line anchor.
+
+    .. attribute :: body
+        :type: str
+
+        Markdown body including skill and severity tag.
+    """
+
+    path: str = Field(min_length=1)
+    line: int = Field(gt=0)
+    body: str = Field(min_length=1)
+
+
+class ReviewPayload(BaseModel, strict=True, extra="forbid"):
+    """Aggregated review data consumed by foreground delivery.
+
+    .. attribute :: pr_number
+        :type: int | None
+
+        Pull request number, or ``None`` for local mode.
+
+    .. attribute :: repo
+        :type: str
+
+        GitHub repository identity.
+
+    .. attribute :: review_body
+        :type: str
+
+        Lead-in, provider incidents, health, and audit Markdown.
+
+    .. attribute :: findings
+        :type: tuple[ReviewFinding, ...]
+
+        Aggregated findings in review order.
+    """
+
+    pr_number: int | None = Field(default=None, gt=0)
+    repo: str = Field(min_length=1)
+    review_body: str = Field(min_length=1)
+    findings: tuple[ReviewFinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RenderContext:
+    """Foreground state included in the deterministic report summary.
+
+    .. attribute :: target
+        :type: str
+
+        Human-readable PR or branch label.
+
+    .. attribute :: head_sha
+        :type: str
+
+        Full reviewed commit SHA.
+
+    .. attribute :: head_ref
+        :type: str
+
+        Reviewed branch name.
+
+    .. attribute :: upstream_sha
+        :type: str
+
+        Upstream SHA or ``none``.
+
+    .. attribute :: worktree_state
+        :type: str
+
+        ``clean`` or ``dirty``.
+
+    .. attribute :: unchanged_count
+        :type: int
+
+        Number of repeated non-progress reviews.
+
+    .. attribute :: skill_count
+        :type: int
+
+        Number of selected checklists.
+
+    .. attribute :: next_step
+        :type: str
+
+        Caller-specific remediation or posting guidance.
+    """
+
+    target: str
+    head_sha: str
+    head_ref: str
+    upstream_sha: str
+    worktree_state: str
+    unchanged_count: int
+    skill_count: int
+    next_step: str
+
+
+def _validated_payload(payload: ReviewPayload | Mapping[str, object]) -> ReviewPayload:
+    """Return strict payload data from a model or mapping.
+
+    :param payload: Validated payload or raw mapping.
+    :returns: Strict review payload.
+    """
+    if isinstance(payload, ReviewPayload):
+        return payload
+    return ReviewPayload.model_validate_json(json.dumps(payload))
+
+
+def render_markdown(
+    payload: ReviewPayload | Mapping[str, object], *, context: RenderContext
+) -> str:
+    """Render the complete no-comments report from structured inputs.
+
+    :param payload: Aggregated review body and findings.
+    :param context: Reviewed state and summary metadata.
+    :returns: Canonical Markdown sentinel content.
+    """
+    review = _validated_payload(payload)
+    grouped: dict[str, list[ReviewFinding]] = {}
+    for finding in review.findings:
+        grouped.setdefault(finding.path, []).append(finding)
+
+    blocks = sum(":block]" in finding.body for finding in review.findings)
+    warns = sum(":warn]" in finding.body for finding in review.findings)
+    lines = [
+        f"# repo-review-full-no-comments — {context.target}",
+        "",
+        review.review_body,
+        "",
+        "## Inline findings (would be posted by `/repo-review-full`)",
+        "",
+    ]
+    for path, findings in grouped.items():
+        lines.append(f"### `{path}`")
+        lines.extend(f"- **L{finding.line}** — {finding.body}" for finding in findings)
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- {blocks} BLOCK, {warns} WARN across {context.skill_count} skills",
+            f"- Reviewed at: {context.head_sha}",
+            "- Progress: "
+            f"branch {context.head_ref}; HEAD {context.head_sha}; "
+            f"upstream {context.upstream_sha}; worktree {context.worktree_state}; "
+            f"unchanged review count {context.unchanged_count}.",
+            f"- {context.next_step}",
+        ]
+    )
+    if context.unchanged_count > 0:
+        lines.append(
+            "- Possible review loop: make coherent remediation durable or report the blocker "
+            "before retrying."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_payload(
+    payload_path: Path,
+    *,
+    output_path: Path,
+    context: RenderContext,
+    remove_payload: bool,
+) -> str:
+    """Validate, atomically write, and optionally remove one findings payload.
+
+    :param payload_path: Exact invocation-isolated JSON payload path.
+    :param output_path: Canonical sentinel destination.
+    :param context: Reviewed state and summary metadata.
+    :param remove_payload: Whether to unlink only ``payload_path`` after success.
+    :returns: Markdown written to ``output_path``.
+    """
+    payload = ReviewPayload.model_validate_json(payload_path.read_text())
+    report = render_markdown(payload, context=context)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=output_path.parent, prefix=".pi-review-")
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            output.write(report)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, output_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    if remove_payload:
+        payload_path.unlink()
+    return report
+
+
+def _git(*args: str) -> str:
+    """Return stripped output from one read-only Git command.
+
+    :param *args: Git arguments.
+    :returns: Command standard output.
+    :raises RuntimeError: If Git exits nonzero.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise RuntimeError("git executable not found on PATH")
+    result = subprocess.run(  # noqa: S603
+        [git, *args],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
+    return result.stdout.strip()
+
+
+def resolve_context(
+    payload: ReviewPayload,
+    *,
+    target: str,
+    skill_count: int,
+    next_step: str,
+) -> RenderContext:
+    """Derive review progress and Git state for deterministic rendering.
+
+    :param payload: Validated aggregate payload.
+    :param target: Human-readable PR or branch label.
+    :param skill_count: Number of selected checklists.
+    :param next_step: Caller-specific follow-up guidance.
+    :returns: Render context persisted in the report summary.
+    """
+    head_sha = _git("rev-parse", "HEAD")
+    head_ref = _git("branch", "--show-current")
+    try:
+        upstream_sha = _git("rev-parse", "@{upstream}")
+    except RuntimeError:
+        upstream_sha = "none"
+    status = _git("status", "--porcelain")
+    worktree_state = "dirty" if status else "clean"
+    state_digest = hashlib.sha256(status.encode()).hexdigest()
+    current_state = f"{head_sha}|{upstream_sha}|{state_digest}"
+    progress_key = hashlib.sha256(f"{head_ref}\n".encode()).hexdigest()
+    progress_path = Path(
+        f".agent-reviews/repo-review-full-no-comments-progress.{progress_key}.txt"
+    )
+    previous_count = 0
+    previous_state = ""
+    if progress_path.exists():
+        previous = progress_path.read_text().strip().split(" ", 1)
+        if len(previous) == 2:
+            previous_count = int(previous[0])
+            previous_state = previous[1]
+    is_non_pass = bool(payload.findings) or "[pr-health]" in payload.review_body
+    unchanged_count = previous_count + 1 if is_non_pass and current_state == previous_state else 0
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(f"{unchanged_count} {current_state}\n")
+    return RenderContext(
+        target=target,
+        head_sha=head_sha,
+        head_ref=head_ref,
+        upstream_sha=upstream_sha,
+        worktree_state=worktree_state,
+        unchanged_count=unchanged_count,
+        skill_count=skill_count,
+        next_step=next_step,
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the deterministic renderer CLI parser.
+
+    :returns: Argument parser.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--payload", type=Path, required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--skill-count", type=int, required=True)
+    parser.add_argument("--next-step", required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--remove-payload", action="store_true")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Render one payload and print the report plus sentinel path.
+
+    :param argv: Optional CLI arguments.
+    :returns: Process exit status.
+    """
+    args = _build_parser().parse_args(argv)
+    payload = ReviewPayload.model_validate_json(args.payload.read_text())
+    context = resolve_context(
+        payload,
+        target=args.target,
+        skill_count=args.skill_count,
+        next_step=args.next_step,
+    )
+    output_path = args.output or Path(make_review_path(context.head_sha))
+    report = render_payload(
+        args.payload,
+        output_path=output_path,
+        context=context,
+        remove_payload=args.remove_payload,
+    )
+    sys.stdout.write(f"{report}Sentinel: {output_path}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

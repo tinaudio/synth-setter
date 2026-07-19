@@ -156,12 +156,51 @@ skip `lance-review`.
 Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
 with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
 `run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
-helper output. Tintin removes `Agent` from
-subagents, so do not spawn a Pi orchestrator and then ask it to nest workers.
-Launch all independent passes in one message, capture each start result's
-`Agent ID` and `Output file`, then collect them with
-`get_subagent_result(wait: true)`. Every pass receives the same complete worker
-prompt and must not modify the checkout or GitHub state.
+helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
+orchestrator and then ask it to nest workers.
+
+Generate one complete assignment file per selected skill before the launch:
+
+```bash
+./.venv/bin/python agent/_shared/pi_review_routing.py worker-prompt \
+  --skill <skill> --target <target> --repo <owner/name> \
+  --base-sha <base> --head-sha <head> \
+  --changed-path <path> [--changed-path <path> ...] \
+  --output <absolute-assignment-path>
+```
+
+Both model passes share that immutable file. Their `Agent` prompt is only:
+`Read and execute the complete review assignment at <absolute-assignment-path>.`
+Do not make the host model reproduce the diff metadata, checklist contract, or
+JSON schema in every tool call. Launch all independent passes in one message and
+capture each start result's `Agent ID` and `Output file`.
+
+The foreground response has a **480-second foreground deadline** measured from
+the first worker launch, reserving two minutes of the ten-minute response budget
+for validation, aggregation, and delivery. The foreground quality floor is
+**one validated report per selected skill** from either the Codex or free-pool
+pass. Prefer Codex: collect the Codex agents together with
+`get_subagent_result(wait: true)`, then inspect every free-pool agent with
+`get_subagent_result(wait: false)` rather than joining the slowest free-pool
+worker. If a Codex attempt fails but its free-pool peer has a valid report, that
+report satisfies the foreground floor; its findings remain provisional until
+Codex verification and therefore move to aftercare rather than entering the
+foreground aggregation unverified.
+
+As soon as every skill meets the floor, verify and merge only second-pass
+findings already available within the deadline. Do not wait for an unfinished
+second pass, replacement candidate, or verification worker past the deadline;
+**defer the unfinished second pass to aftercare**. Before returning, write the
+strict manifest at `$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head,
+deferred skill/pass/model rows, and fingerprints for every foreground finding.
+The launcher validates it and starts detached aftercare. Use schema version 1
+with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
+`base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
+(`skill`, `pass_name`, exact `model`, `thinking`), and
+`foreground_fingerprints`. Aftercare may post only **late Codex-verified
+findings** against the unchanged PR head, following
+`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot
+create aftercare manifests because there is no PR to receive late comments.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
 inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
@@ -170,7 +209,10 @@ current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees
 assigned `tdd-refactor` pass may search tracked files with `git grep` and
 `git ls-files`, as its exhaustive-reference contract requires. Every Bash tool call has a 60-second timeout. A command timeout or hard-aborted
 turn-budget result is a failed attempt; add its exact diagnostic to the audit and
-retry through the candidate sequence. Gracefully wrapped `steered` attempts proceed to report validation and count as successful when their final JSON passes the contract. Record `success` with the wrap-up detail in the audit.
+retry through the candidate sequence only when that pass is still needed for the
+foreground floor. Gracefully wrapped `steered` attempts proceed to report
+validation and count as successful when their final JSON passes the contract.
+Record `success` with the wrap-up detail in the audit.
 
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
@@ -231,14 +273,14 @@ quota/capacity, move the successful Codex pass's effective model to the end of
 prefers a distinct fallback even when the Codex pass reached its own fallback.
 Continue through that bounded Codex sequence only for the same availability
 failures. Record each launch as `Codex fallback` in the audit detail. Never resume
-a failed session under a different model. Tool/checklist, malformed-report,
-timeout, and hard-aborted turn-budget failures do not trigger the cross-provider
-fallback.
+a failed session under a different model. Tool/checklist, malformed-report
+after one same-session correction, timeout, and hard-aborted turn-budget
+failures do not trigger the cross-provider fallback.
 
 A completed worker is not successful until its final assistant JSON passes
 the report contract. The `Output file` is Tintin JSONL audit data, not the
-worker result; extract its terminal assistant text without interpreting it, then
-validate the extracted JSON:
+worker result; extract a unique worker JSON object from harmless surrounding prose,
+then validate the extracted JSON:
 
 ```bash
 ./.venv/bin/python agent/_shared/pi_review_routing.py extract-report \
@@ -253,18 +295,33 @@ columns. The token number is explicitly cumulative processed context across
 turns, not generated output, so label it exactly as the table does.
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
-directly to `validate-report`. `extract-report` only selects terminal assistant
-text; it never repairs worker formatting. If extraction or strict JSON validation
-fails, record `malformed report` and try the next candidate. This
-is a bounded report-quality retry, not a quota classification. Authentication
-errors follow the provider-aware free-pool rule above; tool and checklist errors
-stop immediately. If a Codex pass exhausts its candidates, stop before aggregation
-and invoke terminal failure delivery; never
-write a PASS sentinel after silently dropping the required Codex pass. If a
-free-pool pass exhausts its `candidates` and bounded Codex `fallback_candidates`,
-continue the review with Codex-only findings, record the failed free-pool attempt
-chain in the audit, and add the exact sentence `Free-pool review failed; only Codex ran.` to `review_body` so the posted review or rendered report is explicit
-and truthful about the degraded coverage.
+directly to `validate-report`. `extract-report` will **extract a unique worker
+JSON object from harmless surrounding prose** or a Markdown fence, but it never
+repairs JSON syntax, duplicate keys, identity, fields, or finding semantics.
+
+If extraction or strict validation still fails, record `malformed report`, build
+the exact correction prompt, and **resume the same worker once**:
+
+```bash
+./.venv/bin/python agent/_shared/pi_review_routing.py repair-prompt \
+  <report-path> --skill <skill-name> --target <PR-or-branch-label>
+```
+
+Send that output through `Agent(resume: <agent-id>)`. It explicitly says
+`Do not repeat the review`; the worker must preserve its analysis and make a format-only
+correction without tools. Re-extract and revalidate the resumed response. Only
+if that correction remains invalid may the orchestrator try the next candidate,
+and only while the pass is required for the foreground quality floor. Otherwise
+defer or record the failed second pass without making the foreground wait for a
+complete replacement review. This is a bounded report-quality correction, not a
+quota classification.
+
+Authentication errors follow the provider-aware free-pool rule above; tool and
+checklist errors stop the affected pass immediately. The foreground fails closed
+only if a selected skill has no validated Codex or free-pool report by the
+foreground deadline. Never write a PASS sentinel after silently dropping an
+entire skill. If the free-pool pass is unavailable in the foreground, continue
+with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
 changes this flow, run both host harnesses against the PR from the worktree:

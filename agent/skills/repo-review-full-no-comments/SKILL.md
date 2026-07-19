@@ -16,6 +16,10 @@ Same analysis as `/repo-review-full`, with two differences:
 2. A PR is **not** required. If no PR exists for the current branch, the
    orchestrator reviews the local branch vs. the default branch.
 
+The foreground dry run posts nothing. On an existing PR, deferred second passes
+may later post only new Codex-verified findings through detached aftercare; this
+preserves the sub-ten-minute response without dropping slow independent review.
+
 The review implementation is Pi-native. Claude Code and Codex invoke the same
 headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
@@ -158,7 +162,8 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > and returns the exact failure report before exiting nonzero.
 >
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
-> `gh pr review` command. This step has zero GitHub side effects.
+> `gh pr review` command. The foreground step has zero GitHub side effects;
+> `repo-review-aftercare.md` owns the narrowly scoped late-finding exception.
 >
 > Transform the JSON payload at the exact printed findings path into a Markdown
 > report. The
@@ -167,61 +172,23 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > `pre-pr-review-gate.sh` parser validates this filename after its local
 > PreToolUse registration is restored.
 >
-> **Compute the sentinel path** — the format is owned by
-> `agent/_shared/review_sentinel.py` (single source of truth shared with the
-> gate hook):
+> **Render through the deterministic helper.** Do not hand-write the sentinel
+> path, reconstruct Markdown, or embed the payload in a generated shell program.
+> The helper validates the isolated payload, derives Git/progress state, writes
+> the canonical sentinel atomically, removes only that payload, and prints the
+> exact foreground deliverable:
 >
 > ```bash
-> REVIEW_PATH=$(python3 agent/_shared/review_sentinel.py path "$(git rev-parse HEAD)")
-> mkdir -p "$(dirname "$REVIEW_PATH")"
+> ./.venv/bin/python agent/_shared/pi_review_render.py \
+>   --payload <exact-findings-json-path> \
+>   --target <PR-or-branch-label> --skill-count <K> \
+>   --next-step <caller-specific-tip> --remove-payload
 > ```
 >
-> The result is of the form
-> `.agent-reviews/repo-review-full-no-comments.<40-char-sha>.md`. **Do not
-> hand-write the filename** — always go through the helper.
->
-> **Record review progress.** Before writing the report, record a compact
-> per-branch state file under `.agent-reviews/`. It makes repeated no-progress
-> reviews visible without making ordinary investigation a failure:
->
-> ```bash
-> is_zero_diff="${is_zero_diff:-false}"
-> findings_json_path="${findings_json_path:-}"
-> finding_count=0
-> pr_health_flag_count=0
-> # The zero-diff PASS path skips Steps 2–6 and keeps both counts at zero.
-> # Otherwise derive them from the Step 6 findings JSON.
-> if [[ "$is_zero_diff" == false && -n "$findings_json_path" && -f "$findings_json_path" ]]; then
->   finding_count=$(jq '.findings | length' "$findings_json_path")
->   pr_health_flag_count=$(jq -r '.review_body' "$findings_json_path" | grep -c '\[pr-health\]' || true)
-> fi
-> is_non_pass=false
-> if ((finding_count > 0 || pr_health_flag_count > 0)); then
->   is_non_pass=true
-> fi
-> progress_key=$(git branch --show-current | sha256sum | awk '{print $1}')
-> progress_path=".agent-reviews/repo-review-full-no-comments-progress.${progress_key}.txt"
-> current_head=$(git rev-parse HEAD)
-> current_upstream=$(git rev-parse '@{upstream}' 2>/dev/null || echo none)
-> status_porcelain=$(git status --porcelain)
-> worktree_state=clean
-> [[ -n "$status_porcelain" ]] && worktree_state=dirty
-> current_status=$(printf '%s' "$status_porcelain" | sha256sum | awk '{print $1}')
-> current_state="${current_head}|${current_upstream}|${current_status}"
-> previous_state=""
-> previous_count=0
-> if [[ -f "$progress_path" ]]; then
->   read -r previous_count previous_state <"$progress_path" || true
-> fi
-> unchanged_count=0
-> if "$is_non_pass" && [[ "$current_state" == "$previous_state" ]]; then
->   unchanged_count=$((previous_count + 1))
-> fi
-> printf '%s %s\n' "$unchanged_count" "$current_state" >"$progress_path"
-> ```
->
-> Include this line in every report Summary: `Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count <unchanged_count>.` If `unchanged_count` is greater
-> than zero, append: `Possible review loop: make coherent remediation durable or report the blocker before retrying.`
+> Execute this once and return its stdout verbatim. The result ends with the
+> absolute or repository-relative canonical `Sentinel: <path>` line. The layout
+> below documents helper output; it is not an instruction to generate another
+> report.
 >
 > **Write the report to `$REVIEW_PATH`** using this layout:
 >
@@ -295,9 +262,8 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > - The sentinel file is the gate's contract; your returned report is the human
 >   deliverable. Always produce both.
 >
-> After rendering or failing closed, if `findings_json_path` is non-empty,
-> remove that exact file with `rm -f -- "$findings_json_path"`. Never remove or
-> read another review's findings file.
+> On ordinary success, `--remove-payload` removes the exact isolated findings
+> file. Terminal failure delivery remains responsible for its own cleanup.
 >
 > **Return value.** Reply with the full Markdown report (the exact content you
 > wrote to the sentinel) followed by a final line: `Sentinel: <REVIEW_PATH>`.
@@ -306,10 +272,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## Notes
 
-- This skill is intentionally side-effect-free on GitHub. If a future caller
-  wants the comments posted after all, they can rerun with `/repo-review-full`
-  — the analysis is deterministic enough that re-running is cheap relative to
-  the value of an explicit "no, don't post" mode.
+- This skill's foreground result is side-effect-free on GitHub. For an existing
+  PR, detached aftercare may post one review containing only new Codex-verified
+  findings from passes deferred at the response deadline. It rechecks the exact
+  head immediately before posting. Local-branch mode remains fully side-effect-free.
 - A non-PASS report starts a remediation loop, not a license to retry the same
   review. Follow the non-PASS Summary instruction before another review or a
   handoff. This is advisory so investigation and deliberately uncommitted

@@ -13,12 +13,15 @@ import sh
 
 from agent._shared.pi_review_routing import (
     build_review_plan,
+    build_worker_prompt,
     extract_report,
+    finding_fingerprint,
     main,
     parse_available_models,
     parse_worker_report,
     provenance_for_model,
     report_is_parseable,
+    report_repair_prompt,
     stream_host_events,
     transcript_stats,
 )
@@ -306,6 +309,9 @@ def test_report_is_parseable_accepts_structured_json() -> None:
         '{"severity":"warn","path":"./src/example.py","line":42,'
         '"description":"Defect."}],"what_looks_good":["Clear."]}',
         '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":".","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
         '{"severity":"warn","path":"src/example.py","line":0,'
         '"description":"Defect."}],"what_looks_good":["Clear."]}',
         '{"skill":"code-health","target":"PR #1","findings":['
@@ -323,6 +329,39 @@ def test_report_is_parseable_rejects_invalid_structured_json(report: str) -> Non
         expected_skill="code-health",
         expected_target="PR #1",
     )
+
+
+def test_finding_fingerprint_normalizes_description_whitespace() -> None:
+    """Identify the same late finding despite inconsequential prose spacing."""
+    first = finding_fingerprint(
+        skill="code-health",
+        severity="warn",
+        path="src/example.py",
+        line=42,
+        description="Concern with  extra spacing.",
+    )
+    second = finding_fingerprint(
+        skill="code-health",
+        severity="warn",
+        path="src/example.py",
+        line=42,
+        description="Concern with extra spacing.",
+    )
+
+    assert first == second
+    assert len(first) == 64
+
+
+def test_parse_worker_report_rejects_duplicate_keys() -> None:
+    """Reject last-write-wins JSON that could silently erase findings."""
+    report = (
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"block","path":"src/example.py","line":42,'
+        '"description":"Defect."}],"findings":[],"what_looks_good":["Clear."]}'
+    )
+
+    with pytest.raises(ValueError, match="Duplicate JSON key: findings"):
+        parse_worker_report(report, expected_skill="code-health", expected_target="PR #1")
 
 
 def test_parse_worker_report_returns_validated_boundary_model() -> None:
@@ -536,25 +575,53 @@ def test_extract_report_empty_terminal_assistant_raises(tmp_path: Path) -> None:
         extract_report(transcript)
 
 
-def test_extract_report_leaves_narrated_output_for_validation(tmp_path: Path) -> None:
-    """Keep extraction independent from the worker-result schema.
+def test_extract_report_selects_unique_json_object_from_narration(tmp_path: Path) -> None:
+    """Discard harmless prose around one complete worker report.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
-    narrated = 'Result: {"skill":"code-health"}'
+    report = {
+        "skill": "code-health",
+        "target": "smoke",
+        "findings": [],
+        "what_looks_good": ["Clear."],
+    }
+    narrated = f"Review complete.\n```json\n{json.dumps(report)}\n```"
     transcript.write_text(
         json.dumps({"message": {"role": "assistant", "content": narrated}}) + "\n"
     )
 
     extracted = extract_report(transcript)
 
-    assert extracted == narrated
-    assert not report_is_parseable(
+    assert json.loads(extracted) == report
+    assert report_is_parseable(
         extracted,
         expected_skill="code-health",
         expected_target="smoke",
     )
+
+
+def test_extract_report_multiple_worker_objects_raises(tmp_path: Path) -> None:
+    """Reject ambiguous narration containing competing final reports.
+
+    :param tmp_path: Temporary location for a transcript.
+    """
+    transcript = tmp_path / "worker.output"
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "smoke",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
+    )
+    transcript.write_text(
+        json.dumps({"message": {"role": "assistant", "content": f"{report}\n{report}"}}) + "\n"
+    )
+
+    with pytest.raises(ValueError, match="multiple worker JSON objects"):
+        extract_report(transcript)
 
 
 def test_extract_report_returns_final_retraction_for_validation(tmp_path: Path) -> None:
@@ -600,6 +667,41 @@ def test_extract_report_missing_assistant_text_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="assistant text"):
         extract_report(transcript)
+
+
+def test_report_repair_prompt_preserves_analysis_and_includes_diagnostic() -> None:
+    """Ask the same worker for a format-only correction with actionable context."""
+    report = '{"skill":"plugin:code-health","target":"PR #1"}'
+
+    prompt = report_repair_prompt(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
+
+    assert "Do not repeat the review" in prompt
+    assert "Do not add, remove, or reinterpret findings" in prompt
+    assert "Worker report identity does not match" in prompt or "Field required" in prompt
+    assert report in prompt
+
+
+def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplication() -> None:
+    """Generate the complete worker packet outside the host LLM."""
+    prompt = build_worker_prompt(
+        skill="correctness-review",
+        target="PR #2174",
+        repo="tinaudio/synth-setter",
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        changed_paths=("agent/_shared/pi_review_routing.py", "tests/infra/test.py"),
+    )
+
+    assert "PR #2174" in prompt
+    assert "correctness-review" in prompt
+    assert "git diff " + "a" * 40 + ".." + "b" * 40 in prompt
+    assert "agent/_shared/pi_review_routing.py" in prompt
+    assert "exactly one JSON object" in prompt
+    assert "Do not recursively discover" in prompt
 
 
 def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path) -> None:
