@@ -317,11 +317,16 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "one validated report per selected skill" in text
     assert "resume the same worker once" in text
     assert "Do not repeat the review" in text
-    assert "defer the unfinished second pass to aftercare" in text
+    assert "unfinished second pass to aftercare" in text
     assert re.search(r"late Codex-verified\s+findings", text)
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
     assert "get_subagent_result(wait: false)" in text
+    assert re.search(r"poll them a\s+second time in the foreground", text)
+    assert "at most 360 seconds" in text
+    assert "at most 6 turns per" in text
+    assert "parallel Codex verification wave" in text
+    assert "Record its audit status as `deferred`" in text
     assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)

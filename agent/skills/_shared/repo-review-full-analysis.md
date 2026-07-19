@@ -192,12 +192,21 @@ report satisfies the foreground floor; its findings remain provisional until
 Codex verification and therefore move to aftercare rather than entering the
 foreground aggregation unverified.
 
-As soon as every skill meets the floor, verify and merge only second-pass
-findings already available within the deadline. Do not wait for an unfinished
-second pass, replacement candidate, or verification worker past the deadline;
-**defer the unfinished second pass to aftercare**. Before returning, write the
-strict manifest at `$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head,
-deferred skill/pass/model rows, and fingerprints for every foreground finding.
+As soon as every skill meets the floor, take exactly one non-blocking snapshot
+of all second passes with `get_subagent_result(wait: false)`. Never poll them a
+second time in the foreground. If launch elapsed time is at most 360 seconds,
+put free-pool-only candidate findings already present in that snapshot into one
+parallel Codex verification wave, with high thinking and at most 6 turns per
+verifier. Join only that single wave. If more than 360 seconds have elapsed,
+defer all free-pool-only candidates without foreground verification. This
+leaves at least two minutes for deterministic aggregation and delivery.
+
+Do not launch another foreground verifier, wait for an unfinished second pass,
+or retry a second-pass candidate after the single snapshot; **defer the
+unfinished second pass to aftercare**. Record its audit status as `deferred`, not
+`unavailable`. Before returning, write the strict manifest at
+`$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
+skill/pass/model rows, and fingerprints for every foreground finding.
 The launcher validates it and starts detached aftercare. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
@@ -234,7 +243,7 @@ process tree or transcript to understand execution:
 | Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
 | ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
 
-Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
+Use explicit statuses: `success`, `deferred`, `unavailable`, `quota/capacity`,
 `authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
 exact failure diagnostic or allocation reason,
 not a generic summary. Include one row per attempt, including retries and

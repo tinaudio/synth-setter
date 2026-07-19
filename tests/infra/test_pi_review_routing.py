@@ -516,7 +516,7 @@ def test_stream_host_events_empty_notification_ack_preserves_deliverable(tmp_pat
     source = io.StringIO(
         '{"type":"message_end","message":{"role":"assistant","content":"final report"}}\n'
         '{"type":"message_end","message":{"role":"custom","content":"worker finished"}}\n'
-        '{"type":"message_end","message":{"role":"assistant","content":[]}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":"Sentinel: late"}}\n'
     )
 
     assert stream_host_events(source, tmp_path / "host.jsonl", io.StringIO()) == "final report"

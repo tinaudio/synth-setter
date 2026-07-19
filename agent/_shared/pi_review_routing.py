@@ -485,7 +485,8 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                     notification_pending = True
                 elif event.message.role == "assistant":
                     assistant_text = _message_text(event.message)
-                    if assistant_text.strip() or not notification_pending:
+                    has_deliverable = bool(final_text.strip())
+                    if not notification_pending or not has_deliverable:
                         final_text = assistant_text
                     notification_pending = False
             progress.flush()
