@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 import lance
-import pytest
 import numpy as np
+import pytest
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
@@ -137,6 +137,30 @@ def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Pat
     assert dataset.count_rows() == 2
     assert audio.shape == (2, 2, int(_SAMPLE_RATE * _DURATION_SECONDS))
     assert (np.abs(audio.astype(np.float32)).max(axis=(1, 2)) > 0.0).all()
+
+
+def test_make_lance_dataset_compacts_shard_to_one_fragment_and_version(tmp_path: Path) -> None:
+    """The committed shard holds one compacted fragment and no stale versions.
+
+    With ``samples_per_render_batch=2`` over five rows the writer stages three
+    fragments; the final dataset must compact them into one fragment, keep only
+    the post-compaction manifest, and hold exactly the data files that manifest
+    references (pre-compaction files would double the shard's footprint).
+
+    :param tmp_path: Destination directory for the rendered shard.
+    """
+    shard = tmp_path / "shard-000000.lance"
+
+    make_lance_dataset(shard, _torchsynth_render_cfg())
+
+    dataset = lance.dataset(str(shard))
+    fragments = dataset.get_fragments()
+    assert len(fragments) == 1
+    assert dataset.count_rows() == _SAMPLES_PER_SHARD
+    assert len(dataset.versions()) == 1
+    referenced = {Path(f.path).name for frag in fragments for f in frag.metadata.files}
+    on_disk = {p.name for p in (shard / "data").iterdir()}
+    assert on_disk == referenced
 
 
 def test_make_lance_dataset_same_seed_reproduces_the_shard(tmp_path: Path) -> None:
