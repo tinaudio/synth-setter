@@ -205,6 +205,137 @@ def test_main_rejects_known_non_lance_suffix(tmp_path: Path) -> None:
     mock_lance.assert_not_called()
 
 
+def test_cleanup_dataset_tree_missing_path_is_noop(tmp_path: Path) -> None:
+    """Missing staged trees are ignored during cleanup.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    writers._cleanup_dataset_tree(
+        tmp_path / "missing.lance", context="staged lance dataset"
+    )
+
+
+def test_cleanup_dataset_tree_logs_cleanup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Cleanup warnings surface non-ENOENT filesystem failures.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    warned = MagicMock(name="warning")
+
+    def _raise_os_error(_path: Path) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr(writers.shutil, "rmtree", _raise_os_error)
+    monkeypatch.setattr(writers.logger, "warning", warned)
+
+    writers._cleanup_dataset_tree(tmp_path / "staged.lance", context="staged lance dataset")
+
+    warned.assert_called_once()
+
+
+def test_restore_local_backup_if_needed_restores_single_orphaned_backup(
+    tmp_path: Path,
+) -> None:
+    """A lone orphaned backup is promoted back into the live shard path.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    shard = tmp_path / "shard.lance"
+    backup = tmp_path / "shard.lance.backup-1"
+    backup.mkdir()
+    (backup / "sentinel.txt").write_text("restored")
+
+    writers._restore_local_backup_if_needed(shard)
+
+    assert shard.exists()
+    assert not backup.exists()
+    assert (shard / "sentinel.txt").read_text() == "restored"
+
+
+def test_restore_local_backup_if_needed_rejects_multiple_orphaned_backups(
+    tmp_path: Path,
+) -> None:
+    """Multiple orphaned backups fail closed until a human picks the winner.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    (tmp_path / "shard.lance.backup-a").mkdir()
+    (tmp_path / "shard.lance.backup-b").mkdir()
+
+    with pytest.raises(RuntimeError, match="multiple orphaned lance backups"):
+        writers._restore_local_backup_if_needed(tmp_path / "shard.lance")
+
+
+def test_publish_local_lance_dataset_first_publish_moves_staging_into_place(
+    tmp_path: Path,
+) -> None:
+    """First publish adopts the staged shard directly when no live shard exists.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    shard = tmp_path / "shard.lance"
+    staged = tmp_path / ".shard.lance.tmp-1"
+    staged.mkdir()
+    (staged / "sentinel.txt").write_text("published")
+
+    writers._publish_local_lance_dataset(shard, staged)
+
+    assert shard.exists()
+    assert not staged.exists()
+    assert (shard / "sentinel.txt").read_text() == "published"
+
+
+def test_make_lance_dataset_remote_uri_skips_local_staging_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote URIs commit directly without local temp-dir or publish helpers.
+
+    :param monkeypatch: Pytest fixture used to patch module-level callables.
+    """
+    from synth_setter.pipeline.data import lance_shard
+
+    commits: list[tuple[Path | str, object, list[object]]] = []
+    restore_backup = MagicMock(name="restore_backup")
+    metrics = RenderRejectionMetrics(clipped=0, silent=0)
+
+    monkeypatch.setattr(writers, "resolve_param_spec", lambda _name: SimpleNamespace(encoded_width=4))
+    monkeypatch.setattr(writers, "dataset_field_shapes", lambda *_args: {"audio": (1,)})
+    monkeypatch.setattr(writers, "_restore_local_backup_if_needed", restore_backup)
+    monkeypatch.setattr(
+        writers,
+        "_publish_local_lance_dataset",
+        lambda *_args: pytest.fail("local publish should not run for remote URIs"),
+    )
+    monkeypatch.setattr(
+        writers.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: pytest.fail("remote URIs should not allocate local staging dirs"),
+    )
+    monkeypatch.setattr(
+        writers,
+        "_render_in_batches",
+        lambda **_kwargs: metrics,
+    )
+    monkeypatch.setattr(lance_shard, "lance_schema", lambda *_args: "schema")
+    monkeypatch.setattr(lance_shard, "record_batch_from_arrays", lambda *_args: "batch")
+    monkeypatch.setattr(lance_shard, "lance_fragment", lambda *_args: "fragment")
+    monkeypatch.setattr(
+        lance_shard,
+        "commit_lance_dataset",
+        lambda dest, schema, fragments: commits.append((dest, schema, list(fragments))),
+    )
+
+    result = writers.make_lance_dataset("s3://bucket/shard.lance", _smoke_render_cfg())
+
+    assert result == metrics
+    assert commits == [("s3://bucket/shard.lance", "schema", [])]
+    restore_backup.assert_not_called()
+
+
 class _FakePlugin:
     """Stand-in for a loaded VST plugin handle.
 
