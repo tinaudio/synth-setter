@@ -626,6 +626,17 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
     )
     try:
         sh = importlib.import_module("sh")
+        dry_run = sh.Command(sys.executable)(
+            launcher,
+            manifest,
+            "--dry-run",
+            _cwd=REPO_ROOT,
+            _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+        command = json.loads(str(dry_run))
+        assert str(manifest.resolve()) in command[-1]
+        assert "agent/skills/_shared/repo-review-aftercare.md" in command[-1]
+
         result = sh.Command(sys.executable)(
             launcher,
             manifest,

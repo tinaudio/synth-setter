@@ -185,7 +185,11 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >   --next-step <caller-specific-tip> --remove-payload
 > ```
 >
-> Execute this once and return its stdout verbatim. The result ends with the
+> For the Step 1 zero-diff path, which intentionally has no findings payload,
+> invoke the same helper with `--zero-diff --target <target> --reviewed-head <head-sha>` and omit `--payload`, `--skill-count`, `--next-step`, and
+> `--remove-payload`.
+>
+> Execute the applicable form once and return its stdout verbatim. The result ends with the
 > absolute or repository-relative canonical `Sentinel: <path>` line. The layout
 > below documents helper output; it is not an instruction to generate another
 > report.

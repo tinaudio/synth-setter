@@ -514,12 +514,35 @@ def test_stream_host_events_empty_notification_ack_preserves_deliverable(tmp_pat
     :param tmp_path: Temporary location for the live host transcript.
     """
     source = io.StringIO(
-        '{"type":"message_end","message":{"role":"assistant","content":"final report"}}\n'
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"final report\\nSentinel: existing"}}\n'
         '{"type":"message_end","message":{"role":"custom","content":"worker finished"}}\n'
         '{"type":"message_end","message":{"role":"assistant","content":"Sentinel: late"}}\n'
     )
 
-    assert stream_host_events(source, tmp_path / "host.jsonl", io.StringIO()) == "final report"
+    assert (
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+        == "final report\nSentinel: existing"
+    )
+
+
+def test_stream_host_events_substantive_post_notification_response_replaces_draft(
+    tmp_path: Path,
+) -> None:
+    """Keep a real final report that follows a worker completion notification.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":"draft"}}\n'
+        '{"type":"message_end","message":{"role":"custom","content":"worker finished"}}\n'
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"# repo-review-full-no-comments — final"}}\n'
+    )
+
+    result = stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+    assert result == "# repo-review-full-no-comments — final"
 
 
 def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> None:

@@ -170,6 +170,31 @@ def test_renderer_cli_real_process_writes_report(tmp_path: Path) -> None:
     assert not payload_path.exists()
 
 
+def test_renderer_cli_zero_diff_writes_pass_sentinel(tmp_path: Path) -> None:
+    """Render zero-diff PASS without a findings payload from skipped analysis steps.
+
+    :param tmp_path: Temporary sentinel directory.
+    """
+    output_path = tmp_path / f"repo-review-full-no-comments.{'d' * 40}.md"
+    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_render.py"
+    head = str(sh.Command("git")("rev-parse", "HEAD")).strip()
+
+    result = sh.Command(sys.executable)(
+        script,
+        "--zero-diff",
+        "--target",
+        "branch clean",
+        "--reviewed-head",
+        head,
+        "--output",
+        output_path,
+        _cwd=Path(__file__).resolve().parents[2],
+    )
+
+    assert "PASS — no findings across all skills" in output_path.read_text()
+    assert f"Sentinel: {output_path}" in str(result)
+
+
 def test_render_payload_writes_canonical_sentinel_and_removes_exact_input(
     tmp_path: Path,
 ) -> None:

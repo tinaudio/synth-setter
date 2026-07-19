@@ -65,6 +65,9 @@ _FREE_POOL_CANDIDATES = (
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/tencent/hy3:free",
 )
+PINNED_REVIEW_MODELS = frozenset(
+    (*_DEEP_CODEX_CANDIDATES, *_STANDARD_CODEX_CANDIDATES, *_FREE_POOL_CANDIDATES)
+)
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -448,6 +451,17 @@ def _redact_diagnostic(diagnostic: str) -> str:
     )
 
 
+def _is_notification_acknowledgement(text: str, deliverable: str) -> bool:
+    """Identify empty or sentinel-only acknowledgements after worker notifications.
+
+    :param text: Assistant text following a custom notification.
+    :param deliverable: Last substantive host response.
+    :returns: Whether ``text`` carries no new review deliverable.
+    """
+    stripped = text.strip()
+    return not stripped or (stripped.startswith("Sentinel:") and "Sentinel:" in deliverable)
+
+
 def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> str:
     """Persist Pi JSON events live and emit a sanitized progress projection.
 
@@ -485,8 +499,10 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                     notification_pending = True
                 elif event.message.role == "assistant":
                     assistant_text = _message_text(event.message)
-                    has_deliverable = bool(final_text.strip())
-                    if not notification_pending or not has_deliverable:
+                    is_acknowledgement = notification_pending and _is_notification_acknowledgement(
+                        assistant_text, final_text
+                    )
+                    if not is_acknowledgement:
                         final_text = assistant_text
                     notification_pending = False
             progress.flush()

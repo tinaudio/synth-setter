@@ -14,18 +14,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+if __package__:
+    from agent._shared.pi_review_routing import PINNED_REVIEW_MODELS
+else:
+    from pi_review_routing import PINNED_REVIEW_MODELS
+
 _AFTERCARE_MODEL = "gpt-5.6-terra"
 _AFTERCARE_PROVIDER = "openai-codex"
 _AFTERCARE_THINKING = "medium"
-_PINNED_MODELS = frozenset(
-    {
-        "kimi-coding/k3",
-        "openai-codex/gpt-5.6-sol",
-        "openai-codex/gpt-5.6-terra",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/tencent/hy3:free",
-    }
-)
 
 
 class DeferredPass(BaseModel, strict=True, extra="forbid"):
@@ -76,11 +72,11 @@ class DeferredPass(BaseModel, strict=True, extra="forbid"):
         :returns: Validated deferred pass.
         :raises ValueError: If model provenance conflicts with the logical pass.
         """
-        if self.model not in _PINNED_MODELS:
+        if self.model not in PINNED_REVIEW_MODELS:
             raise ValueError("Deferred pass model is outside the pinned review pool")
         is_codex = self.model.startswith("openai-codex/")
         verification_is_codex = self.verification_model.startswith("openai-codex/")
-        if self.verification_model not in _PINNED_MODELS or not verification_is_codex:
+        if self.verification_model not in PINNED_REVIEW_MODELS or not verification_is_codex:
             raise ValueError("Deferred pass requires a pinned Codex verification model")
         codex_label = "codex"
         expected_codex_origin = self.pass_name == codex_label or self.origin == "codex-fallback"
@@ -203,20 +199,18 @@ def launch_aftercare(manifest_path: Path) -> int:
     """
     load_manifest(manifest_path)
     command = build_command(manifest_path)
-    log_path = manifest_path.with_suffix(".log")
     environment = os.environ.copy()
     environment.pop("SYNTH_SETTER_PI_REVIEW", None)
     environment["SYNTH_SETTER_PI_REVIEW_AFTERCARE"] = "1"
-    with log_path.open("ab") as log_file:
-        process = subprocess.Popen(  # noqa: S603
-            command,
-            cwd=Path.cwd(),
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=Path.cwd(),
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     return process.pid
 
 

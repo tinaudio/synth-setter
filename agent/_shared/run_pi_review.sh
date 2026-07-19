@@ -57,11 +57,12 @@ absolute PI_REVIEW_AFTERCARE_MANIFEST path for any deferred-pass handoff, and \
 return only the specified foreground deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
-  local review_root run_id transcript
+  local aftercare_manifest review_root run_id transcript
   review_root="$(pwd)/.agent-reviews"
   run_id="$(date -u +%Y%m%dT%H%M%SZ).$$"
   transcript="${review_root}/pi-review-host.${run_id}.jsonl"
-  export PI_REVIEW_AFTERCARE_MANIFEST="${review_root}/pi-review-aftercare.${run_id}.json"
+  aftercare_manifest="${review_root}/pi-review-aftercare.${run_id}.json"
+  export PI_REVIEW_AFTERCARE_MANIFEST="${aftercare_manifest}"
   umask 077
   mkdir -p "${review_root}"
   echo "Live Pi transcript: ${transcript}" >&2
@@ -92,7 +93,9 @@ return only the specified foreground deliverable."
         "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
         >&2
     else
-      echo "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" >&2
+      echo \
+        "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
+        >&2
     fi
   fi
   printf '%s\n' "${final_output}"

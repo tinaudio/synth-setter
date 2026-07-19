@@ -211,6 +211,44 @@ def render_markdown(
     return "\n".join(lines) + "\n"
 
 
+def _write_report(report: str, output_path: Path) -> None:
+    """Atomically persist one rendered review.
+
+    :param report: Complete Markdown deliverable.
+    :param output_path: Canonical sentinel destination.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=output_path.parent, prefix=".pi-review-")
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            output.write(report)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, output_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def render_zero_diff(context: RenderContext) -> str:
+    """Render the fixed PASS report for a target with no changed files.
+
+    :param context: Reviewed Git state.
+    :returns: Zero-diff Markdown sentinel content.
+    """
+    return (
+        f"# repo-review-full-no-comments — {context.target}\n\n"
+        "PASS — no findings across all skills (code-health, correctness, comment-hygiene, "
+        "python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n"
+        "## Summary\n\n"
+        "- 0 BLOCK, 0 WARN\n"
+        f"- Reviewed at: {context.head_sha}\n"
+        "- Progress: "
+        f"branch {context.head_ref}; HEAD {context.head_sha}; "
+        f"upstream {context.upstream_sha}; worktree {context.worktree_state}; "
+        "unchanged review count 0.\n"
+    )
+
+
 def render_payload(
     payload_path: Path,
     *,
@@ -228,16 +266,7 @@ def render_payload(
     """
     payload = ReviewPayload.model_validate_json(payload_path.read_text())
     report = render_markdown(payload, context=context)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(dir=output_path.parent, prefix=".pi-review-")
-    try:
-        with os.fdopen(descriptor, "w") as output:
-            output.write(report)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, output_path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_report(report, output_path)
     if remove_payload:
         payload_path.unlink()
     return report
@@ -360,11 +389,13 @@ def _build_parser() -> argparse.ArgumentParser:
     :returns: Argument parser.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--payload", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--payload", type=Path)
+    source.add_argument("--zero-diff", action="store_true")
     parser.add_argument("--target", required=True)
     parser.add_argument("--reviewed-head", required=True)
-    parser.add_argument("--skill-count", type=int, required=True)
-    parser.add_argument("--next-step", required=True)
+    parser.add_argument("--skill-count", type=int, default=0)
+    parser.add_argument("--next-step", default="No follow-up required.")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--remove-payload", action="store_true")
     return parser
@@ -377,7 +408,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     :returns: Process exit status.
     """
     args = _build_parser().parse_args(argv)
-    payload = ReviewPayload.model_validate_json(args.payload.read_text())
+    if args.zero_diff:
+        payload = ReviewPayload.model_validate_json(
+            '{"pr_number":null,"repo":"local","review_body":"PASS — no diff.","findings":[]}'
+        )
+    else:
+        payload = ReviewPayload.model_validate_json(args.payload.read_text())
     context = resolve_context(
         payload,
         reviewed_head=args.reviewed_head,
@@ -386,12 +422,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         next_step=args.next_step,
     )
     output_path = args.output or Path(make_review_path(context.head_sha))
-    report = render_payload(
-        args.payload,
-        output_path=output_path,
-        context=context,
-        remove_payload=args.remove_payload,
-    )
+    if args.zero_diff:
+        report = render_zero_diff(context)
+        _write_report(report, output_path)
+    else:
+        report = render_payload(
+            args.payload,
+            output_path=output_path,
+            context=context,
+            remove_payload=args.remove_payload,
+        )
     sys.stdout.write(f"{report}Sentinel: {output_path}\n")
     return 0
 
