@@ -388,7 +388,7 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
+        covers: "Hydra cfg_train/cfg_train_lance/cfg_eval/cfg_dataset/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, experiment_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, Lance smoke helpers (_write_lance_smoke_split, fake_surge_smoke_lance_datasets, _LANCE_SMOKE_*), shared assertion helpers (train_loss_keys, assert_finite_train_loss, assert_log_per_param_mse_wired), shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER)"
       - pattern: "tests/claude_hooks/conftest.py"
         covers: "Autouse gate-override env scrub (GATE_OVERRIDE_ENV_VARS) so hook subprocesses see their documented default modes"
       - pattern: "tests/_vst.py"

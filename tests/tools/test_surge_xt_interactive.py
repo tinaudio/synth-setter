@@ -977,7 +977,10 @@ class TestRunPredict:
     """Tests for ``_run_predict``'s eval-CLI invocation and Hydra overrides."""
 
     def test_passes_param_spec_and_absolute_paths(self, surge_xt_interactive: ModuleType) -> None:
-        """Select the datamodule ParamSpec and pass absolute paths.
+        """No width override may reach the subprocess, and paths must be cwd-independent.
+
+        ``model.net.d_out`` must be absent — width follows the spec selection — and
+        relative inputs must arrive resolved because the subprocess may run elsewhere.
 
         :param surge_xt_interactive: Lazily imported interactive module fixture.
         """

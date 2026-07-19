@@ -40,7 +40,7 @@ _ROW = [0.0, -1.0, 1.0, 0.0, 0.2, 0.2]
 
 
 def test_encoded_width_counts_onehot_and_note_columns() -> None:
-    """Encoded width includes expanded categorical and note columns."""
+    """Encoded width reflects expanded parameter columns, not source parameter count."""
     spec = _tiny_spec()
 
     assert spec.encoded_width == 6

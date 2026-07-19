@@ -44,9 +44,11 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
+    train_loss_keys,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.eval_fakes import (
@@ -63,6 +65,16 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
+
+
+def _assert_oracle_zero_train_loss(metric_dict: dict[str, torch.Tensor]) -> None:
+    # The oracle constructs its loss as 0.0 * net(...).sum(); any nonzero value
+    # means it stopped being an oracle.
+    for key in train_loss_keys(metric_dict):
+        loss_value = metric_dict[key].item()
+        assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
+
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
 
@@ -421,7 +433,10 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
 def test_train_surge_simple_flow_default_width_matches_fake_batch(
     tmp_path: Path, model_group: str
 ) -> None:
-    """Train one step with each canonical flow group's default encoded width.
+    """A real optimizer step succeeds at each flow group's registry-derived default width.
+
+    The vector field is shrunk only for CPU speed — width wiring is untouched. The loss
+    must come out finite: ``global_step`` advances even past a NaN loss.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     :param model_group: Canonical flow model group under test.
@@ -445,23 +460,27 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
     assert cfg.model.num_params == len(param_specs["surge_simple"])
 
     HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
+    metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
 
 
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
+
+    The loss must come out finite: ``global_step`` advances even past a NaN loss.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
     cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
 
     HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
+    metric_dict, object_dict = train(cfg)
 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert_finite_train_loss(metric_dict)
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)
@@ -491,20 +510,10 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    # `vst_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
-    # populates `train/loss_step` (and `train/loss_epoch` if an epoch boundary was
-    # crossed) in `trainer.callback_metrics`. With `TRAINING_STEPS=1` only the
-    # step-level key is guaranteed; assert whichever is present is finite.
-    loss_keys = [k for k in metric_dict if k.startswith("train/loss")]
-    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
-    for key in loss_keys:
-        loss = metric_dict[key]
-        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+    assert_finite_train_loss(metric_dict)
 
     if experiment_name == _ORACLE_EXPERIMENT:
-        for key in loss_keys:
-            loss_value = metric_dict[key].item()
-            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+        _assert_oracle_zero_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst
@@ -795,16 +804,10 @@ def test_train_surge_fake(
     )
     assert train_split.exists()
 
-    loss_keys = [key for key in metric_dict if key.startswith("train/loss")]
-    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
-    for key in loss_keys:
-        loss = metric_dict[key]
-        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+    assert_finite_train_loss(metric_dict)
 
     if experiment_name == _ORACLE_EXPERIMENT:
-        for key in loss_keys:
-            loss_value = metric_dict[key].item()
-            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+        _assert_oracle_zero_train_loss(metric_dict)
 
 
 @pytest.mark.fake_vst

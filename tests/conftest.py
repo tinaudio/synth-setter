@@ -60,6 +60,34 @@ def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
     assert mse_callbacks[0].param_spec is param_specs[param_spec_name]
 
 
+def train_loss_keys(metric_dict: dict[str, torch.Tensor]) -> list[str]:
+    """Collect the ``train/loss*`` keys, asserting at least one was emitted.
+
+    Modules log ``train/loss`` with ``on_step=True, on_epoch=True``; with a single
+    step only the step-level key is guaranteed, so scan the prefix instead of
+    pinning one key.
+
+    :param metric_dict: Train-metric mapping returned by ``train(cfg)``.
+    :returns: The ``train/loss*`` keys present in the mapping.
+    """
+    loss_keys = [k for k in metric_dict if k.startswith("train/loss")]
+    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
+    return loss_keys
+
+
+def assert_finite_train_loss(metric_dict: dict[str, torch.Tensor]) -> None:
+    """Assert a ``train/loss*`` metric was emitted and every one is finite.
+
+    ``trainer.global_step`` advances even past a NaN/Inf loss, so advancement asserts
+    alone let silent numerical failures pass.
+
+    :param metric_dict: Train-metric mapping returned by ``train(cfg)``.
+    """
+    for key in train_loss_keys(metric_dict):
+        loss = metric_dict[key]
+        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+
+
 def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> float:
     """Wall-clock budget for a fixture-building VST subprocess, scaled by sample count.
 
@@ -723,6 +751,8 @@ def build_fake_train_cfg(
             ],
         )
         with open_dict(cfg):
+            # Random-weight training on random fake data is irreproducible unseeded.
+            cfg.seed = 1234
             cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(output_dir)
             cfg.paths.log_dir = str(output_dir)
@@ -759,6 +789,8 @@ def build_fake_flow_ast_pretrained_train_cfg(output_dir: Path) -> DictConfig:
             ],
         )
         with open_dict(cfg):
+            # Random-weight training on random fake data is irreproducible unseeded.
+            cfg.seed = 1234
             cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(output_dir)
             cfg.paths.log_dir = str(output_dir)
