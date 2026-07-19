@@ -1,6 +1,54 @@
 # CHANGELOG
 
 
+## v10.1.0 (2026-07-19)
+
+### Features
+
+- **data-pipeline**: Compact shards to one fragment, drop old versions
+  ([#2182](https://github.com/tinaudio/synth-setter/pull/2182),
+  [`541ea9d`](https://github.com/tinaudio/synth-setter/commit/541ea9d43ebf77641529b7487fc6808ccf159086))
+
+* feat(data-pipeline): compact shard writer Lance output and drop pre-compaction versions
+
+make_lance_dataset committed one fragment per render batch and kept the pre-compaction manifest, so
+  published shards carried many small fragments plus stale version metadata and doubled data files.
+  Compact the staged dataset to a single fragment (target_rows_per_fragment=samples_per_shard) and
+  remove old versions with cleanup_old_versions(older_than=0, delete_unverified=True) before the
+  shard is renamed into place, so file validation and consumers only ever see the compacted dataset.
+  delete_unverified is safe because the staging tempdir is exclusively owned by the running writer.
+
+Fixes #2179
+
+* fix(testing): restore missing assertion in persistent-workers drift test
+
+test_normalize_for_compare_accepts_persistent_workers_resource_drift landed truncated in 2bdb69a1:
+  it built baseline/current and returned without asserting, silently verifying nothing, and its
+  unused variables made the all-files ruff pre-push hook fail on every branch. Add the equality
+  assertion matching every sibling test.
+
+Fixes #2181
+
+* docs(data-pipeline): align migration non-goals and writer docstring with shard compaction
+
+The Lance migration doc listed compaction as out of scope and the writers module summary still
+  described one fragment per render batch; both now reflect that make_lance_dataset compacts the
+  shard and cleans up old versions before publishing.
+
+Refs #2179
+
+* fix(data-pipeline): stop deleting the previous shard before a rerun renders
+
+The upfront rmtree from 934c3010 predates the staging-tempdir design from 3fbcd416: fragments now
+  stage in a fresh tempdir, so no write ever appends into the existing dataset, and the pre-rename
+  rmtree already provides the documented overwrite. Deleting the destination before rendering meant
+  a failed rerun destroyed the previously committed shard, breaking
+  test_make_lance_dataset_rerun_failure_preserves_existing_dataset on main and blocking CI for every
+  PR. Both the rerun-preservation and rerun-overwrite contracts now pass.
+
+Fixes #2180
+
+
 ## v10.0.7 (2026-07-19)
 
 ### Bug Fixes
