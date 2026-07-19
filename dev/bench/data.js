@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784450010447,
+  "lastUpdate": 1784450013744,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16480,6 +16480,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.027687140399996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45d8718389c80cd266b403bd1102f9220962f9fb",
+          "message": "chore(models): keyword-only num_params + spec-width test hardening (#2154)\n\n* fix(models): make VSTFlowMatchingModule num_params keyword-only\n\n#2119 moved num_params into conditioning's old fifth positional slot, so a\nstale positional caller would silently train at a bogus width; everything\nafter scheduler is now keyword-only, with a regression test pinning the\nTypeError.\n\nAlso applies the remaining #2119 review findings: an instantiated FlowVAE\nforward test at the odd obxf width, registry-parameterized width coverage,\nfinite-loss and seeded assertions for the fake-mode flow train tests\n(seed now set by the shared cfg builders), removal of a cast(Any, ...),\nand content-bearing rewrites of name-restating test docstrings.\n\nFixes #2152\n\n* style(models): drop historical narration from review-added comments\n\nPre-PR review flagged the migration story and literal test values as\ncomment-hygiene violations; the contracts stay, the history moves here.\n\nRefs #2152\n\n* docs: list shared finite-loss assertion helpers in doc-map conftest entry\n\nRefs #2152",
+          "timestamp": "2026-07-19T04:04:24-04:00",
+          "tree_id": "2ec2260aa65c2eac46a4f96cabf4cb5cebab11c2",
+          "url": "https://github.com/tinaudio/synth-setter/commit/45d8718389c80cd266b403bd1102f9220962f9fb"
+        },
+        "date": 1784450013033,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.291681289672852,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.349549462124706,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08066333085298538,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.01084887981414795,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1921169757843018,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 16.853354247699997,
             "unit": "seconds"
           }
         ]
