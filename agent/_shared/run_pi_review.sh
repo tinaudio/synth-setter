@@ -85,6 +85,7 @@ return only the specified foreground deliverable."
   echo "Live Pi transcript: ${transcript}" >&2
   local review_python
   review_python="$(resolve_review_python)"
+  export PI_REVIEW_PYTHON="${review_python}"
   local final_output
   if ! final_output="$(
     pi \
@@ -105,7 +106,7 @@ return only the specified foreground deliverable."
   if [[ -s "${PI_REVIEW_AFTERCARE_MANIFEST}" ]]; then
     local aftercare_pid
     if aftercare_pid="$(
-      ./.venv/bin/python agent/_shared/run_pi_review_aftercare.py \
+      "${review_python}" agent/_shared/run_pi_review_aftercare.py \
         "${PI_REVIEW_AFTERCARE_MANIFEST}"
     )"; then
       echo \

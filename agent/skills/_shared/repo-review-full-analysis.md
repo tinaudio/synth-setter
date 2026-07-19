@@ -167,7 +167,7 @@ put a glob in a worker prompt and never repair assignment paths with
 ```bash
 assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
 mkdir -p "$assignment_dir"
-./.venv/bin/python agent/_shared/pi_review_routing.py worker-prompt \
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
   --skill <skill> --target <target> --repo <owner/name> \
   --base-sha <base> --head-sha <head> \
   --changed-path <path> [--changed-path <path> ...] \
@@ -189,8 +189,9 @@ pass. Prefer Codex: collect the Codex agents together with
 `get_subagent_result(wait: false)` rather than joining the slowest free-pool
 worker. If a Codex attempt fails but its free-pool peer has a valid report, that
 report satisfies the foreground floor, but its findings remain provisional and
-must not enter the foreground aggregation. Add a deferred `codex-verification`
-row for that skill using its exact `verification_model`; aftercare performs a
+must not enter the foreground aggregation. Add a deferred row with
+`pass_name: "codex"` for that skill using its exact `verification_model`;
+aftercare performs a
 fresh independent Codex review because the foreground Codex pass did not
 complete. The provisional free-pool report itself is not treated as verified or
 silently promoted.

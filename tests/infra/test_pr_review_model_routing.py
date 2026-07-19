@@ -624,11 +624,15 @@ def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
     aftercare = (REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py").read_text()
 
     assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
-    assert "run_pi_review_aftercare.py" in launcher
+    assert 'export PI_REVIEW_PYTHON="${review_python}"' in launcher
+    assert '"${review_python}" agent/_shared/run_pi_review_aftercare.py' in launcher
     assert "start_new_session" in aftercare
     assert "openai-codex" in aftercare
     assert "gpt-5.6-terra" in aftercare
     assert "anthropic" not in aftercare.lower()
+    analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
+    assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt' in analysis
+    assert '`pass_name: "codex"`' in analysis
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
