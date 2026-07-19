@@ -1,6 +1,57 @@
 # CHANGELOG
 
 
+## v10.0.7 (2026-07-19)
+
+### Bug Fixes
+
+- **testing**: Restore Lance rerun and baseline checks
+  ([#2175](https://github.com/tinaudio/synth-setter/pull/2175),
+  [`3cd3db9`](https://github.com/tinaudio/synth-setter/commit/3cd3db9b3d42762fae85e83a996aa2ede71c16bb))
+
+* internal-fix(testing): restore compare-baseline assertion
+
+* fix(testing): preserve Lance shard on failed rerun
+
+### Chores
+
+- **models**: Keyword-only num_params + spec-width test hardening
+  ([#2154](https://github.com/tinaudio/synth-setter/pull/2154),
+  [`45d8718`](https://github.com/tinaudio/synth-setter/commit/45d8718389c80cd266b403bd1102f9220962f9fb))
+
+* fix(models): make VSTFlowMatchingModule num_params keyword-only
+
+#2119 moved num_params into conditioning's old fifth positional slot, so a stale positional caller
+  would silently train at a bogus width; everything after scheduler is now keyword-only, with a
+  regression test pinning the TypeError.
+
+Also applies the remaining #2119 review findings: an instantiated FlowVAE forward test at the odd
+  obxf width, registry-parameterized width coverage, finite-loss and seeded assertions for the
+  fake-mode flow train tests (seed now set by the shared cfg builders), removal of a cast(Any, ...),
+  and content-bearing rewrites of name-restating test docstrings.
+
+Fixes #2152
+
+* style(models): drop historical narration from review-added comments
+
+Pre-PR review flagged the migration story and literal test values as comment-hygiene violations; the
+  contracts stay, the history moves here.
+
+Refs #2152
+
+* docs: list shared finite-loss assertion helpers in doc-map conftest entry
+
+### Internal-Fix
+
+- **test**: Restore main CI after Lance and Pi regressions
+  ([#2169](https://github.com/tinaudio/synth-setter/pull/2169),
+  [`3fbcd41`](https://github.com/tinaudio/synth-setter/commit/3fbcd416623867637d3dd65a79de3fd0eb015b84))
+
+* fix(testing): restore main CI after launcher and lance regressions
+
+* fix(data-pipeline): stage lance shard reruns before swap
+
+
 ## v10.0.6 (2026-07-18)
 
 ### Bug Fixes
