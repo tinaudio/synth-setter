@@ -17,7 +17,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agent._shared.review_sentinel import make_review_path
+if __package__:
+    from agent._shared.review_sentinel import make_review_path
+else:
+    from review_sentinel import make_review_path
 
 
 class ReviewFinding(BaseModel, strict=True, extra="forbid"):

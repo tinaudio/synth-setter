@@ -159,14 +159,19 @@ with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
 helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
 orchestrator and then ask it to nest workers.
 
-Generate one complete assignment file per selected skill before the launch:
+Generate one complete assignment file per selected skill before the launch. Use
+the deterministic absolute directory derived from the known handoff path; never
+put a glob in a worker prompt and never repair assignment paths with
+`steer_subagent` after launch:
 
 ```bash
+assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
+mkdir -p "$assignment_dir"
 ./.venv/bin/python agent/_shared/pi_review_routing.py worker-prompt \
   --skill <skill> --target <target> --repo <owner/name> \
   --base-sha <base> --head-sha <head> \
   --changed-path <path> [--changed-path <path> ...] \
-  --output <absolute-assignment-path>
+  --output "$assignment_dir/<skill>.txt"
 ```
 
 Both model passes share that immutable file. Their `Agent` prompt is only:

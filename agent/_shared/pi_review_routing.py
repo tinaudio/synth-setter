@@ -458,6 +458,7 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
     :raises ValueError: If an event is malformed or no final response exists.
     """
     final_text = ""
+    notification_pending = False
     with transcript.open("w") as transcript_file:
         for raw_line in source:
             transcript_file.write(raw_line)
@@ -480,8 +481,13 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                 diagnostic = _redact_diagnostic(event.error_message or "unknown error")
                 progress.write(f"[pi-review] retry {attempt}/{maximum}: {diagnostic}\n")
             elif event.type == "message_end" and event.message is not None:
-                if event.message.role == "assistant":
-                    final_text = _message_text(event.message)
+                if event.message.role == "custom":
+                    notification_pending = True
+                elif event.message.role == "assistant":
+                    assistant_text = _message_text(event.message)
+                    if assistant_text.strip() or not notification_pending:
+                        final_text = assistant_text
+                    notification_pending = False
             progress.flush()
     if not final_text.strip():
         raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")

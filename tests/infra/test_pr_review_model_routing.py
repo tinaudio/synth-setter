@@ -309,6 +309,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
+    assert re.search(r"never\s+put a glob in a worker prompt", text)
+    assert re.search(r"never repair assignment paths\s+with", text)
     assert "480-second foreground deadline" in text
     assert "one validated report per selected skill" in text
     assert "resume the same worker once" in text
