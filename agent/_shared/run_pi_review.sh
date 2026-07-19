@@ -69,17 +69,23 @@ main() {
   local prompt
   prompt="Execute ${skill} using its Pi-native execution path. ${target_instruction} \
 The launcher set SYNTH_SETTER_PI_REVIEW=1; execute the skill in this session \
-and do not invoke run_pi_review.sh again. Follow the skill exactly and return \
-only its specified deliverable."
+and do not invoke run_pi_review.sh again. Follow the skill exactly, use the \
+absolute PI_REVIEW_AFTERCARE_MANIFEST path for any deferred-pass handoff, and \
+return only the specified foreground deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
-  local transcript
-  transcript=".agent-reviews/pi-review-host.$(date -u +%Y%m%dT%H%M%SZ).$$.jsonl"
+  local aftercare_manifest review_root run_id transcript
+  review_root="$(pwd)/.agent-reviews"
+  run_id="$(date -u +%Y%m%dT%H%M%SZ).$$"
+  transcript="${review_root}/pi-review-host.${run_id}.jsonl"
+  aftercare_manifest="${review_root}/pi-review-aftercare.${run_id}.json"
+  export PI_REVIEW_AFTERCARE_MANIFEST="${aftercare_manifest}"
   umask 077
-  mkdir -p .agent-reviews
+  mkdir -p "${review_root}"
   echo "Live Pi transcript: ${transcript}" >&2
   local review_python
   review_python="$(resolve_review_python)"
+  export PI_REVIEW_PYTHON="${review_python}"
   local final_output
   if ! final_output="$(
     pi \
@@ -96,6 +102,21 @@ only its specified deliverable."
   )"; then
     echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
     return 1
+  fi
+  if [[ -s "${PI_REVIEW_AFTERCARE_MANIFEST}" ]]; then
+    local aftercare_pid
+    if aftercare_pid="$(
+      "${review_python}" agent/_shared/run_pi_review_aftercare.py \
+        "${PI_REVIEW_AFTERCARE_MANIFEST}"
+    )"; then
+      echo \
+        "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
+        >&2
+    else
+      echo \
+        "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
+        >&2
+    fi
   fi
   printf '%s\n' "${final_output}"
 }

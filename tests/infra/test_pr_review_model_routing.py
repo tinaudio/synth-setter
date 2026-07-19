@@ -20,6 +20,7 @@ from unittest import mock
 import pytest
 import yaml
 
+from agent._shared.run_pi_review_aftercare import AftercareManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -238,17 +239,19 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "max_turns" not in worker
     assert "model" not in worker
     assert "thinking" not in worker
-    assert "structured report" in prompt.lower()
-    assert "### BLOCK findings" in prompt
-    assert "### WARN findings" in prompt
-    assert "### What looks good" in prompt
+    prompt_flat = " ".join(prompt.split())
+    assert "exactly one JSON object" in prompt_flat
+    assert '"severity": "block or warn"' in prompt
+    assert '"line": 42' in prompt
+    assert '"what_looks_good"' in prompt
+    assert "no Markdown fence or surrounding prose" in prompt_flat
     assert "Never run `find`" in prompt
     assert "60-second timeout" in prompt
     assert "changed paths" in prompt
 
 
-def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
-    """Keep project-local Pi defaults scoped away from Anthropic."""
+def test_pi_project_settings_pin_review_pool_providers_only() -> None:
+    """Keep project-local Pi defaults scoped to the review pool, away from Anthropic."""
     settings = json.loads((REPO_ROOT / ".pi" / "settings.json").read_text())
 
     assert settings["defaultProvider"] == "openai-codex"
@@ -256,7 +259,15 @@ def test_pi_project_settings_pin_codex_and_openrouter_only() -> None:
     assert settings["enabledModels"]
     assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
     assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
+    assert "kimi-coding/k3" in settings["enabledModels"]
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+
+
+def test_pi_project_subagents_allow_twenty_concurrent_workers() -> None:
+    """Allow twenty Pi review workers to bypass Tintin's default queue."""
+    settings = json.loads((REPO_ROOT / ".pi" / "subagents.json").read_text())
+
+    assert settings == {"maxConcurrent": 20}
 
 
 def test_pi_project_explore_agent_is_disabled() -> None:
@@ -275,6 +286,7 @@ def test_pi_project_append_system_forbids_anthropic_agents() -> None:
     assert "Do not select Anthropic providers or models" in text
     assert "Do not launch subagents" in text
     assert "openai-codex" in text
+    assert "kimi-coding" in text
     assert "openrouter" in text
 
 
@@ -289,28 +301,53 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "pi_review_routing.py validate-report" in text
     assert "pi_review_routing.py transcript-stats" in text
     assert "pi_review_routing.py provenance" in text
-    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 5
+    assert "extract a unique worker JSON object from harmless surrounding prose" in text
+    assert '"severity": "block"' in text
+    assert "The worker does not render Markdown or attach provenance" in text
+    assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 6
+    assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py' in text
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
+    assert re.search(r"never\s+put a glob in a worker prompt", text)
+    assert re.search(r"never repair assignment paths\s+with", text)
+    assert "480-second foreground deadline" in text
+    assert "one validated report per selected skill" in text
+    assert "resume the same worker once" in text
+    assert "Do not repeat the review" in text
+    assert "unfinished second pass to aftercare" in text
+    assert re.search(r"late Codex-verified\s+findings", text)
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
-    assert "OpenRouter-only findings never enter aggregation directly" in text
+    assert "get_subagent_result(wait: false)" in text
+    assert re.search(r"poll them a\s+second time in the foreground", text)
+    assert "at most 360 seconds" in text
+    assert "at most 6 turns per" in text
+    assert "parallel Codex verification wave" in text
+    assert "Record its audit status as `deferred`" in text
+    assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
     assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
     assert "max_turns: <plan.max_turns>" in text
     assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
-    assert "turn budget exhausted" in text
+    assert re.search(
+        r"Gracefully wrapped `steered` attempts proceed to report\s+validation",
+        text,
+    )
+    assert re.search(r"hard-aborted\s+turn-budget result is a failed attempt", text)
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert "secondary_fallback_candidates" in text
+    assert re.search(r"both Codex\s+and the free pool pass provider preflight", text)
     assert "fallback_candidates" in text
+    assert "skip remaining candidates from that provider" in text
+    assert "authentication never triggers Codex fallback" in text
     assert "Codex fallback" in text
-    assert "OpenRouter failed; only Codex ran." in text
+    assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
     assert re.search(
         r"authentication.*quota/capacity.*before every\s+other `review_body` section",
@@ -360,11 +397,74 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
     stderr_text = stderr.getvalue().decode()
     match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr_text)
     assert match is not None
-    transcript = REPO_ROOT / match.group(1)
+    transcript = Path(match.group(1))
+    assert transcript.is_absolute()
     try:
         assert transcript.read_text().count("message_") == 2
         assert "openai-codex/gpt-5.6-terra started" in stderr_text
     finally:
+        transcript.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -> None:
+    """Drive foreground completion through the real detached-handoff path.
+
+    :param tmp_path: Temporary fake Pi executable and aftercare marker.
+    """
+    sh = importlib.import_module("sh")
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
+    marker = tmp_path / "aftercare-ran"
+    manifest_path_file = tmp_path / "manifest-path"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        'if [[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]; then\n'
+        '  touch "${AFTERCARE_MARKER}"\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf \'%s\\n\' "${PI_REVIEW_AFTERCARE_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
+        "cat > \"${PI_REVIEW_AFTERCARE_MANIFEST}\" <<'JSON'\n"
+        '{"version":1,"mode":"no-comments","repo":"tinaudio/synth-setter",'
+        '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
+        '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
+        '"origin":"primary","model":"kimi-coding/k3",'
+        '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
+        '"foreground_fingerprints":[]}\n'
+        "JSON\n"
+        'printf \'%s\\n\' \'{"type":"message_end","message":{"role":"assistant",'
+        '"content":"foreground-complete"}}\'\n'
+    )
+    pi.chmod(0o755)
+
+    stderr = io.BytesIO()
+    result = sh.Command(str(launcher))(
+        "repo-review-full-no-comments",
+        "--target",
+        "2174",
+        _cwd=REPO_ROOT,
+        _env={
+            **os.environ,
+            "AFTERCARE_MARKER": str(marker),
+            "MANIFEST_PATH_FILE": str(manifest_path_file),
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        },
+        _err=stderr,
+    )
+    manifest = Path(manifest_path_file.read_text().strip())
+    transcript_match = re.search(r"Live Pi transcript: (.+\.jsonl)", stderr.getvalue().decode())
+    assert transcript_match is not None
+    transcript = Path(transcript_match.group(1))
+    try:
+        deadline = time.monotonic() + 2
+        while not marker.exists() and time.monotonic() < deadline:
+            pass
+        assert str(result).strip() == "foreground-complete"
+        assert marker.exists()
+    finally:
+        manifest.unlink(missing_ok=True)
+        manifest.with_suffix(".log").unlink(missing_ok=True)
         transcript.unlink(missing_ok=True)
 
 
@@ -488,6 +588,126 @@ def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
         )
 
 
+def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
+    """Distinguish independent free-pool coverage from an explicit Codex fallback."""
+    base = {
+        "version": 1,
+        "mode": "no-comments",
+        "repo": "tinaudio/synth-setter",
+        "pr_number": 2174,
+        "base_sha": "a" * 40,
+        "head_sha": "b" * 40,
+        "target": "PR #2174",
+        "foreground_fingerprints": [],
+    }
+    primary = {
+        "skill": "correctness-review",
+        "pass_name": "free-pool",
+        "origin": "primary",
+        "model": "openai-codex/gpt-5.6-sol",
+        "verification_model": "openai-codex/gpt-5.6-sol",
+        "thinking": "high",
+    }
+
+    with pytest.raises(ValueError, match="origin does not match"):
+        AftercareManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
+
+    fallback = {**primary, "origin": "codex-fallback"}
+    manifest = AftercareManifest.model_validate_json(
+        json.dumps({**base, "deferred_passes": [fallback]})
+    )
+    assert manifest.deferred_passes[0].origin == "codex-fallback"
+
+
+def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
+    """Keep deferred second passes auditable after the foreground host exits."""
+    launcher = (REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text()
+    aftercare = (REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py").read_text()
+
+    assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
+    assert 'export PI_REVIEW_PYTHON="${review_python}"' in launcher
+    assert '"${review_python}" agent/_shared/run_pi_review_aftercare.py' in launcher
+    assert "start_new_session" in aftercare
+    assert "openai-codex" in aftercare
+    assert "gpt-5.6-terra" in aftercare
+    assert "anthropic" not in aftercare.lower()
+    analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
+    assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt' in analysis
+    assert '`pass_name: "codex"`' in analysis
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
+    """Drive the real aftercare entrypoint through manifest validation and process launch.
+
+    :param tmp_path: Temporary directory containing the fake Pi executable.
+    """
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py"
+    manifest = REPO_ROOT / ".agent-reviews/test-aftercare-manifest.json"
+    marker = tmp_path / "aftercare-ran"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        '[[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]\n'
+        '[[ -z "${SYNTH_SETTER_PI_REVIEW:-}" ]]\n'
+        f"touch {marker}\n"
+    )
+    pi.chmod(0o755)
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mode": "no-comments",
+                "repo": "tinaudio/synth-setter",
+                "pr_number": 2174,
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "target": "PR #2174",
+                "deferred_passes": [
+                    {
+                        "skill": "correctness-review",
+                        "pass_name": "free-pool",
+                        "origin": "primary",
+                        "model": "kimi-coding/k3",
+                        "verification_model": "openai-codex/gpt-5.6-sol",
+                        "thinking": "high",
+                    }
+                ],
+                "foreground_fingerprints": [],
+            }
+        )
+    )
+    try:
+        sh = importlib.import_module("sh")
+        dry_run = sh.Command(sys.executable)(
+            launcher,
+            manifest,
+            "--dry-run",
+            _cwd=REPO_ROOT,
+            _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+        command = json.loads(str(dry_run))
+        assert str(manifest.resolve()) in command[-1]
+        assert "agent/skills/_shared/repo-review-aftercare.md" in command[-1]
+
+        result = sh.Command(sys.executable)(
+            launcher,
+            manifest,
+            _cwd=REPO_ROOT,
+            _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        )
+        pid = int(str(result))
+        deadline = time.monotonic() + 2
+        while not marker.exists() and time.monotonic() < deadline:
+            pass
+        assert marker.exists()
+        _assert_process_terminated(pid, timeout=2)
+    finally:
+        manifest.unlink(missing_ok=True)
+        manifest.with_suffix(".log").unlink(missing_ok=True)
+
+
 def test_no_comments_review_uses_isolated_findings_path() -> None:
     """Prevent concurrent reviews from sharing one global findings file."""
     text = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
@@ -496,7 +716,8 @@ def test_no_comments_review_uses_isolated_findings_path() -> None:
     assert "review_sentinel.py findings" in text
     assert str(fixed_findings_path) not in text
     assert "exact printed path" in text
-    assert "remove that exact file" in text
+    assert "pi_review_render.py" in text
+    assert "--remove-payload" in text
 
 
 def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
@@ -505,8 +726,8 @@ def test_no_comments_review_reserves_pass_short_form_for_zero_diff() -> None:
 
     assert "If `is_zero_diff == true`" in text
     assert "A non-zero diff with no findings" in text
-    assert 'findings_json_path="${findings_json_path:-}"' in text
-    assert "if `findings_json_path` is non-empty" in text
+    assert "pi_review_render.py" in text
+    assert "complete `## Pi review audit`" in text
 
 
 def test_full_review_skills_define_flat_pi_orchestration() -> None:

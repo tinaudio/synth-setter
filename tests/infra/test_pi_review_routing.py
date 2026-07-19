@@ -13,12 +13,15 @@ import sh
 
 from agent._shared.pi_review_routing import (
     build_review_plan,
+    build_worker_prompt,
     extract_report,
+    finding_fingerprint,
     main,
     parse_available_models,
     parse_worker_report,
     provenance_for_model,
     report_is_parseable,
+    report_repair_prompt,
     stream_host_events,
     transcript_stats,
 )
@@ -26,44 +29,17 @@ from agent._shared.pi_review_routing import (
 AVAILABLE_MODELS = """\
 openai-codex  gpt-5.6-sol    372K  128K  yes  yes
 openai-codex  gpt-5.6-terra  372K  128K  yes  yes
-openrouter    cohere/north-mini-code:free  256K  64K  yes  no
-openrouter    google/gemma-4-31b-it:free  262.1K  32.8K  yes  yes
-openrouter    google/gemma-4-26b-a4b-it:free  131.1K  32.8K  yes  yes
+kimi-coding   k3  256K  128K  yes  yes
 openrouter    nvidia/nemotron-3-ultra-550b-a55b:free  1M  65.5K  yes  no
 openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
-openrouter    nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free  256K  65.5K  yes  yes
-openrouter    openai/gpt-oss-20b:free  131.1K  32.8K  yes  no
-openrouter    poolside/laguna-m.1:free  262.1K  32.8K  yes  no
-openrouter    nvidia/nemotron-3-nano-30b-a3b:free  256K  4.1K  yes  no
 openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
 """
 
-DEEP_PRIMARY_OPENROUTER_MODELS = (
+# Fixed ordered second-pass pool. Its first model is a non-OpenRouter provider,
+# so routing and provenance must not assume every non-Codex candidate is OpenRouter.
+FREE_POOL_MODELS = (
+    "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "openrouter/openai/gpt-oss-20b:free",
-)
-DEEP_SECONDARY_OPENROUTER_MODELS = (
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    "openrouter/tencent/hy3:free",
-)
-STANDARD_PRIMARY_OPENROUTER_MODELS = (
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/openai/gpt-oss-20b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-)
-STANDARD_SECONDARY_OPENROUTER_MODELS = (
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free",
 )
 
@@ -73,8 +49,10 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     assert parse_available_models(AVAILABLE_MODELS) == {
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
-        *DEEP_PRIMARY_OPENROUTER_MODELS,
-        *DEEP_SECONDARY_OPENROUTER_MODELS,
+        "kimi-coding/k3",
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/tencent/hy3:free",
     }
 
 
@@ -89,19 +67,16 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
 
     assert [(item.skill, item.pass_name, item.thinking) for item in plan] == [
         ("correctness-review", "codex", "high"),
-        ("correctness-review", "openrouter", "high"),
+        ("correctness-review", "free-pool", "high"),
         ("comment-hygiene", "codex", "low"),
-        ("comment-hygiene", "openrouter", "low"),
+        ("comment-hygiene", "free-pool", "low"),
     ]
     assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].candidates == DEEP_PRIMARY_OPENROUTER_MODELS
-    assert plan[1].secondary_fallback_candidates == DEEP_SECONDARY_OPENROUTER_MODELS
-    assert plan[3].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS
-    assert plan[3].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS
+    assert plan[1].candidates == FREE_POOL_MODELS
+    assert plan[3].candidates == FREE_POOL_MODELS
     assert all(
         model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
     )
-    assert all(model.startswith("openrouter/") for item in plan[1::2] for model in item.candidates)
     assert all(
         model.startswith("openai-codex/")
         for item in plan[1::2]
@@ -163,10 +138,26 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
-def test_build_review_plan_skips_unavailable_candidates_across_both_tiers() -> None:
-    """Drop retired free models while keeping deterministic primary and secondary tiers."""
+def test_build_review_plan_uses_remaining_codex_candidate_as_free_pool_fallback() -> None:
+    """Preserve paired fallback behavior when one Codex model is unavailable."""
     available = parse_available_models(AVAILABLE_MODELS)
-    available.remove("openrouter/cohere/north-mini-code:free")
+    available.remove("openai-codex/gpt-5.6-terra")
+
+    codex_pass, free_pool_pass = build_review_plan(
+        ["code-health"],
+        changed_lines=300,
+        risk_reasons=(),
+        available_models=available,
+    )
+
+    assert codex_pass.candidates == ("openai-codex/gpt-5.6-sol",)
+    assert free_pool_pass.fallback_candidates == codex_pass.candidates
+
+
+def test_build_review_plan_skips_unavailable_free_pool_candidates() -> None:
+    """Drop retired free-pool models while preserving the fixed attempt order."""
+    available = parse_available_models(AVAILABLE_MODELS)
+    available.remove("kimi-coding/k3")
     available.remove("openrouter/tencent/hy3:free")
 
     plan = build_review_plan(
@@ -176,10 +167,9 @@ def test_build_review_plan_skips_unavailable_candidates_across_both_tiers() -> N
         available_models=available,
     )
 
-    assert plan[1].candidates == STANDARD_PRIMARY_OPENROUTER_MODELS[1:]
-    assert plan[1].secondary_fallback_candidates == STANDARD_SECONDARY_OPENROUTER_MODELS[:-1]
+    assert plan[1].candidates == ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",)
     assert plan[1].unavailable == (
-        "openrouter/cohere/north-mini-code:free",
+        "kimi-coding/k3",
         "openrouter/tencent/hy3:free",
     )
 
@@ -195,15 +185,15 @@ def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
         )
 
 
-def test_build_review_plan_missing_openrouter_raises_provider_error() -> None:
-    """Reject the plan once when OpenRouter is absent from Pi's registry."""
+def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
+    """Reject the plan once when no free-pool model is registered with Pi."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
-        if not model.startswith("openrouter/")
+        if model.startswith("openai-codex/")
     }
 
-    with pytest.raises(ValueError, match=r"OpenRouter.*credentials required"):
+    with pytest.raises(ValueError, match=r"free-pool.*credentials required"):
         build_review_plan(
             ["code-health"],
             changed_lines=300,
@@ -255,116 +245,167 @@ def test_build_review_plan_invalid_input_raises(
 
 
 def test_provenance_for_model_uses_effective_provider() -> None:
-    """Attribute fallback findings to the model that produced the report."""
+    """Attribute pinned review models to the provider that produced the report."""
     assert provenance_for_model("openai-codex/gpt-5.6-sol") == "codex"
-    assert provenance_for_model("openrouter/openrouter/free") == "openrouter"
+    assert (
+        provenance_for_model("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free") == "openrouter"
+    )
+    assert provenance_for_model("kimi-coding/k3") == "kimi-coding"
 
 
 @pytest.mark.parametrize(
-    ("report", "expected"),
+    "model",
     [
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            True,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n"
-            "1. **src/example.py:42** — A concrete defect.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            True,
-        ),
-        ("No output.", False),
-        ("## Summary\n- No findings.", False),
-        (
-            "## code-health review — PR #1\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "> ### BLOCK findings\nNone.\n\n"
-            "> ### WARN findings\nNone.\n\n"
-            "> ### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n1. Missing path and line.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "Unexpected preface.\n\n"
-            "### BLOCK findings\nNone.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
-        (
-            "## code-health review — PR #1\n\n"
-            "### BLOCK findings\n"
-            "1. **src/example.py:42** — A concrete defect.\n"
-            "Unstructured continuation.\n\n"
-            "### WARN findings\nNone.\n\n"
-            "### What looks good\n- Clear.",
-            False,
-        ),
+        "kimi-coding/other",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/paid-model",
     ],
 )
-def test_report_is_parseable_requires_structured_contract(report: str, expected: bool) -> None:
-    """Reject empty or structurally incomplete worker reports.
+def test_provenance_for_model_unpinned_free_pool_model_raises(model: str) -> None:
+    """Reject selectors outside the exact pinned free-pool policy.
 
-    :param report: Candidate worker report.
-    :param expected: Whether the report satisfies the contract.
+    :param model: Unpinned selector using an otherwise allowed provider.
     """
-    assert (
-        report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
-        is expected
+    with pytest.raises(ValueError, match="Unsupported Pi review model"):
+        provenance_for_model(model)
+
+
+def test_report_is_parseable_accepts_structured_json() -> None:
+    """Accept a complete structured worker result."""
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "PR #1",
+            "findings": [],
+            "what_looks_good": ["Clear data flow."],
+        }
     )
+
+    assert report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "No output.",
+        "## code-health review — PR #1",
+        '{"skill":"code-health","target":"PR #1","findings":[],"what_looks_good":[]}',
+        '{"skill":"code-health","target":"PR #1","findings":[],'
+        '"what_looks_good":["Clear."],"unexpected":true}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"BLOCK","path":"src/example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":"42",'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"../example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"./src/example.py","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":".","line":42,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":0,'
+        '"description":"Defect."}],"what_looks_good":["Clear."]}',
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"warn","path":"src/example.py","line":42,'
+        '"description":" "}],"what_looks_good":["Clear."]}',
+    ],
+)
+def test_report_is_parseable_rejects_invalid_structured_json(report: str) -> None:
+    """Reject non-JSON and structurally invalid worker results.
+
+    :param report: Invalid candidate worker result.
+    """
+    assert not report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
+
+
+def test_finding_fingerprint_normalizes_description_whitespace() -> None:
+    """Identify the same late finding despite inconsequential prose spacing."""
+    first = finding_fingerprint(
+        skill="code-health",
+        severity="warn",
+        path="src/example.py",
+        line=42,
+        description="Concern with  extra spacing.",
+    )
+    second = finding_fingerprint(
+        skill="code-health",
+        severity="warn",
+        path="src/example.py",
+        line=42,
+        description="Concern with extra spacing.",
+    )
+
+    assert first == second
+    assert len(first) == 64
+
+
+def test_parse_worker_report_rejects_duplicate_keys() -> None:
+    """Reject last-write-wins JSON that could silently erase findings."""
+    report = (
+        '{"skill":"code-health","target":"PR #1","findings":['
+        '{"severity":"block","path":"src/example.py","line":42,'
+        '"description":"Defect."}],"findings":[],"what_looks_good":["Clear."]}'
+    )
+
+    with pytest.raises(ValueError, match="Duplicate JSON key: findings"):
+        parse_worker_report(report, expected_skill="code-health", expected_target="PR #1")
 
 
 def test_parse_worker_report_returns_validated_boundary_model() -> None:
     """Return typed report data after structural validation."""
-    report = (
-        "## code-health review — PR #1\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\nNone.\n\n"
-        "### What looks good\n- Clear."
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "PR #1",
+            "findings": [
+                {
+                    "severity": "warn",
+                    "path": "src/example.py",
+                    "line": 42,
+                    "description": "A concrete concern.",
+                }
+            ],
+            "what_looks_good": ["Clear data flow."],
+        }
     )
 
     parsed = parse_worker_report(report, expected_skill="code-health", expected_target="PR #1")
 
     assert parsed.skill == "code-health"
     assert parsed.target == "PR #1"
+    assert parsed.findings[0].line == 42
+    assert parsed.findings[0].severity == "warn"
 
 
 def test_report_is_parseable_rejects_wrong_skill_or_target() -> None:
-    """Prevent a valid report for another checklist from entering the merge."""
-    report = (
-        "## python-style review — PR #1\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\nNone.\n\n"
-        "### What looks good\n- Clear."
+    """Prevent a valid result for another assignment from entering the merge."""
+    report = json.dumps(
+        {
+            "skill": "python-style",
+            "target": "PR #1",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
     )
 
-    assert not report_is_parseable(report, expected_skill="code-health", expected_target="PR #1")
+    assert not report_is_parseable(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
     assert not report_is_parseable(
         report.replace("python-style", "code-health"),
         expected_skill="code-health",
@@ -467,6 +508,43 @@ def test_stream_host_events_persists_live_json_and_reports_safe_progress(
     assert "secret-value" not in progress_text
 
 
+def test_stream_host_events_empty_notification_ack_preserves_deliverable(tmp_path: Path) -> None:
+    """Ignore empty assistant acknowledgements caused by late background notifications.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"final report\\nSentinel: existing"}}\n'
+        '{"type":"message_end","message":{"role":"custom","content":"worker finished"}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":"Sentinel: late"}}\n'
+    )
+
+    assert (
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+        == "final report\nSentinel: existing"
+    )
+
+
+def test_stream_host_events_substantive_post_notification_response_replaces_draft(
+    tmp_path: Path,
+) -> None:
+    """Keep a real final report that follows a worker completion notification.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":"draft"}}\n'
+        '{"type":"message_end","message":{"role":"custom","content":"worker finished"}}\n'
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"# repo-review-full-no-comments — final"}}\n'
+    )
+
+    result = stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+    assert result == "# repo-review-full-no-comments — final"
+
+
 def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> None:
     """Reject stale intermediate text when the terminal response is empty.
 
@@ -482,201 +560,126 @@ def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> N
         stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
 
 
-def test_extract_report_returns_last_assistant_markdown(tmp_path: Path) -> None:
+def test_extract_report_returns_terminal_assistant_text_without_interpretation(
+    tmp_path: Path,
+) -> None:
     """Extract only final assistant text from Tintin JSONL.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
+    final_result = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "smoke",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
+    )
     transcript.write_text(
         '{"type":"session_start","sessionId":"metadata-only"}\n'
         '{"message":{"role":"assistant","content":[{"type":"text","text":"draft"}]}}\n'
         '{"message":{"role":"toolResult","content":[{"type":"text","text":"noise"}]}}\n'
-        '{"message":{"role":"assistant","content":['
-        '{"type":"thinking","thinking":"hidden"},'
-        '{"type":"text","text":"## code-health review — smoke\\n\\n'
-        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
-        '### What looks good\\n- Clear."}]}}\n'
+        + json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "hidden"},
+                        {"type": "text", "text": final_result},
+                    ],
+                }
+            }
+        )
+        + "\n"
     )
 
-    report = extract_report(transcript)
-
-    assert report.startswith("## code-health review — smoke")
-    assert "noise" not in report
-    assert "hidden" not in report
+    assert extract_report(transcript) == final_result
 
 
 def test_extract_report_empty_terminal_assistant_raises(tmp_path: Path) -> None:
-    """Reject earlier report text when the terminal assistant message is empty.
+    """Reject earlier output when the terminal assistant message is empty.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"## code-health review — smoke\\n\\n'
-        "### BLOCK findings\\nNone.\\n\\n### WARN findings\\nNone.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":"provisional"}}\n'
         '{"message":{"role":"assistant","content":[]}}\n'
     )
 
-    with pytest.raises(ValueError, match="has no assistant text"):
+    with pytest.raises(ValueError, match="terminal assistant text"):
         extract_report(transcript)
 
 
-def test_extract_report_normalizes_preface_and_trailing_prose(tmp_path: Path) -> None:
-    """Keep the structured report when a model wraps it in narration.
+def test_extract_report_selects_unique_json_object_from_narration(tmp_path: Path) -> None:
+    """Discard harmless prose around one complete worker report.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
+    report = {
+        "skill": "code-health",
+        "target": "smoke",
+        "findings": [],
+        "what_looks_good": ["Clear."],
+    }
+    narrated = f"Review complete.\n```json\n{json.dumps(report)}\n```"
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"analysis\\n\\n'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\n1. **src/example.py:10-12** — Defect.\\n"
-        "```python\\n1. **src/fake.py:99-100** — Example.\\n```\\n"
-        "- **src/bullet.py:20-22** — Bullet.\\n\\n"
-        '### What looks good\\n- Clear.\\n\\nclosing"}}\n'
+        json.dumps({"message": {"role": "assistant", "content": narrated}}) + "\n"
     )
 
-    report = extract_report(transcript)
+    extracted = extract_report(transcript)
 
-    assert report == (
-        "## code-health review — smoke\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\n"
-        "1. **src/example.py:10** — [reported range 10-12] Defect.\n"
-        "2. **src/bullet.py:20** — [reported range 20-22] Bullet.\n\n"
-        "### What looks good\n- Clear."
+    assert json.loads(extracted) == report
+    assert report_is_parseable(
+        extracted,
+        expected_skill="code-health",
+        expected_target="smoke",
     )
 
 
-@pytest.mark.parametrize(
-    "malformed_line",
-    [
-        "**src/missing-number.py:20** — Missing list number.",
-        "2. **src/missing-description.py:30** —",
-    ],
-)
-def test_extract_report_rejects_malformed_finding_like_line(
-    tmp_path: Path, malformed_line: str
-) -> None:
-    """Fail closed instead of dropping or merging malformed findings.
+def test_extract_report_multiple_worker_objects_raises(tmp_path: Path) -> None:
+    """Reject ambiguous narration containing competing final reports.
 
     :param tmp_path: Temporary location for a transcript.
-    :param malformed_line: Finding-like row that violates the report contract.
     """
     transcript = tmp_path / "worker.output"
+    report = json.dumps(
+        {
+            "skill": "code-health",
+            "target": "smoke",
+            "findings": [],
+            "what_looks_good": ["Clear."],
+        }
+    )
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\n1. **src/valid.py:10** — Valid.\\n"
-        f'{malformed_line}\\n\\n### What looks good\\n- Clear."}}}}\n'
+        json.dumps({"message": {"role": "assistant", "content": f"{report}\n{report}"}}) + "\n"
     )
 
-    with pytest.raises(ValueError, match="malformed finding-like line"):
+    with pytest.raises(ValueError, match="multiple worker JSON objects"):
         extract_report(transcript)
 
 
-def test_extract_report_drops_section_preamble_and_renumbers_mixed_findings(
-    tmp_path: Path,
-) -> None:
-    """Produce a valid contract after a narrated mixed-style findings section.
+def test_extract_report_returns_final_retraction_for_validation(tmp_path: Path) -> None:
+    """Do not reuse an earlier result after the worker retracts it.
 
     :param tmp_path: Temporary location for a transcript.
     """
     transcript = tmp_path / "worker.output"
     transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nThe following were observed.\\n"
-        "- **src/first.py:10** — First finding.\\n"
-        "2. **src/second.py:20** — Second finding.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
+        '{"message":{"role":"assistant","content":"provisional"}}\n'
+        '{"message":{"role":"assistant","content":"Tool failure; retract result."}}\n'
     )
 
-    report = extract_report(transcript)
+    extracted = extract_report(transcript)
 
-    assert report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
-    assert "The following were observed." not in report
-    assert "1. **src/first.py:10** — First finding." in report
-    assert "2. **src/second.py:20** — Second finding." in report
-
-
-def test_extract_report_cli_normalizes_narrated_mixed_findings(tmp_path: Path) -> None:
-    """Write a valid canonical report from a narrated worker transcript.
-
-    :param tmp_path: Temporary location for transcript and report files.
-    """
-    transcript = tmp_path / "worker.jsonl"
-    report = tmp_path / "worker.md"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nThe following were observed.\\n"
-        "- **src/first.py:10** — First finding.\\n"
-        "2. **src/second.py:20** — Second finding.\\n\\n"
-        '### What looks good\\n- Clear."}}\n'
+    assert extracted == "Tool failure; retract result."
+    assert not report_is_parseable(
+        extracted,
+        expected_skill="code-health",
+        expected_target="smoke",
     )
-    script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
-    python = sh.Command(sys.executable)
-
-    python(script, "extract-report", transcript, "--output", report)
-    python(
-        script,
-        "validate-report",
-        report,
-        "--skill",
-        "code-health",
-        "--target",
-        "smoke",
-    )
-
-    assert report.read_text() == (
-        "## code-health review — smoke\n\n"
-        "### BLOCK findings\nNone.\n\n"
-        "### WARN findings\n"
-        "1. **src/first.py:10** — First finding.\n"
-        "2. **src/second.py:20** — Second finding.\n\n"
-        "### What looks good\n- Clear.\n"
-    )
-
-
-def test_extract_report_rejects_duplicate_heading_after_good_section(
-    tmp_path: Path,
-) -> None:
-    """Keep duplicate headings visible so validation rejects the report.
-
-    :param tmp_path: Temporary location for a transcript.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        "### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear.\\n\\n"
-        '### BLOCK findings\\n1. **src/hidden.py:9** — Hidden."}}\n'
-    )
-
-    report = extract_report(transcript)
-
-    assert not report_is_parseable(report, expected_skill="code-health", expected_target="smoke")
-    assert "src/hidden.py:9" in report
-
-
-def test_extract_report_requires_final_assistant_report(tmp_path: Path) -> None:
-    """Reject an earlier provisional report followed by a final retraction.
-
-    :param tmp_path: Temporary location for a transcript.
-    """
-    transcript = tmp_path / "worker.output"
-    transcript.write_text(
-        '{"message":{"role":"assistant","content":"'
-        "## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n"
-        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}}\n'
-        '{"message":{"role":"assistant","content":"Tool failure; retract the report."}}\n'
-    )
-
-    with pytest.raises(ValueError, match="final assistant text is not a report"):
-        extract_report(transcript)
 
 
 def test_extract_report_rejects_untyped_metadata_event(tmp_path: Path) -> None:
@@ -703,12 +706,47 @@ def test_extract_report_missing_assistant_text_raises(tmp_path: Path) -> None:
         extract_report(transcript)
 
 
+def test_report_repair_prompt_preserves_analysis_and_includes_diagnostic() -> None:
+    """Ask the same worker for a format-only correction with actionable context."""
+    report = '{"skill":"plugin:code-health","target":"PR #1"}'
+
+    prompt = report_repair_prompt(
+        report,
+        expected_skill="code-health",
+        expected_target="PR #1",
+    )
+
+    assert "Do not repeat the review" in prompt
+    assert "Do not add, remove, or reinterpret findings" in prompt
+    assert "Worker report identity does not match" in prompt or "Field required" in prompt
+    assert report in prompt
+
+
+def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplication() -> None:
+    """Generate the complete worker packet outside the host LLM."""
+    prompt = build_worker_prompt(
+        skill="correctness-review",
+        target="PR #2174",
+        repo="tinaudio/synth-setter",
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        changed_paths=("agent/_shared/pi_review_routing.py", "tests/infra/test.py"),
+    )
+
+    assert "PR #2174" in prompt
+    assert "correctness-review" in prompt
+    assert "git diff " + "a" * 40 + ".." + "b" * 40 in prompt
+    assert "agent/_shared/pi_review_routing.py" in prompt
+    assert "exactly one JSON object" in prompt
+    assert "Do not recursively discover" in prompt
+
+
 def test_validate_report_cli_returns_nonzero_for_malformed_output(tmp_path: Path) -> None:
     """Expose report validation to the natural-language orchestrator.
 
     :param tmp_path: Temporary location for worker output.
     """
-    report = tmp_path / "report.md"
+    report = tmp_path / "report.json"
     report.write_text("No output.")
 
     assert (
@@ -732,11 +770,23 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     :param tmp_path: Temporary location for transcript and report files.
     """
     transcript = tmp_path / "worker.jsonl"
-    report = tmp_path / "worker.md"
+    report = tmp_path / "worker.json"
+    result = {
+        "skill": "code-health",
+        "target": "smoke",
+        "findings": [],
+        "what_looks_good": ["Clear."],
+    }
     transcript.write_text(
-        '{"message":{"role":"assistant","content":[{"type":"text","text":'
-        '"## code-health review — smoke\\n\\n### BLOCK findings\\nNone.\\n\\n'
-        '### WARN findings\\nNone.\\n\\n### What looks good\\n- Clear."}]}}\n'
+        json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": json.dumps(result)}],
+                }
+            }
+        )
+        + "\n"
     )
     script = Path(__file__).resolve().parents[2] / "agent/_shared/pi_review_routing.py"
     python = sh.Command(sys.executable)
@@ -753,13 +803,11 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     )
 
     stats = json.loads(str(python(script, "transcript-stats", transcript)))
-    provenance = str(
-        python(script, "provenance", "openrouter/cohere/north-mini-code:free")
-    ).strip()
+    provenance = str(python(script, "provenance", "kimi-coding/k3")).strip()
 
-    assert report.read_text().startswith("## code-health review — smoke")
+    assert json.loads(report.read_text()) == result
     assert stats["turns"] == 1
-    assert provenance == "openrouter"
+    assert provenance == "kimi-coding"
 
 
 def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:
@@ -786,8 +834,8 @@ def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> N
     assert b"pi --list-models failed: registry unavailable" in error.value.stderr
 
 
-def test_plan_cli_real_process_missing_openrouter_fails_once(tmp_path: Path) -> None:
-    """Stop before expanding model candidates when OpenRouter is unregistered.
+def test_plan_cli_real_process_missing_free_pool_fails_once(tmp_path: Path) -> None:
+    """Stop before expanding model candidates when no free-pool model is registered.
 
     :param tmp_path: Temporary location for the fake executable.
     """
@@ -809,8 +857,8 @@ def test_plan_cli_real_process_missing_openrouter_fails_once(tmp_path: Path) -> 
         )
 
     stderr = error.value.stderr.decode()
-    assert stderr.count("No OpenRouter models available") == 1
-    assert "openrouter/cohere/north-mini-code:free" not in stderr
+    assert stderr.count("No free-pool models available") == 1
+    assert "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free" not in stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
@@ -834,7 +882,4 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"] == list(STANDARD_PRIMARY_OPENROUTER_MODELS)
-    assert payload[1]["secondary_fallback_candidates"] == list(
-        STANDARD_SECONDARY_OPENROUTER_MODELS
-    )
+    assert payload[1]["candidates"] == list(FREE_POOL_MODELS)
