@@ -94,13 +94,13 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
         batch: object,
         batch_idx: int,
     ) -> None:
-        """Write only the recovery checkpoint at a step-based cadence.
+        """Separate recovery saves from monitored top-k selection at step cadence.
 
-        :param trainer: Active Lightning trainer.
-        :param pl_module: Module being trained.
-        :param outputs: Training-step output.
-        :param batch: Training batch.
-        :param batch_idx: Batch index within the epoch.
+        :param trainer: Supplies checkpoint cadence and loop state.
+        :param pl_module: Supplies the automatic-optimization mode.
+        :param outputs: Ignored Lightning hook payload.
+        :param batch: Ignored Lightning hook payload.
+        :param batch_idx: Ignored Lightning hook payload.
         """
         if self.monitor is None or self._every_n_train_steps < 1:
             super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
@@ -128,8 +128,8 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
     def on_validation_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Rank monitored weights using the metric from this validation event.
 
-        :param trainer: Active Lightning trainer.
-        :param pl_module: Module being validated.
+        :param trainer: Supplies fresh validation metrics and loop state.
+        :param pl_module: Unused Lightning hook module.
         """
         if self.monitor is None or self._every_n_train_steps < 1:
             super().on_validation_end(trainer, pl_module)

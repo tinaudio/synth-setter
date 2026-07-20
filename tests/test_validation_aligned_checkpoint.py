@@ -58,16 +58,16 @@ class _ManualOptimizationModule(pl.LightningModule):
         return torch.optim.SGD(self.parameters(), lr=0.1)
 
     def train_dataloader(self) -> DataLoader[tuple[torch.Tensor, ...]]:
-        """Provide two training steps.
+        """Provide deterministic training data.
 
-        :returns: Two-batch synthetic loader.
+        :returns: Synthetic training loader.
         """
         return DataLoader(TensorDataset(torch.zeros(2, 1)), batch_size=1)
 
     def val_dataloader(self) -> DataLoader[tuple[torch.Tensor, ...]]:
         """Validate after each training step.
 
-        :returns: One-batch synthetic loader.
+        :returns: Synthetic validation loader.
         """
         return DataLoader(TensorDataset(torch.zeros(1, 1)), batch_size=1)
 

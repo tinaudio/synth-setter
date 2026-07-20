@@ -6,17 +6,17 @@ from torch.utils.data import DataLoader, TensorDataset
 
 
 class ValidationTrajectoryDataModule(pl.LightningDataModule):
-    """Provide six training batches and one validation batch."""
+    """Provide deterministic training and validation data."""
 
     def train_dataloader(self) -> DataLoader[tuple[torch.Tensor, ...]]:
-        """Provide six batches with validation every second batch.
+        """Provide deterministic training data for validation-cadence tests.
 
         :returns: Synthetic training dataloader.
         """
         return DataLoader(TensorDataset(torch.zeros(6, 1)), batch_size=1)
 
     def val_dataloader(self) -> DataLoader[tuple[torch.Tensor, ...]]:
-        """Provide one deterministic validation batch.
+        """Provide deterministic validation data.
 
         :returns: Synthetic validation dataloader.
         """
@@ -24,7 +24,7 @@ class ValidationTrajectoryDataModule(pl.LightningDataModule):
 
 
 class ValidationTrajectoryModule(pl.LightningModule):
-    """Expose a known three-validation metric trajectory and weight marker."""
+    """Expose a deterministic validation metric trajectory and weight marker."""
 
     def __init__(self) -> None:
         """Initialize the trainable scalar and checkpoint-visible batch counter."""
@@ -44,7 +44,7 @@ class ValidationTrajectoryModule(pl.LightningModule):
         return self.weight.square()
 
     def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> None:
-        """Log metrics that improve at step four and then worsen.
+        """Log a deterministic improving-then-worsening metric trajectory.
 
         :param batch: Unused synthetic validation batch.
         :param batch_idx: Unused batch index.
