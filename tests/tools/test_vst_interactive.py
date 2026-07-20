@@ -4,6 +4,7 @@ import importlib
 import os
 import queue
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import NoReturn
@@ -26,19 +27,29 @@ SURGE_SIMPLE = "surge_simple"
 
 @pytest.fixture(scope="module")
 def vst_interactive():
-    """Import the tool module lazily so collection doesn't fail on heavy imports."""
+    """Import the tool module lazily so collection doesn't fail on heavy imports.
+
+    :returns: Loaded VST interactive module.
+    """
     return importlib.import_module("synth_setter.tools.vst_interactive")
 
 
 @pytest.fixture(scope="module")
 def simple_spec() -> ParamSpec:
-    """Return the ``surge_simple`` ParamSpec used by the prediction-decoding tests."""
+    """Return the ``surge_simple`` ParamSpec used by the prediction-decoding tests.
+
+    :returns: Registered simple ParamSpec.
+    """
     return param_specs[SURGE_SIMPLE]
 
 
 @pytest.fixture(scope="module")
 def simple_spec_total_length(simple_spec: ParamSpec) -> int:
-    """Total encoded row length (synth + note params) for the simple spec."""
+    """Total encoded row length (synth + note params) for the simple spec.
+
+    :param simple_spec: Simple ParamSpec fixture used by the scenario.
+    :returns: Combined encoded synth and note width.
+    """
     return simple_spec.synth_param_length + simple_spec.note_param_length
 
 
@@ -49,6 +60,9 @@ def simple_pred_tensor(simple_spec_total_length: int) -> torch.Tensor:
     Row 0 cycles through ``[-1.0, 0.0, 1.0, 2.0]`` to exercise the
     ``(-1..1) -> (0..1)`` rescaling and clipping (``2.0`` is clipped to ``1``).
     Row 1 is all-zeros (decodes to mid-range values).
+
+    :param simple_spec_total_length: Encoded width of the simple ParamSpec.
+    :returns: Two-row prediction tensor spanning rescale boundaries.
     """
     cycle = np.array([-1.0, 0.0, 1.0, 2.0], dtype=np.float32)
     row_0 = np.tile(cycle, (simple_spec_total_length // 4) + 1)[:simple_spec_total_length]
@@ -70,11 +84,16 @@ class TestDecodePredictionRow:
 
     def test_returns_expected_keys_and_finite_floats(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_pred_tensor: torch.Tensor,
         simple_spec: ParamSpec,
     ) -> None:
-        """Decoded row contains every synth-param key with finite float values."""
+        """Decoded row contains every synth-param key with finite float values.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_pred_tensor: Prediction tensor fixture for the simple ParamSpec.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         synth_params = vst_interactive.decode_prediction_row(
             simple_pred_tensor, batch_idx=0, param_spec_name=SURGE_SIMPLE
         )
@@ -100,12 +119,18 @@ class TestDecodePredictionRow:
     )
     def test_clips_and_rescales_per_column(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_pred_tensor: torch.Tensor,
         param_name: str,
         expected: float,
     ) -> None:
-        """Each column is rescaled from ``[-1, 1]`` to ``[0, 1]`` and clipped before decoding."""
+        """Each column is rescaled from ``[-1, 1]`` to ``[0, 1]`` and clipped before decoding.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_pred_tensor: Prediction tensor fixture for the simple ParamSpec.
+        :param param_name: ParamSpec field selected by the test case.
+        :param expected: Expected decoded parameter value.
+        """
         synth_params = vst_interactive.decode_prediction_row(
             simple_pred_tensor, batch_idx=0, param_spec_name=SURGE_SIMPLE
         )
@@ -114,11 +139,16 @@ class TestDecodePredictionRow:
     @pytest.mark.parametrize("bad_idx", [99, -1], ids=["above-range", "negative"])
     def test_out_of_range_idx_raises(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_pred_tensor: torch.Tensor,
         bad_idx: int,
     ) -> None:
-        """``batch_idx`` outside ``[0, batch_size)`` raises ``IndexError``."""
+        """``batch_idx`` outside ``[0, batch_size)`` raises ``IndexError``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_pred_tensor: Prediction tensor fixture for the simple ParamSpec.
+        :param bad_idx: Out-of-range row index under test.
+        """
         with pytest.raises(IndexError):
             vst_interactive.decode_prediction_row(
                 simple_pred_tensor, batch_idx=bad_idx, param_spec_name=SURGE_SIMPLE
@@ -128,16 +158,22 @@ class TestDecodePredictionRow:
 class TestPredictionRefType:
     """PredictionRefType parses ``PATH:BATCH_IDX`` into a PredictionRef."""
 
-    def test_parses_path_and_batch_idx(self, vst_interactive) -> None:
-        """A ``PATH:BATCH_IDX`` string parses into a ``PredictionRef`` with matching fields."""
+    def test_parses_path_and_batch_idx(self, vst_interactive: ModuleType) -> None:
+        """A ``PATH:BATCH_IDX`` string parses into a ``PredictionRef`` with matching fields.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         parser = vst_interactive.PredictionRefType()
 
         ref = parser.convert("outputs/pred-0.pt:42", None, None)
 
         assert ref == vst_interactive.PredictionRef(path=Path("outputs/pred-0.pt"), batch_idx=42)
 
-    def test_splits_on_last_colon(self, vst_interactive) -> None:
-        """Absolute Windows-style paths still parse because rpartition uses the last ':'."""
+    def test_splits_on_last_colon(self, vst_interactive: ModuleType) -> None:
+        """Absolute Windows-style paths still parse because rpartition uses the last ':'.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         parser = vst_interactive.PredictionRefType()
 
         ref = parser.convert(r"C:\models\pred-0.pt:7", None, None)
@@ -150,17 +186,23 @@ class TestPredictionRefType:
         ["pred-0.pt", "pred-0.pt:not-an-int", ":42", "pred-0.pt:"],
         ids=["missing-colon", "non-int-idx", "empty-path", "empty-idx"],
     )
-    def test_rejects_invalid_uri(self, vst_interactive, value: str) -> None:
-        """Malformed prediction references raise ``click.BadParameter``."""
+    def test_rejects_invalid_uri(self, vst_interactive: ModuleType, value: str) -> None:
+        """Malformed prediction references raise ``click.BadParameter``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param value: Malformed reference text under test.
+        """
         parser = vst_interactive.PredictionRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
 
-    def test_rejects_negative_batch_idx(self, vst_interactive) -> None:
+    def test_rejects_negative_batch_idx(self, vst_interactive: ModuleType) -> None:
         """Reject negative indices to match ``decode_prediction_row``'s contract.
 
         Negative indexing would otherwise silently select the last row.
+
+        :param vst_interactive: Loaded VST interactive module under test.
         """
         parser = vst_interactive.PredictionRefType()
 
@@ -171,8 +213,11 @@ class TestPredictionRefType:
 class TestDatasetRefType:
     """DatasetRefType parses ``PATH:DATASET_IDX`` into a DatasetRef."""
 
-    def test_parses_path_and_batch_idx(self, vst_interactive) -> None:
-        """A ``PATH:DATASET_IDX`` string parses into a ``DatasetRef`` with matching fields."""
+    def test_parses_path_and_batch_idx(self, vst_interactive: ModuleType) -> None:
+        """A ``PATH:DATASET_IDX`` string parses into a ``DatasetRef`` with matching fields.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         parser = vst_interactive.DatasetRefType()
 
         ref = parser.convert("data/test.lance:3", None, None)
@@ -184,15 +229,22 @@ class TestDatasetRefType:
         ["test.lance", "test.lance:not-an-int", ":0", "test.lance:"],
         ids=["missing-colon", "non-int-idx", "empty-path", "empty-idx"],
     )
-    def test_rejects_invalid_uri(self, vst_interactive, value: str) -> None:
-        """Malformed dataset references raise ``click.BadParameter``."""
+    def test_rejects_invalid_uri(self, vst_interactive: ModuleType, value: str) -> None:
+        """Malformed dataset references raise ``click.BadParameter``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param value: Malformed reference text under test.
+        """
         parser = vst_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
 
-    def test_rejects_negative_batch_idx(self, vst_interactive) -> None:
-        """Reject negative indices to avoid a silent ``param_array[-1]`` last-row fallback."""
+    def test_rejects_negative_batch_idx(self, vst_interactive: ModuleType) -> None:
+        """Reject negative indices to avoid a silent ``param_array[-1]`` last-row fallback.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         parser = vst_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
@@ -204,12 +256,18 @@ class TestLoadPredictionSynthParams:
 
     def test_matches_decode_prediction_row_on_same_row(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_pred_tensor: torch.Tensor,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """Loading from disk and in-memory ``decode_prediction_row`` produce identical outputs."""
+        """Loading from disk and in-memory ``decode_prediction_row`` produce identical outputs.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_pred_tensor: Prediction tensor fixture for the simple ParamSpec.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        :param tmp_path: Per-test temporary directory.
+        """
         pred_path = tmp_path / "pred-0.pt"
         torch.save(simple_pred_tensor, pred_path)
         ref = vst_interactive.PredictionRef(path=pred_path, batch_idx=0)
@@ -229,11 +287,16 @@ class TestLoadDatasetSynthParams:
 
     def test_round_trip_returns_original_synth_params(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """Encoding params, persisting to Lance, and reloading recovers the synth params."""
+        """Encoding params, persisting to Lance, and reloading recovers the synth params.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        :param tmp_path: Per-test temporary directory.
+        """
         synth_param_dict, note_param_dict = simple_spec.sample()
         encoded = simple_spec.encode(synth_param_dict, note_param_dict)
         lance_path = tmp_path / "test.lance"
@@ -247,11 +310,16 @@ class TestLoadDatasetSynthParams:
 
     def test_selects_correct_row(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """``batch_idx`` selects the matching row from a multi-row ``param_array``."""
+        """``batch_idx`` selects the matching row from a multi-row ``param_array``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        :param tmp_path: Per-test temporary directory.
+        """
         row_0_synth, row_0_note = simple_spec.sample()
         row_1_synth, row_1_note = simple_spec.sample()
         encoded = np.stack(
@@ -271,11 +339,16 @@ class TestLoadDatasetSynthParams:
 
     def test_out_of_range_idx_raises(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """Raise ``IndexError`` or ``ValueError`` when ``batch_idx`` exceeds ``param_array``."""
+        """Raise ``IndexError`` or ``ValueError`` when ``batch_idx`` exceeds ``param_array``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        :param tmp_path: Per-test temporary directory.
+        """
         encoded = simple_spec.encode(*simple_spec.sample())
         lance_path = tmp_path / "test.lance"
         _write_param_array_lance(lance_path, encoded[None, :])
@@ -288,7 +361,7 @@ class TestLoadDatasetSynthParams:
     @pytest.mark.slow
     def test_loads_row_from_surge_xt_smoke_fixture(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         surge_xt_smoke_datasets: Path,
         param_spec_name: str,
     ) -> None:
@@ -296,6 +369,10 @@ class TestLoadDatasetSynthParams:
 
         The decode spec must match the spec the fixture generated the dataset with —
         otherwise the decoder slices off the end of the row and ``.item()`` raises.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param surge_xt_smoke_datasets: Root of the real Surge XT smoke dataset fixture.
+        :param param_spec_name: ParamSpec registry key paired with the smoke dataset.
         """
         ref = vst_interactive.DatasetRef(path=surge_xt_smoke_datasets / "test.lance", batch_idx=0)
 
@@ -314,6 +391,8 @@ class _ConstantPlugin:
     Duck-typed to satisfy ``play_audio_recorded``'s ``plugin.process(...)`` call —
     avoids loading a real VST3, which is unavailable in headless test runs.
     Stashes its last call's ``midi_messages`` argument for assertion in tests.
+
+    :param sample_value: Constant sample value returned by the fake plugin.
     """
 
     def __init__(self, sample_value: float) -> None:
@@ -330,7 +409,16 @@ class _ConstantPlugin:
         buffer_size: int,
         reset: bool,
     ) -> np.ndarray:
-        """Return a constant-valued ``(num_channels, duration * sample_rate)`` buffer."""
+        """Return a constant-valued ``(num_channels, duration * sample_rate)`` buffer.
+
+        :param midi_messages: Timestamped MIDI messages passed to the fake plugin.
+        :param duration_seconds: Requested render duration in seconds.
+        :param sample_rate: Audio sample rate in hertz.
+        :param num_channels: Requested audio channel count.
+        :param buffer_size: Audio buffer width used by the fake plugin.
+        :param reset: Whether the fake plugin should reset before rendering.
+        :returns: Constant audio buffer with the requested shape.
+        """
         del buffer_size, reset
         self.process_call_count += 1
         self.last_midi_messages = list(midi_messages)
@@ -341,8 +429,14 @@ class _ConstantPlugin:
 class TestPlayAudioRecorded:
     """play_audio_recorded renders a deterministic clip via a single plugin.process() call."""
 
-    def test_writes_exact_duration_frames(self, vst_interactive, tmp_path: Path) -> None:
-        """The WAV's frame count is exactly ``DURATION * SAMPLE_RATE`` (one process call)."""
+    def test_writes_exact_duration_frames(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """The WAV's frame count is exactly ``DURATION * SAMPLE_RATE`` (one process call).
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         plugin = _ConstantPlugin(sample_value=0.25)
         output_path = tmp_path / "session.wav"
         expected_frames = int(
@@ -358,8 +452,14 @@ class TestPlayAudioRecorded:
         assert audio.shape == (vst_interactive.CHANNELS, expected_frames)
         np.testing.assert_allclose(audio, plugin.sample_value, atol=1e-3)
 
-    def test_passes_expected_midi_events(self, vst_interactive, tmp_path: Path) -> None:
-        """plugin.process is called with note_on/off middle-C events at NOTE_START/END."""
+    def test_passes_expected_midi_events(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """plugin.process is called with note_on/off middle-C events at NOTE_START/END.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         plugin = _ConstantPlugin(sample_value=0.0)
 
         vst_interactive.play_audio_recorded(plugin, tmp_path / "events.wav")
@@ -384,6 +484,9 @@ class _FakeMidiMessage:
     """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and ``bytes()``.
 
     ``bytes()`` returns ``list[int]`` to match real ``mido.Message.bytes()``.
+
+    :param msg_type: MIDI message type exposed by the fake.
+    :param payload: Optional MIDI byte payload.
     """
 
     def __init__(self, msg_type: str, payload: list[int] | None = None) -> None:
@@ -404,6 +507,9 @@ class _FakeMidiPortHandle:
     ``mido.ports.IOPort.poll``. When the queue is exhausted, sets ``drain_event``
     (if provided) so the test can flip ``stop_event`` and let the listener exit
     deterministically — no time.sleep / wall-clock polling on the test side.
+
+    :param messages: Fake MIDI messages returned by the test port.
+    :param drain_event: Optional event set when fake MIDI messages are exhausted.
     """
 
     def __init__(
@@ -431,8 +537,11 @@ class _FakeMidiPortHandle:
 class TestMidiListener:
     """``midi_listener`` filters mido messages by type and forwards them to a queue."""
 
-    def test_only_relevant_message_types_are_forwarded(self, vst_interactive) -> None:
-        """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
+    def test_only_relevant_message_types_are_forwarded(self, vst_interactive: ModuleType) -> None:
+        """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         forwarded = [
             _FakeMidiMessage("note_on", [0x90, 0x3C, 0x40]),
             _FakeMidiMessage("note_off", [0x80, 0x3C, 0x00]),
@@ -488,8 +597,11 @@ class TestMidiListener:
 
         assert drained == [(m.bytes(), 0.0) for m in forwarded]
 
-    def test_stop_event_exits_listener_with_no_messages(self, vst_interactive) -> None:
-        """``stop_event`` set before any message arrives drains the listener cleanly."""
+    def test_stop_event_exits_listener_with_no_messages(self, vst_interactive: ModuleType) -> None:
+        """``stop_event`` set before any message arrives drains the listener cleanly.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
 
         class _IdlePort:
             def __enter__(self) -> "_IdlePort":
@@ -511,8 +623,14 @@ class TestMidiListener:
 
         assert midi_queue.empty()
 
-    def test_open_input_failure_logs_and_exits_thread(self, vst_interactive, caplog) -> None:
-        """``midi_listener`` must not raise; failures are logged so the daemon exits cleanly."""
+    def test_open_input_failure_logs_and_exits_thread(
+        self, vst_interactive: ModuleType, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``midi_listener`` must not raise; failures are logged so the daemon exits cleanly.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param caplog: Pytest log-capture fixture.
+        """
 
         def raising_port_opener(_port_name: str) -> object:
             raise OSError("device disconnected")
@@ -551,6 +669,11 @@ class _RecordingPlugin:
     invocation flips ``stop_event`` so ``play_audio`` exits its loop deterministically.
     This replaces the late ``monkeypatch.setattr(plugin, "process", ...)`` re-bind that
     earlier versions of ``TestPlayAudioQueueDrain`` used to drive shutdown.
+
+    :param channels: Audio channel count used by the fake plugin.
+    :param buffer_size: Audio buffer width used by the fake plugin.
+    :param stop_event: Optional shutdown event controlled by the fake plugin.
+    :param stop_after_n_calls: Optional process-call limit before signaling shutdown.
     """
 
     def __init__(
@@ -589,8 +712,13 @@ class _RecordingPlugin:
 class TestPlayAudioQueueDrain:
     """``play_audio`` drains the MIDI queue into ``plugin.process`` once per buffer."""
 
-    def test_queued_events_are_forwarded_to_plugin_process(self, vst_interactive) -> None:
-        """Tuples enqueued by the listener are drained and passed to ``plugin.process``."""
+    def test_queued_events_are_forwarded_to_plugin_process(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """Tuples enqueued by the listener are drained and passed to ``plugin.process``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
             vst_interactive.CHANNELS,
@@ -612,8 +740,11 @@ class TestPlayAudioQueueDrain:
         assert stop_event.is_set()
         assert len(stream.writes) == 1
 
-    def test_none_queue_passes_empty_messages_list(self, vst_interactive) -> None:
-        """When no MIDI port is configured, ``play_audio`` is invoked with ``midi_queue=None``."""
+    def test_none_queue_passes_empty_messages_list(self, vst_interactive: ModuleType) -> None:
+        """When no MIDI port is configured, ``play_audio`` is invoked with ``midi_queue=None``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
             vst_interactive.CHANNELS,
@@ -628,10 +759,14 @@ class TestPlayAudioQueueDrain:
         assert plugin.messages_per_call == [[]]
         assert stop_event.is_set()
 
-    def test_drain_is_capped_at_max_midi_events_per_buffer(self, vst_interactive) -> None:
+    def test_drain_is_capped_at_max_midi_events_per_buffer(
+        self, vst_interactive: ModuleType
+    ) -> None:
         """Drain queues larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` in chunks across buffers.
 
         Prevents one realtime callback from stretching to process the full backlog.
+
+        :param vst_interactive: Loaded VST interactive module under test.
         """
         cap = vst_interactive._MAX_MIDI_EVENTS_PER_BUFFER
         stop_event = threading.Event()
@@ -660,48 +795,82 @@ class TestPlayAudioQueueDrain:
 class TestResolveMidiPort:
     """``_resolve_midi_port`` maps the click flag value to a concrete port name."""
 
-    def test_returns_first_available_when_requested_is_empty_string(self, vst_interactive) -> None:
-        """Empty string means auto-pick: return ``available[0]``."""
+    def test_returns_first_available_when_requested_is_empty_string(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """Empty string means auto-pick: return ``available[0]``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         resolved = vst_interactive._resolve_midi_port("", ["port-a", "port-b"])
         assert resolved == "port-a"
 
-    def test_returns_requested_when_present_in_available(self, vst_interactive) -> None:
-        """A named port that exists in ``available`` is returned verbatim."""
+    def test_returns_requested_when_present_in_available(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """A named port that exists in ``available`` is returned verbatim.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         resolved = vst_interactive._resolve_midi_port("port-b", ["port-a", "port-b"])
         assert resolved == "port-b"
 
-    def test_raises_usage_error_when_requested_not_in_available(self, vst_interactive) -> None:
-        """A named port absent from ``available`` raises ``click.UsageError``."""
+    def test_raises_usage_error_when_requested_not_in_available(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """A named port absent from ``available`` raises ``click.UsageError``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         with pytest.raises(click.UsageError, match="port-z"):
             vst_interactive._resolve_midi_port("port-z", ["port-a", "port-b"])
 
-    def test_raises_usage_error_when_available_is_empty_and_auto(self, vst_interactive) -> None:
-        """Auto-pick with no ports available raises ``click.UsageError``."""
+    def test_raises_usage_error_when_available_is_empty_and_auto(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """Auto-pick with no ports available raises ``click.UsageError``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         with pytest.raises(click.UsageError, match="no MIDI input"):
             vst_interactive._resolve_midi_port("", [])
 
-    def test_raises_usage_error_when_available_is_empty_and_named(self, vst_interactive) -> None:
-        """Named port with no ports available raises ``click.UsageError``."""
+    def test_raises_usage_error_when_available_is_empty_and_named(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """Named port with no ports available raises ``click.UsageError``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         with pytest.raises(click.UsageError, match="no MIDI input"):
             vst_interactive._resolve_midi_port("port-a", [])
 
 
 class _FakeParam:
-    """Stand-in for a pedalboard plugin parameter — exposes only ``raw_value``."""
+    """Stand-in for a pedalboard plugin parameter — exposes only ``raw_value``.
+
+    :param raw_value: Raw parameter value exposed by the fake.
+    """
 
     def __init__(self, raw_value: float) -> None:
         self.raw_value = raw_value
 
 
 class _FakePlugin:
-    """Stand-in plugin with a ``.parameters`` dict-like for drift-detection tests."""
+    """Stand-in plugin with a ``.parameters`` dict-like for drift-detection tests.
+
+    :param params: Initial fake plugin parameter values.
+    """
 
     def __init__(self, params: dict[str, float]) -> None:
         self.parameters = {name: _FakeParam(value) for name, value in params.items()}
 
 
 class _FakeSpec:
-    """Stand-in ParamSpec exposing only the ``synth_param_names`` attribute."""
+    """Stand-in ParamSpec exposing only the ``synth_param_names`` attribute.
+
+    :param synth_param_names: ParamSpec names accepted by the fake specification.
+    """
 
     def __init__(self, synth_param_names: list[str]) -> None:
         self.synth_param_names = synth_param_names
@@ -710,8 +879,13 @@ class _FakeSpec:
 class TestValidateNoDrift:
     """``_validate_no_drift`` raises if a non-spec param drifted from its default."""
 
-    def test_returns_none_when_all_non_spec_params_at_default(self, vst_interactive) -> None:
-        """No drift on any non-spec param → no exception."""
+    def test_returns_none_when_all_non_spec_params_at_default(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """No drift on any non-spec param → no exception.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7}
@@ -720,8 +894,13 @@ class TestValidateNoDrift:
 
         assert result is None
 
-    def test_raises_value_error_when_non_spec_param_drifted(self, vst_interactive) -> None:
-        """A non-spec param away from its default → ``ValueError`` naming the param."""
+    def test_raises_value_error_when_non_spec_param_drifted(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """A non-spec param away from its default → ``ValueError`` naming the param.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.9})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3}
@@ -729,8 +908,11 @@ class TestValidateNoDrift:
         with pytest.raises(ValueError, match="fx_amount"):
             vst_interactive._validate_no_drift(plugin, spec, defaults)
 
-    def test_ignores_drift_on_spec_params(self, vst_interactive) -> None:
-        """Spec params are allowed to vary; only non-spec drift is flagged."""
+    def test_ignores_drift_on_spec_params(self, vst_interactive: ModuleType) -> None:
+        """Spec params are allowed to vary; only non-spec drift is flagged.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         plugin = _FakePlugin({"a_synth": 0.99, "fx_amount": 0.3})
         spec = _FakeSpec(["a_synth"])
         defaults = {"a_synth": 0.5, "fx_amount": 0.3}
@@ -739,8 +921,11 @@ class TestValidateNoDrift:
 
         assert result is None
 
-    def test_drift_within_tolerance_does_not_raise(self, vst_interactive) -> None:
-        """Tiny float deviation within abs_tol=1e-6 is treated as equal."""
+    def test_drift_within_tolerance_does_not_raise(self, vst_interactive: ModuleType) -> None:
+        """Tiny float deviation within abs_tol=1e-6 is treated as equal.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         plugin = _FakePlugin({"fx_amount": 0.3 + 5e-7})
         spec = _FakeSpec([])
         defaults = {"fx_amount": 0.3}
@@ -749,8 +934,11 @@ class TestValidateNoDrift:
 
         assert result is None
 
-    def test_drift_just_above_tolerance_raises(self, vst_interactive) -> None:
-        """Deviation just above abs_tol=1e-6 is flagged."""
+    def test_drift_just_above_tolerance_raises(self, vst_interactive: ModuleType) -> None:
+        """Deviation just above abs_tol=1e-6 is flagged.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         plugin = _FakePlugin({"fx_amount": 0.3 + 1e-3})
         spec = _FakeSpec([])
         defaults = {"fx_amount": 0.3}
@@ -766,6 +954,9 @@ def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", 
     ``default_params`` dict that ``_validate_no_drift`` checks against.
 
     Returns ``(plugin, default_params)``.
+
+    :param simple_spec: Simple ParamSpec fixture used by the scenario.
+    :returns: Fake plugin state used by keyboard-loop tests.
     """
     spec_defaults = {name: 0.25 for name in simple_spec.synth_param_names}
     non_spec_defaults = {"fx_amount": 0.1, "global_volume": 0.7}
@@ -776,8 +967,14 @@ def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", 
 class TestKeyboardLoop:
     """Read keystrokes via ``keystroke_source`` and snapshot params on ``p`` until exit."""
 
-    def test_p_records_patch_q_quits(self, vst_interactive, simple_spec: ParamSpec) -> None:
-        """``["p", "q"]`` records exactly one patch with every spec synth-param key, then quits."""
+    def test_p_records_patch_q_quits(
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
+    ) -> None:
+        """``["p", "q"]`` records exactly one patch with every spec synth-param key, then quits.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["p", "q"])
@@ -797,8 +994,14 @@ class TestKeyboardLoop:
             assert np.isfinite(value), f"{name} = {value} is not finite"
         assert stop_event.is_set()
 
-    def test_unknown_keys_are_ignored(self, vst_interactive, simple_spec: ParamSpec) -> None:
-        """Ignore keystrokes outside ``{p, q}``: no patch, no ``stop_event``, no raise."""
+    def test_unknown_keys_are_ignored(
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
+    ) -> None:
+        """Ignore keystrokes outside ``{p, q}``: no patch, no ``stop_event``, no raise.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["x", "p", "z", "q"])
@@ -815,9 +1018,13 @@ class TestKeyboardLoop:
         assert stop_event.is_set()
 
     def test_stop_event_set_externally_exits_without_consuming_source(
-        self, vst_interactive, simple_spec: ParamSpec
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
     ) -> None:
-        """Return ``[]`` immediately without polling the source when ``stop_event`` is set."""
+        """Return ``[]`` immediately without polling the source when ``stop_event`` is set.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         stop_event.set()
@@ -840,9 +1047,13 @@ class TestKeyboardLoop:
         assert consumed == [], "loop must check stop_event before polling the source"
 
     def test_source_exhaustion_quits_gracefully_and_sets_stop_event(
-        self, vst_interactive, simple_spec: ParamSpec
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
     ) -> None:
-        """Return recorded patches and set ``stop_event`` on source ``StopIteration``."""
+        """Return recorded patches and set ``stop_event`` on source ``StopIteration``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["p"])  # No q — source will raise StopIteration on the second poll.
@@ -859,12 +1070,15 @@ class TestKeyboardLoop:
         assert stop_event.is_set()
 
     def test_drift_during_record_raises_valueerror_and_sets_stop_event(
-        self, vst_interactive, simple_spec: ParamSpec
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
     ) -> None:
         """Raise ``ValueError`` via ``_validate_no_drift`` when a non-spec param drifted.
 
         The loop sets ``stop_event`` and re-raises (so the orchestrator sees the failure
         instead of silently dropping it).
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
         """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         # Drift the non-spec ``fx_amount`` from its default to trip _validate_no_drift.
@@ -887,13 +1101,17 @@ def _write_pred_files(
     output_dir: Path,
     num_samples: int,
     *,
-    pred_tensor_factory=None,
+    pred_tensor_factory: Callable[[int], torch.Tensor] | None = None,
 ) -> None:
     """Write the per-sample ``pred``/``target-audio``/``target-params`` files for a sample dir.
 
     Mirrors the files ``PredictionWriter`` emits, populated with finite tensors by default.
     ``pred_tensor_factory`` lets a test override the ``pred-{i}.pt`` payload (e.g. to inject
     NaN/Inf); the target tensors are always finite stubs.
+
+    :param output_dir: Destination for generated prediction files.
+    :param num_samples: Number of indexed samples to materialize.
+    :param pred_tensor_factory: Factory producing each indexed prediction tensor.
     """
 
     def _default_factory(_idx: int) -> torch.Tensor:
@@ -910,8 +1128,11 @@ def _write_pred_files(
 class TestExpectedPredictionFilenames:
     """``_expected_prediction_filenames`` enumerates ``PredictionWriter``'s output names."""
 
-    def test_returns_three_names_per_sample(self, vst_interactive) -> None:
-        """For ``num_samples`` samples, three sorted filenames per sample are returned."""
+    def test_returns_three_names_per_sample(self, vst_interactive: ModuleType) -> None:
+        """For ``num_samples`` samples, three sorted filenames per sample are returned.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         names = vst_interactive._expected_prediction_filenames(num_samples=2)
 
         assert names == sorted(
@@ -925,8 +1146,11 @@ class TestExpectedPredictionFilenames:
             ]
         )
 
-    def test_zero_samples_returns_empty(self, vst_interactive) -> None:
-        """Zero samples returns an empty list."""
+    def test_zero_samples_returns_empty(self, vst_interactive: ModuleType) -> None:
+        """Zero samples returns an empty list.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         assert vst_interactive._expected_prediction_filenames(num_samples=0) == []
 
 
@@ -1002,30 +1226,54 @@ class TestRunPredict:
 class TestValidatePredictions:
     """``_validate_predictions`` checks expected files exist and tensors are finite."""
 
-    def test_passes_on_complete_finite_outputs(self, vst_interactive, tmp_path: Path) -> None:
-        """Happy path: complete file set with finite predictions does not raise."""
+    def test_passes_on_complete_finite_outputs(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """Happy path: complete file set with finite predictions does not raise.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         _write_pred_files(tmp_path, num_samples=2)
 
         vst_interactive._validate_predictions(tmp_path, num_samples=2)
 
-    def test_missing_file_raises_filenotfounderror(self, vst_interactive, tmp_path: Path) -> None:
-        """A missing per-sample file raises ``FileNotFoundError`` listing the missing entry."""
+    def test_missing_file_raises_filenotfounderror(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """A missing per-sample file raises ``FileNotFoundError`` listing the missing entry.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         _write_pred_files(tmp_path, num_samples=2)
         (tmp_path / "pred-1.pt").unlink()
 
         with pytest.raises(FileNotFoundError, match="pred-1.pt"):
             vst_interactive._validate_predictions(tmp_path, num_samples=2)
 
-    def test_extra_file_raises_filenotfounderror(self, vst_interactive, tmp_path: Path) -> None:
-        """An unexpected file in the directory raises ``FileNotFoundError`` (set mismatch)."""
+    def test_extra_file_raises_filenotfounderror(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """An unexpected file in the directory raises ``FileNotFoundError`` (set mismatch).
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         _write_pred_files(tmp_path, num_samples=1)
         torch.save(torch.zeros(1), tmp_path / "stray-extra.pt")
 
         with pytest.raises(FileNotFoundError, match="stray-extra.pt"):
             vst_interactive._validate_predictions(tmp_path, num_samples=1)
 
-    def test_nan_prediction_raises_valueerror(self, vst_interactive, tmp_path: Path) -> None:
-        """A NaN value in any ``pred-{i}.pt`` raises ``ValueError`` naming the offending file."""
+    def test_nan_prediction_raises_valueerror(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """A NaN value in any ``pred-{i}.pt`` raises ``ValueError`` naming the offending file.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
 
         def factory(idx: int) -> torch.Tensor:
             if idx == 0:
@@ -1041,42 +1289,58 @@ class TestValidatePredictions:
 class TestValidateMetricsDf:
     """``_validate_metrics_df`` validates row count, expected columns, and finiteness."""
 
-    def test_passes_on_matching_shape_and_finite(self, vst_interactive) -> None:
-        """Happy path: matching rows, expected columns, all-finite values does not raise."""
+    def test_passes_on_matching_shape_and_finite(self, vst_interactive: ModuleType) -> None:
+        """Happy path: matching rows, expected columns, all-finite values does not raise.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         df = pd.DataFrame({"mss": [0.1, 0.2], "extra": [1.0, 2.0]})
         spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_wrong_rows_raises_valueerror(self, vst_interactive) -> None:
-        """Row count mismatch raises ``ValueError`` mentioning expected and actual."""
+    def test_wrong_rows_raises_valueerror(self, vst_interactive: ModuleType) -> None:
+        """Row count mismatch raises ``ValueError`` mentioning expected and actual.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         df = pd.DataFrame({"mss": [0.1]})
         spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="expected 2 rows"):
             vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_missing_column_raises_valueerror(self, vst_interactive) -> None:
-        """A missing expected column raises ``ValueError`` listing the missing column."""
+    def test_missing_column_raises_valueerror(self, vst_interactive: ModuleType) -> None:
+        """A missing expected column raises ``ValueError`` listing the missing column.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         df = pd.DataFrame({"other": [0.1, 0.2]})
         spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="missing expected columns"):
             vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_nan_in_expected_column_raises_valueerror(self, vst_interactive) -> None:
-        """A NaN in any expected column raises ``ValueError`` (NaN/Inf message)."""
+    def test_nan_in_expected_column_raises_valueerror(self, vst_interactive: ModuleType) -> None:
+        """A NaN in any expected column raises ``ValueError`` (NaN/Inf message).
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
         df = pd.DataFrame({"mss": [0.1, float("nan")]})
         spec = vst_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
 
         with pytest.raises(ValueError, match="NaN/Inf"):
             vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
-    def test_nan_error_reports_offending_row_count_not_full_df(self, vst_interactive) -> None:
+    def test_nan_error_reports_offending_row_count_not_full_df(
+        self, vst_interactive: ModuleType
+    ) -> None:
         """Error message reports only the offending row count and rows, not the full DataFrame.
 
         Otherwise a 1000-row metrics.csv with one bad row dumps a thousand lines into the
         traceback.
+
+        :param vst_interactive: Loaded VST interactive module under test.
         """
         df = pd.DataFrame(
             {
@@ -1135,9 +1399,13 @@ class TestMaybeEvalCapturedPatches:
     """``_maybe_eval_captured_patches`` wires up the train.lance -> sibling replication."""
 
     def test_no_checkpoint_skips_replication_and_eval(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """Skip sibling-file creation and ``eval_patches`` when ``--checkpoint-path`` is absent."""
+        """Skip sibling-file creation and ``eval_patches`` when ``--checkpoint-path`` is absent.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         train_path = tmp_path / "train.lance"
         _write_stub_lance_dir(train_path, b"stub")
         runner = _RecordingEvalRunner()
@@ -1191,13 +1459,16 @@ class TestMaybeEvalCapturedPatches:
         ]
 
     def test_failed_copy_rolls_back_partial_siblings(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """Roll back earlier siblings on later ``shutil.copytree`` ``OSError``; skip eval.
 
         Failure is triggered by a *real* OS error: ``val.lance`` is pre-created as a directory, so
         the second ``copytree`` fails with ``FileExistsError``; asserting on ``OSError`` matches
         the SUT's ``except OSError:`` contract.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
         """
         train_path = tmp_path / "train.lance"
         _write_stub_lance_dir(train_path, b"train-content")
@@ -1237,6 +1508,10 @@ def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
 
     Samples are shaped ``(num_frames, num_channels)`` to match the convention used by
     ``play_audio_recorded`` and ``predict_vst_audio.py`` (both pass ``output.T``).
+
+    :param path: Destination WAV path.
+    :param silent: Whether generated audio should contain only zeros.
+    :param sample_rate: Audio sample rate in hertz.
     """
     duration_seconds = 0.05
     num_frames = int(sample_rate * duration_seconds)
@@ -1250,7 +1525,12 @@ def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
 
 
 def _populate_audio_dir(audio_dir: Path, num_samples: int, *, silent: bool = False) -> None:
-    """Pre-create ``sample_{i}`` subdirs with per-sample artifacts for render validation."""
+    """Pre-create ``sample_{i}`` subdirs with per-sample artifacts for render validation.
+
+    :param audio_dir: Root containing indexed sample audio artifacts.
+    :param num_samples: Number of indexed samples to materialize.
+    :param silent: Whether generated audio should contain only zeros.
+    """
     audio_dir.mkdir(parents=True, exist_ok=True)
     for i in range(num_samples):
         sample_dir = audio_dir / f"sample_{i}"
@@ -1272,8 +1552,14 @@ class TestBuildPredictVstAudioArgv:
     monkeypatching ``sys.platform`` or the module-level wrapper constant.
     """
 
-    def test_linux_prepends_wrapper_to_argv(self, vst_interactive, tmp_path: Path) -> None:
-        """On Linux, the existing wrapper script is the first argv entry."""
+    def test_linux_prepends_wrapper_to_argv(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """On Linux, the existing wrapper script is the first argv entry.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         wrapper_path = tmp_path / "wrapper.sh"
         wrapper_path.write_text('#!/usr/bin/env bash\nexec "$@"\n')
         wrapper_path.chmod(0o755)
@@ -1290,9 +1576,13 @@ class TestBuildPredictVstAudioArgv:
         assert argv[0] == str(wrapper_path)
 
     def test_linux_missing_wrapper_raises_filenotfounderror(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """On Linux, a missing wrapper path raises ``FileNotFoundError`` naming the path."""
+        """On Linux, a missing wrapper path raises ``FileNotFoundError`` naming the path.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         missing_wrapper = tmp_path / "definitely-does-not-exist.sh"
 
         with pytest.raises(FileNotFoundError, match="VST headless wrapper not found"):
@@ -1305,8 +1595,14 @@ class TestBuildPredictVstAudioArgv:
                 wrapper_path=missing_wrapper,
             )
 
-    def test_non_linux_does_not_prepend_wrapper(self, vst_interactive, tmp_path: Path) -> None:
-        """On non-Linux platforms the wrapper is not prepended and a missing wrapper is fine."""
+    def test_non_linux_does_not_prepend_wrapper(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """On non-Linux platforms the wrapper is not prepended and a missing wrapper is fine.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         missing_wrapper = tmp_path / "definitely-does-not-exist.sh"
 
         argv = vst_interactive._build_predict_vst_audio_argv(
@@ -1347,9 +1643,13 @@ class TestBuildPredictVstAudioArgv:
         assert argv[-1] == "-t"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """Match the two positional argv entries to the caller's source/destination paths."""
+        """Match the two positional argv entries to the caller's source/destination paths.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         preds_dir = tmp_path / "preds"
         audio_dir = tmp_path / "audio"
 
@@ -1367,9 +1667,13 @@ class TestValidateRenderedAudioDir:
     """``_validate_rendered_audio_dir`` checks the per-sample artifacts after rendering."""
 
     def test_returns_none_on_complete_non_silent_dir(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """All artifacts present and audible → returns ``None`` without raising."""
+        """All artifacts present and audible → returns ``None`` without raising.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=2)
 
@@ -1377,9 +1681,13 @@ class TestValidateRenderedAudioDir:
         vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
     def test_missing_artifact_raises_filenotfounderror(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """A missing per-sample artifact (``spec.png``) raises ``FileNotFoundError`` naming it."""
+        """A missing per-sample artifact (``spec.png``) raises ``FileNotFoundError`` naming it.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=1)
         (audio_dir / "sample_0" / "spec.png").unlink()
@@ -1387,8 +1695,14 @@ class TestValidateRenderedAudioDir:
         with pytest.raises(FileNotFoundError, match="spec.png"):
             vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
 
-    def test_silent_wav_raises_valueerror(self, vst_interactive, tmp_path: Path) -> None:
-        """A silent rendered WAV raises ``ValueError`` naming the offending sample / file."""
+    def test_silent_wav_raises_valueerror(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """A silent rendered WAV raises ``ValueError`` naming the offending sample / file.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=1, silent=True)
 
@@ -1396,9 +1710,13 @@ class TestValidateRenderedAudioDir:
             vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=1)
 
     def test_unexpected_sample_dirs_raises_filenotfounderror(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """Mismatched sample directory set (missing) raises ``FileNotFoundError``."""
+        """Mismatched sample directory set (missing) raises ``FileNotFoundError``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         audio_dir = tmp_path / "audio"
         # Caller asks for num_samples=2 but only sample_0 exists.
         _populate_audio_dir(audio_dir, num_samples=1)
@@ -1407,9 +1725,13 @@ class TestValidateRenderedAudioDir:
             vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
     def test_extra_sample_dir_raises_filenotfounderror(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
-        """Raise ``FileNotFoundError`` on an extra sample dir to reject stale leftovers."""
+        """Raise ``FileNotFoundError`` on an extra sample dir to reject stale leftovers.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=2)
         # Pollute the dir with an extra leftover.
@@ -1423,11 +1745,16 @@ class TestValidateRenderedAudioDir:
         with pytest.raises(FileNotFoundError, match="unexpected sample directories"):
             vst_interactive._validate_rendered_audio_dir(audio_dir, num_samples=2)
 
-    def test_num_samples_12_does_not_trip_lex_sort(self, vst_interactive, tmp_path: Path) -> None:
+    def test_num_samples_12_does_not_trip_lex_sort(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
         """Regression: ``num_samples=12`` must survive ``sample_10`` sorting before ``sample_2``.
 
         Set comparison + index iteration keeps validation index-based regardless of directory
         iteration order.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
         """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=12)
@@ -1443,11 +1770,14 @@ class TestRenderPredictedAudioSubprocessIntegration:
     """
 
     def test_runner_receives_argv_with_check_and_timeout(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """Forward argv to the runner with ``check=True`` and a positive ``timeout``.
 
         Drift on either kwarg would silently turn fatal subprocess errors into successes.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
         """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=1)
@@ -1482,12 +1812,15 @@ class TestPlayAudioRecordedE2E:
     """End-to-end: real Surge XT plugin renders a non-silent deterministic clip."""
 
     def test_play_audio_recorded_produces_non_silent_wav(
-        self, vst_interactive, tmp_path: Path
+        self, vst_interactive: ModuleType, tmp_path: Path
     ) -> None:
         """Render a WAV via real Surge XT + ``surge-simple.vstpreset`` with non-silent audio.
 
         Verifies ``play_audio_recorded`` writes a file with the expected frame count and an
         audible peak amplitude.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
         """
         from synth_setter.data.vst.core import load_plugin, load_preset
 
@@ -1527,6 +1860,10 @@ def _write_synthetic_prediction_files(
     Renders without a model checkpoint. Each pred row encodes mid-range params (zeros in the
     (-1..1) coordinate) so the rendered audio depends only on the preset and a deterministic
     note pattern.
+
+    :param pred_dir: Destination for synthetic prediction tensors.
+    :param num_samples: Number of indexed samples to materialize.
+    :param simple_spec: Simple ParamSpec fixture used by the scenario.
     """
     pred_dir.mkdir(parents=True, exist_ok=True)
     total_length = simple_spec.synth_param_length + simple_spec.note_param_length
@@ -1554,11 +1891,16 @@ class TestRenderPredictedAudioE2E:
 
     def test_render_predicted_audio_against_real_subprocess(
         self,
-        vst_interactive,
+        vst_interactive: ModuleType,
         tmp_path: Path,
         simple_spec: ParamSpec,
     ) -> None:
-        """Invoke the real ``predict_vst_audio.py`` and validate non-silent rendered WAVs."""
+        """Invoke the real ``predict_vst_audio.py`` and validate non-silent rendered WAVs.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        """
         plugin_path = "plugins/Surge XT.vst3"
         plugin_state_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
@@ -1602,13 +1944,16 @@ class TestKeyboardLoopE2E:
     """End-to-end: real Surge XT plugin records a patch via deterministic keystrokes."""
 
     def test_p_q_against_real_plugin_records_one_patch(
-        self, vst_interactive, simple_spec: ParamSpec
+        self, vst_interactive: ModuleType, simple_spec: ParamSpec
     ) -> None:
         """Record a patch whose synth-param values match the post-preset-load Surge XT state.
 
         Drives the real Surge XT VST + ``surge-simple.vstpreset`` with ``["p", "q"]`` and asserts
         the recorded patch's synth-param values are finite floats matching the post-preset-load
         defaults.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
         """
         from synth_setter.data.vst.core import load_plugin, load_preset
 

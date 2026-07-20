@@ -147,21 +147,43 @@ SubprocessRunner = Callable[..., object]
 class AudioStreamProtocol(Protocol):
     """Structural surface ``play_audio`` needs from an entered audio-output stream."""
 
-    def write(self, buffer: np.ndarray, sample_rate: int) -> object: ...
+    def write(self, buffer: np.ndarray, sample_rate: int) -> object:
+        """Write one channel-first audio buffer.
+
+        :param buffer: Audio samples with shape ``(channels, frames)``.
+        :param sample_rate: Buffer sample rate in hertz.
+        :returns: Stream-specific write result.
+        """
+        ...
 
 
 class MidiMessageProtocol(Protocol):
-    """Structural surface ``midi_listener`` needs from a polled mido message."""
+    """Structural surface ``midi_listener`` needs from a polled mido message.
+
+    .. attribute :: type
+
+        MIDI message type used to filter performance events.
+    """
 
     type: str
 
-    def bytes(self) -> list[int]: ...
+    def bytes(self) -> list[int]:
+        """Encode the MIDI message for pedalboard.
+
+        :returns: MIDI status and data bytes.
+        """
+        ...
 
 
 class MidiPortProtocol(Protocol):
     """Structural surface ``midi_listener`` needs from an entered mido input port."""
 
-    def poll(self) -> MidiMessageProtocol | None: ...
+    def poll(self) -> MidiMessageProtocol | None:
+        """Return the next available MIDI message without blocking.
+
+        :returns: Next message, or ``None`` when the port is idle.
+        """
+        ...
 
 
 PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
@@ -178,10 +200,9 @@ KeystrokeSource = Callable[[], str]
 
 
 def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtocol]:
-    """Build the production ``AudioStream`` used by ``play_audio``.
+    """Build the production ``AudioStream`` without probing devices during import.
 
-    Defined as a separate helper so the default-device lookup happens only when the seam is left at
-    its default — fake factories used in tests never trigger PortAudio device probing.
+    :returns: Context manager for the default audio output stream.
     """
     return AudioStream(  # pyright: ignore[reportReturnType]
         output_device_name=AudioStream.default_output_device_name,
@@ -192,14 +213,27 @@ def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtoco
 
 @dataclass(frozen=True)
 class _MetricsFileSpec:
-    """Expected shape of a metrics CSV produced by ``compute_audio_metrics.py``."""
+    """Expected shape of a metrics CSV produced by ``compute_audio_metrics.py``.
+
+    .. attribute :: rows
+
+        Required row count.
+
+    .. attribute :: columns
+
+        Required metric columns.
+    """
 
     rows: int
     columns: frozenset[str]
 
 
 def _expected_prediction_filenames(num_samples: int) -> list[str]:
-    """Return the sorted list of filenames ``PredictionWriter`` writes per sample."""
+    """List the prediction artifacts written for each requested sample.
+
+    :param num_samples: Number of sample indices to enumerate.
+    :returns: Sorted prediction artifact filenames.
+    """
     return sorted(
         f"{prefix}-{i}.pt"
         for prefix in ("pred", "target-audio", "target-params")
@@ -212,7 +246,13 @@ def _validate_metrics_df(
     metrics_df: pd.DataFrame,
     expected: _MetricsFileSpec,
 ) -> None:
-    """Verify ``metrics_df`` row count, column superset, and finite values in expected columns."""
+    """Reject metrics tables with the wrong shape, columns, or non-finite values.
+
+    :param metrics_path: Source path included in validation errors.
+    :param metrics_df: Parsed metrics table.
+    :param expected: Required row count and column names.
+    :raises ValueError: The table does not satisfy the expected metrics contract.
+    """
     if len(metrics_df) != expected.rows:
         raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
     missing_columns = expected.columns - set(metrics_df.columns)
@@ -235,7 +275,16 @@ def _validate_metrics_df(
 
 @dataclass(frozen=True)
 class PredictionRef:
-    """Identifier for a single predicted parameter row on disk."""
+    """Identifier for a single predicted parameter row on disk.
+
+    .. attribute :: path
+
+        Prediction tensor path.
+
+    .. attribute :: batch_idx
+
+        Zero-based row index within the tensor.
+    """
 
     path: Path
     batch_idx: int
@@ -243,14 +292,28 @@ class PredictionRef:
 
 @dataclass(frozen=True)
 class DatasetRef:
-    """Identifier for a single dataset row on disk."""
+    """Identifier for a single dataset row on disk.
+
+    .. attribute :: path
+
+        Lance dataset path.
+
+    .. attribute :: batch_idx
+
+        Zero-based row index within the dataset.
+    """
 
     path: Path
     batch_idx: int
 
 
 class PredictionRefType(click.ParamType):
-    """Click parser for ``PATH:BATCH_IDX`` prediction references."""
+    """Click parser for ``PATH:BATCH_IDX`` prediction references.
+
+    .. attribute :: name
+
+        Click parameter type label.
+    """
 
     name = "pred_ref"
 
@@ -260,7 +323,13 @@ class PredictionRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> PredictionRef:
-        """Parse ``PATH:BATCH_IDX`` into a ``PredictionRef`` (pass through if already one)."""
+        """Parse a prediction reference while preserving pre-parsed values.
+
+        :param value: Existing reference or ``PATH:BATCH_IDX`` text.
+        :param param: Click parameter owning the value, when available.
+        :param ctx: Active Click context, when available.
+        :returns: Parsed prediction reference.
+        """
         if isinstance(value, PredictionRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -276,7 +345,12 @@ class PredictionRefType(click.ParamType):
 
 
 class DatasetRefType(click.ParamType):
-    """Click parser for ``PATH:DATASET_IDX`` dataset references."""
+    """Click parser for ``PATH:DATASET_IDX`` dataset references.
+
+    .. attribute :: name
+
+        Click parameter type label.
+    """
 
     name = "dataset_ref"
 
@@ -286,7 +360,13 @@ class DatasetRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> DatasetRef:
-        """Parse ``PATH:DATASET_IDX`` into a ``DatasetRef`` (pass through if already one)."""
+        """Parse a dataset reference while preserving pre-parsed values.
+
+        :param value: Existing reference or ``PATH:DATASET_IDX`` text.
+        :param param: Click parameter owning the value, when available.
+        :param ctx: Active Click context, when available.
+        :returns: Parsed dataset reference.
+        """
         if isinstance(value, DatasetRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -391,17 +471,15 @@ def load_prediction_synth_params(
     :param param_spec_name: Parameter spec name (key into ``param_specs``) used
         to decode the row into raw VST parameter values.
     :returns: Dict mapping VST parameter name to its raw (decoded) value.
-    :raises IndexError: when ``ref.batch_idx`` is out of range for the loaded tensor.
     """
     pred_tensor = _load_pred_tensor(ref.path)
     return decode_prediction_row(pred_tensor, ref.batch_idx, param_spec_name)
 
 
 def _flush_plugin(plugin: VST3Plugin) -> None:
-    """Process an empty buffer and reset the plugin to flush internal state.
+    """Flush state with the same process-reset sequence used by offline rendering.
 
-    Mirrors the post-load / pre-render flush pattern in
-    ``synth_setter.data.vst.core.render_params``.
+    :param plugin: Loaded VST3 instance to flush.
     """
     plugin.process(
         [],
@@ -432,6 +510,12 @@ def play_audio(
     ``audio_stream_factory`` exists for test injection (#844). ``None`` (the default)
     builds the real pedalboard ``AudioStream`` at call time so legacy module-level
     monkeypatches of ``AudioStream`` keep working.
+
+    :param plugin: Loaded VST3 instance that produces each audio buffer.
+    :param stop_event: Shutdown signal shared with the editor and keyboard loop.
+    :param midi_queue: Optional queue of timestamped MIDI byte messages.
+    :param audio_stream_factory: Optional audio-output stream factory.
+    :raises ValueError: The plugin returns an audio buffer with an unexpected shape.
     """
     needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
     stream_resampler = (
@@ -493,6 +577,11 @@ def midi_listener(
     ``port_opener`` exists for test injection (#844). ``None`` resolves to
     ``mido.open_input`` at call time; callers can inject an opener without
     replacing the module-level mido dependency.
+
+    :param port_name: Exact mido input-port name to open.
+    :param midi_queue: Queue receiving timestamped MIDI byte messages.
+    :param stop_event: Shutdown signal shared with the audio and keyboard loops.
+    :param port_opener: Optional MIDI input context-manager factory.
     """
     logger.info("Listening on MIDI port: %s", port_name)
     opener = port_opener if port_opener is not None else mido.open_input  # pyright: ignore[reportAttributeAccessIssue]
@@ -512,9 +601,12 @@ def midi_listener(
 def _resolve_midi_port(requested: str, available: Sequence[str]) -> str:
     """Map the ``--midi-port`` flag value to a concrete port name.
 
-    ``requested == ""`` selects ``available[0]`` (auto-pick); a non-empty value
-    must match one of ``available`` exactly. Either form raises ``click.UsageError``
-    when ``available`` is empty or the requested name is not present.
+    ``requested == ""`` selects ``available[0]``; otherwise an exact match is required.
+
+    :param requested: Requested port name, or an empty string for automatic selection.
+    :param available: Port names reported by mido.
+    :returns: Concrete input-port name.
+    :raises click.UsageError: No input is available or the requested name is absent.
     """
     if not available:
         raise click.UsageError("--midi-port set but no MIDI input ports are available.")
@@ -528,10 +620,12 @@ def _resolve_midi_port(requested: str, available: Sequence[str]) -> str:
 def _validate_no_drift(
     plugin: VST3Plugin, spec: ParamSpec, default_params: dict[str, float]
 ) -> None:
-    """Raise ``ValueError`` if any non-spec plugin param drifted from its default.
+    """Reject drift in plugin parameters outside the selected ParamSpec.
 
-    Only parameters absent from ``spec.synth_param_names`` are checked; spec params
-    are expected to vary between recordings.
+    :param plugin: Loaded plugin whose current parameter values are inspected.
+    :param spec: ParamSpec defining parameters that may vary between patches.
+    :param default_params: Post-preset values for parameters outside the ParamSpec.
+    :raises ValueError: A non-spec parameter differs from its post-preset value.
     """
     for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
         if param_name in spec.synth_param_names:
@@ -558,6 +652,10 @@ def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> Non
     Headless alternative to :func:`play_audio` — uses
     ``pedalboard.io.AudioFile`` instead of an ``AudioStream``, so it works in
     environments without an audio output device.
+
+    :param plugin: Loaded VST3 instance to render.
+    :param session_recording_path: Destination WAV path.
+    :raises ValueError: The plugin returns an audio buffer with an unexpected shape.
     """
     midi_events = make_midi_events(
         SESSION_RECORDING_MIDI_NOTE,
@@ -613,10 +711,12 @@ def keyboard_loop(
     Also exits when ``stop_event`` is set externally (e.g. when the plugin editor is
     closed). Returns the list of recorded patches.
 
-    :param keystroke_source: Zero-arg callable returning one character per invocation;
-        ``None`` defaults to ``click.getchar``. Tests pass ``iter([...]).__next__`` to
-        drive the loop deterministically. ``StopIteration`` raised by the source is
-        treated as quit (sets ``stop_event`` and returns).
+    :param plugin: Loaded plugin whose current parameter values are captured.
+    :param stop_event: Shutdown signal shared with the editor and audio loop.
+    :param param_spec_name: Registry key defining patch parameters.
+    :param default_params: Post-preset values used to detect non-spec drift.
+    :param keystroke_source: Optional zero-argument character source; exhaustion quits.
+    :returns: Recorded synth-parameter patches in capture order.
     """
     spec = param_specs[param_spec_name]
     synth_patches: list[dict[str, float]] = []
@@ -683,9 +783,15 @@ def _run_predict(
     chdirs into its own output dir before the job starts; relative paths would otherwise resolve
     against the wrong cwd. The datamodule ParamSpec drives the model output width.
 
-    ``subprocess_runner`` exists for test injection (#844). ``None`` (the default) resolves to
-    ``subprocess.check_call`` at call time so legacy ``monkeypatch.setattr(subprocess, ...)``
-    tests keep working until they migrate to direct injection.
+    ``subprocess_runner`` exists for test injection (#844). ``None`` resolves to
+    ``subprocess.check_call`` at call time.
+
+    :param checkpoint_path: Model checkpoint loaded by the evaluation entrypoint.
+    :param dataset_root_dir: Root passed to the prediction datamodule.
+    :param predict_file: Lance split used as prediction input.
+    :param predictions_output_dir: Destination for prediction tensors.
+    :param param_spec_name: ParamSpec registry key controlling model output width.
+    :param subprocess_runner: Optional injected subprocess runner.
     """
     runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
     runner(  # noqa: S603
@@ -713,8 +819,10 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
     tensor is finite. Tensors are loaded onto CPU regardless of the device they were saved from
     so this works across mps/cuda/cpu predict runs.
 
-    :raises FileNotFoundError: if the expected files are missing or extras are present.
-    :raises ValueError: if any ``pred-{i}.pt`` tensor contains NaN/Inf.
+    :param predictions_output_dir: Directory produced by PredictionWriter.
+    :param num_samples: Required number of indexed output groups.
+    :raises FileNotFoundError: Expected files are missing or unexpected files are present.
+    :raises ValueError: A prediction tensor contains a non-finite value.
     """
     expected_names = _expected_prediction_filenames(num_samples)
     actual_names = sorted(p.name for p in predictions_output_dir.iterdir())
@@ -756,8 +864,9 @@ def _build_predict_vst_audio_argv(
     :param wrapper_path: Real, on-disk path to the Xvfb wrapper; required on Linux
         (the caller materializes :func:`vst_headless_wrapper` via ``as_file``).
 
-    :raises FileNotFoundError: on Linux when the wrapper path is absent.
-    :raises ValueError: on Linux when ``wrapper_path`` is ``None``.
+    :returns: Argument vector for the renderer subprocess.
+    :raises FileNotFoundError: On Linux when the wrapper path is absent.
+    :raises ValueError: On Linux when ``wrapper_path`` is ``None``.
     """
     resolved_platform = platform if platform is not None else sys.platform
     args: list[str] = []
@@ -795,8 +904,10 @@ def _validate_rendered_audio_dir(audio_dir: Path, num_samples: int) -> None:
     ``pred.wav``, ``spec.png``, ``params.csv``) and the rendered WAVs must not be silent.
     Read-only with respect to ``audio_dir`` — no writes and no subprocess execution.
 
-    :raises FileNotFoundError: if a sample directory is missing or any artifact is absent.
-    :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
+    :param audio_dir: Root containing indexed sample directories.
+    :param num_samples: Required number of sample directories.
+    :raises FileNotFoundError: A sample directory or required artifact is absent.
+    :raises ValueError: A rendered WAV is silent.
     """
     # Compare as sets so num_samples >= 10 doesn't trip on lexical ordering
     # (``sample_10`` sorts before ``sample_2`` in a plain ``sorted()``).
@@ -841,16 +952,15 @@ def _render_predicted_audio(
     otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
     ``presets/surge-base.vstpreset``) and decode/render against a mismatched spec.
 
-    :raises FileNotFoundError: if the headless wrapper is missing on Linux, if any sample directory
-        is missing, or if a per-sample artifact (target.wav, pred.wav, spec.png, params.csv) is
-        absent.
-    :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
+    Validation errors from argv construction and rendered artifacts propagate to the caller.
+
     :param predictions_output_dir: Directory containing prediction tensors.
     :param audio_dir: Directory where rendered audio artifacts are written.
     :param num_samples: Number of prediction samples to render.
     :param param_spec_name: Registry key for the parameter specification.
     :param plugin_state_path: Baseline plugin-state file to load.
     :param subprocess_runner: Optional injected subprocess runner.
+    :raises subprocess.TimeoutExpired: Rendering exceeds the subprocess deadline.
     """
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; keep the context open across the subprocess call.
@@ -891,11 +1001,14 @@ def _compute_and_validate_metrics(
 ) -> None:
     """Compute MSS / wMFCC / SOT / RMS metrics on the rendered pairs and verify the CSV outputs.
 
-    ``subprocess_runner`` exists for test injection (#844). ``None`` (the default) resolves to
-    ``subprocess.check_call`` at call time so legacy module-level monkeypatches keep working.
+    ``subprocess_runner`` exists for test injection (#844). ``None`` resolves to
+    ``subprocess.check_call`` at call time. Metrics-table validation errors propagate.
 
-    :raises FileNotFoundError: if either metrics CSV is missing.
-    :raises ValueError: if a metrics CSV has unexpected shape or columns, or contains NaN/Inf.
+    :param audio_dir: Root containing rendered target/prediction pairs.
+    :param metrics_dir: Destination for metric CSV files.
+    :param num_samples: Expected number of per-sample metric rows.
+    :param subprocess_runner: Optional injected subprocess runner.
+    :raises FileNotFoundError: Either metrics CSV is missing.
     """
     metrics_file_expectations: dict[str, _MetricsFileSpec] = {
         "aggregated_metrics.csv": _MetricsFileSpec(
@@ -961,10 +1074,10 @@ def eval_patches(
         helper so a single fake records all three external invocations. ``None`` (the default)
         preserves production behavior by letting each helper bind its own
         ``subprocess.run``/``subprocess.check_call`` default.
-    :raises FileNotFoundError: if ``checkpoint_path`` is missing, ``dataset_root_dir`` is not a
-        directory, ``predict.lance`` is missing, or any expected pipeline output is absent.
-    :raises ValueError: if predictions contain NaN/Inf, a rendered WAV is silent, or a metrics CSV
-        has the wrong shape/columns or contains NaN/Inf.
+    Downstream prediction, rendering, and metrics validation failures propagate.
+
+    :raises FileNotFoundError: The checkpoint, predict split, or required output is absent.
+    :raises NotADirectoryError: The dataset root is not a directory.
     """
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
@@ -1116,11 +1229,18 @@ def main(
     4. After the editor is closed, render every recorded patch through the plugin and write
        the resulting samples to ``train.lance`` inside ``--output-dataset-dir-path`` via
        ``make_lance_dataset``.
-    5. If ``--checkpoint-path`` is also set, copy ``train.lance`` to ``val.lance``/``test.lance``/
-       ``predict.lance`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
-       run ``src/synth_setter/cli/eval.py mode=predict`` followed by audio rendering
-       (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
-       the captured patches.
+    5. If ``--checkpoint-path`` is set, replicate the captured split and run evaluation.
+
+    :param plugin_path: VST3 plugin path resolved by Click.
+    :param pred: Optional predicted parameter row applied before audition.
+    :param dataset_ref: Optional dataset parameter row applied before audition.
+    :param param_spec_name: ParamSpec registry key paired with the plugin preset.
+    :param output_dataset_dir_path: Optional destination for captured patches.
+    :param midi_port: Optional MIDI input name, or an empty string for auto-selection.
+    :param checkpoint_path: Optional model checkpoint for post-capture evaluation.
+    :param session_recording_path: Optional destination for deterministic audition audio.
+    :raises TypeError: The loaded plugin is not a VST3 plugin.
+    :raises click.UsageError: CLI options conflict or an output path already exists.
     """
     plugin_state_path = plugin_state_paths[param_spec_name]
     if dataset_ref is not None and pred is not None:
@@ -1304,6 +1424,7 @@ def _maybe_eval_captured_patches(
     :param param_spec_name: Registry key for the parameter specification.
     :param plugin_state_path: Baseline plugin-state file used for rendering.
     :param eval_runner: Optional injected evaluation runner.
+    :raises OSError: Replicating a captured split fails.
     """
     if checkpoint_path is None:
         logger.info("No --checkpoint-path provided; skipping patch evaluation.")
