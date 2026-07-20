@@ -1,6 +1,42 @@
 # CHANGELOG
 
 
+## v10.2.0 (2026-07-20)
+
+### Features
+
+- **data-pipeline**: Vast.ai provider for the SkyPilot launcher
+  ([#2212](https://github.com/tinaudio/synth-setter/pull/2212),
+  [`b7c8588`](https://github.com/tinaudio/synth-setter/commit/b7c85889b269e0c4d3ac30b8d2ae3b3a0112df03))
+
+* feat(data-pipeline): add Vast.ai provider to the SkyPilot launch stack
+
+Adds Vast.ai as a third managed-jobs GPU provider alongside RunPod and OCI:
+
+- vast-template.yaml compute template (cloud: vast; docker image_id pinned per-launch like RunPod).
+  - train-vast-smoke.yaml launch config mirroring the RunPod 10-step smoke. -
+  write_provider_creds.sh --provider vast writes ~/.config/vastai/vast_api_key (the path SkyPilot's
+  Vast adaptor reads) from VAST_API_KEY. - _CLOUD_TO_PROVIDER "vast" entry so the launcher
+  bootstraps Vast creds. - pyproject: skypilot[...,vast] extra plus a vastai-sdk==0.2.5 pin. 1.x
+  drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls, breaking every
+  launch.
+
+Verified e2e: a raw vastai-CLI smoke and a managed-job dispatch through synth-setter-skypilot-launch
+  both ran the 10-step surge/ffn_simple train on a Vast RTX 3090 (checkpoint to R2 + W&B artifact)
+  and released the instance.
+
+Refs #2203
+
+* docs(data-pipeline): sync compute-integration doc + doc-map for Vast provider
+
+Resolve doc-drift on the SkyPilot compute-integration design doc and doc-map: correct the
+  vast-template pricing label (use_spot: false, not spot), mark the Phase B/C roadmap as delivered
+  with the actual single-template shape, and point E2E verification at the real
+  synth-setter-skypilot-launch path. Add doc-map entries for vast-template.yaml +
+  train-vast-smoke.yaml and update the write_provider_creds.sh / pyproject covers text for the vast
+  provider.
+
+
 ## v10.1.3 (2026-07-20)
 
 ### Bug Fixes
