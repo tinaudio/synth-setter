@@ -1,7 +1,7 @@
 """Compatibility tests for validation-aligned checkpoint selection."""
 
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import lightning.pytorch as pl
 import pytest
@@ -81,16 +81,20 @@ def test_checkpoint_state_key_remains_resume_compatible() -> None:
     assert aligned.state_key == existing.state_key
 
 
-def test_checkpoint_manual_optimization_recovery_uses_pre_update_weights(tmp_path: Path) -> None:
+@pytest.mark.parametrize("save_last", [True, "link"])
+def test_checkpoint_manual_optimization_recovery_uses_pre_update_weights(
+    tmp_path: Path, save_last: bool | Literal["link"]
+) -> None:
     """The recovery file preserves Lightning's manual-optimization step semantics.
 
     :param tmp_path: Temporary checkpoint directory.
+    :param save_last: Recovery checkpoint mode under test.
     """
     checkpoint = ValidationAlignedModelCheckpoint(
         dirpath=tmp_path,
         monitor="val/score",
         mode="min",
-        save_last=True,
+        save_last=save_last,
         save_top_k=1,
         every_n_train_steps=1,
     )
