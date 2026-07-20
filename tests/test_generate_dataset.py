@@ -40,7 +40,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
@@ -912,26 +912,21 @@ def remote_worker_dispatch(
     return _dispatch
 
 
-def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The generate-dataset entrypoint aborts a RunPod dispatch on insufficient balance.
+def _patch_remote_dispatch_boundaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> MagicMock:
+    """Fake the storage, spec-upload, cred, balance, and SkyPilot boundaries for dispatch.
 
-    Drives the real ``main`` → ``dispatch_via_skypilot`` path (only the SkyPilot
-    SDK, cred bootstrap, R2 spec upload, and the balance HTTP probe are faked at
-    their boundaries) and pins that no job submission happens.
+    Leaves ``main`` → ``dispatch_via_skypilot`` real; sets a sub-floor RunPod
+    balance so the preflight must abort the launch.
 
-    :param tmp_path: Scratch dir for the compute template.
     :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
+    :param tmp_path: Scratch dir for the compute template.
+    :return: The fake ``sky`` module for submission assertions.
     """
-    from unittest.mock import MagicMock
-
     import synth_setter.cli.generate_dataset as generate_dataset_cli
     import synth_setter.pipeline.skypilot_launch as skypilot_launch
 
-    compute_template = tmp_path / "compute.yaml"
-    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "key")
     monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
     monkeypatch.setenv(
@@ -952,6 +947,29 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
     monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
     fake_sky = MagicMock()
     monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    return fake_sky
+
+
+def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The generate-dataset entrypoint aborts a RunPod dispatch on insufficient balance.
+
+    Hydra wraps the launcher's ``RuntimeError`` in ``SystemExit(1)``, so the
+    balance cause is pinned via the captured error output — a pre-dispatch
+    config failure would exit identically but without the balance message.
+
+    :param tmp_path: Scratch dir for the compute template.
+    :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
+    :param capsys: Captures hydra's error output for the cause assertion.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+
+    fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
+    compute_template = tmp_path / "compute.yaml"
+    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -963,11 +981,12 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
         ],
     )
 
-    with pytest.raises((RuntimeError, SystemExit)) as excinfo:
+    with pytest.raises(SystemExit) as excinfo:
         cast("Callable[[], None]", generate_dataset_cli.main)()
 
-    if isinstance(excinfo.value, RuntimeError):
-        assert "insufficient RunPod balance" in str(excinfo.value)
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "insufficient RunPod balance" in captured.err + captured.out
     fake_sky.jobs.launch.assert_not_called()
 
 

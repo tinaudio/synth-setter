@@ -63,7 +63,7 @@ import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.object_storage import (
@@ -165,12 +165,26 @@ _RUNPOD_MIN_BALANCE_USD = 5.0
 _RUNPOD_BALANCE_QUERY = "query { myself { clientBalance } }"
 
 
+class _RunpodMyself(BaseModel, strict=True):
+    clientBalance: float | int  # noqa: N815 — verbatim RunPod GraphQL field name
+
+
+class _RunpodBalanceData(BaseModel, strict=True):
+    myself: _RunpodMyself
+
+
+# Strict trust-boundary model for the RunPod balance GraphQL response.
+class _RunpodBalanceResponse(BaseModel, strict=True):
+    data: _RunpodBalanceData
+
+
 def _fetch_runpod_balance() -> float | None:
     """Probe the RunPod account balance for the launch preflight.
 
     Fail-open by contract: missing or unparsable ``~/.runpod/config.toml``, API
     errors, and malformed responses all return ``None`` — a balance probe must
-    never block a launch on its own failure.
+    never block a launch on its own failure. Each failure emits a one-line
+    stderr notice (exception class only, never the balance or key).
 
     :returns: Balance in USD, or ``None`` when undeterminable.
     """
@@ -180,13 +194,43 @@ def _fetch_runpod_balance() -> float | None:
 
         config_text = (Path.home() / ".runpod" / "config.toml").read_text(encoding="utf-8")
         api_key = tomllib.loads(config_text).get("default", {}).get("api_key")
-        if not api_key:
+        if not isinstance(api_key, str) or not api_key:
+            click.echo(
+                "RunPod balance probe found no api_key in ~/.runpod/config.toml; "
+                "continuing fail-open (balance not verified)",
+                err=True,
+            )
             return None
         runpod.api_key = api_key
-        result = run_graphql_query(_RUNPOD_BALANCE_QUERY)
-        return float(result["data"]["myself"]["clientBalance"])
-    except Exception:  # noqa: BLE001 — fail open, see docstring contract
+        response = _RunpodBalanceResponse(**run_graphql_query(_RUNPOD_BALANCE_QUERY))
+        return float(response.data.myself.clientBalance)
+    except Exception as exc:  # noqa: BLE001 — fail open, see docstring contract
+        click.echo(
+            f"RunPod balance probe unavailable ({type(exc).__name__}); "
+            "continuing fail-open (balance not verified)",
+            err=True,
+        )
         return None
+
+
+def _doc_requests_runpod(doc: dict[str, object]) -> bool:
+    """Report whether any resources entry of a compute template targets RunPod.
+
+    Scans ``resources.cloud`` and every ``resources.any_of`` entry — provider
+    detection keys off ``any_of[0]``, but SkyPilot may satisfy the request with
+    any listed alternative, so the balance gate must consider them all.
+
+    :param doc: Parsed top-level YAML mapping for a SkyPilot Task.
+    :returns: ``True`` when at least one entry names the ``runpod`` cloud.
+    """
+    resources = doc.get("resources")
+    if not isinstance(resources, dict):
+        return False
+    clouds: list[object] = [resources.get("cloud")]
+    any_of = resources.get("any_of")
+    if isinstance(any_of, list):
+        clouds.extend(entry.get("cloud") for entry in any_of if isinstance(entry, dict))
+    return any(isinstance(c, str) and c.strip().lower() == "runpod" for c in clouds)
 
 
 def _check_runpod_balance() -> None:
@@ -672,7 +716,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
     # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
     # holds the provider creds, so a local config.toml balance may be stale.
-    if provider == "runpod" and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
+    if _doc_requests_runpod(task_doc) and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
         _check_runpod_balance()
 
     if provider == "local":

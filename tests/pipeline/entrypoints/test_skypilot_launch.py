@@ -816,6 +816,9 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
+        # setenv records the pre-test (absent) state, so the endpoint dispatch
+        # writes into os.environ is removed again on teardown.
+        monkeypatch.setenv(_SKYPILOT_API_SERVER_ENV, "https://placeholder.invalid")
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
             compute_template=str(template),
@@ -826,6 +829,99 @@ class TestRunpodBalancePreflight:
         )
         dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_called_once()
+
+    def test_mixed_any_of_with_runpod_alternative_still_checks_balance(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A RunPod entry anywhere in ``any_of`` triggers the preflight, not just entry 0.
+
+        Provider detection keys off ``any_of[0]``; a template listing OCI first
+        could still fall through to a RunPod alternative, so the balance gate
+        must scan every entry.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for the balance patch.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 1.0,
+        )
+        template = tmp_path / "compute.yaml"
+        template.write_text(
+            "resources:\n"
+            "  any_of:\n"
+            "  - cloud: oci\n"
+            "  - cloud: runpod\n"
+            "envs:\n"
+            "  RCLONE_CONFIG_R2_TYPE: ''\n"
+        )
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="mixed-any-of",
+        )
+        with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_cli_main_low_balance_exits_nonzero_without_submission(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The launcher CLI surfaces the insufficient-balance abort as a nonzero exit.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for the balance patch.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 1.0,
+        )
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+        )
+        result = CliRunner().invoke(main, [str(cfg_path)])
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "insufficient RunPod balance" in str(result.exception)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_probe_failure_emits_fail_open_notice(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        real_fetch: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A failed probe tells the operator it verified nothing instead of staying silent.
+
+        :param monkeypatch: Pytest fixture for the GraphQL patch.
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        :param capsys: Captures the stderr fail-open notice.
+        """
+        _write_runpod_config_toml(real_fetch)
+
+        def _raise(_query: str) -> dict[str, object]:
+            raise RuntimeError("api down")
+
+        monkeypatch.setattr("runpod.api.graphql.run_graphql_query", _raise)
+        _check_runpod_balance()
+        assert "fail-open" in capsys.readouterr().err
 
     def test_runpod_dispatch_healthy_balance_submits(
         self,
