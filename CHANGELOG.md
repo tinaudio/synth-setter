@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v10.1.2 (2026-07-20)
+
+### Bug Fixes
+
+- **data-pipeline**: Retry Xvfb bootstrap after startup contention
+  ([#2063](https://github.com/tinaudio/synth-setter/pull/2063),
+  [`92febf5`](https://github.com/tinaudio/synth-setter/commit/92febf5566ac102a46db0b73ff395fe665d5c27f))
+
+### Internal-Fix
+
+- **data-pipeline**: Preserve finalize telemetry on failure
+  ([#2024](https://github.com/tinaudio/synth-setter/pull/2024),
+  [`84262ce`](https://github.com/tinaudio/synth-setter/commit/84262ce500f6f08065ce324983b6175ec87d5fa7))
+
+### Refactoring
+
+- **data-pipeline**: Generalize interactive VST tool
+  ([#2059](https://github.com/tinaudio/synth-setter/pull/2059),
+  [`9f9416d`](https://github.com/tinaudio/synth-setter/commit/9f9416d2310ad1e22b39ced0320a9d799778fa6c))
+
+
 ## v10.1.1 (2026-07-20)
 
 ### Bug Fixes
