@@ -36,20 +36,21 @@ sync: ## Merge changes from main branch to your current branch
 # tests run (VST3-not-installed → tests skip via existing skipif decorators).
 UNAME_S := $(shell uname -s)
 HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
+PYTEST := ./.venv/bin/pytest
 
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	./.venv/bin/pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	$(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
 # GPU/MPS tests run serially because accelerators need exclusive access.
 test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb; Darwin: serial VST lane.
 	@if [ "$(UNAME_S)" = "Darwin" ]; then \
 		status=0; \
-		pytest -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
-		pytest -m "requires_vst and not gpu and not mps" || status=1; \
+		$(PYTEST) -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
+		$(PYTEST) -m "requires_vst and not gpu and not mps" || status=1; \
 		exit $$status; \
 	else \
-		$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"; \
+		$(HEADLESS_WRAPPER) $(PYTEST) -n auto -m "not gpu and not mps"; \
 	fi
 
 test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.
