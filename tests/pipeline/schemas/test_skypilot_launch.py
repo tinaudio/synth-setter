@@ -88,10 +88,10 @@ class TestSkypilotClientSettings:
     def test_env_file_loads_endpoint_and_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A dotenv file supplies complete remote-client auth.
+        """A dotenv file overrides stale process auth as one validated pair.
 
-        :param tmp_path: Pytest temporary directory.
-        :param monkeypatch: Pytest environment isolation fixture.
+        :param tmp_path: Isolates the dotenv source from developer files.
+        :param monkeypatch: Supplies stale process auth and restores it after the test.
         """
         monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
         monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)

@@ -347,26 +347,27 @@ def _restore_skypilot_client_env(previous: Mapping[str, str | None]) -> None:
     _reset_skypilot_client_cache()
 
 
-def _configure_skypilot_client(
-    settings: SkypilotClientSettings, *, local: bool, env_file_path: Path
+def _configure_local_skypilot_client() -> None:
+    """Force the local API endpoint over environment and persisted SkyPilot config."""
+    from sky.server import common as server_common
+
+    os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] = server_common.DEFAULT_SERVER_URL
+    os.environ.pop(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, None)
+    _reset_skypilot_client_cache()
+
+
+def _configure_remote_skypilot_client(
+    settings: SkypilotClientSettings, env_file_path: Path
 ) -> None:
-    """Apply and verify SkyPilot client auth before provisioning.
+    """Apply and verify remote SkyPilot client auth before provisioning.
 
     :param settings: Validated client authentication settings.
-    :param local: Whether to force SkyPilot's local API server.
     :param env_file_path: Dotenv source named in user-facing failures.
     :raises click.ClickException: The remote server cannot authenticate the client.
     """
-    if local:
-        for key in SKYPILOT_CLIENT_AUTH_ENV_KEYS:
-            os.environ.pop(key, None)
-    else:
-        os.environ.update(settings.as_env())
-
-    # SkyPilot caches the default endpoint during import, before launcher dotenv resolution.
+    os.environ.update(settings.as_env())
     _reset_skypilot_client_cache()
-
-    if local or settings.api_server_endpoint is None:
+    if settings.api_server_endpoint is None:
         return
 
     from sky.server import common as server_common
@@ -777,23 +778,18 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         )
     worker_env.update(sky_cfg.extra_envs)
 
-    try:
-        client_settings = (
-            SkypilotClientSettings(
-                api_server_endpoint=None,
-                service_account_token=None,
-            )
-            if sky_cfg.local
-            else skypilot_client_settings_from_sources(
+    client_settings: SkypilotClientSettings | None = None
+    if not sky_cfg.local:
+        try:
+            client_settings = skypilot_client_settings_from_sources(
                 env_file_path,
                 api_server_endpoint=sky_cfg.api_server,
             )
-        )
-    except ValidationError as exc:
-        details = "; ".join(str(error["msg"]) for error in exc.errors(include_input=False))
-        raise click.ClickException(
-            f"Invalid SkyPilot client authentication settings in {env_file_path}: {details}"
-        ) from exc
+        except ValidationError as exc:
+            details = "; ".join(str(error["msg"]) for error in exc.errors(include_input=False))
+            raise click.ClickException(
+                f"Invalid SkyPilot client authentication settings in {env_file_path}: {details}"
+            ) from exc
 
     base_job_name = sky_cfg.job_name or f"synth-setter-{uuid.uuid4().hex[:8]}"
 
@@ -803,11 +799,11 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     _ensure_ci_sky_config()
     previous_auth_env = {key: os.environ.get(key) for key in SKYPILOT_CLIENT_AUTH_ENV_KEYS}
     try:
-        _configure_skypilot_client(
-            client_settings,
-            local=sky_cfg.local,
-            env_file_path=env_file_path,
-        )
+        if sky_cfg.local:
+            _configure_local_skypilot_client()
+        else:
+            assert client_settings is not None
+            _configure_remote_skypilot_client(client_settings, env_file_path)
 
         # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
         # storage backend) inherit creds resolved from .env that were never exported.

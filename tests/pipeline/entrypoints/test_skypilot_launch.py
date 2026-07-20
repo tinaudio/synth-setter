@@ -11,14 +11,18 @@ per-rank fan-out, the uuid-stem job-name fallback, and the checked-in ``configs/
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
+import threading
 from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, create_autospec
+from wsgiref.simple_server import make_server
+from wsgiref.types import StartResponse, WSGIEnvironment
 
 import click
 import pytest
@@ -154,10 +158,10 @@ def _succeeded_run(mock_sky: MagicMock) -> None:
 
 @pytest.fixture()
 def skypilot_auth_request(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace the remote SkyPilot health request at the HTTP boundary.
+    """Replace the remote SkyPilot health request with a healthy response.
 
-    :param monkeypatch: Pytest attribute patching fixture.
-    :return: Mocked authenticated request callable.
+    :param monkeypatch: Restores the SDK request function after each test.
+    :return: Request mock whose default response reports healthy.
     """
     from sky.server import common as server_common
 
@@ -1628,7 +1632,7 @@ class TestDispatchViaSkypilot:
         monkeypatch.setenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "sky_orphan-token")
 
         def launch_without_remote_auth(*_args: object, **_kwargs: object) -> str:
-            assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
+            assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "http://127.0.0.1:46580"
             assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
             return "launch-req"
 
@@ -2108,6 +2112,68 @@ class TestSkypilotLaunchCli:
         mock_sky.jobs.launch.assert_called_once()
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
         assert task_doc["run"] == cmd
+
+    def test_valid_dotenv_auth_reaches_remote_health_and_submission(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """The CLI loads dotenv auth for a real HTTP health check before submission.
+
+        :param tmp_path: Holds the launch config and compute template consumed by the CLI.
+        :param env_file: Dotenv source amended with remote client authentication.
+        :param mock_sky: Prevents provisioning after the real health request succeeds.
+        """
+        requests_seen: list[tuple[str, str | None]] = []
+
+        def health_app(environ: WSGIEnvironment, start_response: StartResponse) -> list[bytes]:
+            """Record client auth and return a healthy SkyPilot-shaped response.
+
+            :param environ: WSGI request values carrying the path and authorization header.
+            :param start_response: WSGI callback that starts the HTTP response.
+            :return: JSON response body chunks.
+            """
+            path = str(environ["PATH_INFO"])
+            authorization = environ.get("HTTP_AUTHORIZATION")
+            requests_seen.append((path, authorization if isinstance(authorization, str) else None))
+            body = json.dumps({"status": "healthy"}).encode()
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", "application/json"),
+                    ("Content-Length", str(len(body))),
+                ],
+            )
+            return [body]
+
+        server = make_server("127.0.0.1", 0, health_app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            endpoint = f"http://127.0.0.1:{server.server_port}"
+            with env_file.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}={endpoint}\n"
+                    f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_cli-token\n"
+                )
+            template = _write_runpod_yaml(tmp_path)
+            cfg_path = _write_launch_yaml(
+                tmp_path,
+                compute_template=str(template),
+                cmd="echo",
+                env_file=str(env_file),
+            )
+
+            result = CliRunner().invoke(main, [str(cfg_path)])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        assert result.exit_code == 0, result.output
+        assert requests_seen == [("/api/health", "Bearer sky_cli-token")]
+        mock_sky.jobs.launch.assert_called_once()
 
     def test_extra_env_options_forward_values_to_worker(
         self,
