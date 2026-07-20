@@ -415,6 +415,48 @@ class TestLanceMapDataModuleSetup:
         ) as module:
             assert module.val_dataloader().persistent_workers is True
 
+    def test_prefetch_factor_with_workers_reaches_loader(self, dataset_root: Path) -> None:
+        """A configured prefetch depth reaches loaders that own worker processes.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=1,
+            prefetch_factor=4,
+        ) as module:
+            assert module.val_dataloader().prefetch_factor == 4
+
+    def test_prefetch_factor_default_without_workers_loads_in_process(
+        self, dataset_root: Path
+    ) -> None:
+        """The default prefetch depth keeps the in-process path on PyTorch semantics.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
+    def test_prefetch_factor_without_workers_is_effectively_disabled(
+        self, dataset_root: Path
+    ) -> None:
+        """A configured prefetch depth is safe for in-process loading.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            prefetch_factor=4,
+        ) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
         """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
 
@@ -463,6 +505,92 @@ class TestLanceMapDataModuleSetup:
         try:
             batch = next(iter(module.val_dataloader()))
             assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+        finally:
+            module.teardown()
+
+    def test_setup_test_stage_reads_test_only_root_and_rejects_train_loader(
+        self, tmp_path: Path
+    ) -> None:
+        """The test stage opens only its real Lance split and reports unbuilt access.
+
+        :param tmp_path: Per-test directory holding a partial dataset root.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        write_seeded_lance_shard(root / "test.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="test")
+        try:
+            batch = next(iter(module.test_dataloader()))
+            mel = _unwrap(batch["mel_spec"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+            with pytest.raises(RuntimeError, match="train.*setup.*test"):
+                module.train_dataloader()
+        finally:
+            module.teardown()
+
+    def test_setup_validate_stage_reads_validation_only_root(self, tmp_path: Path) -> None:
+        """The validate stage serves normalized batches without sibling splits.
+
+        :param tmp_path: Per-test directory holding a partial dataset root.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        write_seeded_lance_shard(root / "val.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="validate")
+        try:
+            batch = next(iter(module.val_dataloader()))
+            mel = _unwrap(batch["mel_spec"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+        finally:
+            module.teardown()
+
+    def test_setup_predict_stage_reads_external_prediction_split_only(
+        self, tmp_path: Path
+    ) -> None:
+        """The predict stage uses its source's saved stats and includes source audio.
+
+        :param tmp_path: Per-test directory holding separate empty root and predict data.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        predict_root = tmp_path / "capture"
+        predict_root.mkdir()
+        predict_file = predict_root / "predict.lance"
+        write_seeded_lance_shard(predict_file, num_rows=4, mel_fill=3.0)
+        write_mel_stats(predict_root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            predict_file=predict_file,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="predict")
+        try:
+            batch = next(iter(module.predict_dataloader()))
+            mel = _unwrap(batch["mel_spec"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+            assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         finally:
             module.teardown()
 

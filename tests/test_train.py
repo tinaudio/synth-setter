@@ -9,6 +9,8 @@ that no private ``synth_setter.cli`` helper is imported here.
 
 import logging
 import os
+import re
+import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -392,6 +394,30 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     datamodule.teardown("fit")
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_train_prefetch_factor_override_advances_with_spawn_workers(tmp_path: Path) -> None:
+    """An explicit ``datamodule.prefetch_factor`` reaches train's composed spawn loaders.
+
+    Drives the real ``train(cfg)`` entrypoint in fake mode with spawn workers
+    so the non-default prefetch depth governs live worker buffering.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    with open_dict(cfg):
+        cfg.datamodule.num_workers = 2
+        cfg.datamodule.prefetch_factor = 3
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert object_dict["datamodule"].prefetch_factor == 3
+
+
 def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None:
     """Legacy model and callback aliases run through the train entrypoint.
 
@@ -755,6 +781,26 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Real training completes without opening a test split during fit.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    shutil.rmtree(dataset_root / "test.lance")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.test = False
+        cfg_train_lance.datamodule.num_workers = 0
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, object_dict = train(cfg_train_lance)
+
+    with pytest.raises(RuntimeError, match="test split was not built"):
+        object_dict["datamodule"].test_dataloader()
 
 
 @pytest.mark.dataloader_multiprocess
@@ -1270,6 +1316,9 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())
     assert landed, f"probe snapshot never reached {uploaded}"
+    # Launch namespace between config_id and step dirs keeps concurrent runs apart (#2230).
+    launch_scoped = re.compile(r"^[^/]+/[^/]+-[0-9a-f]{32}/step-\d+/")
+    assert all(launch_scoped.match(p) for p in landed), f"snapshot not launch-scoped: {landed}"
     assert any(p.endswith("pred.wav") for p in landed), f"no pred.wav in snapshot: {landed}"
     assert any(p.endswith("aggregated_metrics.csv") for p in landed), f"no metrics: {landed}"
     assert not [p for p in landed if p.endswith(".pt")], (

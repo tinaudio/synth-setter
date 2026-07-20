@@ -16,11 +16,15 @@ import pytest
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
 
-from synth_setter.cli import train as train_cli
+from synth_setter.cli.train import (
+    _checkpoint_prefix_uri,
+    _configure_val_audio_probe,
+    _derive_probe_uri,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
 
-_TEST_RECOVERY_NAMESPACE = "train-20260715T000000000Z-00000000000000000000000000000001"
+_LAUNCH_NAMESPACE = f"train-20260720T000000000Z-{'0' * 32}"
 
 
 @pytest.fixture(autouse=True)
@@ -30,15 +34,6 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
     :param monkeypatch: Replaces the auth ping with a no-op.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
-
-
-def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
-    """Configure a probe under the test launch namespace.
-
-    :param cfg: Minimal training configuration.
-    :param callbacks: Callback list mutated by the production helper.
-    """
-    train_cli._configure_val_audio_probe(cfg, callbacks, _TEST_RECOVERY_NAMESPACE)
 
 
 def _cfg(
@@ -85,7 +80,7 @@ def test_configure_val_audio_probe_appends_nothing_when_disabled() -> None:
     """False leaves the callback list untouched."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=False), callbacks)
+    _configure_val_audio_probe(_cfg(enabled=False), callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -97,7 +92,7 @@ def test_configure_val_audio_probe_appends_nothing_when_setting_absent() -> None
     with open_dict(cfg):
         del cfg.training.val_audio_probe
 
-    _configure_val_audio_probe(cfg, callbacks)
+    _configure_val_audio_probe(cfg, callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -106,7 +101,7 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
     """Enabling the flag wires exactly one ValAudioProbe under the run's output dir."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=True), callbacks)
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
 
     assert len(callbacks) == 1
     probe = callbacks[0]
@@ -118,28 +113,20 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
 def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:
     """Enabling the probe without a render group fails with a directed error."""
     with pytest.raises(ValueError, match="render"):
-        _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [])
+        _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [], _LAUNCH_NAMESPACE)
 
 
 def test_probe_uri_isolates_independent_same_config_launches() -> None:
     """Separate launches of one config archive probes under separate namespaces."""
     cfg = _cfg(enabled=True)
+    first_namespace = f"train-20260715T000000000Z-{'0' * 31}1"
+    second_namespace = f"train-20260715T000001000Z-{'0' * 31}2"
 
-    first = train_cli._derive_probe_uri(
-        cfg, "train-20260715T000000000Z-00000000000000000000000000000001"
-    )
-    second = train_cli._derive_probe_uri(
-        cfg, "train-20260715T000001000Z-00000000000000000000000000000002"
-    )
+    first = _derive_probe_uri(cfg, first_namespace)
+    second = _derive_probe_uri(cfg, second_namespace)
 
-    assert first == (
-        "r2://intermediate-data/probes/train/"
-        "train-20260715T000000000Z-00000000000000000000000000000001"
-    )
-    assert second == (
-        "r2://intermediate-data/probes/train/"
-        "train-20260715T000001000Z-00000000000000000000000000000002"
-    )
+    assert first == f"r2://intermediate-data/probes/train/{first_namespace}"
+    assert second == f"r2://intermediate-data/probes/train/{second_namespace}"
     assert first != second
 
 
@@ -148,12 +135,35 @@ def test_probe_uri_resume_uses_new_launch_namespace_for_recovered_run() -> None:
     cfg = _cfg(enabled=True)
     recovered_run_id = "train-20260715T000000000Z"
 
-    source = train_cli._derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
-    resumed = train_cli._derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
+    source = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
+    resumed = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
 
     assert source != resumed
     assert f"/{recovered_run_id}-" in source
     assert f"/{recovered_run_id}-" in resumed
+
+
+def test_derive_probe_uri_shares_namespace_segment_with_checkpoint_prefix() -> None:
+    """One launch namespace names both probe and recovery-checkpoint prefixes."""
+    cfg = _cfg(enabled=True)
+
+    probe_uri = _derive_probe_uri(cfg, _LAUNCH_NAMESPACE)
+    checkpoint_prefix = _checkpoint_prefix_uri(cfg, _LAUNCH_NAMESPACE)
+
+    assert probe_uri.endswith(f"/{_LAUNCH_NAMESPACE}")
+    assert checkpoint_prefix.endswith(f"/{_LAUNCH_NAMESPACE}")
+
+
+def test_configure_val_audio_probe_namespaces_upload_uri_without_durability() -> None:
+    """Probe namespacing does not depend on checkpoint durability."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    upload_uri = probe._probe_fn.keywords["upload_uri"]  # noqa: SLF001
+    assert upload_uri == f"r2://intermediate-data/probes/train/{_LAUNCH_NAMESPACE}"
 
 
 @pytest.mark.parametrize(
@@ -168,7 +178,7 @@ def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples:
     cfg.training.val_audio_probe_samples = bad_samples
 
     with pytest.raises(ValueError, match="positive integer"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() -> None:
@@ -181,7 +191,7 @@ def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() 
     cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
 
     with pytest.raises(ValueError) as excinfo:
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
     assert "render.param_spec_name is 'surge_xt'" in str(excinfo.value)
     assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
@@ -192,7 +202,9 @@ def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> 
     callbacks: list[Callback] = []
 
     _configure_val_audio_probe(
-        _cfg(enabled=True, datamodule={"param_spec_name": "surge_xt"}), callbacks
+        _cfg(enabled=True, datamodule={"param_spec_name": "surge_xt"}),
+        callbacks,
+        _LAUNCH_NAMESPACE,
     )
 
     assert len(callbacks) == 1
@@ -206,7 +218,7 @@ def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> No
         del cfg.render.param_spec_name
 
     with pytest.raises(ValueError) as excinfo:
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
     assert "render.param_spec_name is unset" in str(excinfo.value)
 
@@ -225,7 +237,9 @@ def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
     """
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=True, datamodule=datamodule), callbacks)
+    _configure_val_audio_probe(
+        _cfg(enabled=True, datamodule=datamodule), callbacks, _LAUNCH_NAMESPACE
+    )
 
     assert len(callbacks) == 1
 
@@ -240,14 +254,14 @@ def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
         cfg.trainer = {"limit_val_batches": 0}
 
     with pytest.raises(ValueError, match="limit_val_batches"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def test_configure_val_audio_probe_auto_wires_probe_with_render_group() -> None:
     """``auto`` behaves like ``true`` when a render group is composed."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
 
     assert len(callbacks) == 1
     assert isinstance(callbacks[0], ValAudioProbe)
@@ -257,7 +271,9 @@ def test_configure_val_audio_probe_auto_skips_without_render_group() -> None:
     """``auto`` with no render group skips the probe instead of failing the launch."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), callbacks)
+    _configure_val_audio_probe(
+        _cfg(enabled="auto", with_render=False), callbacks, _LAUNCH_NAMESPACE
+    )
 
     assert callbacks == []
 
@@ -270,7 +286,7 @@ def test_configure_val_audio_probe_auto_skip_warns_operator(
     :param caplog: Captures the operator-visible warning.
     """
     with caplog.at_level(logging.WARNING):
-        _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), [])
+        _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), [], _LAUNCH_NAMESPACE)
 
     assert any("no render group composed" in message for message in caplog.messages)
 
@@ -282,7 +298,7 @@ def test_configure_val_audio_probe_auto_skips_when_validation_disabled() -> None
     with open_dict(cfg):
         cfg.trainer = {"limit_val_batches": 0}
 
-    _configure_val_audio_probe(cfg, callbacks)
+    _configure_val_audio_probe(cfg, callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -292,7 +308,7 @@ def test_configure_val_audio_probe_auto_rejects_spec_mismatch() -> None:
     cfg = _cfg(enabled="auto", datamodule={"param_spec_name": "surge_simple"})
 
     with pytest.raises(ValueError, match="param_spec_name"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 @pytest.mark.parametrize(
@@ -309,7 +325,7 @@ def test_configure_val_audio_probe_rejects_unknown_mode(mode: object) -> None:
     cfg.training.val_audio_probe = mode
 
     with pytest.raises(ValueError, match="auto"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def _no_r2() -> None:
@@ -330,7 +346,7 @@ def test_configure_val_audio_probe_auto_skips_when_r2_unavailable(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -345,4 +361,4 @@ def test_configure_val_audio_probe_true_propagates_r2_failure(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
 
     with pytest.raises(RuntimeError, match="R2 credentials missing"):
-        _configure_val_audio_probe(_cfg(enabled=True), [])
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)

@@ -93,8 +93,7 @@ def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     """Build an rclone argv with the shared reliability-flag block, then operands.
 
-    Centralizes ``-vv --checksum --contimeout=30s --timeout=<timeout> --retries=3``
-    so every transfer helper retries transient blips identically. ``--timeout`` is
+    ``--timeout`` is
     the IO idle timeout, not a wall-clock cap; only directory uploads widen it past
     the 300s single-file default.
 
@@ -107,7 +106,7 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     return [
         "rclone",
         verb,
-        "-vv",
+        "-v",
         "--checksum",
         "--contimeout=30s",
         f"--timeout={timeout}",
@@ -459,8 +458,8 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
 
     Uses `rclone copyto` so the destination filename matches the URI exactly (not the source
     basename). Connection-level timeouts and retries are rclone's job: bounds the TCP connect phase
-    and the per-request timeout, retries the whole copy on transient failure, and emits per-request
-    debug logs so a CI failure leaves actionable evidence in stdout.
+    and the per-request timeout, retries the whole copy on transient failure, and emits errors plus
+    transfer summaries so a CI failure leaves actionable evidence without credential-bearing debug.
     """
     args = _rclone_argv("copyto", str(local_path), _to_rclone_path(r2_uri))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI

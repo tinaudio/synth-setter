@@ -44,7 +44,7 @@ run: |
 
   printf "%s\n" "$(hostname) $(date -u +%FT%TZ)" > /tmp/skypilot-local-debug-sentinel.txt
   rclone copy \
-    -vv \
+    -v \
     --checksum \
     --contimeout=30s \
     --timeout=300s \

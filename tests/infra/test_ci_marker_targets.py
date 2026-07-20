@@ -139,6 +139,7 @@ def _run_full_cpu_target(
             "--no-print-directory",
             f"UNAME_S={uname}",
             f"HEADLESS_WRAPPER={wrapper_recorder}",
+            "PYTEST=pytest",
             "test-full-cpu",
         ],
         cwd=project_root,

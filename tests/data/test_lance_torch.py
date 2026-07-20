@@ -309,6 +309,99 @@ class TestMapDataloader:
         assert loader.persistent_workers is False
         assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
 
+    def test_prefetch_factor_with_workers_reaches_dataloader(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """A configured prefetch depth reaches loaders that own worker processes.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest),
+            batch_size=BATCH_SIZE,
+            num_workers=2,
+            prefetch_factor=4,
+        )
+
+        assert loader.prefetch_factor == 4
+
+    def test_prefetch_factor_default_none_keeps_pytorch_default(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Leaving the prefetch depth unset preserves PyTorch's own default.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest), batch_size=BATCH_SIZE, num_workers=2
+        )
+
+        plain_default = DataLoader(
+            LanceMapDataset(dest), batch_size=BATCH_SIZE, num_workers=2
+        )
+        assert loader.prefetch_factor == plain_default.prefetch_factor
+
+    def test_prefetch_factor_without_workers_is_effectively_disabled(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """In-process loaders drop the configured prefetch depth (PyTorch forbids it).
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest),
+            batch_size=BATCH_SIZE,
+            num_workers=0,
+            prefetch_factor=4,
+        )
+
+        assert loader.prefetch_factor is None
+        assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
+
+    def test_lance_map_dataloader_forwards_prefetch_factor(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """The public factory forwards a configured prefetch depth to its loader.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = lance_map_dataloader(
+            dest, batch_size=BATCH_SIZE, num_workers=2, prefetch_factor=4
+        )
+
+        assert loader.prefetch_factor == 4
+
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
+    @pytest.mark.slow
+    def test_prefetch_factor_with_spawn_workers_delivers_batches(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Spawn workers deliver every row when a non-default prefetch depth is set.
+
+        :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
+        """
+        dest, arrays = lance_dataset
+        loader = map_dataloader_over(
+            LanceMapDataset(dest, columns=["param_array"]),
+            batch_size=BATCH_SIZE,
+            num_workers=2,
+            shuffle=False,
+            prefetch_factor=4,
+        )
+
+        rows = _concat_batches(list(loader), "param_array")
+
+        np.testing.assert_array_equal(rows, arrays["param_array"])
+
     def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
         """A row count not divisible by ``batch_size`` yields a ragged final batch.
 

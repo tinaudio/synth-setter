@@ -271,29 +271,15 @@ class _MapSplit:
 
 
 class LanceVSTDataModule(VSTDataModule):
-    """Read every VST split through sample-indexed map semantics.
+    """Read VST splits through stage-aware, sample-indexed map semantics."""
 
-    .. attribute :: train_dataset
-
-       Sample-indexed training dataset.
-
-    .. attribute :: val_dataset
-
-       Sample-indexed validation dataset.
-
-    .. attribute :: test_dataset
-
-       Sample-indexed test dataset.
-
-    .. attribute :: predict_dataset
-
-       Sample-indexed prediction dataset.
-    """
-
-    train_dataset: _SplitDataset
-    val_dataset: _SplitDataset
-    test_dataset: _SplitDataset
-    predict_dataset: _SplitDataset
+    _ALL_SPLITS = ("train", "val", "test", "predict")
+    _STAGE_SPLITS = {
+        "fit": ("train", "val"),
+        "validate": ("val",),
+        "test": ("test",),
+        "predict": ("predict",),
+    }
 
     def __init__(
         self,
@@ -311,6 +297,7 @@ class LanceVSTDataModule(VSTDataModule):
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
+        prefetch_factor: int | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -327,6 +314,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
+        :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+            PyTorch's default, and in-process loading ignores it.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -343,7 +332,41 @@ class LanceVSTDataModule(VSTDataModule):
             param_spec_name=param_spec_name,
         )
         self.persistent_workers = persistent_workers
+        self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
+        self._setup_stage: str | None = None
+
+    def _dataset_for(self, split: str) -> _SplitDataset:
+        """Return one built split through the public dataset attributes.
+
+        :param split: Split key created by :meth:`setup`.
+        :returns: Sample-indexed dataset for the split.
+        :raises AttributeError: If the current stage did not build the split.
+        """
+        try:
+            return self._splits[split].dataset
+        except KeyError as exc:
+            raise AttributeError(f"{split}_dataset is unavailable") from exc
+
+    @property
+    def train_dataset(self) -> _SplitDataset:
+        """Return the training dataset built for the current stage."""
+        return self._dataset_for("train")
+
+    @property
+    def val_dataset(self) -> _SplitDataset:
+        """Return the validation dataset built for the current stage."""
+        return self._dataset_for("val")
+
+    @property
+    def test_dataset(self) -> _SplitDataset:
+        """Return the test dataset built for the current stage."""
+        return self._dataset_for("test")
+
+    @property
+    def predict_dataset(self) -> _SplitDataset:
+        """Return the prediction dataset built for the current stage."""
+        return self._dataset_for("predict")
 
     def _build_lance_split(
         self,
@@ -393,57 +416,61 @@ class LanceVSTDataModule(VSTDataModule):
             collate=_model_batch_passthrough,
         )
 
-    def setup(self, stage: str | None = None) -> None:
-        """Build all sample-indexed train, validation, test, and prediction splits.
+    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
+        """Build the requested on-disk Lance splits.
 
-        :param stage: Lightning stage hint; all splits are built eagerly.
+        :param split_names: Split names required by the current stage.
+        :returns: Requested split datasets and collate operations.
         """
-        del stage
+        train_shard = self.dataset_root / f"train{self.shard_suffix}"
+        split_stats = predict_stats = None
+        if self.use_saved_mean_and_variance:
+            if any(name != "predict" for name in split_names):
+                split_stats = load_dataset_statistics(train_shard)
+            if "predict" in split_names:
+                predict_stats = (
+                    split_stats
+                    if split_stats is not None
+                    and self.predict_file.parent == self.dataset_root
+                    else load_dataset_statistics(self.predict_file)
+                )
+        shard_paths = {
+            "train": train_shard,
+            "val": self.dataset_root / f"val{self.shard_suffix}",
+            "test": self.dataset_root / f"test{self.shard_suffix}",
+            "predict": self.predict_file,
+        }
+        return {
+            name: self._build_lance_split(
+                shard_paths[name],
+                ot=self.ot if name == "train" else False,
+                read_audio=name == "predict",
+                stats=predict_stats if name == "predict" else split_stats,
+            )
+            for name in split_names
+        }
+
+    def setup(self, stage: str | None = None) -> None:
+        """Build the sample-indexed splits required by a Lightning stage.
+
+        :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
+        """
+        split_names = (
+            self._ALL_SPLITS
+            if stage is None
+            else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
+        )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
-                "train": self._build_fake_split(num_params=num_params, read_audio=False),
-                "val": self._build_fake_split(num_params=num_params, read_audio=False),
-                "test": self._build_fake_split(num_params=num_params, read_audio=False),
-                "predict": self._build_fake_split(num_params=num_params, read_audio=True),
+                name: self._build_fake_split(
+                    num_params=num_params, read_audio=name == "predict"
+                )
+                for name in split_names
             }
         else:
-            train_shard = self.dataset_root / f"train{self.shard_suffix}"
-            split_stats = predict_stats = None
-            if self.use_saved_mean_and_variance:
-                split_stats = load_dataset_statistics(train_shard)
-                predict_stats = (
-                    split_stats
-                    if self.predict_file.parent == self.dataset_root
-                    else load_dataset_statistics(self.predict_file)
-                )
-            self._splits = {
-                "train": self._build_lance_split(
-                    train_shard, ot=self.ot, read_audio=False, stats=split_stats
-                ),
-                "val": self._build_lance_split(
-                    self.dataset_root / f"val{self.shard_suffix}",
-                    ot=False,
-                    read_audio=False,
-                    stats=split_stats,
-                ),
-                "test": self._build_lance_split(
-                    self.dataset_root / f"test{self.shard_suffix}",
-                    ot=False,
-                    read_audio=False,
-                    stats=split_stats,
-                ),
-                "predict": self._build_lance_split(
-                    self.predict_file,
-                    ot=False,
-                    read_audio=True,
-                    stats=predict_stats,
-                ),
-            }
-        self.train_dataset = self._splits["train"].dataset
-        self.val_dataset = self._splits["val"].dataset
-        self.test_dataset = self._splits["test"].dataset
-        self.predict_dataset = self._splits["predict"].dataset
+            self._splits = self._build_real_splits(split_names)
+        self._setup_stage = stage
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build one standard map-style dataloader.
@@ -452,8 +479,14 @@ class LanceVSTDataModule(VSTDataModule):
         :param shuffle: Whether to randomize sample order.
         :param drop_last: Whether to discard a ragged final batch.
         :returns: Dataloader yielding model-ready batches.
+        :raises RuntimeError: If :meth:`setup` did not build the requested split.
         """
-        pieces = self._splits[split]
+        try:
+            pieces = self._splits[split]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"{split} split was not built by setup(stage={self._setup_stage!r})"
+            ) from exc
         repeats_first_batch = self.repeat_first_batch and split != "predict"
         dataset = pieces.dataset
         if repeats_first_batch:
@@ -467,6 +500,7 @@ class LanceVSTDataModule(VSTDataModule):
             shuffle=False if repeats_first_batch else shuffle,
             drop_last=drop_last,
             persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -504,9 +538,6 @@ class LanceVSTDataModule(VSTDataModule):
         """
         del stage
         self._splits = {}
-        for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
-            if hasattr(self, name):
-                delattr(self, name)
 
 
 SurgeXTDataset = LanceMapDataset
