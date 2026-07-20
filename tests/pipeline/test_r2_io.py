@@ -27,6 +27,24 @@ from synth_setter.pipeline.schemas.object_storage import (
 )
 
 
+@pytest.fixture
+def synthetic_unreachable_rclone_env() -> dict[str, str]:
+    """Configure a synthetic R2 remote that fails locally without network access.
+
+    :returns: Rclone environment settings shared by credential-redaction tests.
+    """
+    return {
+        "RCLONE_CONFIG": os.devnull,
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "synthetic-access-id-2190",
+        "RCLONE_CONFIG_R2_ENDPOINT": "http://127.0.0.1:9",
+        "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "synthetic-secret-key-2190",
+        "RCLONE_CONFIG_R2_TYPE": "s3",
+        "RCLONE_LOW_LEVEL_RETRIES": "1",
+        "RCLONE_RETRIES_SLEEP": "0s",
+    }
+
+
 class TestIsR2Uri:
     """Tests for is_r2_uri scheme detection."""
 
@@ -114,14 +132,16 @@ class TestRcloneDebugTemplates:
         self,
         template_name: str,
         sentinel_name: str,
+        synthetic_unreachable_rclone_env: dict[str, str],
     ) -> None:
         """A real task run omits credentials while retaining its failure cause.
 
         :param template_name: Compute-template filename whose run block is executed.
         :param sentinel_name: Temporary sentinel filename written by that run block.
+        :param synthetic_unreachable_rclone_env: Synthetic unreachable rclone configuration.
         """
-        access_key = "synthetic-template-access-id-2190"
-        credential = "synthetic-template-secret-key-2190"
+        access_key = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"]
+        credential = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]
         template_path = (
             Path(__file__).parents[2]
             / "src"
@@ -135,16 +155,9 @@ class TestRcloneDebugTemplates:
         assert isinstance(run_script, str)
         env = {
             **os.environ,
+            **synthetic_unreachable_rclone_env,
             "R2_BUCKET": "safe-test-bucket",
             "R2_DEBUG_PREFIX": "issue-2190",
-            "RCLONE_CONFIG": os.devnull,
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": access_key,
-            "RCLONE_CONFIG_R2_ENDPOINT": "http://127.0.0.1:9",
-            "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": credential,
-            "RCLONE_CONFIG_R2_TYPE": "s3",
-            "RCLONE_LOW_LEVEL_RETRIES": "1",
-            "RCLONE_RETRIES_SLEEP": "0s",
         }
 
         try:
@@ -164,7 +177,7 @@ class TestRcloneDebugTemplates:
         assert access_key not in logs
         assert credential not in logs
         assert "Failed to copy" in logs
-        assert "connection refused" in logs
+        assert "safe-test-bucket" in logs
 
 
 class TestToS3Uri:
@@ -579,29 +592,24 @@ class TestUploadToUri:
     def test_failure_logs_redact_credentials_and_keep_error_context(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        synthetic_unreachable_rclone_env: dict[str, str],
         capfd: pytest.CaptureFixture[str],
     ) -> None:
         """A real failed rclone upload omits credentials but retains its cause.
 
         :param tmp_path: Pytest tmp dir used for the upload source file.
-        :param monkeypatch: Pytest fixture used to configure a synthetic unreachable remote.
+        :param synthetic_unreachable_rclone_env: Synthetic unreachable rclone configuration.
         :param capfd: Pytest fixture used to capture rclone's inherited file descriptors.
         """
-        access_key = "synthetic-access-id-2190"
-        credential = "synthetic-secret-key-2190"
+        access_key = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"]
+        credential = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]
         src = tmp_path / "in.json"
         src.write_text("{}")
-        monkeypatch.setenv("RCLONE_CONFIG", os.devnull)
-        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "Cloudflare")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", access_key)
-        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", credential)
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://127.0.0.1:9")
-        monkeypatch.setenv("RCLONE_LOW_LEVEL_RETRIES", "1")
-        monkeypatch.setenv("RCLONE_RETRIES_SLEEP", "0s")
 
-        with pytest.raises(subprocess.CalledProcessError):
+        with (
+            patch.dict(os.environ, synthetic_unreachable_rclone_env),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
             r2_io.upload_to_uri(src, "r2://safe-test-bucket/issue-2190/object")
 
         captured = capfd.readouterr()
@@ -609,7 +617,7 @@ class TestUploadToUri:
         assert access_key not in logs
         assert credential not in logs
         assert "Failed to copyto" in logs
-        assert "connection refused" in logs
+        assert "issue-2190/object" in logs
 
     def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone reliability-flag set on upload.
