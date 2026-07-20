@@ -31,6 +31,23 @@ def _run_text(*args: str) -> str:
     not _RUN_DEVCONTAINER_SMOKE,
     reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
 )
+def test_image_default_user_matches_expected() -> None:
+    """Validate the image's default user against the SkyPilot/RunPod contract.
+
+    ``devcontainer-tools`` must default to root so SkyPilot's RunPod backend can
+    install sshd; ``devcontainer-tools-dev-user`` must default to non-root
+    ``dev`` for local VS Code devcontainers. The runner declares which image it
+    built via ``SYNTH_SETTER_DEVCONTAINER_EXPECT_USER`` (defaults to ``root``).
+    """
+    expected_user = os.environ.get("SYNTH_SETTER_DEVCONTAINER_EXPECT_USER", "root")
+    assert _run_text("whoami") == expected_user
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
 def test_codex_sandbox_prerequisites_available() -> None:
     """Validate the Codex CLI and sandbox prerequisite in the built image."""
     system_codex = Path("/usr/local/bin/codex")

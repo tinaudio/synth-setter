@@ -174,7 +174,35 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            -e SYNTH_SETTER_DEVCONTAINER_EXPECT_USER=root \
             synth-setter:devcontainer-tools-validation \
+            pytest tests/docker/test_devcontainer_tools.py -v
+
+      - name: Build devcontainer-tools-dev-user image (validation only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools-dev-user
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: false
+          load: true
+          tags: synth-setter:devcontainer-tools-dev-user-validation
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+
+      - name: Smoke test devcontainer-tools-dev-user non-root default
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            -e SYNTH_SETTER_DEVCONTAINER_EXPECT_USER=dev \
+            synth-setter:devcontainer-tools-dev-user-validation \
             pytest tests/docker/test_devcontainer_tools.py -v
 
   # Push + smoke tests for push-to-main and workflow_dispatch. Holds the
@@ -421,6 +449,31 @@ jobs:
             ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
             ghcr.io/tinaudio/synth-setter:devcontainer-tools
             ghcr.io/tinaudio/synth-setter:devcontainer-tools-${{ steps.source.outputs.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+          cache-to: ""
+
+      # Non-root sibling consumed by .devcontainer/. Reuses the devcontainer-tools
+      # layers from the shared buildcache, so this pushes only the config delta.
+      - name: Build and push devcontainer-tools-dev-user image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools-dev-user
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: true
+          tags: |
+            ${{ steps.config.outputs.image }}:devcontainer-tools-dev-user
+            ${{ steps.config.outputs.image }}:devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools-dev-user
+            ghcr.io/tinaudio/synth-setter:devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}

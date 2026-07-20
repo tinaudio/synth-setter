@@ -468,3 +468,18 @@ docker-build-devcontainer-tools: ## Build devcontainer-tools image
 		--target devcontainer-tools \
 		-t $(DOCKER_IMAGE):devcontainer-tools \
 		.
+
+docker-build-devcontainer-tools-dev-user: ## Build non-root devcontainer-tools-dev-user image
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
+	DOCKER_BUILDKIT=1 docker buildx build \
+		-f $(DOCKER_FILE) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
+		--build-arg TORCH_BACKEND=$(DOCKER_TORCH_BACKEND) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		--target devcontainer-tools-dev-user \
+		-t $(DOCKER_IMAGE):devcontainer-tools-dev-user \
+		.
