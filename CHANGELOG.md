@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v10.2.1 (2026-07-20)
+
+### Bug Fixes
+
+- **storage**: Redact R2 credentials from rclone transfer logs
+  ([#2228](https://github.com/tinaudio/synth-setter/pull/2228),
+  [`16484d2`](https://github.com/tinaudio/synth-setter/commit/16484d2999a12078a6a0acd6e59ea76f4296257f))
+
+* fix(storage): redact credentials from rclone transfer logs
+
+Use INFO-level transfer logging so environment-projected R2 credentials never enter managed-job
+  output while retry, checksum, and actionable failure diagnostics remain intact.
+
+* test(storage): cover rclone debug task redaction
+
+Execute both repository-owned SkyPilot rclone canary run blocks against a synthetic unreachable
+  endpoint so template-only verbosity regressions disclose themselves in tests.
+
+* test(storage): share unreachable rclone configuration
+
+Keep both redaction paths on one synthetic remote contract and assert stable operation context
+  rather than platform-specific socket wording.
+
+* test(storage): harden rclone redaction coverage
+
+Use a pytest-allocated closed loopback port, require non-debug actionable logs, and pin a canonical
+  spec-upload caller to INFO verbosity.
+
+* test(storage): focus rclone template assertions
+
+Move repository-owned task execution and cleanup into a helper so the parameterized redaction
+  contract remains concise.
+
+* test(storage): skip real rclone checks when binary is absent
+
+Keep the subprocess-backed regression active wherever rclone is installed while allowing minimal
+  conda and Ubuntu jobs to rely on their rclone-enabled matrix peers.
+
+
 ## v10.2.0 (2026-07-20)
 
 ### Features
