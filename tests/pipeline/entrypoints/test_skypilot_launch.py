@@ -805,8 +805,16 @@ class TestDetectProviderFromDoc:
             ({"resources": {"cloud": "kubernetes"}}, "local"),
             ({"resources": {"cloud": "k8s"}}, "local"),
             ({"resources": {"cloud": "RunPod"}}, "runpod"),
+            ({"resources": {"cloud": "vast"}}, "vast"),
         ],
-        ids=["flat-runpod", "any-of-oci", "kubernetes-as-local", "k8s-alias", "case-insensitive"],
+        ids=[
+            "flat-runpod",
+            "any-of-oci",
+            "kubernetes-as-local",
+            "k8s-alias",
+            "case-insensitive",
+            "flat-vast",
+        ],
     )
     def test_supported_clouds_map_to_provider(
         self,

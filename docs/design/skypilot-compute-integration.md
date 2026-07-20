@@ -86,16 +86,17 @@ compute_config: null
 
 ### 4.1 SkyPilot YAML configs (`src/synth_setter/configs/compute/`)
 
-The smoke pipeline ships three real templates:
+The smoke pipeline ships four real templates:
 
 ```
 src/synth_setter/configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
+├── vast-template.yaml        # Vast.ai GPU (marketplace spot-priced alternative)
 ├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
 └── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ```
 
-All three share the launcher (`src/synth_setter/pipeline/skypilot_launch.py`),
+All four share the launcher (`src/synth_setter/pipeline/skypilot_launch.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
 unified worker entrypoint (`synth-setter-generate-dataset-from-hydra` —
 the `@hydra.main` worker-side console script in

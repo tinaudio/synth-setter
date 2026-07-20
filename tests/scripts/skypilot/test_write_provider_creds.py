@@ -42,6 +42,8 @@ R2_ENV: dict[str, str] = {
 
 RUNPOD_ENV: dict[str, str] = {"RUNPOD_API_KEY": "rp-test-key"}
 
+VAST_ENV: dict[str, str] = {"VAST_API_KEY": "vast-test-key"}
+
 # Build a fake PEM at runtime — the source must not contain literal PEM
 # headers, otherwise the detect-private-key pre-commit hook flags this file.
 _PEM_HEADER = "-----BEGIN " + "PRIVATE" + " KEY-----"
@@ -107,6 +109,14 @@ class TestNoStdoutLeak:
     def test_oci_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
         """OCI-mode invocation emits zero bytes on stdout (no leak surface)."""
         result = _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
+        assert result.stdout == ""
+
+    def test_vast_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
+        """Vast invocation writes nothing to stdout.
+
+        :param tmp_path: Pytest fixture providing a fresh HOME directory.
+        """
+        result = _run(tmp_path, {**R2_ENV, **VAST_ENV}, "--provider", "vast")
         assert result.stdout == ""
 
     def test_no_secret_byte_appears_on_stderr_either(self, tmp_path: Path) -> None:
@@ -213,6 +223,26 @@ class TestProviderGating:
         assert config.is_file()
         assert "rp-test-key" in config.read_text()
         assert _file_mode(config) == 0o600
+
+    def test_vast_writes_api_key_file(self, tmp_path: Path) -> None:
+        """Vast provider writes ~/.config/vastai/vast_api_key with the supplied key (mode 600).
+
+        :param tmp_path: Pytest fixture providing a fresh HOME directory.
+        """
+        _run(tmp_path, {**R2_ENV, **VAST_ENV}, "--provider", "vast")
+        key_file = tmp_path / ".config" / "vastai" / "vast_api_key"
+        assert key_file.is_file()
+        assert key_file.read_text() == "vast-test-key\n"
+        assert _file_mode(key_file) == 0o600
+
+    def test_vast_missing_api_key_fails(self, tmp_path: Path) -> None:
+        """Vast provider without VAST_API_KEY in env exits non-zero naming the variable.
+
+        :param tmp_path: Pytest fixture providing a fresh HOME directory.
+        """
+        result = _run(tmp_path, R2_ENV, "--provider", "vast", expect_success=False)
+        assert result.returncode != 0
+        assert "VAST_API_KEY" in result.stderr
 
     def test_oci_writes_oci_config_and_key(self, tmp_path: Path) -> None:
         """OCI provider writes ~/.oci/config and ~/.oci/oci_api_key.pem (mode 600)."""

@@ -1,0 +1,42 @@
+# SkyPilot task template for Vast.ai.
+#
+# Loaded by dispatch_via_skypilot via sky.Task.from_yaml_config(...). Same
+# contract as runpod-template.yaml: no `run:` block (the launcher injects one),
+# creds + spec URI arrive via task.update_envs, and `image_id` is pinned
+# per-launch to docker:tinaudio/synth-setter:<worker-image-tag>.
+#
+# Vast auth: ~/.config/vastai/vast_api_key, written by
+# scripts/skypilot/write_provider_creds.sh --provider vast from VAST_API_KEY.
+#
+# Known upstream quirk: SkyPilot 0.12 installs an unpinned vastai-sdk on a fresh
+# jobs controller, and vastai-sdk 1.x drops VastAI.api_key_access, failing every
+# region with "'VastAI' object has no attribute 'api_key_access'". Fix by
+# downgrading on the controller: pip install "vastai-sdk==0.2.5" (pinned locally
+# in pyproject for the same reason).
+
+resources:
+  cloud: vast
+  # Any one cheap GPU is enough for the smoke run. The set is wide so a
+  # stocked-out tier doesn't fail the launch — SkyPilot picks the cheapest
+  # available match. Add/remove tiers as Vast inventory drifts.
+  accelerators: { RTX3080:1, RTX3090:1, RTXA4000:1, A40:1, RTX4090:1 }
+  use_spot: false
+  disk_size: 50
+
+# Placeholders. Real values are injected by the launcher via update_envs.
+# WORKER_GIT_REF is forwarded so sync_worker_checkout.sh can fetch the PR
+# head over the image-baked checkout when set (PR-CI bake-lag bypass).
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_GIT_REF: ""
+  # Per-rank partition env. Source of truth: src/synth_setter/pipeline/partitioning.py.
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter worker ready (host: $(hostname))"
