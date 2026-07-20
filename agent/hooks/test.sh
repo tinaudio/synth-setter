@@ -1972,6 +1972,30 @@ T_probe_loop_mode_stops_on_env_error() {
 }
 it "probe: --loop stops polling on ERROR" T_probe_loop_mode_stops_on_env_error
 
+T_probe_loop_mode_stops_on_unknown_option() {
+  local out
+  out=$(run_probe --loop --looop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on an unknown option" \
+  T_probe_loop_mode_stops_on_unknown_option
+
+T_probe_loop_mode_stops_on_missing_pr() {
+  local out
+  out=$(run_probe --loop)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling when the PR number is missing" \
+  T_probe_loop_mode_stops_on_missing_pr
+
 # ===========================================================================
 # worktree-post-setup
 # ===========================================================================

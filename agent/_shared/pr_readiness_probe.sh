@@ -7,6 +7,12 @@ usage() {
   echo "usage: $(basename "$0") [--gates-only] [--loop] <pr-number>" >&2
 }
 
+fail_usage() {
+  usage
+  [[ "${loop_mode:-0}" == "1" ]] && exit 0
+  exit 2
+}
+
 fail_env() {
   printf 'ERROR: probe could not evaluate readiness: %s\n' "$*" >&2
   [[ "${loop_mode:-0}" == "1" ]] && exit 0
@@ -22,11 +28,11 @@ while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --gates-only) gates_only=1 ;;
     --loop) loop_mode=1 ;;
-    *) usage; exit 2 ;;
+    *) fail_usage ;;
   esac
   shift
 done
-[[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || { usage; exit 2; }
+[[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || fail_usage
 readonly PR="$1"
 
 command -v gh >/dev/null 2>&1 || fail_env "gh not on PATH"

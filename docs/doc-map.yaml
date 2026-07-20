@@ -323,7 +323,13 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), install-plugins (aggregate) + install-dexed/install-obxf/install-six-sines (sha256-pinned fetched synths mirroring the Dockerfile ARGs; x86_64 Linux only, exit-0 skip elsewhere), link-plugins (mirror primary's plugins/ into a worktree), link-thoughts (symlink a worktree's thoughts/ to the primary's central copy; no-op in primary), link-skills (project the installed skills marketplace into ~/.agents/skills for Gemini/Antigravity discovery), SURGE_XT_VERSION + DEXED_*/OBXF_*/SIX_SINES_* pin vars"
+        covers: "Core local developer setup targets."
+        scope: "local-dev"
+      - pattern: "Makefile"
+        covers: "Pinned plugin installation targets."
+        scope: "local-dev"
+      - pattern: "Makefile"
+        covers: "Worktree plugin, thought, and skill-linking targets."
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + per-user zellij-cache named volumes for dev and root + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand, VS Code terminal profile defaulting to zellij (tmux still selectable)"
@@ -338,7 +344,7 @@ docs:
       - pattern: ".devcontainer/initialize.sh"
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
-        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop, install ~/.tmux.conf and ~/.config/zellij/config.kdl for both root and dev users, best-effort skill projection into ~/.agents/skills via scripts/dev/link-skills.sh (#1561), seed agent full-auto defaults (~/.codex/config.toml approval/sandbox keys when absent + agy --dangerously-skip-permissions bashrc wrapper)"
+        covers: "First-run developer-environment setup."
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — referenced in §4c for enable/disable workflow"
         scope: "wandb-config"
