@@ -499,12 +499,11 @@ docs:
         covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
         scope: "tart"
 
-  # ── Surge XT interactive guide ──────────────────────────────────
-  - doc: docs/guides/surge-xt-interactive.md
-    description: Interactive Surge XT prediction audition and patch-recording guide
+  - doc: docs/guides/vst-interactive.md
+    description: Interactive VST prediction audition and patch-recording guide
     sources:
-      - pattern: "src/synth_setter/tools/surge_xt_interactive.py"
-        covers: "Interactive Surge XT audition and patch-recording CLI"
+      - pattern: "src/synth_setter/tools/vst_interactive.py"
+        covers: "Interactive VST audition and patch-recording CLI"
       - pattern: "src/synth_setter/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"

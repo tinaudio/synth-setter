@@ -151,7 +151,7 @@ src/synth_setter/   ML code and data pipeline (PEP src-layout package)
     data/                Dataset-shaping utilities (lance_staging, lance_finalize, stats)
     skypilot_launch.py   SkyPilot launcher CLI
   evaluation/          Render/metrics library code shared by cli/eval.py and the training val-audio probe
-  tools/               python -m utilities (surge_xt_interactive, plot_param2tok, ...)
+  tools/               python -m utilities (vst_interactive, plot_param2tok, ...)
 configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
 scripts/        SkyPilot / CI shell tooling (skypilot/, ci/)
 tests/          Test suite (mirrors src/synth_setter/ structure)
@@ -214,8 +214,8 @@ Further reading (mostly for contributors and maintainers):
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,
   GitHub Actions, W&B integration
-- [`docs/guides/surge-xt-interactive.md`](docs/guides/surge-xt-interactive.md) —
-  human-in-the-loop tool for auditioning predicted Surge XT params and
+- [`docs/guides/vst-interactive.md`](docs/guides/vst-interactive.md) —
+  human-in-the-loop tool for auditioning predicted VST parameters and
   capturing patches into a labeled dataset
 
 Run `make help` for available commands.

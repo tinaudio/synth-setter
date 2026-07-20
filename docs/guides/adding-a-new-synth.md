@@ -234,7 +234,7 @@ default for tools that don't take a render config (tests, the interactive CLIs).
 ## See also
 
 - [architecture](../architecture.md) — where the registry sits in the pipeline.
-- [Surge XT interactive guide](surge-xt-interactive.md) — auditioning and
+- [VST interactive guide](vst-interactive.md) — auditioning and
   capturing patches once a synth is registered.
 - Epic [#1582](https://github.com/tinaudio/synth-setter/issues/1582) —
   multi-synth generalization, of which this guide is Phase 4.

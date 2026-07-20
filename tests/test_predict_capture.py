@@ -46,8 +46,8 @@ from synth_setter.models.components.transformer import (
     AudioSpectrogramTransformer,
     LearntProjection,
 )
-from synth_setter.models.surge_ff_module import VSTFeedForwardModule
-from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.resources import as_file, param_map
 from tests.data.vst._clap import SURGE_XT_MAPPED_PARAM_COUNT
 
@@ -572,7 +572,7 @@ class TestPredictCaptureEndToEnd:
         )
 
         assert result.returncode == 0, result.stderr
-        assert "Predict Surge params" in result.stdout
+        assert "Predict synth parameters" in result.stdout
 
     def test_mono_low_rate_capture_is_resampled_and_upmixed(
         self, ff_checkpoint: Path, tmp_path: Path
