@@ -976,28 +976,29 @@ def test_train_default_checkpoint_callback_is_validation_aligned(cfg_train: Dict
     assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
 
 
+_CheckpointScenario = tuple[int, int | float, float, int]
+
+
 @pytest.mark.parametrize("save_last", [True, "link"])
 @pytest.mark.parametrize(
-    ("limit_train_batches", "val_check_interval", "expected_score", "expected_step"),
-    [(5, 2, 1.0, 4), (6, 1.0, 2.0, 6)],
+    "scenario",
+    [
+        (5, 1, 1.0, 4),
+        (6, 1.0, 2.0, 6),
+    ],
 )
 def test_train_best_checkpoint_contains_metric_producing_weights(
     cfg_train: DictConfig,
     save_last: bool | Literal["link"],
-    limit_train_batches: int,
-    val_check_interval: int | float,
-    expected_score: float,
-    expected_step: int,
+    scenario: _CheckpointScenario,
 ) -> None:
     """The train entrypoint keeps monitored weights aligned with validation.
 
     :param cfg_train: Tiny CPU training configuration.
     :param save_last: Recovery checkpoint mode under test.
-    :param limit_train_batches: Number of synthetic training batches.
-    :param val_check_interval: Mid-epoch or epoch-end validation cadence.
-    :param expected_score: Best score available at that cadence.
-    :param expected_step: Step that produced the best score and latest recovery save.
+    :param scenario: Validation and checkpoint cadence with expected selection.
     """
+    limit_train_batches, val_check_interval, expected_score, expected_step = scenario
     with open_dict(cfg_train):
         cfg_train.model = {
             "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryModule"

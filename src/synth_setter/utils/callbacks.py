@@ -65,11 +65,7 @@ def _stderr_tail(exc: BaseException) -> str:
 
 
 class ValidationAlignedModelCheckpoint(ModelCheckpoint):
-    """Select monitored step checkpoints only after validation produces their metric.
-
-    The lockfile and entrypoint regression pin the protected Lightning hooks needed to preserve
-    independent top-k and recovery checkpoint cadences.
-    """
+    """Align monitored weights with validation while preserving recovery cadence."""
 
     @property
     def state_key(self) -> str:
@@ -139,6 +135,8 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
             or trainer.state.fn != TrainerFn.FITTING
             or trainer.sanity_checking
         ):
+            return
+        if trainer.global_step % self._every_n_train_steps != 0:
             return
         self._save_topk_checkpoint(trainer, self._monitor_candidates(trainer))
 

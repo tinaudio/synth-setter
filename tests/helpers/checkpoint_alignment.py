@@ -50,7 +50,7 @@ class ValidationTrajectoryModule(pl.LightningModule):
         :param batch_idx: Unused batch index.
         """
         del batch, batch_idx
-        scores = {2: 3.0, 4: 1.0, 6: 2.0}
+        scores = {1: 0.0, 2: 3.0, 3: 2.0, 4: 1.0, 5: 2.0, 6: 2.0}
         self.log("val/score", scores[self.global_step], on_epoch=True)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
