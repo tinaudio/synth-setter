@@ -247,6 +247,28 @@ The existing worker design (`src/synth_setter/pipeline/worker.py`, not yet imple
 - Worker still writes `.rendering` → `.valid`/`.invalid` markers to R2.
 - Worker is idempotent: on startup, checks R2 for already-valid shards in its range, skips them. This is the key property that makes SkyPilot managed jobs work — R2 markers are the natural checkpoints for spot preemption recovery.
 
+### 4.4 Operator `~/.sky/config.yaml` — RunPod jobs-controller sizing and autostop
+
+Two RunPod facts (both learned operationally on 2026-07-19) make an explicit operator config necessary:
+
+1. RunPod rejects container disks over 40 GB on the `cpu3g-4-16` CPU instance SkyPilot picks for the managed-jobs controller (`Container Disk must be less than or equal to 40`), while SkyPilot's default controller disk is 50 GB. Without an override, every `ensure-controller-up` attempt fails and managed jobs sit in STARTING indefinitely.
+2. RunPod cannot stop pods (SkyPilot's backend lists `STOP` as unsupported), so an idle controller keeps billing until it is terminated. Autostop must therefore use `down: true`; the default `wait_for: jobs_and_ssh` semantics keep the controller alive while any managed job is in progress, and losing the controller-local job history for an idle window is an acceptable trade — metrics live in W&B and checkpoints in R2.
+
+Recommended operator config:
+
+```yaml
+# ~/.sky/config.yaml
+jobs:
+  controller:
+    resources:
+      disk_size: 40
+    autostop:
+      idle_minutes: 30
+      down: true
+```
+
+CI overwrites this file with its own controller shrink (`_ensure_ci_sky_config` in `src/synth_setter/pipeline/skypilot_launch.py`); the config above is for operator machines launching real RunPod jobs.
+
 ## 5. What Changes in data-pipeline.md
 
 ### §7.9 Compute Abstraction
