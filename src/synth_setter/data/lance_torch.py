@@ -230,6 +230,7 @@ def lance_map_dataloader(
     pin_memory: bool = False,
     drop_last: bool = False,
     persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ) -> DataLoader:
     """Build a map-style DataLoader (random access, shuffling, DDP-samplable).
 
@@ -245,9 +246,11 @@ def lance_map_dataloader(
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
+    :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+        PyTorch's default.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
-        Worker persistence is disabled when ``num_workers`` is zero.
+        Worker persistence and prefetch depth are disabled when ``num_workers`` is zero.
     """
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
@@ -268,6 +271,7 @@ def lance_map_dataloader(
         pin_memory=pin_memory,
         drop_last=drop_last,
         persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
 
 

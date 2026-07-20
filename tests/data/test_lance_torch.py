@@ -364,6 +364,21 @@ class TestMapDataloader:
         assert loader.prefetch_factor is None
         assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
 
+    def test_lance_map_dataloader_forwards_prefetch_factor(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """The public factory forwards a configured prefetch depth to its loader.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = lance_map_dataloader(
+            dest, batch_size=BATCH_SIZE, num_workers=2, prefetch_factor=4
+        )
+
+        assert loader.prefetch_factor == 4
+
     @pytest.mark.dataloader_multiprocess
     @pytest.mark.xdist_group(name="dataloader-multiprocess")
     @pytest.mark.slow
