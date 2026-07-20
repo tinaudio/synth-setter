@@ -1,0 +1,30 @@
+# Vast.ai variant of train-runpod-smoke.yaml: the same 10-step junk run,
+# dispatched through the Vast compute template to exercise the full path
+# (launcher → SkyPilot Vast worker → checkpoint upload → W&B model artifact).
+#
+# every_n_train_steps=5 guarantees a checkpoint file exists at step 10 even
+# though no epoch completes; the published model artifact is junk —
+# do not evaluate it for quality.
+#
+# A fresh instance has no local dataset, so the cmd pins a small finalized R2
+# root (~5 GiB, fits the 50 GB disk); num_workers=0 keeps startup deterministic.
+
+compute_template: src/synth_setter/configs/compute/vast-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+# tail=true keeps the dispatcher attached so the invoking job reflects the
+# worker run end-to-end.
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  "experiment=${EXPERIMENT:-surge/ffn_simple}"
+  datamodule.param_spec_name=surge_simple
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/}"
+  datamodule.num_workers=0
+  training.upload_checkpoints_during_training=true
+  trainer.min_steps=10
+  trainer.max_steps=10
+  callbacks.model_checkpoint.every_n_train_steps=5
+  hydra.run.dir=/home/build/synth-setter/train-run

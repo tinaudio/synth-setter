@@ -152,7 +152,10 @@ config = [
 # keeps `uv sync --frozen` self-sufficient.
 # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
 compute = [
-  "skypilot[runpod,oci,kubernetes]==0.12.0",
+  "skypilot[runpod,oci,kubernetes,vast]==0.12.0",
+  # Pin: vastai-sdk 1.x removes VastAI.api_key_access, which SkyPilot 0.12's Vast
+  # provisioner still calls (sky/provision/vast/utils.py) — 1.x breaks every launch.
+  "vastai-sdk==0.2.5",
   "runpod==1.8.1",
   "oci",
   "kubernetes==35.0.0",

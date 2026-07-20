@@ -10,6 +10,7 @@ configs under ``src/synth_setter/configs/launch/`` (train/eval workflows).
 
 Provider-neutral: the same call launches against
 `src/synth_setter/configs/compute/runpod-template.yaml`,
+`src/synth_setter/configs/compute/vast-template.yaml`,
 `src/synth_setter/configs/compute/oci-cpu-template.yaml`, or
 `src/synth_setter/configs/compute/local-template.yaml`
 (kubernetes-via-`sky local up`).
@@ -35,8 +36,8 @@ Managed jobs differ from cluster-level launches:
   via `name=`), not a cluster name.
 
 Per-backend image handling (driven by ``sky_cfg.worker_image_tag``):
-- RunPod: each Resources entry's `image_id` is pinned to `docker:<image>` before the
-  managed-job submission, so the controller's worker provisions from that image.
+- RunPod / Vast: each Resources entry's `image_id` is pinned to `docker:<image>` before
+  the managed-job submission, so the controller's worker provisions from that image.
 - OCI: SkyPilot's OCI backend rejects `docker:<image>` for `image_id`, so the
   YAML's `run:` block performs a sub-docker invocation that consumes
   `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
@@ -254,6 +255,7 @@ def _check_runpod_balance() -> None:
 _CLOUD_TO_PROVIDER: dict[str, str] = {
     "runpod": "runpod",
     "oci": "oci",
+    "vast": "vast",
     "kubernetes": "local",
     "k8s": "local",
 }
@@ -498,7 +500,7 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:
     if provider is None:
         raise ValueError(
             f"Unsupported cloud {cloud_value!r} in {source}; cred bootstrap "
-            "supports runpod, oci, and local (kubernetes) only"
+            "supports runpod, oci, vast, and local (kubernetes) only"
         )
     return provider
 
