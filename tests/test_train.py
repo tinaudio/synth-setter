@@ -1295,8 +1295,6 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
     :param monkeypatch: Replaces only the unavailable VST/metrics subprocess stages.
     :param tmp_path: Parent for separate local launch output directories.
     """
-    import concurrent.futures
-
     from synth_setter.evaluation import audio_probe
     from synth_setter.utils.callbacks import ValAudioProbe
 
@@ -1345,8 +1343,7 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
         assert len(probes) == 1
         probe = probes[0]
         assert probe._future is not None
-        concurrent.futures.wait([probe._future], timeout=120)
-        assert probe._future.result()["val_audio/mss_mean"] == 0.1
+        assert probe._future.result(timeout=120)["val_audio/mss_mean"] == 0.1
 
     config_id = resolve_run_config_id(cfg_surge_fake_train)
     uploaded = fake_r2_remote / cfg_surge_fake_train.r2.bucket / "probes" / config_id
