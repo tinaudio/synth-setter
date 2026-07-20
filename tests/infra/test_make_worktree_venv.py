@@ -12,7 +12,6 @@ import pytest
 PROJECT_ROOT = Path(__file__).parents[2]
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 LINUX_HEADLESS_TOOLS = (
-    "Xvfb",
     "awk",
     "dbus-run-session",
     "mktemp",
@@ -21,9 +20,15 @@ LINUX_HEADLESS_TOOLS = (
     "ps",
     "xdpyinfo",
     "xsettingsd",
+    "Xvfb",
 )
 LINUX_HEADLESS_AVAILABLE = os.uname().sysname == "Linux" and all(
     shutil.which(tool, path=SYSTEM_PATH) for tool in LINUX_HEADLESS_TOOLS
+)
+LINUX_HEADLESS_SKIP_REASON = (
+    "install the Linux headless tools, then run: ./.venv/bin/pytest "
+    "tests/infra/test_make_worktree_venv.py::"
+    "test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper"
 )
 
 
@@ -127,7 +132,7 @@ def _run_full_cpu(checkout: Path, log_path: Path, uname: str) -> subprocess.Comp
 
 
 @pytest.mark.infra
-@pytest.mark.skipif(not LINUX_HEADLESS_AVAILABLE, reason="Linux headless tools are unavailable")
+@pytest.mark.skipif(not LINUX_HEADLESS_AVAILABLE, reason=LINUX_HEADLESS_SKIP_REASON)
 def test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper(
     tmp_path: Path,
 ) -> None:
