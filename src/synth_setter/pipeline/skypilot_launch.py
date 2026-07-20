@@ -166,13 +166,13 @@ _RUNPOD_BALANCE_QUERY = "query { myself { clientBalance } }"
 
 
 def _fetch_runpod_balance() -> float | None:
-    """Return the RunPod account balance in USD, or ``None`` when undeterminable.
+    """Probe the RunPod account balance for the launch preflight.
 
     Fail-open by contract: missing or unparsable ``~/.runpod/config.toml``, API
     errors, and malformed responses all return ``None`` — a balance probe must
     never block a launch on its own failure.
 
-    :returns: Account balance in USD, or ``None``.
+    :returns: Balance in USD, or ``None`` when undeterminable.
     """
     try:
         import runpod

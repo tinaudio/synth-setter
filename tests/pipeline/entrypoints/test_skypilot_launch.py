@@ -748,7 +748,7 @@ class TestRunpodBalancePreflight:
         """
         _write_runpod_config_toml(real_fetch)
 
-        def _raise(_query: str) -> dict[str, Any]:
+        def _raise(_query: str) -> dict[str, object]:
             raise RuntimeError("api down")
 
         monkeypatch.setattr("runpod.api.graphql.run_graphql_query", _raise)
