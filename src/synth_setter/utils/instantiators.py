@@ -46,7 +46,7 @@ def _finalize_loggers(loggers: list[Logger], status: str) -> None:
     for logger in loggers:
         try:
             logger.finalize(status)
-        except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
+        except BaseException as exc:  # noqa: BLE001 — cleanup must remain best-effort
             log.warning(
                 f"logger finalize failed on {type(logger).__name__} ({type(exc).__name__})"
             )
