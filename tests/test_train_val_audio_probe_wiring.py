@@ -16,9 +16,14 @@ import pytest
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
 
-from synth_setter.cli.train import _configure_val_audio_probe, _derive_probe_uri
+from synth_setter.cli.train import (
+    _configure_val_audio_probe as _configure_val_audio_probe_for_launch,
+)
+from synth_setter.cli.train import _derive_probe_uri
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
+
+_TEST_RECOVERY_NAMESPACE = "train-20260715T000000000Z-00000000000000000000000000000001"
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +33,15 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
     :param monkeypatch: Replaces the auth ping with a no-op.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+
+
+def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
+    """Configure a probe under the test launch namespace.
+
+    :param cfg: Minimal training configuration.
+    :param callbacks: Callback list mutated by the production helper.
+    """
+    _configure_val_audio_probe_for_launch(cfg, callbacks, _TEST_RECOVERY_NAMESPACE)
 
 
 def _cfg(
@@ -110,11 +124,35 @@ def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:
         _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [])
 
 
-def test_derive_probe_uri_uses_bucket_and_run_config_id() -> None:
-    """The snapshot prefix derives from r2.bucket under probes/."""
-    uri = _derive_probe_uri(_cfg(enabled=True))
+def test_probe_uri_isolates_independent_same_config_launches() -> None:
+    """Separate launches of one config archive probes under separate namespaces."""
+    cfg = _cfg(enabled=True)
 
-    assert uri.startswith("r2://intermediate-data/probes/")
+    first = _derive_probe_uri(cfg, "train-20260715T000000000Z-00000000000000000000000000000001")
+    second = _derive_probe_uri(cfg, "train-20260715T000001000Z-00000000000000000000000000000002")
+
+    assert first == (
+        "r2://intermediate-data/probes/train/"
+        "train-20260715T000000000Z-00000000000000000000000000000001"
+    )
+    assert second == (
+        "r2://intermediate-data/probes/train/"
+        "train-20260715T000001000Z-00000000000000000000000000000002"
+    )
+    assert first != second
+
+
+def test_probe_uri_resume_uses_new_launch_namespace_for_recovered_run() -> None:
+    """A resumed W&B run preserves its ID but starts a new probe launch namespace."""
+    cfg = _cfg(enabled=True)
+    recovered_run_id = "train-20260715T000000000Z"
+
+    source = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
+    resumed = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
+
+    assert source != resumed
+    assert f"/{recovered_run_id}-" in source
+    assert f"/{recovered_run_id}-" in resumed
 
 
 @pytest.mark.parametrize(
