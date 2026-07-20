@@ -9,6 +9,7 @@ For example, inspect one checklist's available passes with::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -18,9 +19,13 @@ from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, TextIO
 
 import sh
 from pydantic import BaseModel, Field, model_validator
+
+_REPORT_KEYS = frozenset({"findings", "skill", "target", "what_looks_good"})
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
@@ -44,6 +49,7 @@ PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
+_FREE_POOL_SETUP = "authenticate with `/login kimi-coding` or `/login openrouter`"
 
 _DEEP_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
@@ -53,46 +59,15 @@ _STANDARD_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
 )
-# Keep the routed OpenRouter review pool pinned to exact live free-model IDs.
-# These lists intentionally exclude Anthropic-backed aliases and generic routers
-# such as ``openrouter/free`` so the audit can report the exact reviewed model.
-_DEEP_OPENROUTER_PRIMARY_CANDIDATES = (
+# Keep this ordered pool pinned so audit provenance records each provider and exact model.
+_FREE_POOL_CANDIDATES = (
+    "kimi-coding/k3",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "openrouter/openai/gpt-oss-20b:free",
-)
-_DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/tencent/hy3:free",
 )
-_STANDARD_OPENROUTER_PRIMARY_CANDIDATES = (
-    "openrouter/cohere/north-mini-code:free",
-    "openrouter/openai/gpt-oss-20b:free",
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/google/gemma-4-26b-a4b-it:free",
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+PINNED_REVIEW_MODELS = frozenset(
+    (*_DEEP_CODEX_CANDIDATES, *_STANDARD_CODEX_CANDIDATES, *_FREE_POOL_CANDIDATES)
 )
-_STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES = (
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-    "openrouter/poolside/laguna-m.1:free",
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    "openrouter/tencent/hy3:free",
-)
-_REQUIRED_REPORT_HEADINGS = (
-    "### BLOCK findings",
-    "### WARN findings",
-    "### What looks good",
-)
-_REPORT_TITLE = re.compile(r"^## (?P<skill>[a-z0-9-]+) review — (?P<target>.+)$")
-_FINDING = re.compile(r"^\d+\. \*\*.+:\d+\*\* — \S.+$")
-_RANGED_FINDING = re.compile(r"^(\d+\. \*\*.+:)(\d+)-(\d+)(\*\* — \S.+)$")
-_BULLET_FINDING = re.compile(r"^- \*\*(.+:)(\d+)(?:-(\d+))?\*\* — (\S.+)$")
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -142,11 +117,23 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
         :type: _TranscriptUsage | None
 
         Optional provider token accounting.
+
+    .. attribute :: provider
+        :type: str | None
+
+        Effective provider for host lifecycle events.
+
+    .. attribute :: model
+        :type: str | None
+
+        Effective model for host lifecycle events.
     """
 
     role: str
     content: str | list[_TranscriptContentBlock]
     usage: _TranscriptUsage | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
@@ -184,8 +171,107 @@ class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
         return self
 
 
+class _HostEvent(BaseModel, strict=True, extra="ignore"):
+    """Validated trust-boundary shape for one Pi host JSON event.
+
+    .. attribute :: type
+        :type: str
+
+        Event discriminator.
+
+    .. attribute :: message
+        :type: _TranscriptMessage | None
+
+        Message lifecycle payload.
+
+    .. attribute :: tool_name
+        :type: str | None
+
+        Tool lifecycle name.
+
+    .. attribute :: is_error
+        :type: bool | None
+
+        Whether tool execution failed.
+
+    .. attribute :: attempt
+        :type: int | None
+
+        Current provider retry number.
+
+    .. attribute :: max_attempts
+        :type: int | None
+
+        Provider retry limit.
+
+    .. attribute :: error_message
+        :type: str | None
+
+        Provider retry diagnostic.
+    """
+
+    type: str
+    message: _TranscriptMessage | None = None
+    tool_name: str | None = Field(default=None, alias="toolName")
+    is_error: bool | None = Field(default=None, alias="isError")
+    attempt: int | None = None
+    max_attempts: int | None = Field(default=None, alias="maxAttempts")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+
+
+class WorkerFinding(BaseModel, strict=True, extra="forbid"):
+    """One structured finding returned by a review worker.
+
+    .. attribute :: severity
+        :type: Literal["block", "warn"]
+
+        Merge severity assigned by the checklist.
+
+    .. attribute :: path
+        :type: str
+
+        Repository-relative changed file path.
+
+    .. attribute :: line
+        :type: int
+
+        Positive changed-line anchor.
+
+    .. attribute :: description
+        :type: str
+
+        Self-contained failure scenario or concern.
+    """
+
+    severity: Literal["block", "warn"]
+    path: str
+    line: int = Field(gt=0)
+    description: str
+
+    @model_validator(mode="after")
+    def _require_content(self) -> WorkerFinding:
+        """Reject findings that cannot be anchored or explained.
+
+        :returns: Validated finding.
+        :raises ValueError: If the path or description is empty or unsafe.
+        """
+        path = Path(self.path)
+        is_canonical = path.as_posix() == self.path and "\\" not in self.path
+        if (
+            not self.path.strip()
+            or self.path == "."
+            or path.is_absolute()
+            or ".." in path.parts
+            or not is_canonical
+        ):
+            raise ValueError("Finding path must be canonical and repository-relative")
+        if not self.description.strip():
+            raise ValueError("Finding description must be non-empty")
+        return self
+
+
 class WorkerReport(BaseModel, strict=True, extra="forbid"):
-    """Validated worker-report fields consumed by aggregation.
+    """Structured worker result consumed by aggregation.
 
     .. attribute :: skill
         :type: str
@@ -197,27 +283,34 @@ class WorkerReport(BaseModel, strict=True, extra="forbid"):
 
         Assigned PR or branch label.
 
-    .. attribute :: block_findings
-        :type: tuple[str, ...]
+    .. attribute :: findings
+        :type: tuple[WorkerFinding, ...]
 
-        Validated blocking-finding rows.
-
-    .. attribute :: warn_findings
-        :type: tuple[str, ...]
-
-        Validated warning-finding rows.
+        Typed blocking and warning findings.
 
     .. attribute :: what_looks_good
         :type: tuple[str, ...]
 
-        Evidence bullets from the worker.
+        Positive evidence from the reviewed diff.
     """
 
     skill: str
     target: str
-    block_findings: tuple[str, ...]
-    warn_findings: tuple[str, ...]
+    findings: tuple[WorkerFinding, ...]
     what_looks_good: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _require_content(self) -> WorkerReport:
+        """Reject reports without assignment identity or positive evidence.
+
+        :returns: Validated worker report.
+        :raises ValueError: If identity or positive evidence is empty.
+        """
+        if not self.skill.strip() or not self.target.strip():
+            raise ValueError("Worker report identity must be non-empty")
+        if not self.what_looks_good or any(not item.strip() for item in self.what_looks_good):
+            raise ValueError("Worker report requires positive evidence")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +350,7 @@ class ReviewPass:
     .. attribute :: pass_name
         :type: str
 
-        Logical Codex or OpenRouter pass.
+        Logical ``codex`` or ``free-pool`` pass.
 
     .. attribute :: candidates
         :type: tuple[str, ...]
@@ -269,17 +362,11 @@ class ReviewPass:
 
         Configured models absent from Pi's registry.
 
-    .. attribute :: secondary_fallback_candidates
-        :type: tuple[str, ...]
-
-        Same-provider OpenRouter free models reserved for the secondary fallback
-        tier after the primary free-model tier is exhausted.
-
     .. attribute :: fallback_candidates
         :type: tuple[str, ...]
 
-        Codex models used only after an OpenRouter pass exhausts both free-model
-        tiers. The orchestrator reorders them around the effective Codex-pass model.
+        Codex models used only after a free-pool pass exhausts its candidates.
+        The orchestrator reorders them around the effective Codex-pass model.
 
     .. attribute :: thinking
         :type: str
@@ -301,7 +388,6 @@ class ReviewPass:
     pass_name: str
     candidates: tuple[str, ...]
     unavailable: tuple[str, ...]
-    secondary_fallback_candidates: tuple[str, ...]
     fallback_candidates: tuple[str, ...]
     thinking: str
     reason: str
@@ -335,117 +421,163 @@ def _transcript_entries(transcript: Path) -> list[_TranscriptEntry]:
     ]
 
 
-def _structured_report_markdown(text: str) -> str | None:
-    """Remove narration surrounding one structured worker report.
+def _message_text(message: _TranscriptMessage) -> str:
+    """Return concatenated text blocks from one Pi message.
 
-    :param text: Assistant text that may wrap a report in prose.
-    :returns: Structured Markdown, or ``None`` when no report title exists.
+    :param message: Validated Pi message.
+    :returns: Plain text content in block order.
     """
-    lines = text.strip().splitlines()
-    start = next(
-        (index for index, line in enumerate(lines) if _REPORT_TITLE.fullmatch(line)),
-        None,
-    )
-    if start is None:
-        return None
-    report_lines = lines[start:]
-    if any(report_lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
-        return "\n".join(report_lines).strip()
-    indices = [report_lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
-    if indices != sorted(indices):
-        return "\n".join(report_lines).strip()
-
-    block_lines = _normalized_finding_lines(report_lines[indices[0] + 1 : indices[1]])
-    warn_lines = _normalized_finding_lines(report_lines[indices[1] + 1 : indices[2]])
-    good_lines = [line for line in report_lines[indices[2] + 1 :] if line.startswith("- ")]
-    sections = (
-        ("### BLOCK findings", block_lines),
-        ("### WARN findings", warn_lines),
-        ("### What looks good", good_lines),
-    )
-    output = [report_lines[0]]
-    for heading, content in sections:
-        output.extend(("", heading, *content))
-    return "\n".join(output).strip()
+    if isinstance(message.content, str):
+        return message.content
+    return "".join(block.text or "" for block in message.content if block.type == "text")
 
 
-def _normalized_finding_lines(lines: Sequence[str]) -> list[str]:
-    """Keep contract findings and anchor ranges at their first changed line.
+def _redact_diagnostic(diagnostic: str) -> str:
+    """Remove credential-shaped values from a provider diagnostic.
 
-    :param lines: Raw lines from a BLOCK or WARN section.
-    :returns: Canonical finding lines with surrounding narration removed.
-    :raises ValueError: If a finding-like line violates the report contract.
+    :param diagnostic: Raw retry diagnostic emitted by Pi.
+    :returns: Diagnostic safe for the terminal progress stream.
     """
-    normalized: list[str] = []
-    in_fence = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
+    redacted = re.sub(
+        r"(?i)\b(authorization)(\s*:\s*)[^\r\n;,]+",
+        r"\1\2<redacted>",
+        diagnostic,
+    )
+    return re.sub(
+        r"(?i)\b(bearer|api[-_ ]?key|token)\b"
+        r"((?:\s+(?:is|expired))?\s*[:=\"']*\s*)\S+",
+        r"\1\2<redacted>",
+        redacted,
+    )
+
+
+def _is_notification_acknowledgement(text: str, deliverable: str) -> bool:
+    """Identify empty or sentinel-only acknowledgements after worker notifications.
+
+    :param text: Assistant text following a custom notification.
+    :param deliverable: Last substantive host response.
+    :returns: Whether ``text`` carries no new review deliverable.
+    """
+    stripped = text.strip()
+    return not stripped or (stripped.startswith("Sentinel:") and "Sentinel:" in deliverable)
+
+
+def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> str:
+    """Persist Pi JSON events live and emit a sanitized progress projection.
+
+    :param source: Pi's newline-delimited JSON event stream.
+    :param transcript: Destination for the authoritative raw event stream.
+    :param progress: Terminal stream for sanitized lifecycle updates.
+    :returns: Final assistant text for the host caller.
+    :raises ValueError: If an event is malformed or no final response exists.
+    """
+    final_text = ""
+    notification_pending = False
+    with transcript.open("w") as transcript_file:
+        for raw_line in source:
+            transcript_file.write(raw_line)
+            transcript_file.flush()
+            if not raw_line.strip():
+                continue
+            event = _HostEvent.model_validate_json(raw_line)
+            if event.type == "message_start" and event.message is not None:
+                message = event.message
+                if message.role == "assistant" and message.provider and message.model:
+                    progress.write(f"[pi-review] {message.provider}/{message.model} started\n")
+            elif event.type == "tool_execution_start" and event.tool_name:
+                progress.write(f"[pi-review] tool {event.tool_name} started\n")
+            elif event.type == "tool_execution_end" and event.tool_name:
+                outcome = "failed" if event.is_error else "finished"
+                progress.write(f"[pi-review] tool {event.tool_name} {outcome}\n")
+            elif event.type == "auto_retry_start":
+                attempt = event.attempt if event.attempt is not None else "?"
+                maximum = event.max_attempts if event.max_attempts is not None else "?"
+                diagnostic = _redact_diagnostic(event.error_message or "unknown error")
+                progress.write(f"[pi-review] retry {attempt}/{maximum}: {diagnostic}\n")
+            elif event.type == "message_end" and event.message is not None:
+                if event.message.role == "custom":
+                    notification_pending = True
+                elif event.message.role == "assistant":
+                    assistant_text = _message_text(event.message)
+                    is_acknowledgement = notification_pending and _is_notification_acknowledgement(
+                        assistant_text, final_text
+                    )
+                    if not is_acknowledgement:
+                        final_text = assistant_text
+                    notification_pending = False
+            progress.flush()
+    if not final_text.strip():
+        raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")
+    return final_text
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build one JSON object while rejecting ambiguous duplicate keys.
+
+    :param pairs: Decoder-preserved object members in source order.
+    :returns: Object mapping when every key is unique.
+    :raises ValueError: If a key appears more than once.
+    """
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _strict_json_loads(value: str) -> object:
+    """Decode JSON without last-write-wins duplicate-key behavior.
+
+    :param value: Candidate JSON text.
+    :returns: Decoded JSON value.
+    :raises ValueError: If syntax or object keys are invalid.
+    """
+    try:
+        return json.loads(value, object_pairs_hook=_reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid worker JSON: {error.msg}") from error
+
+
+def _extract_report_envelope(value: str) -> str:
+    """Strip harmless text when one report-shaped JSON object is present.
+
+    :param value: Terminal worker text that may contain narration or a Markdown fence.
+    :returns: Unique report object, or unchanged text for correction when none is complete.
+    :raises ValueError: If competing report objects make the result ambiguous.
+    """
+    decoder = json.JSONDecoder(object_pairs_hook=_reject_duplicate_keys)
+    candidates: list[str] = []
+    for start, character in enumerate(value):
+        if character != "{":
             continue
-        if in_fence:
+        try:
+            decoded, end = decoder.raw_decode(value, start)
+        except (json.JSONDecodeError, ValueError):
             continue
-        if not stripped:
-            continue
-        if stripped in {"None", "None.", "- None", "- None."}:
-            normalized.append("None.")
-            continue
-        if _FINDING.fullmatch(stripped):
-            normalized.append(stripped)
-            continue
-        ranged = _RANGED_FINDING.fullmatch(stripped)
-        if ranged is not None:
-            prefix, start, end, suffix = ranged.groups()
-            normalized.append(
-                f"{prefix}{start}{suffix.replace(' — ', f' — [reported range {start}-{end}] ', 1)}"
-            )
-            continue
-        bullet = _BULLET_FINDING.fullmatch(stripped)
-        if bullet is not None:
-            path, start, end, description = bullet.groups()
-            range_note = f"[reported range {start}-{end}] " if end is not None else ""
-            normalized.append(
-                f"{len(normalized) + 1}. **{path}{start}** — {range_note}{description}"
-            )
-            continue
-        if "**" in stripped:
-            raise ValueError(f"malformed finding-like line: {stripped}")
-    return [
-        re.sub(r"^\d+\.", f"{index}.", finding) if _FINDING.fullmatch(finding) else finding
-        for index, finding in enumerate(normalized, start=1)
-    ]
+        if isinstance(decoded, dict) and frozenset(decoded) == _REPORT_KEYS:
+            candidates.append(value[start:end])
+    if not candidates:
+        return value.strip()
+    if len(candidates) > 1:
+        raise ValueError("Terminal assistant text contains multiple worker JSON objects")
+    return candidates[0]
 
 
 def extract_report(transcript: Path) -> str:
-    """Extract the final assistant Markdown from a Tintin transcript.
+    """Extract one unambiguous worker JSON object from a Tintin transcript.
 
     :param transcript: Tintin JSONL output path returned by ``Agent``.
-    :returns: Final non-empty assistant text.
-    :raises ValueError: If no assistant report text exists.
+    :returns: Unique JSON object, or raw terminal text for same-session correction.
+    :raises ValueError: If the terminal assistant message is empty or contains competing reports.
     """
-    latest = ""
-    saw_assistant_text = False
+    latest: str | None = None
     for entry in _transcript_entries(transcript):
-        if entry.message is None or entry.message.role != "assistant":
-            continue
-        content = entry.message.content
-        if isinstance(content, str):
-            text = content
-        else:
-            text = "".join(block.text or "" for block in content if block.type == "text")
-        if not text.strip():
-            continue
-        saw_assistant_text = True
-        structured = _structured_report_markdown(text)
-        latest = structured or ""
+        if entry.message is not None and entry.message.role == "assistant":
+            latest = _message_text(entry.message).strip()
     if not latest:
-        detail = (
-            "final assistant text is not a report"
-            if saw_assistant_text
-            else "has no assistant text"
-        )
-        raise ValueError(f"Transcript {detail}: {transcript}")
-    return latest
+        raise ValueError(f"Transcript has no terminal assistant text: {transcript}")
+    return _extract_report_envelope(latest)
 
 
 def transcript_stats(transcript: Path) -> TranscriptStats:
@@ -479,72 +611,154 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
     )
 
 
+def finding_fingerprint(
+    *, skill: str, severity: str, path: str, line: int, description: str
+) -> str:
+    """Return a stable identity for foreground/aftercare finding deduplication.
+
+    :param skill: Checklist that produced the finding.
+    :param severity: Finding severity.
+    :param path: Repository-relative finding path.
+    :param line: Positive finding anchor.
+    :param description: Self-contained finding text.
+    :returns: Lowercase SHA-256 digest of normalized finding content.
+    """
+    normalized = {
+        "description": " ".join(description.split()),
+        "line": line,
+        "path": path,
+        "severity": severity,
+        "skill": skill,
+    }
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def provenance_for_model(model: str) -> str:
     """Return finding provenance from the model that produced it.
 
     :param model: Canonical ``provider/model-id`` selector.
-    :returns: ``codex`` or ``openrouter``.
-    :raises ValueError: If the provider is outside the review policy.
+    :returns: ``codex`` for Codex models, else the pinned free-pool provider.
+    :raises ValueError: If the model is outside the review policy.
     """
     provider = model.split("/", 1)[0]
     if provider == "openai-codex":
         return "codex"
-    if provider == "openrouter":
-        return "openrouter"
-    raise ValueError(f"Unsupported Pi review provider: {provider}")
+    if model in _FREE_POOL_CANDIDATES:
+        return provider
+    raise ValueError(f"Unsupported Pi review model: {model}")
 
 
 def parse_worker_report(report: str, *, expected_skill: str, expected_target: str) -> WorkerReport:
-    """Parse a structurally valid worker report into its boundary model.
+    """Parse a worker's structured JSON result into its boundary model.
 
-    :param report: Worker Markdown output.
+    :param report: Worker JSON output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
     :returns: Validated report data consumed by aggregation.
-    :raises ValueError: If identity or report structure is invalid.
+    :raises ValueError: If JSON, identity, or report fields are invalid.
     """
-    lines = report.strip().splitlines()
-    if not lines:
-        raise ValueError("Worker report is empty")
-    title = _REPORT_TITLE.fullmatch(lines[0])
-    if (
-        title is None
-        or title.group("skill") != expected_skill
-        or title.group("target") != expected_target
-    ):
+    strict_json = json.dumps(_strict_json_loads(report))
+    parsed = WorkerReport.model_validate_json(strict_json)
+    if parsed.skill != expected_skill or parsed.target != expected_target:
         raise ValueError("Worker report identity does not match its assignment")
-    if any(lines.count(heading) != 1 for heading in _REQUIRED_REPORT_HEADINGS):
-        raise ValueError("Worker report headings are missing or duplicated")
-    indices = [lines.index(heading) for heading in _REQUIRED_REPORT_HEADINGS]
-    if indices != sorted(indices) or any(line.strip() for line in lines[1 : indices[0]]):
-        raise ValueError("Worker report headings are out of order")
+    return parsed
 
-    block_lines = lines[indices[0] + 1 : indices[1]]
-    warn_lines = lines[indices[1] + 1 : indices[2]]
-    good_lines = [line for line in lines[indices[2] + 1 :] if line.strip()]
-    if not (
-        _findings_section_is_valid(block_lines)
-        and _findings_section_is_valid(warn_lines)
-        and bool(good_lines)
-        and all(line.startswith("- ") and len(line) > 2 for line in good_lines)
-    ):
-        raise ValueError("Worker report sections are malformed")
-    return WorkerReport(
-        skill=title.group("skill"),
-        target=title.group("target"),
-        block_findings=tuple(line for line in block_lines if line.strip()),
-        warn_findings=tuple(line for line in warn_lines if line.strip()),
-        what_looks_good=tuple(good_lines),
+
+def report_repair_prompt(report: str, *, expected_skill: str, expected_target: str) -> str:
+    """Build a format-only correction prompt for the worker that wrote a bad report.
+
+    :param report: Extracted report text that failed validation.
+    :param expected_skill: Checklist assigned to the worker.
+    :param expected_target: Target assigned to the worker.
+    :returns: Prompt suitable for one same-session resume turn.
+    """
+    try:
+        parse_worker_report(
+            report,
+            expected_skill=expected_skill,
+            expected_target=expected_target,
+        )
+    except ValueError as error:
+        diagnostic = str(error)
+    else:
+        diagnostic = "The report is already valid; return it unchanged."
+    return (
+        "Correct only the structured report from your preceding response. "
+        "Do not repeat the review or use tools. Do not add, remove, or reinterpret findings. "
+        f"The assigned skill is {expected_skill!r} and target is {expected_target!r}. "
+        f"Validation diagnostic: {diagnostic}\n"
+        "Return exactly one JSON object with no Markdown fence or surrounding prose:\n"
+        f"{report.strip()}"
     )
 
 
-def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
-    """Return whether a worker report satisfies the merge contract.
+def build_worker_prompt(
+    *,
+    skill: str,
+    target: str,
+    repo: str,
+    base_sha: str,
+    head_sha: str,
+    changed_paths: Sequence[str],
+) -> str:
+    """Build one deterministic, bounded assignment shared by both model passes.
 
-    :param report: Worker Markdown output.
+    :param skill: Authoritative checklist name.
+    :param target: Assigned PR or branch label.
+    :param repo: GitHub repository in ``owner/name`` form.
+    :param base_sha: Full base commit SHA.
+    :param head_sha: Full reviewed commit SHA.
+    :param changed_paths: Repository-relative paths in the reviewed diff.
+    :returns: Complete worker prompt stored outside the host model response.
+    :raises ValueError: If assignment identity, SHAs, or paths are invalid.
+    """
+    if skill not in SUPPORTED_SKILLS:
+        raise ValueError(f"Unknown review skill: {skill}")
+    if not target.strip() or not repo.strip() or not changed_paths:
+        raise ValueError("Worker assignment identity and changed paths must be non-empty")
+    if not _SHA_RE.fullmatch(base_sha) or not _SHA_RE.fullmatch(head_sha):
+        raise ValueError("Worker assignment requires full lowercase commit SHAs")
+    for changed_path in changed_paths:
+        path = Path(changed_path)
+        if path.is_absolute() or path.as_posix() != changed_path or ".." in path.parts:
+            raise ValueError("Worker assignment paths must be canonical and repository-relative")
+    skill_instruction = (
+        f"Invoke the tinaudio-synth-setter-skills:{skill} skill via the Skill tool."
+    )
+    if skill in DEEP_SKILLS:
+        skill_instruction = (
+            f"Invoke the repo-local {skill} skill by reading agent/skills/{skill}/SKILL.md."
+        )
+    paths = "\n".join(f"- {path}" for path in changed_paths)
+    return f"""Review assignment
+Target: {target}
+Repository: {repo}
+Base SHA: {base_sha}
+Head SHA: {head_sha}
+Skill: {skill}
+
+{skill_instruction}
+Inspect only `git diff {base_sha}..{head_sha} -- <changed paths>` and explicit checklist paths.
+Do not recursively discover files, inspect caches, dependencies, sibling worktrees, or modify state.
+Every Bash call has a 60-second timeout.
+
+Changed paths:
+{paths}
+
+Return exactly one JSON object and no surrounding prose:
+{{"skill":"{skill}","target":"{target}","findings":[{{"severity":"block or warn","path":"repository-relative changed path","line":42,"description":"self-contained concern"}}],"what_looks_good":["positive evidence"]}}
+Use an empty findings array when appropriate. Keep what_looks_good non-empty and string values under 1500 words total.
+"""
+
+
+def report_is_parseable(report: str, *, expected_skill: str, expected_target: str) -> bool:
+    """Return whether a worker result satisfies the merge contract.
+
+    :param report: Worker JSON output.
     :param expected_skill: Checklist the worker was assigned.
     :param expected_target: PR or branch label the worker was assigned.
-    :returns: Whether identity and ordered sections are structurally valid.
+    :returns: Whether identity and structured fields satisfy the worker-result schema.
     """
     try:
         parse_worker_report(
@@ -555,21 +769,6 @@ def report_is_parseable(report: str, *, expected_skill: str, expected_target: st
     except ValueError:
         return False
     return True
-
-
-def _findings_section_is_valid(lines: Sequence[str]) -> bool:
-    """Return whether a findings section satisfies the worker-report contract.
-
-    :param lines: Raw non-heading lines from one findings section.
-    :returns: Whether the section is empty-free and contains valid finding rows.
-    """
-    content = [line for line in lines if line.strip()]
-    if content in (["None."], ["None"], ["- None."], ["- None"]):
-        return True
-    if not content:
-        return False
-
-    return all(_FINDING.fullmatch(line) for line in content)
 
 
 def _available_and_unavailable(
@@ -587,6 +786,79 @@ def _available_and_unavailable(
     return available, unavailable
 
 
+def _codex_candidates_for_skill(
+    skill: str,
+    available_models: AbstractSet[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return available and unavailable Codex candidates for one checklist.
+
+    :param skill: Authoritative checklist name.
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :returns: Available and unavailable Codex selectors in policy order.
+    :raises ValueError: If no configured Codex candidate is available.
+    """
+    configured = _DEEP_CODEX_CANDIDATES if skill in DEEP_SKILLS else _STANDARD_CODEX_CANDIDATES
+    candidates, unavailable = _available_and_unavailable(configured, available_models)
+    if not candidates:
+        raise ValueError(f"No available models remain for {skill}/codex")
+    return candidates, unavailable
+
+
+def _review_passes_for_skill(
+    skill: str,
+    *,
+    changed_lines: int,
+    risk_reasons: Sequence[str],
+    available_models: AbstractSet[str],
+    free_pool_candidates: tuple[str, ...],
+    free_pool_unavailable: tuple[str, ...],
+) -> tuple[ReviewPass, ReviewPass]:
+    """Build the paired Codex and free-pool passes for one checklist.
+
+    :param skill: Authoritative checklist name.
+    :param changed_lines: Total added and deleted lines in the diff.
+    :param risk_reasons: Named risk signals detected in the diff.
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :param free_pool_candidates: Registered free-pool selectors in policy order.
+    :param free_pool_unavailable: Unregistered free-pool selectors in policy order.
+    :returns: Paired Codex and free-pool passes.
+    """
+    thinking, reason = _thinking_for(
+        skill,
+        changed_lines=changed_lines,
+        risk_reasons=risk_reasons,
+    )
+    codex_candidates, codex_unavailable = _codex_candidates_for_skill(
+        skill,
+        available_models,
+    )
+    # Bind pass names to locals; a string literal on ``pass_name=`` trips ruff S106.
+    codex_label = "codex"
+    free_pool_label = "free-pool"
+    return (
+        ReviewPass(
+            skill=skill,
+            pass_name=codex_label,
+            candidates=codex_candidates,
+            unavailable=codex_unavailable,
+            fallback_candidates=(),
+            thinking=thinking,
+            reason=reason,
+            max_turns=PI_REVIEW_MAX_TURNS,
+        ),
+        ReviewPass(
+            skill=skill,
+            pass_name=free_pool_label,
+            candidates=free_pool_candidates,
+            unavailable=free_pool_unavailable,
+            fallback_candidates=tuple(reversed(codex_candidates)),
+            thinking=thinking,
+            reason=reason,
+            max_turns=PI_REVIEW_MAX_TURNS,
+        ),
+    )
+
+
 def build_review_plan(
     skills: Sequence[str],
     *,
@@ -601,8 +873,8 @@ def build_review_plan(
     :param risk_reasons: Named risk signals detected in the diff.
     :param available_models: Canonical selectors from Pi's model registry.
     :returns: Two ordered passes per skill, preserving the supplied skill order.
-    :raises ValueError: If no skills are selected, inputs are invalid, or Codex authentication is
-        missing.
+    :raises ValueError: If no skills are selected, inputs are invalid, or a required provider is
+        absent from Pi's registry.
     """
     if not skills:
         raise ValueError("skills must be non-empty")
@@ -612,74 +884,25 @@ def build_review_plan(
     if unknown:
         raise ValueError(f"Unknown review skill(s): {', '.join(unknown)}")
     _require_codex(available_models)
-    plan: list[ReviewPass] = []
-    for skill in skills:
-        is_deep = skill in DEEP_SKILLS
-        codex_configured = _DEEP_CODEX_CANDIDATES if is_deep else _STANDARD_CODEX_CANDIDATES
-        openrouter_primary_configured = (
-            _DEEP_OPENROUTER_PRIMARY_CANDIDATES
-            if is_deep
-            else _STANDARD_OPENROUTER_PRIMARY_CANDIDATES
-        )
-        openrouter_secondary_configured = (
-            _DEEP_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
-            if is_deep
-            else _STANDARD_OPENROUTER_SECONDARY_FALLBACK_CANDIDATES
-        )
-        thinking, reason = _thinking_for(
+    _require_free_pool(available_models)
+    # The free pool is a single fixed tuple, so its availability split is invariant
+    # across skills; only the Codex candidates vary with each skill's depth.
+    free_pool_candidates, free_pool_unavailable = _available_and_unavailable(
+        _FREE_POOL_CANDIDATES,
+        available_models,
+    )
+    return [
+        review_pass
+        for skill in skills
+        for review_pass in _review_passes_for_skill(
             skill,
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
+            available_models=available_models,
+            free_pool_candidates=free_pool_candidates,
+            free_pool_unavailable=free_pool_unavailable,
         )
-        codex_candidates, codex_unavailable = _available_and_unavailable(
-            codex_configured,
-            available_models,
-        )
-        if not codex_candidates:
-            raise ValueError(f"No available models remain for {skill}/codex")
-        codex_label = "codex"
-        plan.append(
-            ReviewPass(
-                skill=skill,
-                pass_name=codex_label,
-                candidates=codex_candidates,
-                unavailable=codex_unavailable,
-                secondary_fallback_candidates=(),
-                fallback_candidates=(),
-                thinking=thinking,
-                reason=reason,
-                max_turns=PI_REVIEW_MAX_TURNS,
-            )
-        )
-        openrouter_candidates, openrouter_primary_unavailable = _available_and_unavailable(
-            openrouter_primary_configured,
-            available_models,
-        )
-        (
-            openrouter_secondary_candidates,
-            openrouter_secondary_unavailable,
-        ) = _available_and_unavailable(
-            openrouter_secondary_configured,
-            available_models,
-        )
-        openrouter_label = "openrouter"
-        plan.append(
-            ReviewPass(
-                skill=skill,
-                pass_name=openrouter_label,
-                candidates=openrouter_candidates,
-                unavailable=(
-                    *openrouter_primary_unavailable,
-                    *openrouter_secondary_unavailable,
-                ),
-                secondary_fallback_candidates=openrouter_secondary_candidates,
-                fallback_candidates=tuple(reversed(codex_candidates)),
-                thinking=thinking,
-                reason=reason,
-                max_turns=PI_REVIEW_MAX_TURNS,
-            )
-        )
-    return plan
+    ]
 
 
 def _require_codex(available_models: AbstractSet[str]) -> None:
@@ -690,6 +913,18 @@ def _require_codex(available_models: AbstractSet[str]) -> None:
     """
     if not any(model.startswith("openai-codex/") for model in available_models):
         raise ValueError(f"No openai-codex models available; {_CODEX_SETUP}; credentials required")
+
+
+def _require_free_pool(available_models: AbstractSet[str]) -> None:
+    """Require at least one registered free-pool model before planning the second pass.
+
+    :param available_models: Canonical selectors returned by Pi's model registry.
+    :raises ValueError: If no free-pool candidate is registered.
+    """
+    if not any(model in available_models for model in _FREE_POOL_CANDIDATES):
+        raise ValueError(
+            f"No free-pool models available; {_FREE_POOL_SETUP}; credentials required"
+        )
 
 
 def _thinking_for(
@@ -733,16 +968,32 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--changed-lines", type=int, required=True)
     plan.add_argument("--risk", action="append", default=[])
     extract = subparsers.add_parser(
-        "extract-report", help="write final assistant Markdown from Tintin JSONL"
+        "extract-report", help="write the unique worker JSON object from Tintin JSONL"
     )
     extract.add_argument("transcript", type=Path)
     extract.add_argument("--output", type=Path, required=True)
     validate = subparsers.add_parser(
-        "validate-report", help="check a worker report's section contract"
+        "validate-report", help="check a worker result's JSON contract"
     )
     validate.add_argument("path", type=Path)
     validate.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
     validate.add_argument("--target", required=True)
+    repair = subparsers.add_parser(
+        "repair-prompt", help="build one same-session format-correction prompt"
+    )
+    repair.add_argument("path", type=Path)
+    repair.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    repair.add_argument("--target", required=True)
+    worker_prompt = subparsers.add_parser(
+        "worker-prompt", help="write a deterministic review-worker assignment"
+    )
+    worker_prompt.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    worker_prompt.add_argument("--target", required=True)
+    worker_prompt.add_argument("--repo", required=True)
+    worker_prompt.add_argument("--base-sha", required=True)
+    worker_prompt.add_argument("--head-sha", required=True)
+    worker_prompt.add_argument("--changed-path", action="append", required=True)
+    worker_prompt.add_argument("--output", type=Path, required=True)
     stats = subparsers.add_parser(
         "transcript-stats", help="print Tintin runtime-budget statistics as JSON"
     )
@@ -751,6 +1002,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "provenance", help="print provenance for an effective model"
     )
     provenance.add_argument("model")
+    fingerprint = subparsers.add_parser(
+        "finding-fingerprint", help="print a stable finding identity"
+    )
+    fingerprint.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
+    fingerprint.add_argument("--severity", required=True, choices=("block", "warn"))
+    fingerprint.add_argument("--path", required=True)
+    fingerprint.add_argument("--line", required=True, type=int)
+    fingerprint.add_argument("--description", required=True)
+    stream = subparsers.add_parser(
+        "stream-host", help="persist Pi host JSON while reporting safe progress"
+    )
+    stream.add_argument("--transcript", type=Path, required=True)
     return parser
 
 
@@ -801,11 +1064,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             else 1
         )
+    if args.command == "repair-prompt":
+        sys.stdout.write(
+            f"{report_repair_prompt(args.path.read_text(), expected_skill=args.skill, expected_target=args.target)}\n"
+        )
+        return 0
+    if args.command == "worker-prompt":
+        args.output.write_text(
+            build_worker_prompt(
+                skill=args.skill,
+                target=args.target,
+                repo=args.repo,
+                base_sha=args.base_sha,
+                head_sha=args.head_sha,
+                changed_paths=args.changed_path,
+            )
+        )
+        return 0
     if args.command == "transcript-stats":
         sys.stdout.write(f"{json.dumps(asdict(transcript_stats(args.transcript)), indent=2)}\n")
         return 0
     if args.command == "provenance":
         sys.stdout.write(f"{provenance_for_model(args.model)}\n")
+        return 0
+    if args.command == "finding-fingerprint":
+        sys.stdout.write(
+            f"{finding_fingerprint(skill=args.skill, severity=args.severity, path=args.path, line=args.line, description=args.description)}\n"
+        )
+        return 0
+    if args.command == "stream-host":
+        sys.stdout.write(f"{stream_host_events(sys.stdin, args.transcript, sys.stderr)}\n")
         return 0
     raise AssertionError(f"Unhandled command: {args.command}")
 

@@ -2032,8 +2032,11 @@ MAKE_STUB
   grep -q "ARGS=link-skills" "$make_log" 2>/dev/null || {
     echo "make link-skills not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
   }
+  grep -q "ARGS=install-git-hooks" "$make_log" 2>/dev/null || {
+    echo "make install-git-hooks not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
 }
-it "worktree-post-setup: valid path → make link-plugins + link-thoughts + link-skills run in that directory" T_wt_post_setup_runs_make_in_new_worktree
+it "worktree-post-setup: valid path → links assets and installs git hooks" T_wt_post_setup_runs_make_in_new_worktree
 
 T_wt_post_setup_exits_0_on_missing_path() {
   local out

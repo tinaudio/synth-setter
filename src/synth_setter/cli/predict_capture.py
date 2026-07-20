@@ -2,7 +2,7 @@
 
 Python half of the live sound-match bridge: a CLAP host plugin captures 4 s of
 audio to ``capture-sample-dir/<uuid>.wav`` and spawns this CLI; we predict the
-Surge patch that best matches the sound and write
+synth patch that best matches the sound and write
 ``param-prediction-dir/<uuid>/params.csv`` (plus ``pred-0.pt`` as a debugging
 aid). Values in ``params.csv`` are already in each parameter's native CLAP
 domain per the committed per-spec map (:func:`synth_setter.resources.clap_map`).
@@ -34,8 +34,8 @@ from synth_setter.data.vst.clap_map import (
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.models.surge_ff_module import VSTFeedForwardModule
-from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.resources import as_file, param_map
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
@@ -262,7 +262,7 @@ def main(  # noqa: DOC501, DOC503
     device: str,
     log_dir: Path,
 ) -> None:
-    """Predict Surge params for one capture WAV and write the bridge CSV.
+    """Predict synth parameters for one capture WAV and write the bridge CSV.
 
     Every run — including any crash — is recorded in ``<log-dir>/<uuid>.log``;
     the console mirror stays on stderr via ``click.echo``.

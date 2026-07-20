@@ -12,9 +12,11 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
+import hydra
 import numpy as np
 import pandas as pd
 import pytest
@@ -32,6 +34,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
+from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._vst import PLUGIN_PATH
@@ -44,9 +47,11 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
+    train_loss_keys,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.eval_fakes import (
@@ -63,6 +68,16 @@ from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
+
+
+def _assert_oracle_zero_train_loss(metric_dict: dict[str, torch.Tensor]) -> None:
+    # The oracle constructs its loss as 0.0 * net(...).sum(); any nonzero value
+    # means it stopped being an oracle.
+    for key in train_loss_keys(metric_dict):
+        loss_value = metric_dict[key].item()
+        assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
+
 _PREDICTION_PT_PREFIXES = ("pred", "target-audio", "target-params")
 _FAKE_METRICS_CSV = fake_metrics_csv(NUM_FIXTURE_SAMPLES)
 
@@ -421,7 +436,10 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
 def test_train_surge_simple_flow_default_width_matches_fake_batch(
     tmp_path: Path, model_group: str
 ) -> None:
-    """Train one step with each canonical flow group's default encoded width.
+    """A real optimizer step succeeds at each flow group's registry-derived default width.
+
+    The vector field is shrunk only for CPU speed — width wiring is untouched. The loss
+    must come out finite: ``global_step`` advances even past a NaN loss.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     :param model_group: Canonical flow model group under test.
@@ -445,23 +463,59 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
     assert cfg.model.num_params == len(param_specs["surge_simple"])
 
     HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
+    metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_train_runpod_experiment_default_datamodule_advances(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    experiment: str,
+) -> None:
+    """Train one step with each RunPod experiment's own datamodule selection.
+
+    :param tmp_path: Hydra output and log directory.
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    :param experiment: Shipped RunPod launch experiment to train.
+    """
+    cfg = _build_surge_xt_smoke_cfg(
+        accelerator="cpu",
+        param_spec_name="surge_simple",
+        experiment=experiment,
+        datamodule_group=None,
+    )
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
 
 
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
+
+    The loss must come out finite: ``global_step`` advances even past a NaN loss.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
     cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
 
     HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
+    metric_dict, object_dict = train(cfg)
 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert_finite_train_loss(metric_dict)
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)
@@ -491,20 +545,10 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    # `vst_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
-    # populates `train/loss_step` (and `train/loss_epoch` if an epoch boundary was
-    # crossed) in `trainer.callback_metrics`. With `TRAINING_STEPS=1` only the
-    # step-level key is guaranteed; assert whichever is present is finite.
-    loss_keys = [k for k in metric_dict if k.startswith("train/loss")]
-    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
-    for key in loss_keys:
-        loss = metric_dict[key]
-        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+    assert_finite_train_loss(metric_dict)
 
     if experiment_name == _ORACLE_EXPERIMENT:
-        for key in loss_keys:
-            loss_value = metric_dict[key].item()
-            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+        _assert_oracle_zero_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst
@@ -795,16 +839,10 @@ def test_train_surge_fake(
     )
     assert train_split.exists()
 
-    loss_keys = [key for key in metric_dict if key.startswith("train/loss")]
-    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
-    for key in loss_keys:
-        loss = metric_dict[key]
-        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+    assert_finite_train_loss(metric_dict)
 
     if experiment_name == _ORACLE_EXPERIMENT:
-        for key in loss_keys:
-            loss_value = metric_dict[key].item()
-            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+        _assert_oracle_zero_train_loss(metric_dict)
 
 
 @pytest.mark.fake_vst
@@ -958,6 +996,87 @@ def _prediction_file_names() -> list[str]:
         for prefix in _PREDICTION_PT_PREFIXES
         for sample_idx in range(NUM_FIXTURE_SAMPLES)
     )
+
+
+def test_train_default_checkpoint_callback_is_validation_aligned(cfg_train: DictConfig) -> None:
+    """Guard the callback target against stale-metric checkpoint selection.
+
+    :param cfg_train: Configuration whose default callback is instantiated.
+    """
+    checkpoint = hydra.utils.instantiate(cfg_train.callbacks.model_checkpoint)
+
+    assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
+
+
+type _CheckpointScenario = tuple[int, int | float, float, int, int]
+
+
+@pytest.mark.parametrize("save_last", [True, "link"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        (5, 3, 2.0, 3, 4),
+        (6, 1.0, 2.0, 6, 6),
+    ],
+)
+def test_train_best_checkpoint_contains_metric_producing_weights(
+    cfg_train: DictConfig,
+    save_last: bool | Literal["link"],
+    scenario: _CheckpointScenario,
+) -> None:
+    """The train entrypoint keeps monitored weights aligned with validation.
+
+    :param cfg_train: Tiny CPU training configuration.
+    :param save_last: Recovery checkpoint mode under test.
+    :param scenario: Validation and checkpoint cadence with expected selection.
+    """
+    (
+        limit_train_batches,
+        val_check_interval,
+        expected_score,
+        expected_best_step,
+        expected_last_step,
+    ) = scenario
+    with open_dict(cfg_train):
+        cfg_train.model = {
+            "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryModule"
+        }
+        cfg_train.datamodule = {
+            "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryDataModule"
+        }
+        cfg_train.callbacks = {
+            "model_checkpoint": {
+                "_target_": "synth_setter.utils.callbacks.ValidationAlignedModelCheckpoint",
+                "dirpath": f"{cfg_train.paths.output_dir}/checkpoints",
+                "filename": "step_{step}",
+                "monitor": "val/score",
+                "mode": "min",
+                "save_top_k": 1,
+                "save_last": save_last,
+                "auto_insert_metric_name": False,
+                "every_n_train_steps": 2,
+            }
+        }
+        cfg_train.logger = None
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = limit_train_batches
+        cfg_train.trainer.limit_val_batches = 1
+        cfg_train.trainer.num_sanity_val_steps = 0
+        cfg_train.trainer.val_check_interval = val_check_interval
+        cfg_train.training.val_audio_probe = False
+    HydraConfig().set_config(cfg_train)
+
+    _, objects = train(cfg_train)
+
+    checkpoint = objects["trainer"].checkpoint_callback
+    assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
+    best = torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)
+    last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
+    assert checkpoint.best_model_score == expected_score
+    assert best["global_step"] == expected_best_step
+    assert best["state_dict"]["trained_batches"] == expected_best_step
+    assert last["global_step"] == expected_last_step
+    assert last["state_dict"]["trained_batches"] == expected_last_step
 
 
 @pytest.mark.slow

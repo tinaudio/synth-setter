@@ -318,12 +318,15 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
     "logger.wandb.log_model",  # changed `true` → False (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
+    "logger.wandb.resume",  # W&B run-resume mode changes tracking behavior, not model behavior
     "logger.wandb.settings.console",  # `wrap` added in #1506; console capture, no model impact
     "logger.wandb.settings.console_multipart",  # added in #1641; console capture, no model impact
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
     "datamodule.dataset_root",
     # Per-dataloader process count is host-resource sizing, not a model knob (#1916).
     "datamodule.num_workers",
+    # Worker lifecycle is resource sizing; #2149 must validate fixed-seed behavior before merge.
+    "datamodule.persistent_workers",
     "datamodule.predict_file",
     "datamodule.stats_file",
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
@@ -419,6 +422,22 @@ def _normalize_for_compare(cfg: dict) -> dict:
 def test_normalize_for_compare_accepts_num_workers_host_resource_drift() -> None:
     baseline = {"datamodule": {"num_workers": 11}, "model": {"hidden_size": 512}}
     current = {"datamodule": {"num_workers": 4}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_persistent_workers_resource_drift() -> None:
+    """Worker persistence is an accepted config difference pending #2149."""
+    baseline = {"datamodule": {"persistent_workers": False}, "model": {"hidden_size": 512}}
+    current = {"datamodule": {"persistent_workers": True}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_wandb_resume_observability_drift() -> None:
+    """W&B resume mode does not change model behavior."""
+    baseline = {"logger": {"wandb": {"resume": None}}, "model": {"hidden_size": 512}}
+    current = {"logger": {"wandb": {"resume": "allow"}}, "model": {"hidden_size": 512}}
 
     assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
 

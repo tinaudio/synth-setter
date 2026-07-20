@@ -206,7 +206,7 @@ docstring, insert a blank line in the middle of the sentence" — produces
 an ungrammatical sentence fragment as the summary. This is the dominant
 maintainability regression seen in the #1044 review (Copilot comment
 [3243241015](https://github.com/tinaudio/synth-setter/pull/1044#discussion_r3243241015)
-on `src/synth_setter/tools/surge_xt_interactive.py` flagged the canonical
+on `src/synth_setter/tools/vst_interactive.py` flagged the canonical
 bad pattern).
 
 **Do not split a sentence in the middle to satisfy `D205`. Rewrite the

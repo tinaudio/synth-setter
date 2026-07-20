@@ -134,19 +134,25 @@ If you fetched the docs and the native API does **not** cover the case (e.g. the
 repo's use is genuinely outside Lance's scope), say so under "What looks good"
 rather than forcing a finding.
 
-Report shape (same contract the fan-out expects):
+Report shape (same JSON contract the fan-out expects — one object, no fence or
+surrounding prose; each description carries the verbatim doc quote and deep
+link, and the first `what_looks_good` entry names the resolved `pylance`
+version):
 
-```
-## lance-review review — PR #<N>  (reviewed against pylance <version>)
-
-### BLOCK findings
-1. **<path>:<line>** — <hand-roll → native primitive>. Docs: "<verbatim quote>" — <deep link>
-
-### WARN findings
-1. **<path>:<line>** — <…>. Docs: "<verbatim quote>" — <deep link>
-
-### What looks good
-- <native-API usage worth keeping; cite the file>
+```json
+{
+  "skill": "lance-review",
+  "target": "PR #<N>",
+  "findings": [
+    {
+      "severity": "block",
+      "path": "<repository-relative changed path>",
+      "line": 42,
+      "description": "<hand-roll → native primitive>. Docs: \"<verbatim quote>\" — <deep link>"
+    }
+  ],
+  "what_looks_good": ["Reviewed against pylance <version>.", "<native-API usage worth keeping; cite the file>"]
+}
 ```
 
 ## Review checklist

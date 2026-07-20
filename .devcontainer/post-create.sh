@@ -131,7 +131,7 @@ fi
 for scope in --global --local --worktree; do
   git config "$scope" --unset-all core.hooksPath 2>/dev/null || true
 done
-pre-commit install
+pre-commit install --hook-type pre-commit --hook-type pre-push
 
 # Per-worktree venv isolation. The image bakes VIRTUAL_ENV=/venv/main onto
 # PATH, so every git worktree shares one editable install — whichever ran

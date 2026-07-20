@@ -19,14 +19,9 @@
 
 set -euo pipefail
 
-TMP_DIR=$(mktemp -d)
-export XAUTHORITY="${XAUTHORITY:-$TMP_DIR/.Xauthority}"
-
-export LIBGL_ALWAYS_SOFTWARE=1
-export NO_AT_BRIDGE=1
-export JUCE_USE_XINPUT2=0
-
-DISPLAY_FILE="$TMP_DIR/display_num"
+TMP_DIR=""
+DISPLAY_FILE=""
+readonly XVFB_STARTUP_PROBES=100
 
 cleanup() {
   # `kill PID` is async — bash returns while the child is still draining.
@@ -68,65 +63,164 @@ cleanup() {
   fi
   echo "[wrapper] cleanup: done" >&2
 }
-trap cleanup EXIT
 
-# Start Xvfb (let it pick a display)
-# -displayfd 3 writes the chosen display number to file descriptor 3
-# 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
-Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
-  </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
-XVFB_PID=$!
+# Concurrent bootstraps can lose the display-lock race or miss the readiness
+# window, so retry instead of failing the renderer (#2035).
+# Globals:
+#   Reads the environment variable named by the first argument.
+# Arguments:
+#   Variable name, default value, and inclusive maximum.
+# Outputs:
+#   Normalized decimal value to stdout; clamp diagnostics to stderr.
+normalize_decimal() {
+  local name=$1
+  local default=$2
+  local maximum=$3
+  local value=${!name:-$default}
 
-# Wait for Xvfb to output the display number
-count=0
-while [ ! -s "$DISPLAY_FILE" ]; do
-  sleep 0.1
-  count=$((count+1))
-  if [ "$count" -ge 100 ]; then
-     echo "Timeout waiting for Xvfb to start" >&2
-     cat "$TMP_DIR/xvfb.log" >&2
-     exit 1
+  case "$value" in
+    *[!0-9]*)
+      printf '%s\n' "$default"
+      return
+      ;;
+  esac
+  while [[ "$value" == 0* ]]; do
+    value=${value#0}
+  done
+  value=${value:-0}
+  if (( ${#value} > ${#maximum} )) ||
+    [[ ${#value} -eq ${#maximum} && "$value" > "$maximum" ]]; then
+    echo "[wrapper] clamping ${name} to ${maximum}" >&2
+    printf '%s\n' "$maximum"
+    return
   fi
-  # Check if Xvfb died
-  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
-    echo "Xvfb died unexpectedly" >&2
-    cat "$TMP_DIR/xvfb.log" >&2
-    exit 1
+  printf '%s\n' "$value"
+}
+
+# Normalize a positive decimal, falling back when the override represents zero.
+# Arguments:
+#   Variable name, default value, and inclusive maximum.
+# Outputs:
+#   Normalized positive decimal value to stdout; clamp diagnostics to stderr.
+normalize_positive_decimal() {
+  local default=$2
+  local value
+  value=$(normalize_decimal "$1" "$default" "$3")
+
+  if (( value == 0 )); then
+    printf '%s\n' "$default"
+    return
   fi
-done
+  printf '%s\n' "$value"
+}
 
-DISPLAY_NUM=$(cat "$DISPLAY_FILE")
-export DISPLAY=:${DISPLAY_NUM}
+# Start Xvfb and wait until it accepts connections.
+# Globals:
+#   DISPLAY_FILE, DISPLAY, TMP_DIR, XVFB_PID, XVFB_READY_PROBES,
+#   XVFB_STARTUP_PROBES.
+# Outputs:
+#   Startup diagnostics to stderr.
+# Returns:
+#   0 when Xvfb accepts connections; 1 on startup failure.
+start_xvfb_attempt() {
+  : > "$DISPLAY_FILE"
+  # -displayfd 3 writes the chosen display number to file descriptor 3;
+  # 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
+  Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
+    </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
+  XVFB_PID=$!
 
-# Wait for X to be ready (avoid races)
-for _ in {1..50}; do
-  if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat "$TMP_DIR/xvfb.log" || true; exit 1; }
+  # The display-number write has its own fixed limit before readiness probes.
+  local count=0
+  while [[ ! -s "$DISPLAY_FILE" ]]; do
+    if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+      echo "Xvfb died unexpectedly" >&2
+      return 1
+    fi
+    count=$((count+1))
+    if (( count >= XVFB_STARTUP_PROBES )); then
+      echo "Timeout waiting for Xvfb to start" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
 
-# Start an XSettings manager.
-# `</dev/null` detaches stdin so backgrounded daemons (and any grandchildren
-# they fork) don't keep the parent SSH session's stdin pipe open. Without
-# this, SkyPilot's RunPod backend never observes EOF on the SSH command's
-# pipes and the job stays in RUNNING forever even after the wrapped
-# command exits (#735).
-xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
-XSETTINGS_PID=$!
+  DISPLAY=":$(cat "$DISPLAY_FILE")"
+  export DISPLAY
 
-# Start a lightweight window manager (important for many plugins)
-openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
-OPENBOX_PID=$!
+  local probe
+  for ((probe = 0; probe < XVFB_READY_PROBES; probe += 1)); do
+    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Xvfb did not become ready on $DISPLAY" >&2
+  return 1
+}
 
-# Run the actual command inside a D-Bus session.
-#
-# Do NOT use `exec` here. With `exec`, the wrapper bash is replaced by
-# dbus-run-session, the `trap cleanup EXIT` above never fires, and
-# Xvfb / xsettingsd / openbox keep running after the wrapped command
-# exits. On RunPod, SkyPilot's job-status reporter never sees the SSH
-# session's process tree go quiet — the job stays in RUNNING forever
-# even after the worker uploads its artifacts. Bisected via the
-# test-skypilot-debug matrix; see #735 for the full evidence.
-dbus-run-session -- "$@"
+# Reap a failed Xvfb so retries do not stack servers.
+# Globals:
+#   TMP_DIR, XVFB_PID.
+# Outputs:
+#   The failed Xvfb log to stderr.
+reap_failed_xvfb() {
+  kill "$XVFB_PID" 2>/dev/null || true
+  wait "$XVFB_PID" 2>/dev/null || true
+  XVFB_PID=""
+  cat "$TMP_DIR/xvfb.log" >&2 || true
+}
+
+# Bootstrap X11 and run the requested command in its D-Bus session.
+# Globals:
+#   Modifies DISPLAY_FILE, TMP_DIR, OPENBOX_PID, XSETTINGS_PID, and Xvfb
+#   retry settings; exports X11 compatibility variables.
+# Arguments:
+#   Command and arguments to execute.
+# Outputs:
+#   Bootstrap and cleanup diagnostics to stderr; command output unchanged.
+# Returns:
+#   The wrapped command's exit status, or non-zero when Xvfb bootstrap fails.
+main() {
+  TMP_DIR=$(mktemp -d)
+  DISPLAY_FILE="$TMP_DIR/display_num"
+  export XAUTHORITY="${XAUTHORITY:-$TMP_DIR/.Xauthority}"
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export NO_AT_BRIDGE=1
+  export JUCE_USE_XINPUT2=0
+  trap cleanup EXIT
+
+  XVFB_BOOTSTRAP_ATTEMPTS=$(normalize_positive_decimal \
+    XVFB_BOOTSTRAP_ATTEMPTS 3 9)
+  XVFB_READY_PROBES=$(normalize_positive_decimal XVFB_READY_PROBES 50 100)
+  XVFB_RETRY_JITTER_MAX=$(normalize_decimal XVFB_RETRY_JITTER_MAX 9 9)
+  readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX
+
+  local attempt=1
+  until start_xvfb_attempt; do
+    reap_failed_xvfb
+    if (( attempt >= XVFB_BOOTSTRAP_ATTEMPTS )); then
+      echo "Xvfb bootstrap failed after ${attempt} attempt(s)" >&2
+      return 1
+    fi
+    attempt=$((attempt+1))
+    echo "[wrapper] retrying Xvfb bootstrap" \
+      "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
+    # Jitter decorrelates concurrent bootstraps racing the same display locks.
+    if (( XVFB_RETRY_JITTER_MAX > 0 )); then
+      sleep "0.$((RANDOM % XVFB_RETRY_JITTER_MAX + 1))"
+    fi
+  done
+
+  # Detached stdin prevents daemons from keeping SkyPilot's SSH pipe open (#735).
+  xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
+  XSETTINGS_PID=$!
+
+  openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
+  OPENBOX_PID=$!
+
+  # exec would replace bash and bypass the cleanup trap (#735).
+  dbus-run-session -- "$@"
+}
+
+main "$@"

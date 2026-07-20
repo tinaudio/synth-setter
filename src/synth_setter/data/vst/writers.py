@@ -2,12 +2,15 @@
 
 ``make_lance_dataset`` is the sole entrypoint dispatched by the renderer CLI on
 the output suffix; it writes a Lance dataset directory, one fragment per render
-batch, committed as one dataset at the end.
+batch, committed as one dataset and compacted to a single fragment at the end.
 """
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -258,7 +261,9 @@ def make_lance_dataset(
     run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
     ``float32``. The shard metadata is embedded in Arrow schema metadata so
     validation and finalize recover the sidecar payload at read time. Each
-    render batch becomes one Lance fragment, committed as one dataset at the end.
+    render batch becomes one Lance fragment, committed as one dataset at the
+    end, then compacted to a single fragment with pre-compaction manifests and
+    data files removed.
 
     :param lance_dir: Destination ``.lance`` dataset directory.
     :param render_cfg: Per-shard renderer config from the dataset spec.
@@ -284,6 +289,7 @@ def make_lance_dataset(
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
+    lance_path = Path(lance_dir)
 
     _validate_fixed_params_lengths(
         num_samples=render_cfg.samples_per_shard,
@@ -291,22 +297,36 @@ def make_lance_dataset(
         fixed_note_params_list=fixed_note_params_list,
     )
     schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
+    lance_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = Path(tempfile.mkdtemp(dir=lance_path.parent, prefix=f".{lance_path.name}.tmp-"))
 
-    fragments: list[lance.fragment.FragmentMetadata] = []
+    try:
+        fragments: list[lance.fragment.FragmentMetadata] = []
 
-    def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-        record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
-        fragments.append(lance_fragment(lance_dir, schema, record_batch))
+        def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
+            record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+            fragments.append(lance_fragment(staging_path, schema, record_batch))
 
-    # Commit only after a clean render: orphaned fragment data files from a failed
-    # run stay uncommitted (no dataset manifest references them).
-    metrics = _render_in_batches(
-        render_cfg=render_cfg,
-        param_spec=param_spec,
-        start_idx=start_idx,
-        fixed_synth_params_list=fixed_synth_params_list,
-        fixed_note_params_list=fixed_note_params_list,
-        flush_batch=_flush,
-    )
-    commit_lance_dataset(lance_dir, schema, fragments)
-    return metrics
+        # Commit only after a clean render: orphaned fragment data files from a failed
+        # run stay uncommitted (no dataset manifest references them).
+        metrics = _render_in_batches(
+            render_cfg=render_cfg,
+            param_spec=param_spec,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
+            flush_batch=_flush,
+        )
+        commit_lance_dataset(staging_path, schema, fragments)
+        # Compact per-batch fragments into one, then drop the pre-compaction manifest and
+        # its data files; delete_unverified is safe — the staging dir is exclusively ours.
+        dataset = lance.dataset(str(staging_path))
+        dataset.optimize.compact_files(target_rows_per_fragment=render_cfg.samples_per_shard)
+        dataset.cleanup_old_versions(older_than=timedelta(0), delete_unverified=True)
+        if lance_path.exists():
+            shutil.rmtree(lance_path)
+        staging_path.rename(lance_path)
+        return metrics
+    finally:
+        if staging_path.exists():
+            shutil.rmtree(staging_path, ignore_errors=True)

@@ -144,30 +144,33 @@ Return the standard fan-out report. **Severity:**
   receive, a fragile assumption that will break under a plausible change, or a
   defect you can describe but not tie to a concrete trigger.
 
-Every BLOCK and WARN body MUST contain, in this order:
+Every finding description MUST contain, in this order:
 
-1. The `<path>:<line>` anchor.
-2. One sentence naming the defect.
-3. The **failure scenario** — concrete inputs/state → the wrong result, and the
+1. One sentence naming the defect (the anchor lives in `path`/`line`).
+2. The **failure scenario** — concrete inputs/state → the wrong result, and the
    correct behavior in one clause.
 
-Report shape (same contract the fan-out expects):
+Report shape (same JSON contract the fan-out expects — one object, no fence or
+surrounding prose):
 
+```json
+{
+  "skill": "correctness-review",
+  "target": "PR #<N>",
+  "findings": [
+    {
+      "severity": "block",
+      "path": "<repository-relative changed path>",
+      "line": 42,
+      "description": "<defect>. Failure: given <input/state>, <what happens>; should <correct behavior>."
+    }
+  ],
+  "what_looks_good": ["<a tricky path that IS correct, and why — so the next reviewer need not re-derive it>"]
+}
 ```
-## correctness-review review — PR #<N>
 
-### BLOCK findings
-1. **<path>:<line>** — <defect>. Failure: given <input/state>, <what happens>; should <correct behavior>.
-
-### WARN findings
-1. **<path>:<line>** — <latent defect>. Failure: <trigger not yet reachable / plausible near-future change>, then <wrong result>.
-
-### What looks good
-- <a tricky path that IS correct, and why — so the next reviewer need not re-derive it>
-```
-
-Aim for a 1500-word ceiling so the report stays scannable. Rank BLOCK findings
-most-severe first.
+Aim for a 1500-word ceiling across string values so the report stays scannable.
+Rank `block` findings most-severe first in the `findings` array.
 
 ## Review checklist
 

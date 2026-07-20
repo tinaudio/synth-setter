@@ -11,8 +11,66 @@ orchestrator brief.
 `agent/_shared/run_pi_review.sh`, so every harness uses the same flat Tintin
 fan-out. Tintin intentionally removes its `Agent` tool from spawned subagents.
 
+The launcher persists Pi's host JSON events under `.agent-reviews/`, prints the
+exact live transcript path before review work starts, and sends sanitized
+model, tool, and retry lifecycle updates to stderr. Treat the JSONL as the
+authoritative host audit and the launcher's stdout as the final deliverable.
+
 You MUST complete every step below in order, then return to your orchestrator
 brief's Step 7 for the final delivery step.
+
+## Terminal failure delivery
+
+After Step 1 resolves the target and origin HEAD, route every terminal failure
+through the tested failure-delivery helper. This includes planner/provider
+preflight errors, authentication failures, exhausted required passes, malformed
+report exhaustion, aggregation errors, and ordinary Step 7 delivery errors.
+Every terminal failure uses this delivery helper; never merely print the audit
+and stop.
+
+Before returning from a terminal failure, write one isolated JSON object with
+this strict shape:
+
+```json
+{
+  "target": "PR #<N> or branch <head_ref>",
+  "head": "<40-character origin HEAD>",
+  "stage": "<failed pipeline stage>",
+  "diagnostic": "<exact terminal diagnostic>",
+  "repo": "tinaudio/synth-setter",
+  "pr_number": 123,
+  "transcript_paths": ["<preserved host or worker transcript>"],
+  "provider_incidents": [
+    {
+      "model": "<exact provider/model selector>",
+      "category": "quota/capacity",
+      "diagnostic": "<exact provider diagnostic>"
+    }
+  ],
+  "audit_markdown": "<accumulated attempt audit table, possibly empty>",
+  "partial_findings": ["<validated partial finding summary>"]
+}
+```
+
+Use JSON `null` for both `repo` and `pr_number` in local-branch mode. Use an
+empty list or empty string for unavailable partial audit fields; never invent
+an attempt, incident, finding, or transcript.
+
+`repo-review-full` invokes `review_failure.py deliver --mode full`; the
+no-comments sibling uses `--mode no-comments`. Substitute the exact isolated
+JSON path:
+
+```bash
+./.venv/bin/python agent/_shared/review_failure.py deliver \
+  --mode <full-or-no-comments> --input <failure-json-path>
+```
+
+Exit 1 is the expected result because the review failed. Return the helper's
+stdout verbatim; stderr already reports a preserved local payload if GitHub
+delivery also fails. The helper puts `## Provider incidents` first, writes the
+local report before external delivery, posts a top-level COMMENT review in full
+mode, and writes the canonical blocking HEAD sentinel in no-comments mode.
+Do not enter ordinary Step 7 after this helper runs.
 
 ## Step 1: Resolve the PR
 
@@ -98,22 +156,83 @@ skip `lance-review`.
 Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
 with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
 `run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
-helper output. Tintin removes `Agent` from
-subagents, so do not spawn a Pi orchestrator and then ask it to nest workers.
-Launch all independent passes in one message, capture each start result's
-`Agent ID` and `Output file`, then collect them with
-`get_subagent_result(wait: true)`. Every pass receives the same complete worker
-prompt and must not modify the checkout or GitHub state.
+helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
+orchestrator and then ask it to nest workers.
+
+Generate one complete assignment file per selected skill before the launch. Use
+the deterministic absolute directory derived from the known handoff path; never
+put a glob in a worker prompt and never repair assignment paths with
+`steer_subagent` after launch:
+
+```bash
+assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
+mkdir -p "$assignment_dir"
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
+  --skill <skill> --target <target> --repo <owner/name> \
+  --base-sha <base> --head-sha <head> \
+  --changed-path <path> [--changed-path <path> ...] \
+  --output "$assignment_dir/<skill>.txt"
+```
+
+Both model passes share that immutable file. Their `Agent` prompt is only:
+`Read and execute the complete review assignment at <absolute-assignment-path>.`
+Do not make the host model reproduce the diff metadata, checklist contract, or
+JSON schema in every tool call. Launch all independent passes in one message and
+capture each start result's `Agent ID` and `Output file`.
+
+The foreground response has a **480-second foreground deadline** measured from
+the first worker launch, reserving two minutes of the ten-minute response budget
+for validation, aggregation, and delivery. The foreground quality floor is
+**one validated report per selected skill** from either the Codex or free-pool
+pass. Prefer Codex: collect the Codex agents together with
+`get_subagent_result(wait: true)`, then inspect every free-pool agent with
+`get_subagent_result(wait: false)` rather than joining the slowest free-pool
+worker. If a Codex attempt fails but its free-pool peer has a valid report, that
+report satisfies the foreground floor, but its findings remain provisional and
+must not enter the foreground aggregation. Add a deferred row with
+`pass_name: "codex"` for that skill using its exact `verification_model`;
+aftercare performs a
+fresh independent Codex review because the foreground Codex pass did not
+complete. The provisional free-pool report itself is not treated as verified or
+silently promoted.
+
+As soon as every skill meets the floor, take exactly one non-blocking snapshot
+of all second passes with `get_subagent_result(wait: false)`. Never poll them a
+second time in the foreground. If launch elapsed time is at most 360 seconds,
+put free-pool-only candidate findings already present in that snapshot into one
+parallel Codex verification wave, with high thinking and at most 6 turns per
+verifier. Join only that single wave. If more than 360 seconds have elapsed,
+defer all free-pool-only candidates without foreground verification. This
+leaves at least two minutes for deterministic aggregation and delivery.
+
+Do not launch another foreground verifier, wait for an unfinished second pass,
+or retry a second-pass candidate after the single snapshot; **defer the
+unfinished second pass to aftercare**. Record its audit status as `deferred`, not
+`unavailable`. Before returning, write the strict manifest at
+`$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
+skill/pass/model rows, and fingerprints for every foreground finding.
+The launcher validates it and starts detached aftercare. Use schema version 1
+with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
+`base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
+(`skill`, `pass_name`, `origin`, exact `model`, effective foreground
+`verification_model`, and `thinking`), and `foreground_fingerprints`. Use
+`origin: primary` for independent provider coverage and `origin: codex-fallback`
+only after the free pool exhausted. Aftercare may post only **late Codex-verified
+findings** against the unchanged PR head, following
+`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot create aftercare manifests because they lack a
+stable remote PR/head delivery boundary.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
 inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
 paths. It must never recursively discover files or checklists, search above the
 current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
 assigned `tdd-refactor` pass may search tracked files with `git grep` and
-`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool
-call has a 60-second timeout. A command timeout or
-turn budget exhausted result is a failed attempt, never a partial success; add
-its exact diagnostic to the audit and retry through the candidate sequence.
+`git ls-files`, as its exhaustive-reference contract requires. Every Bash tool call has a 60-second timeout. A command timeout or hard-aborted
+turn-budget result is a failed attempt; add its exact diagnostic to the audit and
+retry through the candidate sequence only when that pass is still needed for the
+foreground floor. Gracefully wrapped `steered` attempts proceed to report
+validation and count as successful when their final JSON passes the contract.
+Record `success` with the wrap-up detail in the audit.
 
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
@@ -128,12 +247,14 @@ process tree or transcript to understand execution:
 | Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
 | ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
 
-Use explicit statuses: `success`, `unavailable`, `quota/capacity`,
+Use explicit statuses: `success`, `deferred`, `unavailable`, `quota/capacity`,
 `authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
 exact failure diagnostic or allocation reason,
 not a generic summary. Include one row per attempt, including retries and
 verification passes. Precede the table with one sentence counting successful,
-failed, retried, and rejected attempts. If the pipeline must fail closed, print the audit table before stopping even though no sentinel is written.
+failed, retried, and rejected attempts. If the pipeline must fail closed, pass
+the table to the terminal failure-delivery helper; never merely print the audit
+and stop.
 
 Use the tested routing helper as the single source of model candidates,
 availability filtering, thinking levels, and allocation reasons. Count changed
@@ -143,46 +264,50 @@ logic. Pass each detected signal with `--risk` and one `--skill` argument per
 selected checklist:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py plan \
+./.venv/bin/python agent/_shared/pi_review_routing.py plan \
   --skill correctness-review --skill code-health \
   --changed-lines "$changed_lines" --risk concurrency
 ```
 
 The command runs `pi --list-models` and returns JSON with two logical passes per
-skill, the ordered available primary `candidates`, skipped `unavailable` models,
-OpenRouter's same-provider `secondary_fallback_candidates`, cross-provider
-Codex `fallback_candidates`, `thinking`, and `reason`. Codex is required.
-OpenRouter is optional because its pass can degrade through the secondary
-free-model tier and then the returned Codex fallback. Record skipped candidates
-in the audit with no agent id or transcript.
+skill, the ordered available `candidates`, skipped `unavailable` models,
+cross-provider Codex `fallback_candidates`, `thinking`, and `reason`. Codex and
+the free pool must both be registered with Pi. If either is absent, stop on the
+planner's single provider-level error instead of expanding every configured
+model into audit rows. Record individually skipped models only after both Codex
+and the free pool pass provider preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
-the failure and launch a fresh worker with the next same-provider candidate.
-Codex-pass candidates are always `openai-codex/*`; OpenRouter-pass candidates
-are always `openrouter/*`. Exhaust the primary OpenRouter `candidates` first,
-then continue through `secondary_fallback_candidates` before attempting any
-Codex fallback. If an OpenRouter pass has no free candidates, or every primary
-and secondary candidate exhausts quota/capacity, move the successful Codex pass's effective
-model to the end of `fallback_candidates`, then launch a fresh worker
-with the first model. This prefers a distinct fallback even when the Codex pass
-reached its own fallback. Continue through that bounded Codex sequence only for
-the same availability failures. Record each launch as `Codex fallback` in the
-audit detail. Never resume a failed session under a different model.
-Authentication, tool/checklist, malformed-report, timeout, and turn-budget
+the failure and launch a fresh worker with the next candidate in the pass.
+Codex-pass candidates are always `openai-codex/*`; free-pool candidates span
+`kimi-coding/*` and `openrouter/*` in their fixed order. Exhaust the free-pool
+`candidates` in order before attempting any Codex fallback. If a free-pool attempt
+fails authentication, record it, skip remaining candidates from that provider,
+and continue with the next candidate from a different free-pool provider. Stop
+when no different free-pool provider remains; authentication never triggers Codex fallback.
+If a free-pool pass has no available candidates, or every candidate exhausts
+quota/capacity, move the successful Codex pass's effective model to the end of
+`fallback_candidates`, then launch a fresh worker with the first model. This
+prefers a distinct fallback even when the Codex pass reached its own fallback.
+Continue through that bounded Codex sequence only for the same availability
+failures. Record each launch as `Codex fallback` in the audit detail. Never resume
+a failed session under a different model. Tool/checklist, malformed-report
+after one same-session correction, timeout, and hard-aborted turn-budget
 failures do not trigger the cross-provider fallback.
 
-A completed worker is not successful until its final assistant Markdown passes
-the report contract. The `Output file` is Tintin JSONL audit data, not Markdown;
-extract its final assistant text deterministically, then validate that file:
+A completed worker is not successful until its final assistant JSON passes
+the report contract. The `Output file` is Tintin JSONL audit data, not the
+worker result; extract a unique worker JSON object from harmless surrounding prose,
+then validate the extracted JSON:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py extract-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py extract-report \
   <output-file> --output <report-path>
-python3 agent/_shared/pi_review_routing.py validate-report \
+./.venv/bin/python agent/_shared/pi_review_routing.py validate-report \
   <report-path> --skill <skill-name> --target <PR-or-branch-label>
-python3 agent/_shared/pi_review_routing.py transcript-stats <output-file>
+./.venv/bin/python agent/_shared/pi_review_routing.py transcript-stats <output-file>
 ```
 
 Use `transcript-stats` for the audit's elapsed, turns, and cumulative-token
@@ -190,17 +315,33 @@ columns. The token number is explicitly cumulative processed context across
 turns, not generated output, so label it exactly as the table does.
 
 Do not copy the `get_subagent_result` envelope or feed the JSONL transcript
-directly to `validate-report`. If extraction or validation fails, record
-`malformed report` and try the next candidate. This
-is a bounded report-quality retry, not a quota classification. Authentication,
-tool, and checklist errors stop immediately. If a Codex pass exhausts its
-candidates, stop before aggregation or delivery; never write a PASS sentinel
-after silently dropping the required Codex pass. If an OpenRouter pass exhausts
-its primary `candidates`, `secondary_fallback_candidates`, and bounded Codex
-`fallback_candidates`, continue the review with Codex-only findings, record the
-failed OpenRouter attempt chain in the audit, and add the exact sentence
-`OpenRouter failed; only Codex ran.` to `review_body` so the posted review or
-rendered report is explicit and truthful about the degraded coverage.
+directly to `validate-report`. `extract-report` will **extract a unique worker
+JSON object from harmless surrounding prose** or a Markdown fence, but it never
+repairs JSON syntax, duplicate keys, identity, fields, or finding semantics.
+
+If extraction or strict validation still fails, record `malformed report`, build
+the exact correction prompt, and **resume the same worker once**:
+
+```bash
+./.venv/bin/python agent/_shared/pi_review_routing.py repair-prompt \
+  <report-path> --skill <skill-name> --target <PR-or-branch-label>
+```
+
+Send that output through `Agent(resume: <agent-id>)`. It explicitly says
+`Do not repeat the review`; the worker must preserve its analysis and make a format-only
+correction without tools. Re-extract and revalidate the resumed response. Only
+if that correction remains invalid may the orchestrator try the next candidate,
+and only while the pass is required for the foreground quality floor. Otherwise
+defer or record the failed second pass without making the foreground wait for a
+complete replacement review. This is a bounded report-quality correction, not a
+quota classification.
+
+Authentication errors follow the provider-aware free-pool rule above; tool and
+checklist errors stop the affected pass immediately. The foreground fails closed
+only if a selected skill has no validated Codex or free-pool report by the
+foreground deadline. Never write a PASS sentinel after silently dropping an
+entire skill. If the free-pool pass is unavailable in the foreground, continue
+with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
 changes this flow, run both host harnesses against the PR from the worktree:
@@ -214,7 +355,7 @@ codex exec --dangerously-bypass-approvals-and-sandbox \
 ```
 
 After each command, verify the sentinel audit contains every planned
-Codex/OpenRouter pass, bounded turn/runtime/token columns, an existing
+Codex/free-pool pass, bounded turn/runtime/token columns, an existing
 transcript path for each launched attempt, and the current full HEAD from
 `review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
 helper CLI tests.
@@ -223,16 +364,16 @@ helper CLI tests.
   sentinel HEAD, and fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
-produced it, including after same-provider fallback:
+produced it, including after within-pass fallback:
 
 ```bash
-python3 agent/_shared/pi_review_routing.py provenance <effective-model>
+./.venv/bin/python agent/_shared/pi_review_routing.py provenance <effective-model>
 ```
 
 Merge duplicate findings using effective provenance. Findings independently
-reported by Codex and OpenRouter are `both`; Codex-only findings are `codex`.
-OpenRouter-only findings never enter aggregation directly. A logical
-OpenRouter pass produced by a Codex fallback has Codex provenance and needs no
+reported by the Codex pass and the free-pool pass are `both`; Codex-only findings
+are `codex`. free-pool-only findings never enter aggregation directly. A logical
+free-pool pass produced by a Codex fallback has Codex provenance and needs no
 additional verification. For each skill that has any, launch one additional
 `pr-review-worker` with the successful Codex
 pass's effective model, `high` thinking, and the successful Codex pass's
@@ -241,9 +382,10 @@ those it can reproduce from the diff. This model has already passed availability
 preflight; if the original Codex pass used a fallback, verification uses that
 same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
-A confirmed candidate is tagged `openrouter; verified by: codex`; a rejected
-candidate is omitted and recorded in the audit. If verification fails or is
-malformed, stop rather than posting unverified free-model output. Add every
+A confirmed candidate is tagged `<free-pool provider>; verified by: codex` (its
+own `kimi-coding` or `openrouter` provenance); a rejected candidate is omitted
+and recorded in the audit. If verification fails or is malformed, stop rather
+than posting unverified free-pool output. Add every
 unavailable, failed, malformed, verified, rejected, and successful attempt to
 the audit section.
 
@@ -264,32 +406,31 @@ contract below is unchanged for both.
 must fetch the required upstream pages through read-only Bash commands within
 the same 60-second command deadline. `correctness-review` needs no web access.
 
-Each agent returns a Markdown report with `BLOCK` and `WARN` sections. Each finding cites `<path>:<line>`. Agents work independently — they should not coordinate.
+Each agent returns one JSON object and no surrounding prose. Agents work independently — they should not coordinate.
 
 ### Per-agent output contract
 
-Each agent returns a Markdown block:
-
+```json
+{
+  "skill": "<skill-name>",
+  "target": "PR #<N>",
+  "findings": [
+    {
+      "severity": "block",
+      "path": "<repository-relative changed path>",
+      "line": 42,
+      "description": "<self-contained failure scenario or concern>"
+    }
+  ],
+  "what_looks_good": ["<positive evidence from the diff>"]
+}
 ```
-## <skill-name> review — PR #<N>
 
-### BLOCK findings
-1. **<path>:<line>** — <description>
-
-### WARN findings
-1. **<path>:<line>** — <description>
-
-### What looks good
-- ...
-```
-
-Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
-
-Each finding ends with `codex`, `openrouter`, or `both` provenance.
+`severity` is exactly `block` or `warn`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
 
 ## Step 5: Aggregate findings
 
-Once every parallel agent returns, parse each report's BLOCK and WARN findings. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+Once every parallel agent returns, ingest each validated worker result's structured `findings`. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
 
 Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
 
@@ -333,9 +474,26 @@ Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-proje
 
 Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
 
+Before writing any other `review_body` content, inspect the audit rows for
+`authentication` and `quota/capacity` statuses. If either status occurred,
+begin `review_body` with `## Provider incidents`, followed by one bullet per
+affected attempt in attempt order:
+
+```markdown
+## Provider incidents
+
+- **authentication** — openrouter/example-model: exact provider diagnostic
+- **quota/capacity** — openai-codex/example-model: exact provider diagnostic
+```
+
+Preserve the exact model selector and diagnostic; deduplicate only identical
+status/model/diagnostic triples. This incident summary must appear before every
+other `review_body` section, including the review lead-in, `## PR health`, and
+`## Pi review audit`. Omit it only when neither status occurred.
+
 `review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
 
-**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
@@ -351,7 +509,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every OpenRouter path failed and only Codex-origin reports survived, prepend `OpenRouter failed; only Codex ran.` to the non-health portion of `review_body`.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 

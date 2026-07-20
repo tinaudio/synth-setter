@@ -1,6 +1,408 @@
 # CHANGELOG
 
 
+## v10.1.2 (2026-07-20)
+
+### Bug Fixes
+
+- **data-pipeline**: Retry Xvfb bootstrap after startup contention
+  ([#2063](https://github.com/tinaudio/synth-setter/pull/2063),
+  [`92febf5`](https://github.com/tinaudio/synth-setter/commit/92febf5566ac102a46db0b73ff395fe665d5c27f))
+
+### Internal-Fix
+
+- **data-pipeline**: Preserve finalize telemetry on failure
+  ([#2024](https://github.com/tinaudio/synth-setter/pull/2024),
+  [`84262ce`](https://github.com/tinaudio/synth-setter/commit/84262ce500f6f08065ce324983b6175ec87d5fa7))
+
+### Refactoring
+
+- **data-pipeline**: Generalize interactive VST tool
+  ([#2059](https://github.com/tinaudio/synth-setter/pull/2059),
+  [`9f9416d`](https://github.com/tinaudio/synth-setter/commit/9f9416d2310ad1e22b39ced0320a9d799778fa6c))
+
+
+## v10.1.1 (2026-07-20)
+
+### Bug Fixes
+
+- **training**: Align monitored checkpoints with validation weights
+  ([#2188](https://github.com/tinaudio/synth-setter/pull/2188),
+  [`3b168ef`](https://github.com/tinaudio/synth-setter/commit/3b168efa8f89d844fe68ab5f699243470dabd06c))
+
+* fix(training): align best checkpoints with validation
+
+* fix(training): preserve manual checkpoint step semantics
+
+* test(training): cover linked manual recovery checkpoints
+
+* chore(comments): apply pre-PR review fixes
+
+* fix(training): save epoch-end validation checkpoints
+
+* fix(training): honor checkpoint cadence during validation
+
+* fix(training): save manual recovery before validation
+
+* fix(training): keep manual recovery state consistent
+
+### Internal-Feat
+
+- **automation**: Route the second review pass to a free-pool
+  ([#2174](https://github.com/tinaudio/synth-setter/pull/2174),
+  [`273c62e`](https://github.com/tinaudio/synth-setter/commit/273c62ee372a2250e0fabc7daebc573fce6cdfb5))
+
+* fix(data-pipeline): drop removed loader kwarg from torchsynth stress test
+
+The #2065 stress test still passes `loader="map"` to `LanceVSTDataModule`, but that parameter was
+  removed, so the project-wide pyright pre-commit hook fails on `main` and blocks every Python
+  commit. Drop the stale kwarg; the datamodule is map-style by default, so behavior is unchanged.
+
+Refs #2157
+
+* internal-feat(automation): route the second Pi review pass through a fixed free-pool
+
+The OpenRouter free-model pool backing the second logical PR-review pass has been flaky. Replace its
+  deep/standard primary+secondary tiers with one fixed ordered pool tried in exactly this order:
+  `kimi-coding/k3`, `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`,
+  `openrouter/tencent/hy3:free`.
+
+Because the pool now spans providers, routing and provenance no longer assume every non-Codex
+  candidate is OpenRouter: the pass is renamed `openrouter` -> `free-pool`, `provenance_for_model`
+  derives its allowlist from the pool (so it reports `kimi-coding` or `openrouter`), and the
+  plan-time preflight becomes `_require_free_pool` (at least one pool model registered). The single
+  fixed pool also lets the availability split hoist out of the per-skill loop, and drops the
+  now-unused `secondary_fallback_candidates` field. Codex remains required and the cross-provider
+  Codex fallback is preserved.
+
+Policy and audit terminology are realigned across `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`,
+  `AGENTS.md`, and the review analysis doc — the second pass is no longer called "OpenRouter", and
+  the degraded-coverage sentence is now `Free-pool review failed; only Codex ran.`
+
+Refs #2155
+
+* internal-fix(automation): reword stale same-provider fallback in review analysis
+
+The free-pool second pass advances through one ordered tuple that can cross providers (kimi-coding
+  -> openrouter), so "same-provider fallback" no longer describes it. Reword to "within-pass
+  fallback".
+
+Refs #2173
+
+* internal-fix(automation): use structured Pi worker results
+
+* internal-feat(automation): raise Pi review concurrency
+
+* internal-fix(automation): address Pi review findings
+
+* internal-fix(automation): validate canonical review paths
+
+* internal-fix(automation): accept graceful review wrap-ups
+
+* internal-fix(automation): bound foreground review latency
+
+* internal-fix(automation): stabilize bounded review delivery
+
+* internal-fix(automation): harden deferred review handoff
+
+* internal-fix(automation): cap foreground verification wave
+
+* internal-fix(automation): close review delivery edge cases
+
+* internal-fix(automation): align deferred interpreter contracts
+
+* internal-fix(test): align review helper command coverage
+
+
+## v10.1.0 (2026-07-19)
+
+### Features
+
+- **data-pipeline**: Compact shards to one fragment, drop old versions
+  ([#2182](https://github.com/tinaudio/synth-setter/pull/2182),
+  [`541ea9d`](https://github.com/tinaudio/synth-setter/commit/541ea9d43ebf77641529b7487fc6808ccf159086))
+
+* feat(data-pipeline): compact shard writer Lance output and drop pre-compaction versions
+
+make_lance_dataset committed one fragment per render batch and kept the pre-compaction manifest, so
+  published shards carried many small fragments plus stale version metadata and doubled data files.
+  Compact the staged dataset to a single fragment (target_rows_per_fragment=samples_per_shard) and
+  remove old versions with cleanup_old_versions(older_than=0, delete_unverified=True) before the
+  shard is renamed into place, so file validation and consumers only ever see the compacted dataset.
+  delete_unverified is safe because the staging tempdir is exclusively owned by the running writer.
+
+Fixes #2179
+
+* fix(testing): restore missing assertion in persistent-workers drift test
+
+test_normalize_for_compare_accepts_persistent_workers_resource_drift landed truncated in 2bdb69a1:
+  it built baseline/current and returned without asserting, silently verifying nothing, and its
+  unused variables made the all-files ruff pre-push hook fail on every branch. Add the equality
+  assertion matching every sibling test.
+
+Fixes #2181
+
+* docs(data-pipeline): align migration non-goals and writer docstring with shard compaction
+
+The Lance migration doc listed compaction as out of scope and the writers module summary still
+  described one fragment per render batch; both now reflect that make_lance_dataset compacts the
+  shard and cleans up old versions before publishing.
+
+Refs #2179
+
+* fix(data-pipeline): stop deleting the previous shard before a rerun renders
+
+The upfront rmtree from 934c3010 predates the staging-tempdir design from 3fbcd416: fragments now
+  stage in a fresh tempdir, so no write ever appends into the existing dataset, and the pre-rename
+  rmtree already provides the documented overwrite. Deleting the destination before rendering meant
+  a failed rerun destroyed the previously committed shard, breaking
+  test_make_lance_dataset_rerun_failure_preserves_existing_dataset on main and blocking CI for every
+  PR. Both the rerun-preservation and rerun-overwrite contracts now pass.
+
+Fixes #2180
+
+
+## v10.0.7 (2026-07-19)
+
+### Bug Fixes
+
+- **testing**: Restore Lance rerun and baseline checks
+  ([#2175](https://github.com/tinaudio/synth-setter/pull/2175),
+  [`3cd3db9`](https://github.com/tinaudio/synth-setter/commit/3cd3db9b3d42762fae85e83a996aa2ede71c16bb))
+
+* internal-fix(testing): restore compare-baseline assertion
+
+* fix(testing): preserve Lance shard on failed rerun
+
+### Chores
+
+- **models**: Keyword-only num_params + spec-width test hardening
+  ([#2154](https://github.com/tinaudio/synth-setter/pull/2154),
+  [`45d8718`](https://github.com/tinaudio/synth-setter/commit/45d8718389c80cd266b403bd1102f9220962f9fb))
+
+* fix(models): make VSTFlowMatchingModule num_params keyword-only
+
+#2119 moved num_params into conditioning's old fifth positional slot, so a stale positional caller
+  would silently train at a bogus width; everything after scheduler is now keyword-only, with a
+  regression test pinning the TypeError.
+
+Also applies the remaining #2119 review findings: an instantiated FlowVAE forward test at the odd
+  obxf width, registry-parameterized width coverage, finite-loss and seeded assertions for the
+  fake-mode flow train tests (seed now set by the shared cfg builders), removal of a cast(Any, ...),
+  and content-bearing rewrites of name-restating test docstrings.
+
+Fixes #2152
+
+* style(models): drop historical narration from review-added comments
+
+Pre-PR review flagged the migration story and literal test values as comment-hygiene violations; the
+  contracts stay, the history moves here.
+
+Refs #2152
+
+* docs: list shared finite-loss assertion helpers in doc-map conftest entry
+
+### Internal-Fix
+
+- **test**: Restore main CI after Lance and Pi regressions
+  ([#2169](https://github.com/tinaudio/synth-setter/pull/2169),
+  [`3fbcd41`](https://github.com/tinaudio/synth-setter/commit/3fbcd416623867637d3dd65a79de3fd0eb015b84))
+
+* fix(testing): restore main CI after launcher and lance regressions
+
+* fix(data-pipeline): stage lance shard reruns before swap
+
+
+## v10.0.6 (2026-07-18)
+
+### Bug Fixes
+
+- **data-pipeline**: Clear stale datasets before overwrite shard writes
+  ([#2165](https://github.com/tinaudio/synth-setter/pull/2165),
+  [`934c301`](https://github.com/tinaudio/synth-setter/commit/934c30103b4910dbb17ca017dc84c68adc9d5459))
+
+* fix(data-pipeline): clear stale datasets before overwrite shard writes
+
+make_lance_dataset documents non-resumable overwrite, but fragment writes into an existing committed
+  dataset adopt its schema (Lance append mode), which the #2109 write-time guard now correctly
+  rejects — reruns over an existing shard failed with a stale-schema mismatch. Remove any existing
+  dataset directory before rendering so the overwrite starts clean.
+
+Also drop the loader="map" argument the #2065 stress test passed to LanceVSTDataModule; #2075
+  removed that parameter, which crossed #2065 in flight and broke pyright on main.
+
+Fixes #2153
+
+* docs: map tests/pipeline/** into the testing-primer doc sources
+
+Refs #2153
+
+### Chores
+
+- **ci-automation**: Deliver terminal Pi review failure audits
+  ([#2166](https://github.com/tinaudio/synth-setter/pull/2166),
+  [`1202fb6`](https://github.com/tinaudio/synth-setter/commit/1202fb6b2fbd135758c5c16e2a6bc3b7e7c61dd4))
+
+* internal-fix(ci-automation): fail once on missing review provider
+
+* internal-fix(ci-automation): require terminal Pi response text
+
+* internal-fix(ci-automation): harden Pi review streaming
+
+* internal-fix(ci-automation): redact provider credential phrases
+
+* internal-fix(ci-automation): deliver terminal review failures
+
+* internal-fix(ci-automation): close failed audit descriptors
+
+* internal-fix(ci-automation): order review incident summaries
+
+### Internal-Feat
+
+- **automation**: Preflight providers and stream Pi review audits
+  ([#2155](https://github.com/tinaudio/synth-setter/pull/2155),
+  [`71b55a8`](https://github.com/tinaudio/synth-setter/commit/71b55a81981e814172287a99bf6d1c33f47c7b4f))
+
+* internal-fix(ci-automation): fail once on missing review provider
+
+* internal-fix(ci-automation): require terminal Pi response text
+
+* internal-fix(ci-automation): harden Pi review streaming
+
+* internal-fix(ci-automation): redact provider credential phrases
+
+### Internal-Fix
+
+- **test**: Accept persistent worker config drift
+  ([#2151](https://github.com/tinaudio/synth-setter/pull/2151),
+  [`2bdb69a`](https://github.com/tinaudio/synth-setter/commit/2bdb69a14f55630b8ff002c4b2373c9f918b2c7e))
+
+### Testing
+
+- **data-pipeline**: Stress Lance with torchsynth end to end
+  ([#2065](https://github.com/tinaudio/synth-setter/pull/2065),
+  [`6de7d88`](https://github.com/tinaudio/synth-setter/commit/6de7d88dedc628cc74ccf1ab204fe6e6ab3e5be1))
+
+* test(data-pipeline): lance stress suite driven by the torchsynth backend
+
+Real-render stress coverage the VST path cannot afford: batch/shard boundary sweep,
+  overwrite-not-append reruns, failed-render commits-nothing recovery, cross-shard seed isolation,
+  and a slow full round-trip (from_hydra worker subprocesses -> fake-R2 staging -> finalize commit +
+  stats.npz -> map-loader datamodule epoch).
+
+The suite's first catch: build_generate_args resolved the renderer script repo-root-relative, so
+  shard dispatch broke from any other cwd — now import-anchored (the un-stubbed from_hydra dispatch
+  path had no coverage).
+
+Refs #1757
+
+* test(data-pipeline): address stress-branch review findings
+
+Pin the import-anchored renderer script path by suffix (two argv tests pinned the old
+  repo-root-relative literal), add a cwd-independence regression test for build_generate_args,
+  narrow the missing-dataset assertion to ValueError, extract the Hydra compose helper from the
+  round-trip test, and tighten docstrings.
+
+* test(data-pipeline): stress-branch round-2 review fixes
+
+Assert the dispatched renderer script path is absolute and real in the canonical from_hydra e2e,
+  check the audio column's dtype/rows in the boundary sweep, and reword the cwd regression docstring
+  to the current contract.
+
+* test(data-pipeline): address stress-suite review warnings
+
+* test(data-pipeline): address PR 2065 review feedback
+
+* test(data-pipeline): tighten Lance stress review coverage
+
+
+## v10.0.5 (2026-07-18)
+
+### Automation
+
+- Disable Pi Explore agent ([#2130](https://github.com/tinaudio/synth-setter/pull/2130),
+  [`df40e15`](https://github.com/tinaudio/synth-setter/commit/df40e158397aadc0fe279fcd8bf96f48f310f6c1))
+
+### Bug Fixes
+
+- **testing**: Accept wandb resume config drift
+  ([#2150](https://github.com/tinaudio/synth-setter/pull/2150),
+  [`113dc56`](https://github.com/tinaudio/synth-setter/commit/113dc56d0c3cd01476f606d91e32f1704c98651c))
+
+### Testing
+
+- Isolate Codex launcher test interpreter
+  ([#2148](https://github.com/tinaudio/synth-setter/pull/2148),
+  [`d22a7c6`](https://github.com/tinaudio/synth-setter/commit/d22a7c69bd6b193c948b9af760d0521ce477f65c))
+
+- Isolate lance target R2 env ([#2142](https://github.com/tinaudio/synth-setter/pull/2142),
+  [`4e199e6`](https://github.com/tinaudio/synth-setter/commit/4e199e6643fe1f82d45542b7c6e5ca0704e1b1a5))
+
+
+## v10.0.4 (2026-07-18)
+
+### Automation
+
+- Keep Pi reviews alive through completion
+  ([#2125](https://github.com/tinaudio/synth-setter/pull/2125),
+  [`0f2c2cf`](https://github.com/tinaudio/synth-setter/commit/0f2c2cfd37baa893c8a2d1974048972c23295516))
+
+* fix(ci-automation): keep Pi reviews alive through completion
+
+* fix(ci-automation): format Pi review host contract
+
+### Bug Fixes
+
+- **ci-automation**: Enforce formatting before agent pushes
+  ([#2141](https://github.com/tinaudio/synth-setter/pull/2141),
+  [`9bc8f60`](https://github.com/tinaudio/synth-setter/commit/9bc8f6038b71576d06da45e087e3b8a3194fbfc5))
+
+* internal-fix(ci-automation): enforce formatting before pushes
+
+* test(ci-automation): exercise pre-push enforcement end to end
+
+* internal-fix(ci-automation): anchor hooks to primary environment
+
+### Chores
+
+- **ci-automation**: Default Pi to GPT-5.6 Sol
+  ([#2131](https://github.com/tinaudio/synth-setter/pull/2131),
+  [`c15a56d`](https://github.com/tinaudio/synth-setter/commit/c15a56d830e1638003cd2ac10158545656b26e3c))
+
+### Refactoring
+
+- **config**: Derive VST widths from ParamSpec
+  ([#2119](https://github.com/tinaudio/synth-setter/pull/2119),
+  [`76241de`](https://github.com/tinaudio/synth-setter/commit/76241dec88fc76f0505ab5e09867f24d682981b3))
+
+- **config**: Rename generic VST Hydra groups
+  ([#2062](https://github.com/tinaudio/synth-setter/pull/2062),
+  [`0805e94`](https://github.com/tinaudio/synth-setter/commit/0805e94241dfdb9f4682877d62ec09664683c297))
+
+* refactor(config): rename generic Hydra groups for VST
+
+Require active ParamSpecs for per-parameter metrics and the generic Flow-VAE model so neutral
+  configs cannot silently select Surge defaults.
+
+* test(config): preserve Surge job compatibility
+
+Keep the stable eval_surge alias for Surge-specific launch scripts and exercise active ParamSpec
+  callback wiring through real train and eval entrypoints.
+
+Refs #2018
+
+* fix(config): preserve VST config compatibility aliases
+
+Keep archived Surge group names as thin aliases, require concrete Flow-VAE experiments to select
+  their ParamSpec and output width, and pin callback wiring through real entrypoints.
+
+* fix(config): preserve Surge Flow-VAE alias defaults
+
+* test(config): cover VST alias compatibility
+
+* fix(config): correct Surge flow width to 92 (#2120)
+
+
 ## v10.0.3 (2026-07-17)
 
 ### Bug Fixes

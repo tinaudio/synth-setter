@@ -106,7 +106,7 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "description": "Auto-format on every Edit/Write: ruff (Python), mdformat (Markdown), prettier (YAML). Markdown and YAML go via `pre-commit run <hook> --files` so the exact pinned versions and excludes from .pre-commit-config.yaml apply — no version drift between save-time and commit-time. Goal: catch lint and formatting errors immediately rather than waiting for pre-commit.",
+        "description": "Auto-format feedback on every Edit/Write: best-effort ruff (Python), mdformat (Markdown), and prettier (YAML). Markdown and YAML go via `pre-commit run <hook> --files` so the exact pinned versions and excludes from .pre-commit-config.yaml apply. This hook is non-enforcing; Git pre-commit and pre-push hooks are authoritative.",
         "hooks": [
           {
             "type": "command",
@@ -126,7 +126,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Worktree post-setup: after `git worktree add`, automatically runs `make link-plugins && make link-thoughts` in the new worktree so the plugins/ symlink and thoughts/ symlink are present without a manual follow-up. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks).",
+        "description": "Worktree post-setup: after `git worktree add`, installs pre-commit/pre-push hooks and links shared plugins, thoughts, and skills in the new worktree. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks).",
         "hooks": [
           {
             "type": "command",

@@ -42,7 +42,9 @@ after an rclone download. A review against the pinned library
   there is no production Lance data and no format-version marker today. This is
   a clean cutover — old single-file shards are simply regenerated.
 - **No new versioning / index features in this change.** The migration *unlocks*
-  them; actually using `merge`/compaction/vector indices is out of scope (YAGNI).
+  them; actually using `merge`/compaction/vector indices was out of scope
+  (YAGNI) at migration time. Per-shard compaction and old-version cleanup have
+  since landed in `writers.make_lance_dataset` (#2179).
 - **Worker writes stay local-then-upload.** Workers still write a shard locally,
   run the 4-check validation, then upload — now a directory upload. Only *reads*
   on the sequential paths move to direct R2.
