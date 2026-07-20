@@ -912,6 +912,65 @@ def remote_worker_dispatch(
     return _dispatch
 
 
+def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generate-dataset entrypoint aborts a RunPod dispatch on insufficient balance.
+
+    Drives the real ``main`` → ``dispatch_via_skypilot`` path (only the SkyPilot
+    SDK, cred bootstrap, R2 spec upload, and the balance HTTP probe are faked at
+    their boundaries) and pins that no job submission happens.
+
+    :param tmp_path: Scratch dir for the compute template.
+    :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
+    """
+    from unittest.mock import MagicMock
+
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    compute_template = tmp_path / "compute.yaml"
+    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv(
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://acct.r2.cloudflarestorage.com"
+    )
+    monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+    monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "write_spec_locally",
+        lambda _spec, output_dir: Path(output_dir) / "input_spec.json",
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli, "upload_spec", lambda _spec: "r2://test/input_spec.json"
+    )
+    monkeypatch.setattr(generate_dataset_cli.r2_io, "ensure_r2_env_loaded", lambda _env_file: None)
+    monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", lambda **_kwargs: None)
+    monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
+    fake_sky = MagicMock()
+    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={compute_template}",
+        ],
+    )
+
+    with pytest.raises((RuntimeError, SystemExit)) as excinfo:
+        cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    if isinstance(excinfo.value, RuntimeError):
+        assert "insufficient RunPod balance" in str(excinfo.value)
+    fake_sky.jobs.launch.assert_not_called()
+
+
 def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_executes(
     tmp_path: Path,
     remote_worker_dispatch: Callable[

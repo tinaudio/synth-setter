@@ -670,7 +670,9 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-    if provider == "runpod":
+    # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
+    # holds the provider creds, so a local config.toml balance may be stale.
+    if provider == "runpod" and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
         _check_runpod_balance()
 
     if provider == "local":

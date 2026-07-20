@@ -795,6 +795,38 @@ class TestRunpodBalancePreflight:
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
+    def test_runpod_dispatch_remote_api_server_skips_balance_probe(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With a remote API server the probe is skipped — local creds may be stale.
+
+        Mirrors the ``_run_cred_bootstrap`` skip: the server holds the provider
+        creds, so a local ``config.toml`` balance is not authoritative.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for the balance patch.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 1.0,
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="remote-api-server",
+            api_server="https://sky.example.com",
+        )
+        dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_called_once()
+
     def test_runpod_dispatch_healthy_balance_submits(
         self,
         tmp_path: Path,
