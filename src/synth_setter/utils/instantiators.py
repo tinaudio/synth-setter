@@ -47,7 +47,11 @@ def _finalize_loggers(loggers: list[Logger], status: str) -> None:
         try:
             logger.finalize(status)
         except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
-            log.warning(f"logger finalize failed on {type(logger).__name__}: {exc}")
+            log.warning(
+                "logger finalize failed on {} ({})",
+                type(logger).__name__,
+                type(exc).__name__,
+            )
 
 
 def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
@@ -68,6 +72,12 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     if not isinstance(logger_cfg, DictConfig):
         raise TypeError("Logger config must be a DictConfig!")
 
+    wandb_run_before: object | None = None
+    if find_spec("wandb"):
+        import wandb
+
+        wandb_run_before = wandb.run
+
     try:
         for _, lg_conf in logger_cfg.items():
             if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
@@ -75,6 +85,14 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
                 logger.append(hydra.utils.instantiate(lg_conf))
     except BaseException:
         _finalize_loggers(logger, "failed")
+        if find_spec("wandb"):
+            import wandb
+
+            if wandb.run is not None and wandb.run is not wandb_run_before:
+                try:
+                    wandb.finish()
+                except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
+                    log.warning("wandb.finish() failed ({})", type(exc).__name__)
         raise
 
     return logger
@@ -102,4 +120,4 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
         try:
             wandb.finish()
         except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
-            log.warning(f"wandb.finish() failed: {exc}")
+            log.warning("wandb.finish() failed ({})", type(exc).__name__)

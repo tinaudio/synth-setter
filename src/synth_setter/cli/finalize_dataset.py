@@ -316,7 +316,7 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
     loggers: list[Logger] = []
     status = "success"
-    started_at = perf_counter()
+    started_at: float | None = None
     log_summary: Callable[[float], None] | None = None
     try:
         loggers = instantiate_loggers(cfg.get("logger"))
@@ -327,9 +327,11 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
         _log_dataset_artifact(loggers, spec)
     except BaseException as error:
         status = "failed"
-        failed_elapsed_seconds = perf_counter() - started_at
+        failed_elapsed_seconds = None
+        if log_summary is not None and started_at is not None:
+            failed_elapsed_seconds = perf_counter() - started_at
         _log_finalize_failure(error, spec)
-        if log_summary is not None:
+        if log_summary is not None and failed_elapsed_seconds is not None:
             log_summary(failed_elapsed_seconds)
         raise
     finally:

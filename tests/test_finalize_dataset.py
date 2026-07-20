@@ -561,6 +561,52 @@ def test_instantiate_loggers_failure_closes_previously_created_loggers(
     assert finish_calls == []
 
 
+def test_instantiate_loggers_failure_finishes_new_wandb_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed constructor sequence finishes the W&B run it opened.
+
+    :param monkeypatch: Simulates one logger opening W&B before the next fails.
+    """
+    close_statuses: list[str] = []
+    finish_calls: list[None] = []
+    owned_run = object()
+
+    class OpenedWandbLogger(WandbLogger):
+        def __init__(self) -> None:
+            pass
+
+        def finalize(self, status: str) -> None:
+            close_statuses.append(status)
+
+    calls = 0
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            monkeypatch.setattr(wandb, "run", owned_run)
+            return OpenedWandbLogger()
+        raise RuntimeError("second logger setup failed")
+
+    monkeypatch.setattr(wandb, "run", None)
+    monkeypatch.setattr(wandb, "finish", lambda: finish_calls.append(None))
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    assert close_statuses == ["failed"]
+    assert finish_calls == [None]
+
+
 def test_finalize_logger_setup_failure_emits_structured_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
