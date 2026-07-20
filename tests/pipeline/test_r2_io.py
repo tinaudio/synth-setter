@@ -74,7 +74,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copyto", "r2:bucket/key", "dest/file") == [
             "rclone",
             "copyto",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=300s",
@@ -88,7 +88,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copy", "src/dir", "r2:bucket/p", timeout="3h") == [
             "rclone",
             "copy",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=3h",
@@ -335,7 +335,7 @@ class TestDownloadToPath:
             r2_io.download_to_path("r2://bucket/key.json", tmp_path / "out.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
@@ -386,7 +386,7 @@ class TestDownloadDirNoOverwrite:
         assert args[:2] == ["rclone", "copy"]
         assert "--immutable" in args
         assert "--checksum" in args
-        assert "-vv" in args
+        assert "-v" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
@@ -507,11 +507,46 @@ class TestUploadToUri:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
 
+    def test_failure_logs_redact_credentials_and_keep_error_context(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A real failed rclone upload omits credentials but retains its cause.
+
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        :param monkeypatch: Pytest fixture used to configure a synthetic unreachable remote.
+        :param capfd: Pytest fixture used to capture rclone's inherited file descriptors.
+        """
+        access_key = "synthetic-access-id-2190"
+        credential = "synthetic-secret-key-2190"
+        src = tmp_path / "in.json"
+        src.write_text("{}")
+        monkeypatch.setenv("RCLONE_CONFIG", os.devnull)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_PROVIDER", "Cloudflare")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", access_key)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", credential)
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://127.0.0.1:9")
+        monkeypatch.setenv("RCLONE_LOW_LEVEL_RETRIES", "1")
+        monkeypatch.setenv("RCLONE_RETRIES_SLEEP", "0s")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.upload_to_uri(src, "r2://safe-test-bucket/issue-2190/object")
+
+        captured = capfd.readouterr()
+        logs = f"{captured.out}\n{captured.err}"
+        assert access_key not in logs
+        assert credential not in logs
+        assert "Failed to copyto" in logs
+        assert "connection refused" in logs
+
     def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone reliability-flag set on upload.
 
         State-based tests cover the file-landing contract but cannot observe the
-        ``-vv / --checksum / --contimeout / --timeout / --retries`` flags. Losing
+        ``-v / --checksum / --contimeout / --timeout / --retries`` flags. Losing
         any of them is a silent correctness regression (e.g. dropping
         ``--checksum`` would let half-uploaded objects pass; dropping
         ``--retries`` would surface transient network blips as hard failures).
@@ -525,7 +560,7 @@ class TestUploadToUri:
             r2_io.upload_to_uri(src, "r2://bucket/key.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
