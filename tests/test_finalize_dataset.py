@@ -524,7 +524,18 @@ def test_instantiate_loggers_failure_closes_previously_created_loggers(
     :param monkeypatch: Makes the second Hydra logger constructor fail.
     """
     close_statuses: list[str] = []
-    first_logger = SimpleNamespace(finalize=close_statuses.append)
+    finish_calls: list[None] = []
+
+    class LazyWandbLogger(WandbLogger):
+        def __init__(self) -> None:
+            pass
+
+        def finalize(self, status: str) -> None:
+            close_statuses.append(status)
+
+    first_logger = LazyWandbLogger()
+    monkeypatch.setattr(wandb, "run", object())
+    monkeypatch.setattr(wandb, "finish", lambda: finish_calls.append(None))
     calls = 0
 
     def instantiate_logger(cfg: DictConfig) -> object:
@@ -547,6 +558,7 @@ def test_instantiate_loggers_failure_closes_previously_created_loggers(
         instantiators.instantiate_loggers(logger_cfg)
 
     assert close_statuses == ["failed"]
+    assert finish_calls == []
 
 
 def test_finalize_logger_setup_failure_emits_structured_diagnostic(

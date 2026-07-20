@@ -37,6 +37,19 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> list[Callback]:
     return callbacks
 
 
+def _finalize_loggers(loggers: list[Logger], status: str) -> None:
+    """Finalize logger objects without changing process-global W&B state.
+
+    :param loggers: Logger objects owned by the current lifecycle.
+    :param status: Completion status forwarded to each logger.
+    """
+    for logger in loggers:
+        try:
+            logger.finalize(status)
+        except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
+            log.warning(f"logger finalize failed on {type(logger).__name__}: {exc}")
+
+
 def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     """Instantiate loggers from config.
 
@@ -61,7 +74,7 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
                 log.info(f"Instantiating logger <{lg_conf._target_}>")
                 logger.append(hydra.utils.instantiate(lg_conf))
     except BaseException:
-        close_loggers(logger, "failed")
+        _finalize_loggers(logger, "failed")
         raise
 
     return logger
@@ -79,11 +92,7 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
     :param status: ``"success"`` or ``"failed"``; forwarded verbatim to each
         logger's ``finalize`` contract.
     """
-    for lg in loggers:
-        try:
-            lg.finalize(status)
-        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
-            log.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
+    _finalize_loggers(loggers, status)
     if not find_spec("wandb"):
         return
     import wandb
