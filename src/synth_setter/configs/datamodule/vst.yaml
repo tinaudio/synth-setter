@@ -8,8 +8,7 @@ ot: true
 # against host RAM, not cores — see getting-started.md §8.
 num_workers: 4
 persistent_workers: true
-# Batches prefetched per worker; null delegates to PyTorch. Ignored when
-# num_workers is 0.
+# Null delegates prefetch depth to PyTorch; in-process loading ignores it.
 prefetch_factor: null
 predict_file: null
 # Mandatory: each concrete config declares its synth's spec — a default here

@@ -190,9 +190,8 @@ def map_dataloader_over(
     effective_persistence = persistent_workers and num_workers > 0
     effective_shuffle = None if sampler is not None else shuffle
     if num_workers == 0:
-        # get_safe_loader requires workers; plain DataLoader supports in-process loading.
-        # Cast bridges __getitems__' column dict with DataLoader's list-oriented stub.
-        # prefetch_factor is omitted: PyTorch forbids it without workers.
+        # In-process loading needs plain DataLoader; get_safe_loader requires workers.
+        # Cast bridges its list-oriented stub; PyTorch forbids prefetch_factor without workers.
         typed_collate = cast(Callable[[list[object]], object], effective_collate)
         return DataLoader(
             dataset,

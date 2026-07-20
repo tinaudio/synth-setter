@@ -398,8 +398,8 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 def test_train_prefetch_factor_override_advances_with_spawn_workers(tmp_path: Path) -> None:
     """An explicit ``datamodule.prefetch_factor`` reaches train's composed spawn loaders.
 
-    Drives the real ``train(cfg)`` entrypoint in fake mode with two spawn
-    workers so the non-default prefetch depth governs live worker buffering.
+    Drives the real ``train(cfg)`` entrypoint in fake mode with spawn workers
+    so the non-default prefetch depth governs live worker buffering.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
