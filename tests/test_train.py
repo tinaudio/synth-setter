@@ -12,6 +12,7 @@ import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
@@ -32,6 +33,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
+from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._vst import PLUGIN_PATH
@@ -961,6 +963,57 @@ def _prediction_file_names() -> list[str]:
         for prefix in _PREDICTION_PT_PREFIXES
         for sample_idx in range(NUM_FIXTURE_SAMPLES)
     )
+
+
+@pytest.mark.parametrize("save_last", [True, "link"])
+def test_train_best_checkpoint_contains_metric_producing_weights(
+    cfg_train: DictConfig, save_last: bool | Literal["link"]
+) -> None:
+    """The train entrypoint keeps monitored weights aligned with validation.
+
+    :param cfg_train: Tiny CPU training configuration.
+    :param save_last: Recovery checkpoint mode under test.
+    """
+    with open_dict(cfg_train):
+        cfg_train.model = {
+            "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryModule"
+        }
+        cfg_train.datamodule = {
+            "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryDataModule"
+        }
+        cfg_train.callbacks = {
+            "model_checkpoint": {
+                "_target_": "synth_setter.utils.callbacks.ValidationAlignedModelCheckpoint",
+                "dirpath": f"{cfg_train.paths.output_dir}/checkpoints",
+                "filename": "step_{step}",
+                "monitor": "val/score",
+                "mode": "min",
+                "save_top_k": 1,
+                "save_last": save_last,
+                "auto_insert_metric_name": False,
+                "every_n_train_steps": 1,
+            }
+        }
+        cfg_train.logger = None
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 6
+        cfg_train.trainer.limit_val_batches = 1
+        cfg_train.trainer.num_sanity_val_steps = 0
+        cfg_train.trainer.val_check_interval = 2
+        cfg_train.training.val_audio_probe = False
+    HydraConfig().set_config(cfg_train)
+
+    _, objects = train(cfg_train)
+
+    checkpoint = objects["trainer"].checkpoint_callback
+    assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
+    best = torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)
+    last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
+    assert checkpoint.best_model_score == 1.0
+    assert best["global_step"] == 4
+    assert best["state_dict"]["trained_batches"] == 4
+    assert last["global_step"] == 6
+    assert last["state_dict"]["trained_batches"] == 6
 
 
 @pytest.mark.slow

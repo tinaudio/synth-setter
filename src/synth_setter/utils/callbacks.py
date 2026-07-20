@@ -21,6 +21,8 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter, Callback, Checkpoint, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.trainer.states import TrainerFn
+from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
@@ -60,6 +62,79 @@ def _stderr_tail(exc: BaseException) -> str:
     if not isinstance(stderr, str) or not stderr:
         return ""
     return stderr[-STDERR_TAIL_CHARS:]
+
+
+class ValidationAlignedModelCheckpoint(ModelCheckpoint):
+    """Select monitored step checkpoints only after validation produces their metric.
+
+    The lockfile and entrypoint regression pin the protected Lightning hooks needed to preserve
+    independent top-k and recovery checkpoint cadences.
+    """
+
+    @property
+    def state_key(self) -> str:
+        """Preserve compatibility with checkpoints written by ModelCheckpoint.
+
+        :returns: Lightning callback-state key used by the base checkpoint class.
+        """
+        fields = {
+            "monitor": self.monitor,
+            "mode": self.mode,
+            "every_n_train_steps": self._every_n_train_steps,
+            "every_n_epochs": self._every_n_epochs,
+            "train_time_interval": self._train_time_interval,
+        }
+        return f"{ModelCheckpoint.__qualname__}{fields!r}"
+
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: STEP_OUTPUT,
+        batch: object,
+        batch_idx: int,
+    ) -> None:
+        """Write only the recovery checkpoint at a step-based cadence.
+
+        :param trainer: Active Lightning trainer.
+        :param pl_module: Module being trained.
+        :param outputs: Training-step output.
+        :param batch: Training batch.
+        :param batch_idx: Batch index within the epoch.
+        """
+        if self.monitor is None or self._every_n_train_steps < 1:
+            super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
+            return
+        if self._should_skip_saving_checkpoint(trainer):
+            return
+        if trainer.global_step % self._every_n_train_steps != 0:
+            return
+        configured_save_last = self.save_last
+        if configured_save_last == "link":
+            self.save_last = True
+        try:
+            self._save_last_checkpoint(trainer, self._monitor_candidates(trainer))
+        finally:
+            self.save_last = configured_save_last
+
+    def on_validation_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Rank monitored weights using the metric from this validation event.
+
+        :param trainer: Active Lightning trainer.
+        :param pl_module: Module being validated.
+        """
+        if self.monitor is None or self._every_n_train_steps < 1:
+            super().on_validation_end(trainer, pl_module)
+            return
+        if (
+            trainer.fast_dev_run
+            or trainer.state.fn != TrainerFn.FITTING
+            or trainer.sanity_checking
+        ):
+            return
+        if self._should_save_on_train_epoch_end(trainer):
+            return
+        self._save_topk_checkpoint(trainer, self._monitor_candidates(trainer))
 
 
 def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
