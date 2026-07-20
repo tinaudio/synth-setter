@@ -1131,7 +1131,10 @@ def test_evaluate_test_mode_partial_lance_root_returns_metric(
         cfg_train_lance.ckpt_path = None
 
     HydraConfig().set_config(cfg_train_lance)
-    metric_dict, object_dict = evaluate(cfg_train_lance)
+    try:
+        metric_dict, object_dict = evaluate(cfg_train_lance)
+    finally:
+        GlobalHydra.instance().clear()
 
     assert math.isfinite(metric_dict["test/param_mse"].item())
     assert Path(object_dict["datamodule"].dataset_root) == dataset_root

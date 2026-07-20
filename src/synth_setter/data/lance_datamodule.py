@@ -271,29 +271,7 @@ class _MapSplit:
 
 
 class LanceVSTDataModule(VSTDataModule):
-    """Read every VST split through sample-indexed map semantics.
-
-    .. attribute :: train_dataset
-
-       Sample-indexed training dataset.
-
-    .. attribute :: val_dataset
-
-       Sample-indexed validation dataset.
-
-    .. attribute :: test_dataset
-
-       Sample-indexed test dataset.
-
-    .. attribute :: predict_dataset
-
-       Sample-indexed prediction dataset.
-    """
-
-    train_dataset: _SplitDataset
-    val_dataset: _SplitDataset
-    test_dataset: _SplitDataset
-    predict_dataset: _SplitDataset
+    """Read VST splits through stage-aware, sample-indexed map semantics."""
 
     _ALL_SPLITS = ("train", "val", "test", "predict")
     _STAGE_SPLITS = {
@@ -357,6 +335,38 @@ class LanceVSTDataModule(VSTDataModule):
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
+
+    def _dataset_for(self, split: str) -> _SplitDataset:
+        """Return one built split through the public dataset attributes.
+
+        :param split: Split key created by :meth:`setup`.
+        :returns: Sample-indexed dataset for the split.
+        :raises AttributeError: If the current stage did not build the split.
+        """
+        try:
+            return self._splits[split].dataset
+        except KeyError as exc:
+            raise AttributeError(f"{split}_dataset is unavailable") from exc
+
+    @property
+    def train_dataset(self) -> _SplitDataset:
+        """Return the training dataset built for the current stage."""
+        return self._dataset_for("train")
+
+    @property
+    def val_dataset(self) -> _SplitDataset:
+        """Return the validation dataset built for the current stage."""
+        return self._dataset_for("val")
+
+    @property
+    def test_dataset(self) -> _SplitDataset:
+        """Return the test dataset built for the current stage."""
+        return self._dataset_for("test")
+
+    @property
+    def predict_dataset(self) -> _SplitDataset:
+        """Return the prediction dataset built for the current stage."""
+        return self._dataset_for("predict")
 
     def _build_lance_split(
         self,
@@ -460,12 +470,6 @@ class LanceVSTDataModule(VSTDataModule):
             }
         else:
             self._splits = self._build_real_splits(split_names)
-        for name in self._ALL_SPLITS:
-            attribute = f"{name}_dataset"
-            if name in self._splits:
-                setattr(self, attribute, self._splits[name].dataset)
-            elif hasattr(self, attribute):
-                delattr(self, attribute)
         self._setup_stage = stage
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
@@ -534,10 +538,6 @@ class LanceVSTDataModule(VSTDataModule):
         """
         del stage
         self._splits = {}
-        for split in self._ALL_SPLITS:
-            name = f"{split}_dataset"
-            if hasattr(self, name):
-                delattr(self, name)
 
 
 SurgeXTDataset = LanceMapDataset
