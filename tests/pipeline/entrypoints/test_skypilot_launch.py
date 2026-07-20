@@ -158,15 +158,15 @@ def _succeeded_run(mock_sky: MagicMock) -> None:
 
 @pytest.fixture()
 def skypilot_auth_request(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace the remote SkyPilot health request with a healthy response.
+    """Replace the remote SkyPilot auth request with a valid response.
 
     :param monkeypatch: Restores the SDK request function after each test.
-    :return: Request mock whose default response reports healthy.
+    :return: Request mock whose default response matches ``/api/status``.
     """
     from sky.server import common as server_common
 
     response = MagicMock()
-    response.json.return_value = {"status": "healthy"}
+    response.json.return_value = []
     request = MagicMock(return_value=response)
     monkeypatch.setattr(server_common, "make_authenticated_request", request)
     return request
@@ -1513,7 +1513,8 @@ class TestDispatchViaSkypilot:
         assert server_common.get_server_url() != "https://sky.example.com"
         skypilot_auth_request.assert_called_once_with(
             "GET",
-            "/api/health",
+            "/api/status",
+            params={"fields": ["request_id"], "limit": 1},
             retry=True,
             timeout=(5.0, 30.0),
         )
@@ -1555,7 +1556,7 @@ class TestDispatchViaSkypilot:
         bootstrap.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_unhealthy_api_response_stops_before_launch(
+    def test_invalid_auth_response_stops_before_launch(
         self,
         tmp_path: Path,
         env_file: Path,
@@ -1579,7 +1580,7 @@ class TestDispatchViaSkypilot:
             env_file=str(env_file),
         )
 
-        with pytest.raises(click.ClickException, match="did not report healthy"):
+        with pytest.raises(click.ClickException, match="invalid response"):
             dispatch_via_skypilot(sky_cfg)
 
         mock_sky.jobs.launch.assert_not_called()
@@ -1629,10 +1630,12 @@ class TestDispatchViaSkypilot:
         :param mock_sky: Mocked external SkyPilot SDK boundary.
         :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
         """
+        from sky.server import common as server_common
+
         monkeypatch.setenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "sky_orphan-token")
 
         def launch_without_remote_auth(*_args: object, **_kwargs: object) -> str:
-            assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "http://127.0.0.1:46580"
+            assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == server_common.DEFAULT_SERVER_URL
             assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
             return "launch-req"
 
@@ -2123,12 +2126,12 @@ class TestSkypilotLaunchCli:
 
         :param tmp_path: Holds the launch config and compute template consumed by the CLI.
         :param env_file: Dotenv source amended with remote client authentication.
-        :param mock_sky: Prevents provisioning after the real health request succeeds.
+        :param mock_sky: Prevents provisioning after the real auth request succeeds.
         """
         requests_seen: list[tuple[str, str | None]] = []
 
         def health_app(environ: WSGIEnvironment, start_response: StartResponse) -> list[bytes]:
-            """Record client auth and return a healthy SkyPilot-shaped response.
+            """Record client auth and return a SkyPilot request-status response.
 
             :param environ: WSGI request values carrying the path and authorization header.
             :param start_response: WSGI callback that starts the HTTP response.
@@ -2137,7 +2140,7 @@ class TestSkypilotLaunchCli:
             path = str(environ["PATH_INFO"])
             authorization = environ.get("HTTP_AUTHORIZATION")
             requests_seen.append((path, authorization if isinstance(authorization, str) else None))
-            body = json.dumps({"status": "healthy"}).encode()
+            body = json.dumps([]).encode()
             start_response(
                 "200 OK",
                 [
@@ -2172,7 +2175,7 @@ class TestSkypilotLaunchCli:
             thread.join()
 
         assert result.exit_code == 0, result.output
-        assert requests_seen == [("/api/health", "Bearer sky_cli-token")]
+        assert requests_seen == [("/api/status", "Bearer sky_cli-token")]
         mock_sky.jobs.launch.assert_called_once()
 
     def test_extra_env_options_forward_values_to_worker(

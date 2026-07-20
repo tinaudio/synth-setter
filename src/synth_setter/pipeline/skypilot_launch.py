@@ -53,6 +53,7 @@ import functools
 import os
 import re
 import subprocess
+import threading
 import tomllib
 import uuid
 from collections.abc import Callable, Mapping
@@ -141,6 +142,7 @@ _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
 _CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 _SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS = 5.0
 _SKYPILOT_AUTH_READ_TIMEOUT_SECONDS = 30.0
+_SKYPILOT_DISPATCH_LOCK = threading.Lock()
 
 # SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
 # ~1950m allocatable CPU after kube-system. See PR #876.
@@ -375,7 +377,8 @@ def _configure_remote_skypilot_client(
     try:
         response = server_common.make_authenticated_request(
             "GET",
-            "/api/health",
+            "/api/status",
+            params={"fields": ["request_id"], "limit": 1},
             retry=True,
             timeout=(
                 _SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS,
@@ -383,16 +386,16 @@ def _configure_remote_skypilot_client(
             ),
         )
         response.raise_for_status()
-        health = response.json()
+        request_status = response.json()
     except requests.RequestException as exc:
         raise click.ClickException(
             "SkyPilot API server authentication check failed before launch. "
             f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} and "
             f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN} in {env_file_path}."
         ) from exc
-    if not isinstance(health, dict) or health.get("status") != "healthy":
+    if not isinstance(request_status, list):
         raise click.ClickException(
-            "SkyPilot API server authentication check did not report healthy before launch. "
+            "SkyPilot API server authentication check returned an invalid response before launch. "
             f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} in {env_file_path}."
         )
 
@@ -716,7 +719,7 @@ def _run_workers_from_doc(
     return _run_workers_detached(job_names, launch_get_job_id)
 
 
-def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
+def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     """Dispatch ``sky_cfg.cmd`` to the SkyPilot template named in ``sky_cfg``.
 
     ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be non-None.
@@ -847,6 +850,15 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{len(failed)} of {sky_cfg.num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
+
+
+def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
+    """Dispatch while isolating the SkyPilot SDK's process-wide client state.
+
+    :param sky_cfg: Validated launcher configuration.
+    """
+    with _SKYPILOT_DISPATCH_LOCK:
+        _dispatch_via_skypilot(sky_cfg)
 
 
 def load_launch_config(path: Path) -> SkypilotLaunchConfig:
