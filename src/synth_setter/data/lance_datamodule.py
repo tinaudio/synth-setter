@@ -406,6 +406,40 @@ class LanceVSTDataModule(VSTDataModule):
             collate=_model_batch_passthrough,
         )
 
+    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
+        """Build the requested on-disk Lance splits.
+
+        :param split_names: Split names required by the current stage.
+        :returns: Requested split datasets and collate operations.
+        """
+        train_shard = self.dataset_root / f"train{self.shard_suffix}"
+        split_stats = predict_stats = None
+        if self.use_saved_mean_and_variance:
+            if any(name != "predict" for name in split_names):
+                split_stats = load_dataset_statistics(train_shard)
+            if "predict" in split_names:
+                predict_stats = (
+                    split_stats
+                    if split_stats is not None
+                    and self.predict_file.parent == self.dataset_root
+                    else load_dataset_statistics(self.predict_file)
+                )
+        shard_paths = {
+            "train": train_shard,
+            "val": self.dataset_root / f"val{self.shard_suffix}",
+            "test": self.dataset_root / f"test{self.shard_suffix}",
+            "predict": self.predict_file,
+        }
+        return {
+            name: self._build_lance_split(
+                shard_paths[name],
+                ot=self.ot if name == "train" else False,
+                read_audio=name == "predict",
+                stats=predict_stats if name == "predict" else split_stats,
+            )
+            for name in split_names
+        }
+
     def setup(self, stage: str | None = None) -> None:
         """Build the sample-indexed splits required by a Lightning stage.
 
@@ -425,33 +459,7 @@ class LanceVSTDataModule(VSTDataModule):
                 for name in split_names
             }
         else:
-            train_shard = self.dataset_root / f"train{self.shard_suffix}"
-            split_stats = predict_stats = None
-            if self.use_saved_mean_and_variance:
-                if any(name != "predict" for name in split_names):
-                    split_stats = load_dataset_statistics(train_shard)
-                if "predict" in split_names:
-                    predict_stats = (
-                        split_stats
-                        if split_stats is not None
-                        and self.predict_file.parent == self.dataset_root
-                        else load_dataset_statistics(self.predict_file)
-                    )
-            shard_paths = {
-                "train": train_shard,
-                "val": self.dataset_root / f"val{self.shard_suffix}",
-                "test": self.dataset_root / f"test{self.shard_suffix}",
-                "predict": self.predict_file,
-            }
-            self._splits = {
-                name: self._build_lance_split(
-                    shard_paths[name],
-                    ot=self.ot if name == "train" else False,
-                    read_audio=name == "predict",
-                    stats=predict_stats if name == "predict" else split_stats,
-                )
-                for name in split_names
-            }
+            self._splits = self._build_real_splits(split_names)
         for name in self._ALL_SPLITS:
             attribute = f"{name}_dataset"
             if name in self._splits:

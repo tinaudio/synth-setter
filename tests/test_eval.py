@@ -10,6 +10,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 
 import math
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -1113,6 +1114,27 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
+
+
+def test_evaluate_test_mode_partial_lance_root_returns_metric(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Real ``evaluate`` consumes ``test.lance`` when train and val are absent.
+
+    :param cfg_train_lance: Tiny production-composed Lance configuration.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    shutil.rmtree(dataset_root / "train.lance")
+    shutil.rmtree(dataset_root / "val.lance")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.mode = "test"
+        cfg_train_lance.ckpt_path = None
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = evaluate(cfg_train_lance)
+
+    assert math.isfinite(metric_dict["test/param_mse"].item())
+    assert Path(object_dict["datamodule"].dataset_root) == dataset_root
 
 
 def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
