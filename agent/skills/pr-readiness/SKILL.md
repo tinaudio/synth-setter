@@ -39,22 +39,26 @@ Resolve the PR once up front:
 PR=$(gh pr view "$(git branch --show-current)" --json number -q .number)
 ```
 
-Then iterate until all four gates hold. Use `/loop` for the waiting steps with
-the four-gate probe as the poll target — never `gh pr checks` alone (rationale
-in docs/pr-readiness-loop.md § The probe):
+Run the probe once before waiting. Its final state determines the next step:
+
+- `READY` (exit 0) — gates 1–3 hold.
+- `ACTION_REQUIRED` (exit 1) — stop polling and remediate the listed gate.
+- `ERROR` (exit 2) — report or fix the probe failure; readiness is unknown.
+- `WAIT` (exit 8) — only transient work remains.
+
+Use `/loop` only for `WAIT`, with `--loop` translating `WAIT` to retry and all
+terminal decisions to stop:
 
 ```bash
-/loop 2m bash agent/_shared/pr_readiness_probe.sh "$PR"
+/loop 2m bash agent/_shared/pr_readiness_probe.sh --loop "$PR"
 ```
 
-The probe prints one line per gate (gate-3 failures list each unresolved
-thread awaiting a reply; gate 4 is an advisory Copilot status) and exits 0
-only when gates 1-3 hold. Act on whichever gate it reports as failing:
+When the loop stops, read the final state and run the normal probe again before
+acting. Never poll the normal probe's undifferentiated nonzero exit.
 
-1. **Watch CI** — poll the probe as above, or `gh pr checks "$PR" --watch`
-   for a single blocking wait when you'll re-probe right after. On any
-   failure, diagnose, fix, commit, push, and return to step 1. Never move on
-   with red CI.
+1. **Watch CI** — `WAIT` may be polled as above. `ACTION_REQUIRED` lists each
+   failed check with its result and URL; diagnose, fix, commit, push, and
+   return to step 1. Never wait for a terminal failure to heal itself.
 
 2. **Check mergeability** — `gh pr view "$PR" --json mergeable -q .mergeable`:
 

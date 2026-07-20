@@ -9,8 +9,8 @@
 #   warn   loud stderr, exit 0 (never blocks)
 #   off    no-op
 #
-# Gates 1-3 are decided by agent/_shared/pr_readiness_probe.sh (gate 4 stays
-# advisory); a missing probe or probe error (exit ≥2) fails open — only exit 1 blocks.
+# Gates 1-3 come from agent/_shared/pr_readiness_probe.sh; gate 4 is advisory.
+# ACTION_REQUIRED (1) and WAIT (8) block, while probe errors fail open.
 set -euo pipefail
 
 # shellcheck disable=SC2034  # read by log() in _lib.sh via ${HOOK_NAME:-unknown}
@@ -87,9 +87,18 @@ main() {
   # skip the probe's advisory Copilot lookup (two paginated REST calls).
   probe_out=$(bash "$probe" --gates-only "$pr" 2>&1) || probe_rc=$?
   [[ "$probe_rc" -eq 0 ]] && exit 0
-  if [[ "$probe_rc" -ne 1 ]]; then
+  if [[ "$probe_rc" -ne 1 && "$probe_rc" -ne 8 ]]; then
     { declare -F log >/dev/null 2>&1 && log "probe exited ${probe_rc} for PR #${pr}; fail-open: ${probe_out}"; } || true
     exit 0
+  fi
+
+  local next_step
+  if [[ "$probe_rc" -eq 8 ]]; then
+    next_step="Only transient work remains; continue monitoring with the "
+    next_step+="action-aware command in /pr-readiness."
+  else
+    next_step="Do not keep polling: remediate each ACTION gate above, push "
+    next_step+="if needed, then re-probe."
   fi
 
   declare -F ensure_reviews_dir >/dev/null 2>&1 && ensure_reviews_dir
@@ -109,10 +118,11 @@ ${prefix}: PR #${pr} (branch ${branch}) is not ready — readiness probe report:
 
 ${probe_out}
 
+${next_step}
+
 AGENTS.md "After every push, drive the readiness loop until all four gates
-hold." Do not end the turn yet. Run /pr-readiness to drive the loop (watch CI,
-check mergeable, reply inline to every open review comment, wait for Copilot)
-— procedure and traps in docs/pr-readiness-loop.md.
+hold." Do not end the turn yet. Run /pr-readiness for the full procedure and
+traps in docs/pr-readiness-loop.md.
 
 ${override_hint}
 EOF

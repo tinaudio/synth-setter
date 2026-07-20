@@ -165,10 +165,10 @@ unintended shell expansion. A `PreToolUse` hook
   `/pr-preflight`.
 - **After every push, drive the readiness loop until all four gates hold.**
   "I pushed the fix" is not "the PR is ready." Run `/pr-readiness` to drive the
-  loop, polling `agent/_shared/pr_readiness_probe.sh <N>` (all four gates in
-  one shot — never `gh pr checks` alone): fix red CI; confirm
-  `mergeable=MERGEABLE`; reply inline on
-  every open review comment via `/pr-review-resolver`; then wait ~60s (allow
+  loop. Probe once, then poll with `pr_readiness_probe.sh --loop <N>` only for
+  `WAIT`; `ACTION_REQUIRED` means stop polling and fix red CI, conflicts, or
+  review threads. Confirm `mergeable=MERGEABLE`; reply inline on every open
+  review comment via `/pr-review-resolver`; then wait ~60s (allow
   15 min) for Copilot's post-push review on **both**
   `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
   `repos/<OWNER>/<REPO>/pulls/<N>/reviews`; address any new findings and loop.

@@ -82,7 +82,11 @@ EOF
 # $GH_STUB_LOG is set, every invocation appends its argv there so tests can
 # assert explicit-branch arg passing (`gh pr view <branch>`).
 # pr-readiness-stop.sh / pr_readiness_probe.sh add more knobs:
-#   $GH_STUB_CHECKS_EXIT      exit code for `gh pr checks` (0 = green)
+#   $GH_STUB_CHECKS_EXIT      exit code for `gh pr checks` (0 = query succeeded)
+#   $GH_STUB_CHECKS_JSON      check rows from `gh pr checks --json`
+#   $GH_STUB_CHECKS_MESSAGE   non-JSON message returned by `gh pr checks --json`
+#   $GH_STUB_CHECKS_UNSUPPORTED make `gh pr checks --json` reject the flag
+#   $GH_STUB_STATUS_ROLLUP_JSON raw `statusCheckRollup` entries for fallback
 #   $GH_STUB_PR_STATE         state in the probe's combined pr-view call
 #   $GH_STUB_MERGEABLE        mergeable in the combined pr-view call
 #   $GH_STUB_HEAD             headRefOid in the combined pr-view call
@@ -97,6 +101,24 @@ if [[ -n "${GH_STUB_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$GH_STUB_LOG"
 fi
 if [[ "$1" == "pr" && "$2" == "checks" ]]; then
+  if [[ "$*" == *"--json"* ]]; then
+    if [[ "${GH_STUB_CHECKS_UNSUPPORTED:-0}" == "1" ]]; then
+      echo "unknown flag: --json" >&2
+      exit 1
+    elif [[ -n "${GH_STUB_CHECKS_MESSAGE:-}" ]]; then
+      printf '%s\n' "$GH_STUB_CHECKS_MESSAGE"
+    elif [[ -n "${GH_STUB_CHECKS_JSON:-}" ]]; then
+      printf '%s\n' "$GH_STUB_CHECKS_JSON"
+    elif [[ "${GH_STUB_CHECKS_EXIT:-0}" == "0" ]]; then
+      printf '%s%s\n' \
+        '[{"bucket":"pass","link":"https://example.test/pass",' \
+        '"name":"tests","state":"SUCCESS"}]'
+    else
+      printf '%s%s\n' \
+        '[{"bucket":"fail","link":"https://example.test/fail",' \
+        '"name":"tests","state":"FAILURE"}]'
+    fi
+  fi
   exit "${GH_STUB_CHECKS_EXIT:-0}"
 fi
 if [[ "$1" == "api" && "$2" == "graphql" ]]; then
@@ -116,6 +138,10 @@ if [[ "$1" == "api" && "$2" == *"/pulls/"* ]]; then
     *"/reviews"*) printf '%s\n' "${GH_STUB_PULL_REVIEWS:-[]}" ;;
     *) printf '[]\n' ;;
   esac
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"statusCheckRollup"* ]]; then
+  printf '{"statusCheckRollup":%s}\n' "${GH_STUB_STATUS_ROLLUP_JSON:-[]}"
   exit 0
 fi
 if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"headRefOid"* ]]; then
@@ -1489,6 +1515,51 @@ T_readiness_blocks_on_unknown_mergeable() {
 }
 it "pr-readiness-stop: mergeable=UNKNOWN is not a pass (gate 2) → exit 2" T_readiness_blocks_on_unknown_mergeable
 
+T_readiness_blocks_on_pending_ci_with_wait_guidance() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-pending")
+  out=$(cd "$wt" && echo '' \
+    | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"
+    echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || {
+    echo "expected EXIT:2 on WAIT, got: $out"
+    return 1
+  }
+  grep -q "continue monitoring" "$stderr_file" || {
+    echo "WAIT guidance should continue monitoring"
+    return 1
+  }
+}
+it "pr-readiness-stop: WAIT → exit 2 with monitoring guidance" \
+  T_readiness_blocks_on_pending_ci_with_wait_guidance
+
+T_readiness_conflict_rejects_passive_polling() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-action")
+  out=$(cd "$wt" && echo '' \
+    | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"
+    echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || {
+    echo "expected EXIT:2 on action, got: $out"
+    return 1
+  }
+  grep -q "Do not keep polling" "$stderr_file" || {
+    echo "ACTION guidance should reject passive polling"
+    return 1
+  }
+}
+it "pr-readiness-stop: ACTION_REQUIRED → remediation guidance" \
+  T_readiness_conflict_rejects_passive_polling
+
 T_readiness_passes_when_gates_hold() {
   local out stderr_file wt
   stderr_file="$TEST_DIR/rd_stderr.txt"
@@ -1614,6 +1685,20 @@ run_probe() {
   echo "EXIT:$?"
 }
 
+readiness_check() {
+  # Usage: readiness_check <bucket> <name> <state> <link>
+  printf '[{"bucket":"%s","name":"%s","state":"%s","link":"%s"}]\n' \
+    "$1" "$2" "$3" "$4"
+}
+
+assert_probe_exit() {
+  local out="$1" expected="$2"
+  [[ "$(last_exit_line "$out")" == "EXIT:${expected}" ]] || {
+    echo "expected EXIT:${expected}, got: $out"
+    return 1
+  }
+}
+
 T_probe_all_gates_pass() {
   local out
   export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
@@ -1636,13 +1721,134 @@ it "probe: missing PR-number argument → exit 2 with usage" T_probe_missing_arg
 
 T_probe_red_ci_fails_gate1() {
   local out
-  export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    fail unit-tests FAILURE https://example.test/log/7)
+  export GH_STUB_CHECKS_JSON
   out=$(run_probe 42)
-  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 on red CI, got: $out"; return 1; }
-  grep -q "Gate 1" <<<"$out" || { echo "should name Gate 1; got: $out"; return 1; }
-  grep -q "NOT READY" <<<"$out" || { echo "should report NOT READY; got: $out"; return 1; }
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should require action; got: $out"
+    return 1
+  }
+  grep -q "unit-tests (FAILURE) — https://example.test/log/7" \
+    <<<"$out" || {
+    echo "should report the failed check and URL; got: $out"
+    return 1
+  }
 }
-it "probe: red/pending CI → exit 1 naming Gate 1" T_probe_red_ci_fails_gate1
+it "probe: failed CI → exit 1 with actionable check details" \
+  T_probe_red_ci_fails_gate1
+
+T_probe_pending_ci_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending unit-tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: pending-only CI → exit 8 WAIT" T_probe_pending_ci_waits
+
+T_probe_old_gh_falls_back_to_status_rollup() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[{"__typename":"CheckRun","name":"unit-tests","status":"FAILURE","conclusion":"FAILURE","detailsUrl":"https://example.test/log/9"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "unit-tests (FAILURE) — https://example.test/log/9" <<<"$out" || {
+    echo "should normalize statusCheckRollup; got: $out"
+    return 1
+  }
+}
+it "probe: gh without checks --json → statusCheckRollup fallback" \
+  T_probe_old_gh_falls_back_to_status_rollup
+
+T_probe_checks_not_registered_yet_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_CHECKS_MESSAGE="no checks reported on the 'feature' branch"
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: no checks registered yet → exit 8 WAIT" \
+  T_probe_checks_not_registered_yet_waits
+
+T_probe_pending_ci_with_conflict_requires_action() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending unit-tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should require action; got: $out"
+    return 1
+  }
+  grep -q "CONFLICTING" <<<"$out" || {
+    echo "should name the conflict; got: $out"
+    return 1
+  }
+}
+it "probe: pending CI + conflict → exit 1 ACTION_REQUIRED" \
+  T_probe_pending_ci_with_conflict_requires_action
+
+T_probe_unknown_mergeability_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=UNKNOWN
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pass tests SUCCESS https://example.test/pass)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: mergeable=UNKNOWN → exit 8 WAIT" \
+  T_probe_unknown_mergeability_waits
+
+T_probe_loop_mode_stops_on_action() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pass tests SUCCESS https://example.test/pass)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should preserve the action state; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on ACTION_REQUIRED" \
+  T_probe_loop_mode_stops_on_action
+
+T_probe_loop_mode_retries_wait() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending tests QUEUED https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should preserve WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: --loop retries only WAIT" T_probe_loop_mode_retries_wait
 
 T_probe_conflicting_fails_gate2() {
   local out
@@ -1776,6 +1982,54 @@ T_probe_pr_view_failure_is_env_error() {
   [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on gh metadata failure, got: $out"; return 1; }
 }
 it "probe: gh pr view failure → exit 2 (error, never a silent pass or gate verdict)" T_probe_pr_view_failure_is_env_error
+
+T_probe_loop_mode_stops_on_env_error() {
+  local out
+  export GH_STUB_PR_VIEW_JSON_EXIT=1
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "ERROR" <<<"$out" || {
+    echo "should preserve the error state; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on ERROR" T_probe_loop_mode_stops_on_env_error
+
+T_probe_loop_mode_stops_on_unknown_option() {
+  local out
+  out=$(run_probe --loop --looop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on an unknown option" \
+  T_probe_loop_mode_stops_on_unknown_option
+
+T_probe_loop_mode_stops_when_unknown_option_precedes_loop() {
+  local out
+  out=$(run_probe --looop --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: unknown option before --loop still stops polling" \
+  T_probe_loop_mode_stops_when_unknown_option_precedes_loop
+
+T_probe_loop_mode_stops_on_missing_pr() {
+  local out
+  out=$(run_probe --loop)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling when the PR number is missing" \
+  T_probe_loop_mode_stops_on_missing_pr
 
 # ===========================================================================
 # worktree-post-setup

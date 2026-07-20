@@ -4,11 +4,18 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $(basename "$0") [--gates-only] <pr-number>" >&2
+  echo "usage: $(basename "$0") [--gates-only] [--loop] <pr-number>" >&2
+}
+
+fail_usage() {
+  usage
+  [[ "${loop_mode:-0}" == "1" ]] && exit 0
+  exit 2
 }
 
 fail_env() {
-  printf 'probe error: %s\n' "$*" >&2
+  printf 'ERROR: probe could not evaluate readiness: %s\n' "$*" >&2
+  [[ "${loop_mode:-0}" == "1" ]] && exit 0
   exit 2
 }
 
@@ -16,11 +23,19 @@ fail_env() {
 readonly BODY_PREVIEW_CHARS=100
 
 gates_only=0
-if [[ "${1:-}" == "--gates-only" ]]; then
-  gates_only=1
+loop_mode=0
+for arg in "$@"; do
+  [[ "$arg" == "--loop" ]] && loop_mode=1
+done
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --gates-only) gates_only=1 ;;
+    --loop) loop_mode=1 ;;
+    *) fail_usage ;;
+  esac
   shift
-fi
-[[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || { usage; exit 2; }
+done
+[[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || fail_usage
 readonly PR="$1"
 
 command -v gh >/dev/null 2>&1 || fail_env "gh not on PATH"
@@ -48,22 +63,86 @@ if [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]]; then
   exit 0
 fi
 
-gates_hold=1
+action_required=0
+wait_required=0
 
-if gh pr checks "$PR" >/dev/null 2>&1; then
-  echo "Gate 1 (CI): PASS — all checks green"
+checks_rc=0
+checks=$(gh pr checks "$PR" --json name,state,bucket,link 2>&1) \
+  || checks_rc=$?
+if [[ "$checks_rc" -eq 1 && "$checks" == *"unknown flag: --json"* ]]; then
+  rollup=$(gh pr view "$PR" --json statusCheckRollup 2>&1) \
+    || fail_env "gh pr view ${PR} check fallback failed: ${rollup}"
+  jq -e '.statusCheckRollup | type == "array"' >/dev/null 2>&1 \
+    <<<"$rollup" \
+    || fail_env "gh pr view ${PR} returned invalid check fallback: ${rollup}"
+  checks=$(jq '[.statusCheckRollup[] | {
+    name: (.name // .context),
+    state: (if .__typename == "CheckRun"
+      then (if .conclusion == "" then .status else .conclusion end)
+      else .state end),
+    bucket: (if .__typename == "CheckRun" then
+      .conclusion as $conclusion
+      | if .status != "COMPLETED" and $conclusion == "" then "pending"
+      elif $conclusion == "CANCELLED" then "cancel"
+      elif (["ACTION_REQUIRED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT"]
+        | index($conclusion)) != null then "fail"
+      else "pass" end
+    elif .state == "PENDING" or .state == "EXPECTED" then "pending"
+    elif .state == "FAILURE" or .state == "ERROR" then "fail"
+    else "pass" end),
+    link: (.detailsUrl // .targetUrl)
+  }]' <<<"$rollup")
+  if [[ "$(jq 'length' <<<"$checks")" -eq 0 ]]; then
+    checks="no checks reported on PR #${PR}"
+    checks_rc=1
+  else
+    checks_rc=0
+  fi
+fi
+if [[ "$checks_rc" -ne 0 && "$checks_rc" -ne 1 && "$checks_rc" -ne 8 ]]; then
+  fail_env "gh pr checks ${PR} failed (${checks_rc}): ${checks}"
+fi
+if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$checks"; then
+  if [[ "$checks_rc" -eq 1 && "$checks" == no\ checks\ reported* ]]; then
+    echo "Gate 1 (CI): WAIT — ${checks}"
+    wait_required=1
+  else
+    fail_env "gh pr checks ${PR} returned non-JSON: ${checks}"
+  fi
 else
-  echo "Gate 1 (CI): FAIL — checks failing or still pending" \
-    "(gh pr checks ${PR})"
-  gates_hold=0
+  failed_checks=$(jq -r '
+    .[] | select(.bucket == "fail" or .bucket == "cancel")
+    | "  - \(.name) (\(.state)) — " + (.link // "no URL")
+  ' <<<"$checks")
+  pending_count=$(jq \
+    '[.[] | select(.bucket == "pending")] | length' <<<"$checks")
+  if [[ -n "$failed_checks" ]]; then
+    count=$(grep -c . <<<"$failed_checks")
+    echo "Gate 1 (CI): ACTION — ${count} terminal check failure(s):"
+    printf '%s\n' "$failed_checks"
+    action_required=1
+  elif [[ "$pending_count" -gt 0 ]]; then
+    echo "Gate 1 (CI): WAIT — ${pending_count} check(s) still pending"
+    wait_required=1
+  else
+    echo "Gate 1 (CI): PASS — all checks green"
+  fi
 fi
 
-if [[ "$mergeable" == "MERGEABLE" ]]; then
-  echo "Gate 2 (mergeable): PASS"
-else
-  echo "Gate 2 (mergeable): FAIL — ${mergeable:-UNKNOWN} (want MERGEABLE)"
-  gates_hold=0
-fi
+case "$mergeable" in
+  MERGEABLE)
+    echo "Gate 2 (mergeable): PASS"
+    ;;
+  CONFLICTING)
+    echo "Gate 2 (mergeable): ACTION — CONFLICTING;" \
+      "update from the base branch"
+    action_required=1
+    ;;
+  *)
+    echo "Gate 2 (mergeable): WAIT — ${mergeable:-UNKNOWN}"
+    wait_required=1
+    ;;
+esac
 
 # Awaiting = unresolved && (single comment || last comment not the PR
 # author's) — so a finding self-posted by the author still counts until replied.
@@ -107,10 +186,11 @@ else
   printf '%s\n' "$awaiting"
   echo "  Drive /pr-review-resolver: reply inline with a fix-commit SHA" \
     "or justification."
-  gates_hold=0
+  action_required=1
 fi
 
-if [[ "$gates_hold" == "1" && "$gates_only" == "0" ]]; then
+if [[ "$action_required" == "0" && "$wait_required" == "0" \
+  && "$gates_only" == "0" ]]; then
   short_head=${head_sha:0:7}
   copilot_err=0
   comments_json=$(gh api "repos/${owner}/${name}/pulls/${PR}/comments" \
@@ -135,11 +215,18 @@ if [[ "$gates_hold" == "1" && "$gates_only" == "0" ]]; then
   fi
 fi
 
-if [[ "$gates_hold" == "1" ]]; then
-  echo "READY: gates 1-3 hold."
-  exit 0
+if [[ "$action_required" == "1" ]]; then
+  echo "ACTION_REQUIRED: stop polling and remediate the actionable" \
+    "gate(s) above."
+  [[ "$loop_mode" == "1" ]] && exit 0
+  exit 1
 fi
 
-echo "NOT READY: fix the failing gate(s) above, push, and re-probe." \
-  "See docs/pr-readiness-loop.md."
-exit 1
+if [[ "$wait_required" == "1" ]]; then
+  echo "WAIT: only transient readiness work remains; continue monitoring."
+  [[ "$loop_mode" == "1" ]] && exit 1
+  exit 8
+fi
+
+echo "READY: gates 1-3 hold."
+exit 0
