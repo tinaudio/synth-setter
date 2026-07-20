@@ -587,9 +587,23 @@ sky api info
 
 `sky api info` should print server version and status.
 
-### 6.3 Persist for SDK and CLI use
+### 6.3 Configure clients
 
-Add the following to the shell rc file (`~/.zshrc`, `~/.bashrc`):
+For `synth-setter-skypilot-launch`, add the endpoint to the launcher's configured
+`.env` file (the workspace `.env` by default):
+
+```dotenv
+SKYPILOT_API_SERVER_ENDPOINT=https://skypilot:YOUR_PASSWORD@sky.yourdomain.com
+# SKYPILOT_SERVICE_ACCOUNT_TOKEN=sky_YOUR_SERVICE_ACCOUNT_TOKEN
+```
+
+The launcher loads these values without shell exports and verifies the remote
+API server before provider credential bootstrap or job submission. A service
+account token requires an endpoint; malformed values and failed authentication
+stop the launch before provisioning.
+
+For direct `sky` CLI and Python SDK use, add the following to the shell rc file
+(`~/.zshrc`, `~/.bashrc`):
 
 ```bash
 export SKYPILOT_API_SERVER_ENDPOINT="https://skypilot:YOUR_PASSWORD@sky.yourdomain.com"

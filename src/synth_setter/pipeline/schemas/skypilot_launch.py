@@ -8,11 +8,144 @@ resolved separately via ``resolve_worker_env``.
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
+from typing import Final
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from dotenv import dotenv_values
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
+ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
 
 _ENV_IDENT_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
+def _clean(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _client_settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
+    candidates: dict[str, str | None] = {}
+    if env_file is not None and env_file.is_file():
+        candidates.update(dotenv_values(env_file))
+
+    kwargs: dict[str, str] = {}
+    for env_key, field_name in (
+        (ENV_SKYPILOT_API_SERVER_ENDPOINT, "api_server_endpoint"),
+        (ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "service_account_token"),
+    ):
+        for source in (candidates, os.environ):
+            value = _clean(source.get(env_key))
+            if value is not None:
+                kwargs[field_name] = value
+                break
+    return kwargs
+
+
+class SkypilotClientSettings(BaseSettings):
+    """SkyPilot client authentication loaded from ``SKYPILOT_*`` env.
+
+    .. attribute :: model_config
+
+        Pydantic settings config sentinel.
+
+    .. attribute :: api_server_endpoint
+
+        Optional remote SkyPilot API server URL.
+
+    .. attribute :: service_account_token
+
+        Optional SkyPilot service-account token.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SKYPILOT_",
+        env_ignore_empty=True,
+        extra="ignore",
+        frozen=True,
+        strict=True,
+        str_strip_whitespace=True,
+    )
+
+    api_server_endpoint: str | None = None
+    service_account_token: SecretStr | None = None
+
+    @field_validator("api_server_endpoint")
+    @classmethod
+    def _endpoint_is_http_url(cls, value: str | None) -> str | None:
+        """Require a remote endpoint to use HTTP(S) and name a host.
+
+        :param value: Candidate SkyPilot API server endpoint.
+        :returns: Stripped endpoint, if configured.
+        :raises ValueError: The endpoint is not an HTTP(S) URL with a host.
+        """
+        if value is None:
+            return None
+        endpoint = value.strip()
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+            raise ValueError("must be an HTTP(S) URL with a host")
+        return endpoint
+
+    @field_validator("service_account_token")
+    @classmethod
+    def _token_has_skypilot_prefix(cls, value: SecretStr | None) -> SecretStr | None:
+        """Require SkyPilot's service-account token format when configured.
+
+        :param value: Candidate service-account token.
+        :returns: Valid token, if configured.
+        :raises ValueError: The token is blank or lacks the ``sky_`` prefix.
+        """
+        if value is None:
+            return None
+        token = value.get_secret_value().strip()
+        if not token.startswith("sky_"):
+            raise ValueError("must start with 'sky_'")
+        return SecretStr(token)
+
+    @model_validator(mode="after")
+    def _token_requires_endpoint(self) -> SkypilotClientSettings:
+        """Reject a service token with no remote server target.
+
+        :returns: Validated client settings.
+        :raises ValueError: A token is configured without an API endpoint.
+        """
+        if self.service_account_token is not None and self.api_server_endpoint is None:
+            raise ValueError("service account token requires a SkyPilot API server endpoint")
+        return self
+
+    def as_env(self) -> dict[str, str]:
+        """Project configured client authentication into SkyPilot env vars.
+
+        :returns: Non-empty SkyPilot client environment entries.
+        """
+        env: dict[str, str] = {}
+        if self.api_server_endpoint is not None:
+            env[ENV_SKYPILOT_API_SERVER_ENDPOINT] = self.api_server_endpoint
+        if self.service_account_token is not None:
+            env[ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN] = self.service_account_token.get_secret_value()
+        return env
+
+
+def skypilot_client_settings_from_sources(
+    env_file: Path | None = None, *, api_server_endpoint: str | None = None
+) -> SkypilotClientSettings:
+    """Load SkyPilot client auth from config, dotenv, then process environment.
+
+    :param env_file: Optional dotenv file to inspect before process environment.
+    :param api_server_endpoint: Optional launch-config endpoint override.
+    :returns: Validated SkyPilot client settings.
+    """
+    kwargs = _client_settings_kwargs_from_sources(env_file)
+    if api_server_endpoint is not None:
+        kwargs["api_server_endpoint"] = api_server_endpoint
+    return SkypilotClientSettings(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 class SkypilotLaunchConfig(BaseModel):

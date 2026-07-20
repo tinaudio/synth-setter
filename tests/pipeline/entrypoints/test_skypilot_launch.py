@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,11 @@ import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.object_storage import RCLONE_ENV_KEYS
-from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+from synth_setter.pipeline.schemas.skypilot_launch import (
+    ENV_SKYPILOT_API_SERVER_ENDPOINT,
+    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+    SkypilotLaunchConfig,
+)
 from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
     _SKYPILOT_API_SERVER_ENV,
@@ -66,7 +71,7 @@ def env_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Strip the worker env keys from the test process env.
 
     Without this, a developer with ``RCLONE_CONFIG_R2_*`` exported in their shell
@@ -78,6 +83,16 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.startswith("SYNTH_SETTER_STORAGE_"):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+    monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)
+
+    from sky.server import common as server_common
+
+    server_common.get_server_url.cache_clear()
+    server_common.is_api_server_local.cache_clear()
+    yield
+    server_common.get_server_url.cache_clear()
+    server_common.is_api_server_local.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -1430,6 +1445,78 @@ class TestDispatchViaSkypilot:
         worker_env = task.update_envs.call_args.args[0]
         assert worker_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
 
+    def test_dispatch_loads_skypilot_auth_from_env_file(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Remote client auth in dotenv is active before the first SkyPilot request.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param monkeypatch: Pytest environment fixture.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        from sky.server import common as server_common
+
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
+        assert server_common.get_server_url() == "https://stale.example.com"
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT)
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n"
+                f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_test-token\n"
+            )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="dotenv-auth",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "https://sky.example.com"
+        assert os.environ[ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN] == "sky_test-token"
+        assert server_common.get_server_url() == "https://sky.example.com"
+        mock_sky.api_info.assert_called_once_with()
+        mock_sky.jobs.launch.assert_called_once()
+
+    def test_remote_auth_failure_stops_before_bootstrap_or_launch(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A failed remote health check prevents provider or worker provisioning.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param monkeypatch: Pytest attribute patching fixture.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
+        mock_sky.api_info.side_effect = RuntimeError("unauthorized")
+        bootstrap = MagicMock()
+        monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", bootstrap)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+        )
+
+        with pytest.raises(click.ClickException, match="authentication check failed"):
+            dispatch_via_skypilot(sky_cfg)
+
+        bootstrap.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
+
     def test_dispatch_failure_raises_runtime_error(
         self,
         tmp_path: Path,
@@ -1951,6 +2038,35 @@ class TestSkypilotLaunchCli:
 
         assert result.exit_code != 0
         assert "must be a YAML mapping" in result.output
+
+    def test_malformed_dotenv_auth_exits_before_skypilot_request(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """The real CLI reports malformed dotenv auth without provisioning.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=not-a-url\n")
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code != 0
+        assert "Invalid SkyPilot client authentication settings" in result.output
+        mock_sky.api_info.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_unparseable_yaml_exits_nonzero_with_clean_error(self, tmp_path: Path) -> None:
         """Invalid YAML syntax maps to a clean CLI error, not a raw traceback.

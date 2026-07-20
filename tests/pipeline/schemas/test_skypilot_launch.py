@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
+from pathlib import Path
 
-from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+import pytest
+from pydantic import SecretStr, ValidationError
+
+from synth_setter.pipeline.schemas.skypilot_launch import (
+    ENV_SKYPILOT_API_SERVER_ENDPOINT,
+    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+    SkypilotClientSettings,
+    SkypilotLaunchConfig,
+    skypilot_client_settings_from_sources,
+)
 
 
 class TestDefaults:
@@ -72,6 +80,96 @@ class TestValidation:
         cfg = SkypilotLaunchConfig()
         with pytest.raises(ValidationError):
             cfg.compute_template = "anything.yaml"  # type: ignore[misc]
+
+
+class TestSkypilotClientSettings:
+    """SkyPilot client auth resolves from dotenv without shell exports."""
+
+    def test_env_file_loads_endpoint_and_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dotenv file supplies complete remote-client auth.
+
+        :param tmp_path: Pytest temporary directory.
+        :param monkeypatch: Pytest environment isolation fixture.
+        """
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+        monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n"
+            f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_test-token\n"
+        )
+
+        settings = skypilot_client_settings_from_sources(env_file)
+
+        assert settings.api_server_endpoint == "https://sky.example.com"
+        assert settings.service_account_token is not None
+        assert settings.service_account_token.get_secret_value() == "sky_test-token"
+
+    def test_config_endpoint_combines_with_env_file_token(self, tmp_path: Path) -> None:
+        """An explicit endpoint can pair with a dotenv service token.
+
+        :param tmp_path: Pytest temporary directory.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_test-token\n")
+
+        settings = skypilot_client_settings_from_sources(
+            env_file,
+            api_server_endpoint="https://config.example.com",
+        )
+
+        assert settings.api_server_endpoint == "https://config.example.com"
+        assert settings.service_account_token is not None
+
+    def test_blank_env_file_value_falls_back_to_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank dotenv auth does not mask a usable process value.
+
+        :param tmp_path: Pytest temporary directory.
+        :param monkeypatch: Pytest environment fixture.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://process.example.com")
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=\n")
+
+        settings = skypilot_client_settings_from_sources(env_file)
+
+        assert settings.api_server_endpoint == "https://process.example.com"
+
+    def test_service_account_token_without_endpoint_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A token without its target server fails before dispatch.
+
+        :param monkeypatch: Pytest environment isolation fixture.
+        """
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+        with pytest.raises(ValidationError, match="requires.*API server endpoint"):
+            SkypilotClientSettings(service_account_token=SecretStr("sky_orphan-token"))
+
+    def test_invalid_service_account_token_rejected(self) -> None:
+        """A malformed token fails before any authenticated request."""
+        with pytest.raises(ValidationError, match="must start with 'sky_'"):
+            SkypilotClientSettings(
+                api_server_endpoint="https://sky.example.com",
+                service_account_token=SecretStr("not-a-token"),
+            )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["not-a-url", "ftp://sky.example.com", "https://"],
+        ids=["missing-scheme", "unsupported-scheme", "missing-host"],
+    )
+    def test_invalid_api_server_endpoint_rejected(self, endpoint: str) -> None:
+        """Malformed endpoint values fail at the settings boundary.
+
+        :param endpoint: Invalid endpoint candidate.
+        """
+        with pytest.raises(ValidationError, match="HTTP.*URL"):
+            SkypilotClientSettings(api_server_endpoint=endpoint)
 
 
 class TestModelCopy:
