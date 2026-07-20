@@ -213,7 +213,7 @@ def _fetch_runpod_balance() -> float | None:
         return None
 
 
-def _doc_requests_runpod(doc: dict[str, object]) -> bool:
+def _doc_requests_runpod(doc: Mapping[str, object]) -> bool:
     """Report whether any resources entry of a compute template targets RunPod.
 
     Scans ``resources.cloud`` and every ``resources.any_of`` entry — provider
