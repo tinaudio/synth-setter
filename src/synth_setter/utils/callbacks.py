@@ -105,6 +105,14 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
         if self.monitor is None or self._every_n_train_steps < 1:
             super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
             return
+        if not pl_module.automatic_optimization:
+            configured_save_top_k = self.save_top_k
+            self.save_top_k = 0
+            try:
+                super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
+            finally:
+                self.save_top_k = configured_save_top_k
+            return
         if self._should_skip_saving_checkpoint(trainer):
             return
         if trainer.global_step % self._every_n_train_steps != 0:
