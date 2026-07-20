@@ -1,6 +1,114 @@
 # CHANGELOG
 
 
+## v10.1.3 (2026-07-20)
+
+### Bug Fixes
+
+- **evaluation**: Restore FSD50K and NSynth checkpoint prediction jobs
+  ([#2207](https://github.com/tinaudio/synth-setter/pull/2207),
+  [`180cf05`](https://github.com/tinaudio/synth-setter/commit/180cf0570630a325daeb1abf484192e71560a9bf))
+
+* test(testing): reproduce audio prediction config failure
+
+* fix(evaluation): pin audio prediction checkpoint specs
+
+* test(evaluation): place audio prediction e2e in eval suite
+
+* test(evaluation): cover every audio checkpoint family
+
+* test(evaluation): clarify audio prediction CLI fixture paths
+
+### Chores
+
+- **config**: Restore RunPod launch datamodule composition
+  ([#2201](https://github.com/tinaudio/synth-setter/pull/2201),
+  [`ee14bbd`](https://github.com/tinaudio/synth-setter/commit/ee14bbd6de4e33f132eb3e5b383de2f46835d9e6))
+
+* test(training): reproduce stale RunPod datamodule override
+
+* fix(training): use experiment datamodule in RunPod launches
+
+* test(training): exercise RunPod experiment datamodule defaults
+
+### Internal-Feat
+
+- **ci-automation**: Nudge Pi and Codex on PR readiness
+  ([#2210](https://github.com/tinaudio/synth-setter/pull/2210),
+  [`7f9c11b`](https://github.com/tinaudio/synth-setter/commit/7f9c11b4a78204fe7de23fff3182960308d6ca6e))
+
+* internal-feat(ci-automation): nudge agents on PR readiness
+
+* internal-fix(ci-automation): skip Pi adapter tests without Node
+
+* internal-fix(ci-automation): resolve Pi hook from repository root
+
+### Internal-Fix
+
+- **auth**: Fail RunPod launches fast on insufficient balance
+  ([#2202](https://github.com/tinaudio/synth-setter/pull/2202),
+  [`520ba32`](https://github.com/tinaudio/synth-setter/commit/520ba32915cb83627b4d7c8fb795187579415fb7))
+
+* feat(data-pipeline): fail RunPod launches fast on insufficient account balance
+
+An exhausted RunPod balance previously surfaced as managed jobs stuck in STARTING forever while the
+  controller sought pods it could never rent. dispatch_via_skypilot now probes the account balance
+  after cred bootstrap and aborts below a $5 floor with an error that deliberately withholds the
+  amount (logs are shared; the balance is account-sensitive). The probe fails open on any error so
+  an API hiccup can never block a launch.
+
+CLAUDE.md/AGENTS.md gain the agent-facing preflight command.
+
+Refs #2193
+
+* internal-fix(data-pipeline): address pre-PR review warns on balance preflight
+
+Distinct summary vs :returns: content (comment-hygiene C6) while keeping the return section
+  pydoclint DOC201 requires; drop dict[str, Any] from a test helper per project standard P2.
+
+* internal-fix(data-pipeline): harden balance preflight per re-review findings
+
+- P31: canonical e2e test drives generate-dataset -> real dispatch and pins the insufficient-balance
+  abort before any submission. - Skip the probe under a remote SkyPilot API server (mirrors the cred
+  bootstrap skip) so a stale local config.toml can't gate the wrong account. - Agent docs now state
+  the fail-open caveat instead of an unqualified OK.
+
+* internal-fix(data-pipeline): close final-review blocks on balance preflight
+
+- Pin the e2e abort cause: assert SystemExit(1) plus the insufficient- balance message in hydra's
+  captured error output; extract the boundary patching into a helper. - Add a CliRunner test for the
+  launcher CLI's nonzero low-balance exit. - Gate the preflight on a full resources scan
+  (_doc_requests_runpod) so a RunPod alternative anywhere in any_of is still checked, not just entry
+  0. - Parse the GraphQL response through a strict Pydantic model (trust boundary) and require a
+  string api_key. - Emit a stderr fail-open notice (exception class only) so operators can tell an
+  unverified balance from a passing check.
+
+* internal-fix(data-pipeline): accept read-only Mapping in _doc_requests_runpod
+
+* docs(data-pipeline): document the RunPod balance preflight in the compute design doc
+
+* internal-fix(data-pipeline): pin HYDRA_FULL_ERROR in the low-balance e2e test
+
+CI exports HYDRA_FULL_ERROR=1, so hydra re-raises the launcher's RuntimeError instead of wrapping it
+  in SystemExit(1) and the SystemExit expectation failed there. Pinning the env in the test asserts
+  the typed exception + message directly, identical in every environment.
+
+- **ci-automation**: Stop polling actionable readiness states
+  ([#2144](https://github.com/tinaudio/synth-setter/pull/2144),
+  [`c8af60f`](https://github.com/tinaudio/synth-setter/commit/c8af60f2742c37c7ef70cb2b68355796e435eb9c))
+
+* internal-fix(ci-automation): stop polling actionable readiness states
+
+* internal-fix(ci-automation): stop loop-mode usage retries
+
+Route usage failures through the loop-aware terminal adapter and cover unknown-option and
+  missing-argument behavior.
+
+Tighten the two doc-map entries flagged in review.
+
+* internal-fix(ci-automation): support installed gh readiness checks
+
+
 ## v10.1.2 (2026-07-20)
 
 ### Bug Fixes
