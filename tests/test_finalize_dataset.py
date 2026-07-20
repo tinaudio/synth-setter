@@ -10,20 +10,25 @@ from __future__ import annotations
 import glob
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NoReturn, cast
 
 import lance
 import pytest
 import wandb
+from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
+from loguru import logger as loguru_logger
 from omegaconf import DictConfig, OmegaConf
+from structlog.testing import capture_logs
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.utils import instantiators
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_lance_smoke_spec,
@@ -203,6 +208,35 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     # Existence proves @hydra.main resolved ${paths.log_dir}, ${now:…}, and
     # the ${task_name} interpolations the shared hydra group references.
     assert (tmp_path / "logs" / "finalize_dataset").is_dir()
+
+
+def test_finalize_dataset_main_failure_emits_structured_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """The decorated CLI reports a real dispatch failure with dataset identity.
+
+    :param tmp_path: Hosts the spec JSON and Hydra run dir.
+    :param monkeypatch: Points Hydra at the temporary project and dataset.
+    :param stub_finalize_setup: Installs auth and marker-probe stubs.
+    """
+    monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    spec = build_lance_smoke_spec(
+        task_name="hydra-finalize-failure",
+        train_val_test_sizes=(0, 4, 0),
+    )
+    dataset_root_uri = write_spec_to_root(spec, tmp_path)
+    monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_root_uri={dataset_root_uri}"])
+
+    with capture_logs() as captured_logs, pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.main()
+
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["dataset_prefix"] == spec.r2.prefix
+    assert failure_log["run_id"] == spec.run_id
 
 
 def _build_finalize_cfg_with_offline_wandb(
@@ -396,28 +430,261 @@ def test_finalize_keeps_r2_artifacts_when_live_metric_logging_fails(
     assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
 
 
-def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
+def test_finalize_failure_logs_sanitized_traceback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
 ) -> None:
-    """A ``finalize_from_spec`` failure propagates but still closes the wandb run as failed.
+    """A failed finalize logs its traceback without propagating an exception message.
 
-    Pins the ``finalize()`` ``try/finally`` contract: the body's exception must
-    re-raise *and* the loggers must be closed with ``status="failed"`` so the
-    data-generation run is not left dangling. A real offline ``WandbLogger`` is
-    instantiated (via the offline-wandb cfg builder) so the close path runs
-    ``wandb.finish()`` for real. ``close_loggers`` is wrapped with a spy that
-    still delegates to the real helper: the spy captures the forwarded
-    ``status`` (the state-based ``wandb.run is None`` witness alone can't
-    distinguish ``"success"`` from ``"failed"``, nor a ``finally`` that skips the
-    close entirely, because wandb teardown can null the run by other means). The
-    failure is injected at ``finalize_from_spec`` so the ``except`` sets
-    ``status="failed"`` before re-raising.
+    :param tmp_path: Hosts the spec JSON and scratch work dir.
+    :param monkeypatch: Replaces finalization with an exception carrying a synthetic secret.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    signed_url = "https://r2.example.invalid/object?X-Amz-Signature=do-not-log"
+
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
+        raise RuntimeError(signed_url)
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    spec = build_lance_smoke_spec(task_name="finalize-sanitized-failure")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    with capture_logs() as captured_logs, pytest.raises(RuntimeError):
+        finalize_dataset.finalize(cfg)
+
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["dataset_prefix"] == spec.r2.prefix
+    assert failure_log["error_type"] == "RuntimeError"
+    assert failure_log["git_sha"] == spec.git_sha
+    assert failure_log["run_id"] == spec.run_id
+    assert "in boom" in failure_log["traceback"]
+    assert signed_url not in failure_log["traceback"]
+
+
+def test_finalize_failure_logging_outage_preserves_finalize_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A diagnostic sink failure does not replace the finalize exception.
+
+    :param tmp_path: Hosts the spec JSON and scratch work dir.
+    :param monkeypatch: Makes finalization and structured failure logging raise.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
+        raise ValueError("finalize body failed")
+
+    def fail_failure_log(*args: object, **kwargs: object) -> NoReturn:
+        del args, kwargs
+        raise RuntimeError("diagnostic sink failed with secret=do-not-log")
+
+    fallback_logs: list[str] = []
+    handler_id = loguru_logger.add(fallback_logs.append, format="{message}")
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    monkeypatch.setattr(
+        finalize_dataset,
+        "_failure_logger",
+        SimpleNamespace(error=fail_failure_log),
+    )
+    spec = build_lance_smoke_spec(task_name="finalize-diagnostic-outage")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    try:
+        with pytest.raises(ValueError, match="finalize body failed"):
+            finalize_dataset.finalize(cfg)
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert fallback_logs == ["structured finalize failure logging failed\n"]
+    assert "do-not-log" not in "".join(fallback_logs)
+
+
+def test_instantiate_loggers_failure_closes_previously_created_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later logger-construction failure rolls back earlier loggers.
+
+    :param monkeypatch: Makes the second Hydra logger constructor fail.
+    """
+    close_statuses: list[str] = []
+    finish_calls: list[None] = []
+
+    class LazyWandbLogger(WandbLogger):
+        def __init__(self) -> None:
+            pass
+
+        def finalize(self, status: str) -> None:
+            close_statuses.append(status)
+
+    first_logger = LazyWandbLogger()
+    monkeypatch.setattr(wandb, "run", object())
+    monkeypatch.setattr(wandb, "finish", lambda: finish_calls.append(None))
+    calls = 0
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            return first_logger
+        raise RuntimeError("second logger setup failed")
+
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    assert close_statuses == ["failed"]
+    assert finish_calls == []
+
+
+def test_instantiate_loggers_failure_logs_finalize_error_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rollback reports logger-finalize failure type without its message.
+
+    :param monkeypatch: Makes logger finalization and the next constructor fail.
+    :param caplog: Captures the stdlib-backed ranked logger warning.
+    """
+    calls = 0
+
+    def fail_finalize(status: str) -> NoReturn:
+        del status
+        raise RuntimeError("secret=do-not-log")
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(finalize=fail_finalize)
+        raise ValueError("second logger setup failed")
+
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with caplog.at_level("WARNING"), pytest.raises(ValueError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[rank: 0] logger finalize failed on SimpleNamespace (RuntimeError)" in messages
+    assert "do-not-log" not in "\n".join(messages)
+
+
+def test_instantiate_loggers_failure_finishes_new_wandb_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed constructor sequence finishes the W&B run it opened.
+
+    :param monkeypatch: Simulates one logger opening W&B before the next fails.
+    """
+    close_statuses: list[str] = []
+    finish_calls: list[None] = []
+    owned_run = object()
+
+    class OpenedWandbLogger(WandbLogger):
+        def __init__(self) -> None:
+            pass
+
+        def finalize(self, status: str) -> None:
+            close_statuses.append(status)
+
+    calls = 0
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            monkeypatch.setattr(wandb, "run", owned_run)
+            return OpenedWandbLogger()
+        raise RuntimeError("second logger setup failed")
+
+    monkeypatch.setattr(wandb, "run", None)
+    monkeypatch.setattr(wandb, "finish", lambda: finish_calls.append(None))
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    assert close_statuses == ["failed"]
+    assert finish_calls == [None]
+
+
+def test_finalize_logger_setup_failure_emits_structured_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """Finalize reports logger-construction failures with dataset identity.
+
+    :param tmp_path: Hosts the spec JSON and scratch work dir.
+    :param monkeypatch: Makes logger construction fail.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+
+    def fail_logger_setup(logger_cfg: DictConfig | None) -> NoReturn:
+        del logger_cfg
+        raise RuntimeError("logger setup failed")
+
+    monkeypatch.setattr(finalize_dataset, "instantiate_loggers", fail_logger_setup)
+    spec = build_lance_smoke_spec(task_name="finalize-logger-setup-failure")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    with capture_logs() as captured_logs, pytest.raises(RuntimeError, match="logger setup failed"):
+        finalize_dataset.finalize(cfg)
+
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["run_id"] == spec.run_id
+
+
+def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A partial failure persists terminal W&B totals and closes loggers as failed.
 
     :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, raises from
-        ``finalize_from_spec``, and wraps ``close_loggers`` with the status spy.
+    :param monkeypatch: Pins offline W&B, injects partial progress followed by failure, and records
+        logger-close status.
     :param stub_finalize_setup: Installs the auth + marker-probe stubs.
     """
     for key in [k for k in os.environ if k.startswith("WANDB_")]:
@@ -431,10 +698,23 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
         work_dir: Path,
         progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
     ) -> NoReturn:
-        del spec, work_dir, progress_callback
+        del spec, work_dir
+        assert progress_callback is not None
+        progress_callback("shard_processed")
+        progress_callback("artifact_uploaded")
         raise RuntimeError("simulated finalize_from_spec failure")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    real_log_metrics = WandbLogger.log_metrics
+    metric_calls: list[Mapping[str, float]] = []
+
+    def capture_log_metrics(
+        self: WandbLogger, metrics: Mapping[str, float], step: int | None = None
+    ) -> None:
+        metric_calls.append(metrics)
+        real_log_metrics(self, metrics, step)
+
+    monkeypatch.setattr(WandbLogger, "log_metrics", capture_log_metrics)
 
     real_close = finalize_dataset.close_loggers
     close_statuses: list[str] = []
@@ -459,6 +739,175 @@ def test_finalize_closes_loggers_failed_when_finalize_from_spec_raises(
         f"finalize() must close loggers exactly once as failed, got {close_statuses}"
     )
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
+
+    summary_rows = [metrics for metrics in metric_calls if "finalize/elapsed_seconds" in metrics]
+    assert len(summary_rows) == 1
+    # These assertions pin callback forwarding.
+    assert summary_rows[0]["finalize/shards_processed"] == 1
+    assert summary_rows[0]["finalize/artifacts_uploaded"] == 1
+    assert summary_rows[0]["finalize/elapsed_seconds"] >= 0
+
+
+def test_finalize_failure_with_no_progress_omits_terminal_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A failure before progress emits no terminal W&B summary row.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param monkeypatch: Pins offline W&B and injects a failure before any progress event.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
+        raise RuntimeError("simulated finalize_from_spec failure")
+
+    metric_calls: list[Mapping[str, float]] = []
+
+    def capture_log_metrics(
+        self: WandbLogger,
+        metrics: Mapping[str, float],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        del self, args, kwargs
+        metric_calls.append(metrics)
+
+    monkeypatch.setattr(WandbLogger, "log_metrics", capture_log_metrics)
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    spec = build_lance_smoke_spec(task_name="finalize-failed-no-progress")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
+        finalize_dataset.finalize(cfg)
+
+    assert metric_calls == []
+    assert wandb.run is None, "finalize() left the wandb run open after a failed body"
+
+
+def test_finalize_closes_loggers_when_progress_logging_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A progress-logger setup failure closes the configured W&B run as failed.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param monkeypatch: Makes progress-logger setup fail and records logger-close status.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    def fail_progress_logger_setup(loggers: Sequence[Logger], total_shards: int) -> NoReturn:
+        del loggers, total_shards
+        raise RuntimeError("simulated progress logger setup failure")
+
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset._make_finalize_progress_logger",
+        fail_progress_logger_setup,
+    )
+    real_close = finalize_dataset.close_loggers
+    close_statuses: list[str] = []
+
+    def spy_close(loggers: list[object], status: str) -> None:
+        close_statuses.append(status)
+        real_close(loggers, status)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
+    spec = build_lance_smoke_spec(task_name="finalize-progress-logger-setup-failure")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="simulated progress logger setup failure"):
+        finalize_dataset.finalize(cfg)
+
+    assert close_statuses == ["failed"]
+    assert wandb.run is None, "finalize() left the wandb run open after logger setup failed"
+
+
+def test_finalize_failure_keeps_logger_close_best_effort_when_metric_logging_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """Metric logging failures do not prevent failed-run cleanup.
+
+    :param tmp_path: Hosts the spec JSON, scratch work_dir, and offline run dir.
+    :param monkeypatch: Makes every metric write fail after one progress event and records close.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+    metric_calls: list[Mapping[str, float]] = []
+
+    def fail_log_metrics(
+        self: WandbLogger,
+        metrics: Mapping[str, float],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        del self, args, kwargs
+        metric_calls.append(metrics)
+        raise RuntimeError("simulated W&B history outage")
+
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir
+        assert progress_callback is not None
+        progress_callback("shard_processed")
+        raise RuntimeError("simulated finalize_from_spec failure")
+
+    monkeypatch.setattr(WandbLogger, "log_metrics", fail_log_metrics)
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    real_close = finalize_dataset.close_loggers
+    close_statuses: list[str] = []
+
+    def spy_close(loggers: list[object], status: str) -> None:
+        close_statuses.append(status)
+        real_close(loggers, status)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.close_loggers", spy_close)
+    spec = build_lance_smoke_spec(task_name="finalize-metric-failure-close")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = _build_finalize_cfg_with_offline_wandb(
+        write_spec_to_root(spec, tmp_path), output_dir, tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="simulated finalize_from_spec failure"):
+        finalize_dataset.finalize(cfg)
+
+    assert any("finalize/elapsed_seconds" in metrics for metrics in metric_calls)
+    assert close_statuses == ["failed"]
+    assert wandb.run is None, "finalize() left the wandb run open after metric logging failed"
 
 
 def test_finalize_swallows_artifact_log_failure_and_keeps_r2_artifacts(

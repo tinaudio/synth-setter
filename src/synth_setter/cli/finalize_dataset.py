@@ -11,11 +11,14 @@ sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
+from traceback import format_tb
 from typing import cast
 
 import hydra
+import structlog
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -35,6 +38,8 @@ from synth_setter.pipeline.spec_io import load_spec_from_root
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
+
+_failure_logger = structlog.get_logger(__name__)
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -240,6 +245,26 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
     return artifact
 
 
+def _log_finalize_failure(error: BaseException, spec: DatasetSpec) -> None:
+    """Log a failed finalize traceback without exposing the exception text.
+
+    :param error: Exception raised by the finalize body.
+    :param spec: Dataset identity attached to the failure event.
+    """
+    try:
+        _failure_logger.error(
+            "finalize_failed",
+            dataset_prefix=spec.r2.prefix,
+            error_type=type(error).__name__,
+            git_sha=spec.git_sha,
+            run_id=spec.run_id,
+            traceback="".join(format_tb(error.__traceback__)),
+        )
+    except Exception:  # noqa: BLE001 — diagnostics cannot replace the finalize failure
+        with suppress(Exception):
+            logger.warning("structured finalize failure logging failed")
+
+
 def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
     """Log the canonical ``dataset`` artifact to each ``WandbLogger`` in ``loggers``.
 
@@ -273,8 +298,8 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     lineage DAG). The wandb run id is pinned and ``resume=allow`` is forced so
     finalize attaches to the generation run rather than minting a new one;
     both are no-ops when ``cfg`` carries no ``logger`` group (the wandb-free
-    default). On any failure the loggers are still closed (status ``"failed"``)
-    before the exception re-raises.
+    default). On any failure the traceback and partial progress summary are
+    logged before the loggers close with status ``"failed"`` and the exception re-raises.
 
     :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
         accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
@@ -289,16 +314,25 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     if OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
-    loggers = instantiate_loggers(cfg.get("logger"))
+    loggers: list[Logger] = []
     status = "success"
+    started_at: float | None = None
+    log_summary: Callable[[float], None] | None = None
     try:
-        report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
+        loggers = instantiate_loggers(cfg.get("logger"))
         started_at = perf_counter()
+        report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
         finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
         log_summary(perf_counter() - started_at)
         _log_dataset_artifact(loggers, spec)
-    except BaseException:
+    except BaseException as error:
         status = "failed"
+        failed_elapsed_seconds = None
+        if log_summary is not None and started_at is not None:
+            failed_elapsed_seconds = perf_counter() - started_at
+        _log_finalize_failure(error, spec)
+        if log_summary is not None and failed_elapsed_seconds is not None:
+            log_summary(failed_elapsed_seconds)
         raise
     finally:
         close_loggers(loggers, status)
