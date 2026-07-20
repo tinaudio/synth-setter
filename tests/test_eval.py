@@ -150,6 +150,7 @@ def _write_audio_prediction_fixture(path: Path) -> None:
 
 def _audio_prediction_cli_args(
     case: _AudioPredictionCase,
+    *,
     checkpoint: Path,
     audio_root: Path,
     output_dir: Path,
@@ -252,7 +253,12 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     output_dir = tmp_path / f"{case.experiment}-output"
 
     result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
-        _audio_prediction_cli_args(case, checkpoint, audio_root, output_dir),
+        _audio_prediction_cli_args(
+            case,
+            checkpoint=checkpoint,
+            audio_root=audio_root,
+            output_dir=output_dir,
+        ),
         capture_output=True,
         text=True,
         timeout=300,
