@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v10.3.1 (2026-07-20)
+
+### Bug Fixes
+
+- **evaluation**: Skip incomplete W&B logger overlays
+  ([#2239](https://github.com/tinaudio/synth-setter/pull/2239),
+  [`0561d94`](https://github.com/tinaudio/synth-setter/commit/0561d94d2c4efef9c42fcc8b80acc7747d2d63ec))
+
+Hydra train experiments leave partial logger.wandb metadata when evaluation selects a non-W&B
+  logger. Avoid pinning absent id fields while preserving complete programmatic logger configs.
+
+### Internal-Fix
+
+- **training**: Honor Lightning stages in Lance data setup
+  ([#2240](https://github.com/tinaudio/synth-setter/pull/2240),
+  [`063aff1`](https://github.com/tinaudio/synth-setter/commit/063aff1ed53606b6c930fe1ad5211211eb6be42f))
+
+* fix(training): honor stages in Lance data setup
+
+* refactor(training): address Lance setup review
+
+* test(training): cover fit-only Lance roots
+
+* refactor(training): expose typed Lance split accessors
+
+
 ## v10.3.0 (2026-07-20)
 
 ### Features
