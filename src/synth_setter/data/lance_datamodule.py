@@ -311,6 +311,7 @@ class LanceVSTDataModule(VSTDataModule):
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
+        prefetch_factor: int | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -327,6 +328,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
+        :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+            PyTorch's default, and in-process loading ignores it.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -343,6 +346,7 @@ class LanceVSTDataModule(VSTDataModule):
             param_spec_name=param_spec_name,
         )
         self.persistent_workers = persistent_workers
+        self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
 
     def _build_lance_split(
@@ -467,6 +471,7 @@ class LanceVSTDataModule(VSTDataModule):
             shuffle=False if repeats_first_batch else shuffle,
             drop_last=drop_last,
             persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def train_dataloader(self) -> DataLoader:

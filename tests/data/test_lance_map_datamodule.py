@@ -415,6 +415,48 @@ class TestLanceMapDataModuleSetup:
         ) as module:
             assert module.val_dataloader().persistent_workers is True
 
+    def test_prefetch_factor_with_workers_reaches_loader(self, dataset_root: Path) -> None:
+        """A configured prefetch depth reaches loaders that own worker processes.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=1,
+            prefetch_factor=4,
+        ) as module:
+            assert module.val_dataloader().prefetch_factor == 4
+
+    def test_prefetch_factor_default_without_workers_loads_in_process(
+        self, dataset_root: Path
+    ) -> None:
+        """The default prefetch depth keeps the in-process path on PyTorch semantics.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
+    def test_prefetch_factor_without_workers_is_effectively_disabled(
+        self, dataset_root: Path
+    ) -> None:
+        """A configured prefetch depth is safe for in-process loading.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            prefetch_factor=4,
+        ) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
         """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
 
