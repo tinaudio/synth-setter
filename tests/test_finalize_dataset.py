@@ -12,6 +12,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NoReturn, cast
 
 import lance
@@ -429,9 +430,51 @@ def test_finalize_failure_logs_sanitized_traceback(
         finalize_dataset.finalize(cfg)
 
     failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["dataset_prefix"] == spec.r2.prefix
     assert failure_log["error_type"] == "RuntimeError"
+    assert failure_log["git_sha"] == spec.git_sha
+    assert failure_log["run_id"] == spec.run_id
     assert "in boom" in failure_log["traceback"]
     assert signed_url not in failure_log["traceback"]
+
+
+def test_finalize_failure_logging_outage_preserves_finalize_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """A diagnostic sink failure does not replace the finalize exception.
+
+    :param tmp_path: Hosts the spec JSON and scratch work dir.
+    :param monkeypatch: Makes finalization and structured failure logging raise.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+
+    def boom(
+        spec: DatasetSpec,
+        work_dir: Path,
+        progress_callback: finalize_dataset.FinalizeProgressCallback | None = None,
+    ) -> NoReturn:
+        del spec, work_dir, progress_callback
+        raise ValueError("finalize body failed")
+
+    def fail_failure_log(*args: object, **kwargs: object) -> NoReturn:
+        del args, kwargs
+        raise RuntimeError("diagnostic sink failed")
+
+    monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    monkeypatch.setattr(
+        finalize_dataset,
+        "_failure_logger",
+        SimpleNamespace(error=fail_failure_log),
+    )
+    spec = build_lance_smoke_spec(task_name="finalize-diagnostic-outage")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    with pytest.raises(ValueError, match="finalize body failed"):
+        finalize_dataset.finalize(cfg)
 
 
 def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
@@ -501,7 +544,7 @@ def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
 
     summary_rows = [metrics for metrics in metric_calls if "finalize/elapsed_seconds" in metrics]
     assert len(summary_rows) == 1
-    # ``boom`` emits one event of each kind, so these pin callback forwarding.
+    # These assertions pin callback forwarding.
     assert summary_rows[0]["finalize/shards_processed"] == 1
     assert summary_rows[0]["finalize/artifacts_uploaded"] == 1
     assert summary_rows[0]["finalize/elapsed_seconds"] >= 0

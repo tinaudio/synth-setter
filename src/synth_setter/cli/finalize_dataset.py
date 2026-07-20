@@ -11,6 +11,7 @@ sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
 from traceback import format_tb
@@ -244,16 +245,21 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
     return artifact
 
 
-def _log_finalize_failure(error: BaseException) -> None:
+def _log_finalize_failure(error: BaseException, spec: DatasetSpec) -> None:
     """Log a failed finalize traceback without exposing the exception text.
 
     :param error: Exception raised by the finalize body.
+    :param spec: Dataset identity attached to the failure event.
     """
-    _failure_logger.error(
-        "finalize_failed",
-        error_type=type(error).__name__,
-        traceback="".join(format_tb(error.__traceback__)),
-    )
+    with suppress(Exception):
+        _failure_logger.error(
+            "finalize_failed",
+            dataset_prefix=spec.r2.prefix,
+            error_type=type(error).__name__,
+            git_sha=spec.git_sha,
+            run_id=spec.run_id,
+            traceback="".join(format_tb(error.__traceback__)),
+        )
 
 
 def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
@@ -317,7 +323,7 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     except BaseException as error:
         status = "failed"
         failed_elapsed_seconds = perf_counter() - started_at
-        _log_finalize_failure(error)
+        _log_finalize_failure(error, spec)
         if log_summary is not None:
             log_summary(failed_elapsed_seconds)
         raise
