@@ -40,14 +40,15 @@ def resolve_run_config_id(cfg: DictConfig) -> str:
 def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
     """Pin the W&B run id and ``job_type`` onto ``cfg`` before logger instantiation.
 
-    No-op when the cfg has no ``logger.wandb`` group (e.g. ``logger=tensorboard``
-    or ``logger=null``), so ``OmegaConf.update`` never raises on the missing key.
+    No-op when ``logger.wandb`` is absent or is an incomplete experiment overlay,
+    so ``OmegaConf.update`` never raises on missing logger fields.
 
     :param cfg: Hydra-composed cfg; ``logger.wandb.{id,job_type}`` are updated in place.
     :param run_id: The W&B run id to pin (see :func:`synth_setter.run_id.make_wandb_run_id`).
     :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation``).
     """
-    if OmegaConf.select(cfg, "logger.wandb") is None:
+    wandb_cfg = OmegaConf.select(cfg, "logger.wandb")
+    if wandb_cfg is None or "id" not in wandb_cfg or "job_type" not in wandb_cfg:
         return
     OmegaConf.update(cfg, "logger.wandb.id", run_id)
     OmegaConf.update(cfg, "logger.wandb.job_type", job_type)
