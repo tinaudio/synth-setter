@@ -851,12 +851,45 @@ class TestRunpodBalancePreflight:
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
+    def test_runpod_dispatch_local_api_server_checks_balance(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A local API server uses host credentials, so its balance remains authoritative.
+
+        :param tmp_path: Hosts the RunPod compute template.
+        :param env_file: Supplies worker object-storage credentials.
+        :param mock_sky: Records whether submission was reached.
+        :param monkeypatch: Forces a launch-blocking RunPod balance.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 1.0,
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="local-api-server",
+            local=True,
+        )
+
+        with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
+            dispatch_via_skypilot(sky_cfg)
+
+        mock_sky.jobs.launch.assert_not_called()
+
     def test_runpod_dispatch_remote_api_server_skips_balance_probe(
         self,
         tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        skypilot_auth_request: MagicMock,
     ) -> None:
         """With a remote API server the probe is skipped — local creds may be stale.
 
@@ -867,6 +900,7 @@ class TestRunpodBalancePreflight:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         :param monkeypatch: Pytest fixture for the balance patch.
+        :param skypilot_auth_request: Prevents a real remote preflight request.
         """
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
@@ -884,6 +918,7 @@ class TestRunpodBalancePreflight:
             api_server="https://sky.example.com",
         )
         dispatch_via_skypilot(sky_cfg)
+        skypilot_auth_request.assert_called_once()
         mock_sky.jobs.launch.assert_called_once()
 
     def test_mixed_any_of_with_runpod_alternative_still_checks_balance(

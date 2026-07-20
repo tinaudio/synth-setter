@@ -400,6 +400,20 @@ def _configure_remote_skypilot_client(
         )
 
 
+def _skypilot_api_server_is_remote() -> bool:
+    """Return whether the active endpoint delegates provider state to another host.
+
+    :returns: Whether provider checks belong to a remote API server.
+    """
+    api_server_endpoint = os.environ.get(_SKYPILOT_API_SERVER_ENV)
+    if not api_server_endpoint:
+        return False
+
+    from sky.server import common as server_common
+
+    return not server_common.is_api_server_local(api_server_endpoint)
+
+
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
     """Invoke `scripts/skypilot/write_provider_creds.sh` for `provider`.
 
@@ -414,17 +428,13 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     (when provided) so a local-dev `.env` carrying provider creds bootstraps
     cleanly without manual `export`.
     """
-    api_server_endpoint = os.environ.get(_SKYPILOT_API_SERVER_ENV)
-    if api_server_endpoint:
-        from sky.server import common as server_common
-
-        if not server_common.is_api_server_local(api_server_endpoint):
-            click.echo(
-                f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
-                "creds, skipping local cred bootstrap",
-                err=True,
-            )
-            return
+    if _skypilot_api_server_is_remote():
+        click.echo(
+            f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
+            "creds, skipping local cred bootstrap",
+            err=True,
+        )
+        return
 
     env = {**os.environ}
     if env_file_path is not None and env_file_path.is_file():
@@ -818,9 +828,8 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
         if provider != "local":
             _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-        # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
-        # holds the provider creds, so a local config.toml balance may be stale.
-        if _doc_requests_runpod(task_doc) and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
+        # A remote server owns the authoritative RunPod account and balance.
+        if _doc_requests_runpod(task_doc) and not _skypilot_api_server_is_remote():
             _check_runpod_balance()
 
         if provider == "local":
