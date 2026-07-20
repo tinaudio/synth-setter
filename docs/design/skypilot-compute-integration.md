@@ -91,7 +91,7 @@ The smoke pipeline ships four real templates:
 ```
 src/synth_setter/configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
-├── vast-template.yaml        # Vast.ai GPU (marketplace spot-priced alternative)
+├── vast-template.yaml        # Vast.ai GPU (marketplace on-demand alternative; use_spot: false)
 ├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
 └── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ```
@@ -308,14 +308,10 @@ Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_f
 
 ### Phase B: SkyPilot compute configs
 
-**Files to create:**
+**Delivered** (superseded by §4.1 — the actual shape differs from the original spot/ondemand plan):
 
-- `src/synth_setter/configs/compute/vast-spot.yaml`
-- `src/synth_setter/configs/compute/vast-ondemand.yaml`
-
-**Files to modify:**
-
-- `pyproject.toml` — add `skypilot[vast]` as optional dependency
+- `src/synth_setter/configs/compute/vast-template.yaml` — a single on-demand template (`use_spot: false`), not separate spot/ondemand variants.
+- `pyproject.toml` — `vast` added to the required `skypilot[runpod,oci,kubernetes,vast]` extra (not an optional dependency).
 
 ### Phase C: Pipeline CLI + SkyPilot integration
 
@@ -383,12 +379,11 @@ Should `skypilot` be a required or optional dependency?
 ### Integration tests
 
 - `pipeline generate` with `compute_config: null` runs workers locally (LocalBackend path).
-- `pipeline generate` with `compute_config: src/synth_setter/configs/compute/vast-spot.yaml` calls SkyPilot SDK (mock SkyPilot in tests).
+- `pipeline generate` with `compute_config: src/synth_setter/configs/compute/vast-template.yaml` calls SkyPilot SDK (mock SkyPilot in tests).
 - Worker idempotency: start worker with some shards already `.valid` in R2 → skips them.
 
 ### E2E validation
 
-- `sky check` confirms Vast.ai credentials.
+- `sky check vast` confirms Vast.ai credentials.
 - `sky show-gpus` confirms GPU availability.
-- `sky launch --dryrun` with a compute config confirms pricing and provisioning.
-- Full `pipeline generate` → `pipeline status` → `pipeline finalize` cycle on Vast.ai spot instance.
+- Managed-job dispatch via `synth-setter-skypilot-launch src/synth_setter/configs/launch/train-vast-smoke.yaml` provisions a Vast GPU, runs the 10-step smoke train, and releases the instance (verified in #2212).

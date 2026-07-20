@@ -169,12 +169,16 @@ docs:
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
-    description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + OCI smoke)
+    description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + Vast + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`)."
       - pattern: "src/synth_setter/configs/compute/runpod-template.yaml"
         covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (currently projected rclone env for the worker backend), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
+      - pattern: "src/synth_setter/configs/compute/vast-template.yaml"
+        covers: "SkyPilot Task YAML for Vast.ai: resources block (cloud: vast, use_spot: false), image_id injected per-launch by `_override_image_id` exactly like RunPod. Vast auth is `~/.config/vastai/vast_api_key` (written by write_provider_creds.sh --provider vast). Header documents the vastai-sdk 1.x `api_key_access` breakage and the controller-side pin."
+      - pattern: "src/synth_setter/configs/launch/train-vast-smoke.yaml"
+        covers: "Launch config dispatching the 10-step junk train through vast-template.yaml — Vast.ai analogue of train-runpod-smoke.yaml (checkpoint upload + W&B artifact, num_workers=0)."
       - pattern: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then invokes `synth-setter-generate-dataset-from-hydra` against the synced checkout."
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
@@ -182,7 +186,7 @@ docs:
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
-        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor); PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
@@ -198,7 +202,7 @@ docs:
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"
-        covers: "skypilot[runpod,oci,kubernetes]==0.12.0 listed under [project.dependencies] — required, not optional"
+        covers: "skypilot[runpod,oci,kubernetes,vast]==0.12.0 listed under [project.dependencies] — required, not optional. vastai-sdk==0.2.5 pinned alongside it (1.x drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls)."
         scope: "skypilot"
 
   # ── Storage provenance spec ─────────────────────────────────────
