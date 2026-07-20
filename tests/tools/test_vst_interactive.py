@@ -107,13 +107,9 @@ class TestDecodePredictionRow:
     @pytest.mark.parametrize(
         "param_name, expected",
         [
-            # col 0 = -1.0 -> rescaled 0.0 -> attack at spec min (0.0)
             ("a_amp_eg_attack", 0.0),
-            # col 1 =  0.0 -> rescaled 0.5 -> decay at spec midpoint
             ("a_amp_eg_decay", 0.385),
-            # col 2 =  1.0 -> rescaled 1.0 -> release at spec max
             ("a_amp_eg_release", 0.77),
-            # col 3 =  2.0 -> clipped to 1.0 -> sustain at spec max
             ("a_amp_eg_sustain", 1.0),
         ],
     )
@@ -153,6 +149,33 @@ class TestDecodePredictionRow:
             vst_interactive.decode_prediction_row(
                 simple_pred_tensor, batch_idx=bad_idx, param_spec_name=SURGE_SIMPLE
             )
+
+    def test_wrong_width_when_decoded_raises_valueerror(
+        self, vst_interactive: ModuleType, simple_spec_total_length: int
+    ) -> None:
+        """Reject rows encoded for a different ParamSpec.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec_total_length: Encoded width of the simple ParamSpec.
+        """
+        prediction = torch.zeros((1, simple_spec_total_length + 1))
+
+        with pytest.raises(ValueError, match="prediction width"):
+            vst_interactive.decode_prediction_row(prediction, 0, SURGE_SIMPLE)
+
+    def test_non_finite_value_when_decoded_raises_valueerror(
+        self, vst_interactive: ModuleType, simple_spec_total_length: int
+    ) -> None:
+        """Reject non-finite model output before parameter decoding.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec_total_length: Encoded width of the simple ParamSpec.
+        """
+        prediction = torch.zeros((1, simple_spec_total_length))
+        prediction[0, 0] = torch.nan
+
+        with pytest.raises(ValueError, match="non-finite"):
+            vst_interactive.decode_prediction_row(prediction, 0, SURGE_SIMPLE)
 
 
 class TestPredictionRefType:
@@ -357,6 +380,28 @@ class TestLoadDatasetSynthParams:
         with pytest.raises((IndexError, ValueError)):
             vst_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
+    def test_wrong_width_when_loaded_raises_valueerror(
+        self,
+        vst_interactive: ModuleType,
+        simple_spec_total_length: int,
+        tmp_path: Path,
+    ) -> None:
+        """Reject dataset rows encoded for another ParamSpec.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec_total_length: Encoded width of the simple ParamSpec.
+        :param tmp_path: Per-test temporary directory.
+        """
+        lance_path = tmp_path / "wrong-width.lance"
+        _write_param_array_lance(
+            lance_path,
+            np.zeros((1, simple_spec_total_length + 1), dtype=np.float32),
+        )
+        ref = vst_interactive.DatasetRef(path=lance_path, batch_idx=0)
+
+        with pytest.raises(ValueError, match="dataset row width"):
+            vst_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
+
     @pytest.mark.requires_vst
     @pytest.mark.slow
     def test_loads_row_from_surge_xt_smoke_fixture(
@@ -478,6 +523,36 @@ class TestPlayAudioRecorded:
         assert note_on_bytes[1] == vst_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_off_bytes[1] == vst_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_on_bytes[2] == vst_interactive.SESSION_RECORDING_VELOCITY
+
+    @pytest.mark.parametrize(
+        "sample_value, message",
+        [
+            (1.01, r"outside \[-1, 1\]"),
+            (-1.01, r"outside \[-1, 1\]"),
+            (float("nan"), "non-finite"),
+        ],
+        ids=["positive", "negative", "non-finite"],
+    )
+    def test_invalid_audio_raises_valueerror(
+        self,
+        vst_interactive: ModuleType,
+        tmp_path: Path,
+        sample_value: float,
+        message: str,
+    ) -> None:
+        """Reject non-finite or out-of-range recording samples.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        :param sample_value: Invalid sample value returned by the plugin.
+        :param message: Expected validation-error fragment.
+        """
+        output_path = tmp_path / "invalid.wav"
+
+        with pytest.raises(ValueError, match=message):
+            vst_interactive.play_audio_recorded(_ConstantPlugin(sample_value), output_path)
+
+        assert not output_path.exists()
 
 
 class _FakeMidiMessage:
@@ -1397,6 +1472,7 @@ class _RecordingEvalRunner:
     def __call__(
         self,
         num_samples: int,
+        *,
         dataset_root_dir: Path,
         checkpoint_path: Path,
         param_spec_name: str,
@@ -1537,6 +1613,48 @@ class TestMaybeEvalCapturedPatches:
         assert not (tmp_path / "predict.lance").exists()
         assert runner.calls == []
 
+    def test_failed_copy_removes_current_partial_destination(
+        self,
+        vst_interactive: ModuleType,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Remove a new destination partially created by a failing copy.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        :param monkeypatch: Pytest fixture for inducing the partial-copy error.
+        """
+        train_path = tmp_path / "train.lance"
+        _write_stub_lance_dir(train_path)
+        checkpoint_path = tmp_path / "model.ckpt"
+        checkpoint_path.write_bytes(b"ckpt")
+        real_copytree = vst_interactive.shutil.copytree
+
+        def copytree_with_partial_failure(source: Path, destination: Path) -> Path:
+            if destination.name == "val.lance":
+                destination.mkdir()
+                (destination / "partial").write_bytes(b"partial")
+                raise OSError("simulated partial copy")
+            return real_copytree(source, destination)
+
+        monkeypatch.setattr(vst_interactive.shutil, "copytree", copytree_with_partial_failure)
+
+        with pytest.raises(OSError, match="partial copy"):
+            vst_interactive._maybe_eval_captured_patches(
+                patch_file_path=train_path,
+                output_dataset_dir_path=tmp_path,
+                num_patches=1,
+                checkpoint_path=checkpoint_path,
+                param_spec_name=SURGE_SIMPLE,
+                plugin_state_path="presets/surge-base.vstpreset",
+                eval_runner=_RecordingEvalRunner(),
+            )
+
+        assert not (tmp_path / "test.lance").exists()
+        assert not (tmp_path / "val.lance").exists()
+        assert not (tmp_path / "predict.lance").exists()
+
 
 def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
     """Write a brief mono WAV at ``path``.
@@ -1577,6 +1695,101 @@ def _populate_audio_dir(audio_dir: Path, num_samples: int, *, silent: bool = Fal
         _write_wav(sample_dir / "pred.wav", silent=silent)
         (sample_dir / "spec.png").write_bytes(b"\x89PNG\r\n\x1a\n")
         (sample_dir / "params.csv").write_text("name,value\n")
+
+
+class _MaterializingPipelineRunner:
+    """Materialize each subprocess stage's outputs for an orchestration test.
+
+    :param num_samples: Number of indexed artifacts each stage should emit.
+    """
+
+    def __init__(self, num_samples: int) -> None:
+        self.num_samples = num_samples
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        check: bool | None = None,
+        timeout: int | None = None,
+    ) -> None:
+        """Record a command and create the artifacts its real subprocess owns.
+
+        :param args: Subprocess argument vector.
+        :param check: Whether the real subprocess would enforce a zero exit status.
+        :param timeout: Real subprocess deadline in seconds.
+        :raises AssertionError: The command targets an unknown module.
+        """
+        del check, timeout
+        self.calls.append(args)
+        module_index = args.index("-m") + 1
+        module = args[module_index]
+        if module == "synth_setter.cli.eval":
+            output_arg = next(
+                arg for arg in args if arg.startswith("callbacks.prediction_writer.output_dir=")
+            )
+            output_dir = Path(output_arg.partition("=")[2])
+            for index in range(self.num_samples):
+                torch.save(torch.zeros(1), output_dir / f"pred-{index}.pt")
+                torch.save(torch.zeros(1), output_dir / f"target-audio-{index}.pt")
+                torch.save(torch.zeros(1), output_dir / f"target-params-{index}.pt")
+            return
+        if module == "synth_setter.evaluation.predict_vst_audio":
+            _populate_audio_dir(Path(args[module_index + 2]), self.num_samples)
+            return
+        if module == "synth_setter.evaluation.compute_audio_metrics":
+            metrics_dir = Path(args[module_index + 2])
+            pd.DataFrame(
+                {
+                    metric: np.full(self.num_samples, 0.5)
+                    for metric in ("mss", "wmfcc", "sot", "rms")
+                }
+            ).to_csv(metrics_dir / "metrics.csv", index=False)
+            pd.DataFrame({"mean": np.full(4, 0.5), "std": np.zeros(4)}).to_csv(
+                metrics_dir / "aggregated_metrics.csv", index=False
+            )
+            return
+        raise AssertionError(f"unexpected subprocess module: {module}")
+
+
+class TestEvalPatches:
+    """``eval_patches`` wires prediction, rendering, and metrics in order."""
+
+    def test_materialized_pipeline_outputs_are_validated(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """Exercise all stages through their real artifact validators.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
+        checkpoint_path = tmp_path / "model.ckpt"
+        checkpoint_path.write_bytes(b"checkpoint")
+        (tmp_path / "predict.lance").mkdir()
+        runner = _MaterializingPipelineRunner(num_samples=2)
+
+        vst_interactive.eval_patches(
+            2,
+            dataset_root_dir=tmp_path,
+            checkpoint_path=checkpoint_path,
+            param_spec_name=SURGE_SIMPLE,
+            plugin_state_path="presets/surge-simple.vstpreset",
+            experiment="vst/custom",
+            subprocess_runner=runner,
+        )
+
+        modules = [args[args.index("-m") + 1] for args in runner.calls]
+        assert modules == [
+            "synth_setter.cli.eval",
+            "synth_setter.evaluation.predict_vst_audio",
+            "synth_setter.evaluation.compute_audio_metrics",
+        ]
+        assert "experiment=vst/custom" in runner.calls[0]
+        assert "datamodule.param_spec_name=surge_simple" in runner.calls[0]
+        assert "surge_simple" in runner.calls[1]
+        assert "presets/surge-simple.vstpreset" in runner.calls[1]
+        assert len(pd.read_csv(tmp_path / "metrics" / "metrics.csv")) == 2
 
 
 _RENDER_DEFAULT_PRESET = "presets/surge-base.vstpreset"
@@ -2039,6 +2252,201 @@ class _StopBeforeGuiError(Exception):
 
 def _raise_stop(plugin_path: str) -> NoReturn:
     raise _StopBeforeGuiError(plugin_path)
+
+
+class _CliPlugin:
+    """Minimal VST3Plugin replacement for public-CLI branch tests."""
+
+    def __init__(self) -> None:
+        self.parameters: dict[str, object] = {}
+
+    def show_editor(self, stop_event: threading.Event) -> None:
+        """Close the fake editor immediately.
+
+        :param stop_event: Shared shutdown signal.
+        """
+        stop_event.set()
+
+
+def _invoke_cli_and_capture_params(
+    vst_interactive: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+) -> dict[str, float]:
+    """Invoke the Click command and return parameters sent to the plugin.
+
+    :param vst_interactive: Loaded VST interactive module under test.
+    :param monkeypatch: Pytest fixture replacing external plugin operations.
+    :param args: CLI arguments after the command name.
+    :returns: Parameter mapping passed to ``set_params``.
+    """
+    plugin = _CliPlugin()
+    applied: list[dict[str, float]] = []
+    monkeypatch.setattr(vst_interactive, "VST3Plugin", _CliPlugin)
+    monkeypatch.setattr(vst_interactive, "load_plugin", lambda _path: plugin)
+    monkeypatch.setattr(vst_interactive, "load_preset", lambda *_args: None)
+    monkeypatch.setattr(vst_interactive, "_flush_plugin", lambda *_args: None)
+    monkeypatch.setattr(
+        vst_interactive, "set_params", lambda _plugin, params: applied.append(params)
+    )
+    monkeypatch.setattr(vst_interactive, "play_audio_recorded", lambda *_args: None)
+    monkeypatch.setattr(vst_interactive, "keyboard_loop", lambda *_args: [])
+
+    result = CliRunner().invoke(vst_interactive.main, args)
+
+    assert result.exception is None, result.output
+    assert len(applied) == 1
+    return applied[0]
+
+
+class TestMainParameterReference:
+    """The public CLI applies decoded prediction and dataset references."""
+
+    def test_pred_values_reach_plugin(
+        self,
+        vst_interactive: ModuleType,
+        simple_spec_total_length: int,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Decode ``--pred`` and forward its synth values to ``set_params``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec_total_length: Encoded width of the simple ParamSpec.
+        :param tmp_path: Per-test temporary directory.
+        :param monkeypatch: Pytest fixture replacing external plugin operations.
+        """
+        prediction = torch.zeros((1, simple_spec_total_length))
+        prediction_path = tmp_path / "pred.pt"
+        torch.save(prediction, prediction_path)
+
+        applied = _invoke_cli_and_capture_params(
+            vst_interactive,
+            monkeypatch,
+            [
+                "--plugin-path",
+                "fake.vst3",
+                "--param-spec-name",
+                SURGE_SIMPLE,
+                "--pred",
+                f"{prediction_path}:0",
+                "--session-recording-path",
+                str(tmp_path / "session.wav"),
+            ],
+        )
+
+        assert applied == vst_interactive.decode_prediction_row(prediction, 0, SURGE_SIMPLE)
+
+    def test_dataset_values_reach_plugin(
+        self,
+        vst_interactive: ModuleType,
+        simple_spec: ParamSpec,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Decode ``--dataset-ref`` and forward its synth values to ``set_params``.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec: Simple ParamSpec fixture used by the scenario.
+        :param tmp_path: Per-test temporary directory.
+        :param monkeypatch: Pytest fixture replacing external plugin operations.
+        """
+        synth_params, note_params = simple_spec.sample()
+        dataset_path = tmp_path / "test.lance"
+        _write_param_array_lance(
+            dataset_path,
+            simple_spec.encode(synth_params, note_params)[None, :],
+        )
+
+        applied = _invoke_cli_and_capture_params(
+            vst_interactive,
+            monkeypatch,
+            [
+                "--plugin-path",
+                "fake.vst3",
+                "--param-spec-name",
+                SURGE_SIMPLE,
+                "--dataset-ref",
+                f"{dataset_path}:0",
+                "--session-recording-path",
+                str(tmp_path / "session.wav"),
+            ],
+        )
+
+        assert applied == pytest.approx(synth_params, abs=1e-5)
+
+
+class TestMainGuards:
+    """Public CLI conflicts fail before plugin loading."""
+
+    def test_pred_and_dataset_ref_when_combined_fail(self, vst_interactive: ModuleType) -> None:
+        """Reject simultaneous parameter-row sources.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        with mock.patch.object(vst_interactive, "load_plugin", _raise_stop):
+            result = CliRunner().invoke(
+                vst_interactive.main,
+                [
+                    "--param-spec-name",
+                    SURGE_SIMPLE,
+                    "--pred",
+                    "pred.pt:0",
+                    "--dataset-ref",
+                    "test.lance:0",
+                ],
+            )
+
+        assert result.exit_code == 2
+        assert "mutually exclusive" in result.output
+
+    def test_midi_and_recording_when_combined_fail(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """Reject MIDI input during deterministic recording.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
+        with mock.patch.object(vst_interactive, "load_plugin", _raise_stop):
+            result = CliRunner().invoke(
+                vst_interactive.main,
+                [
+                    "--param-spec-name",
+                    SURGE_SIMPLE,
+                    "--midi-port",
+                    "controller",
+                    "--session-recording-path",
+                    str(tmp_path / "session.wav"),
+                ],
+            )
+
+        assert result.exit_code == 2
+        assert "mutually exclusive" in result.output
+
+    def test_existing_output_dataset_directory_fails(
+        self, vst_interactive: ModuleType, tmp_path: Path
+    ) -> None:
+        """Reject an output directory that could be overwritten.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param tmp_path: Per-test temporary directory.
+        """
+        output_dir = tmp_path / "existing"
+        output_dir.mkdir()
+        with mock.patch.object(vst_interactive, "load_plugin", _raise_stop):
+            result = CliRunner().invoke(
+                vst_interactive.main,
+                [
+                    "--param-spec-name",
+                    SURGE_SIMPLE,
+                    "--output-dataset-dir-path",
+                    str(output_dir),
+                ],
+            )
+
+        assert result.exit_code == 2
+        assert "already exists" in result.output
 
 
 class TestMainPluginPathDefault:

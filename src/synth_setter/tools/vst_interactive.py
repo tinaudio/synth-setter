@@ -78,18 +78,13 @@ MAKE_DATASET_SIGNAL_DURATION_SECONDS = 4.0
 MAKE_DATASET_MIN_LOUDNESS = -55.0
 MAKE_DATASET_SAMPLES_PER_RENDER_BATCH = 32
 
-# Real-time playback rate. Set this to whatever the default output device supports
-# if it differs from ``SAMPLE_RATE`` — ``play_audio`` will resample on the fly.
-# Resampling adds overhead, so it's optional and disabled by default.
+# Set this only when the output device requires a rate other than SAMPLE_RATE.
 PLAYBACK_SAMPLE_RATE = SAMPLE_RATE
 
 # Maximum time to wait for the audio thread to drain after ``stop_event`` is set.
 AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
 
-# Deterministic recording clip when ``--session-recording-path`` is set.
-# The point is reproducibility: same plugin + preset + params -> same WAV.
-# A held middle-C note is rendered from ``NOTE_START`` to ``NOTE_END``,
-# inside a fixed-length window so any release tail is captured.
+# Offline middle-C recording uses a fixed window to retain its release tail.
 SESSION_RECORDING_DURATION_SECONDS = 10.0
 SESSION_RECORDING_MIDI_NOTE = 60  # middle C (C4)
 SESSION_RECORDING_VELOCITY = 100
@@ -111,15 +106,10 @@ _STOP_LOOPING = False
 
 _DRIFT_TOLERANCE = 1e-6
 
-# Cap how many queued MIDI events ``play_audio`` drains per buffer so a high-rate
-# CC stream can't extend the realtime audio callback enough to cause underruns.
-# Excess events stay queued and are processed on the next buffer (~12ms later at
-# 44.1k/512), which is well within the human-perceptible latency budget.
+# Bound per-buffer MIDI work to avoid audio underruns; defer excess events.
 _MAX_MIDI_EVENTS_PER_BUFFER = 64
 
-# Polling interval for ``midi_listener`` between non-blocking ``port.poll()`` calls.
-# Short enough to make the listener responsive to ``stop_event`` (~10ms worst case)
-# without busy-spinning on the GIL.
+# Poll frequently enough for prompt shutdown without busy-spinning.
 _MIDI_POLL_INTERVAL_SECONDS = 0.01
 
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
@@ -397,6 +387,24 @@ def _load_pred_tensor(pred_path: Path) -> torch.Tensor:
     return torch.load(pred_path, map_location="cpu", weights_only=True)
 
 
+def _validate_encoded_row(row: np.ndarray, spec: ParamSpec, source: str) -> None:
+    """Reject rows that cannot be decoded by the selected ParamSpec.
+
+    :param row: One-dimensional encoded parameter row.
+    :param spec: ParamSpec selected for decoding.
+    :param source: Human-readable row source for error messages.
+    :raises ValueError: If the row has the wrong width or contains non-finite values.
+    """
+    expected_width = spec.synth_param_length + spec.note_param_length
+    if row.shape != (expected_width,):
+        actual_width = row.shape[-1] if row.ndim else 0
+        raise ValueError(
+            f"{source} width {actual_width} does not match ParamSpec width {expected_width}"
+        )
+    if not np.isfinite(row).all():
+        raise ValueError(f"{source} contains non-finite values")
+
+
 def decode_prediction_row(
     pred_tensor: torch.Tensor,
     batch_idx: int,
@@ -419,6 +427,7 @@ def decode_prediction_row(
 
     spec = param_specs[param_spec_name]
     row = pred_tensor[batch_idx].detach().cpu().float().numpy()
+    _validate_encoded_row(row, spec, "prediction")
     synth_params, _ = decode_model_output(row, spec)
     return synth_params
 
@@ -453,6 +462,7 @@ def load_dataset_synth_params(
     row = np.asarray(
         table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0], dtype=np.float32
     )
+    _validate_encoded_row(row, spec, "dataset row")
 
     synth_params, _ = spec.decode(row)
     return synth_params
@@ -655,7 +665,8 @@ def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> Non
 
     :param plugin: Loaded VST3 instance to render.
     :param session_recording_path: Destination WAV path.
-    :raises ValueError: The plugin returns an audio buffer with an unexpected shape.
+    :raises ValueError: The plugin returns an invalid shape, non-finite samples, or samples
+        outside the normalized ``[-1, 1]`` range.
     """
     midi_events = make_midi_events(
         SESSION_RECORDING_MIDI_NOTE,
@@ -684,6 +695,11 @@ def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> Non
         raise ValueError(
             f"expected output shape ({CHANNELS}, {expected_frames}), got {output.shape}"
         )
+    if not np.isfinite(output).all():
+        raise ValueError("recorded audio contains non-finite samples")
+    peak = float(np.abs(output).max())
+    if peak > 1.0:
+        raise ValueError(f"recorded audio peak {peak:.6f} is outside [-1, 1]")
     # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
     with AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS) as f:
         f.write(output.T)
@@ -1037,12 +1053,12 @@ def _compute_and_validate_metrics(
 
 def eval_patches(
     num_samples: int,
+    *,
     dataset_root_dir: Path,
     checkpoint_path: Path,
     param_spec_name: str,
     plugin_state_path: str,
     experiment: str = _DEFAULT_EVAL_EXPERIMENT,
-    *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
     """Run model eval on captured patches end-to-end.
@@ -1402,7 +1418,28 @@ def main(
     )
 
 
-type EvalRunner = Callable[[int, Path, Path, str, str, str], None]
+class EvalRunner(Protocol):
+    """Callable contract for captured-patch evaluation."""
+
+    def __call__(
+        self,
+        num_samples: int,
+        *,
+        dataset_root_dir: Path,
+        checkpoint_path: Path,
+        param_spec_name: str,
+        plugin_state_path: str,
+        experiment: str,
+    ) -> None:
+        """Evaluate captured patches with explicit same-typed settings.
+
+        :param num_samples: Number of patches to evaluate.
+        :param dataset_root_dir: Root containing the evaluation splits.
+        :param checkpoint_path: Model checkpoint used for prediction.
+        :param param_spec_name: ParamSpec registry key used for decoding.
+        :param plugin_state_path: Baseline plugin state used for rendering.
+        :param experiment: Hydra experiment selecting the model configuration.
+        """
 
 
 def _maybe_eval_captured_patches(
@@ -1443,26 +1480,29 @@ def _maybe_eval_captured_patches(
     sibling_paths = [
         output_dataset_dir_path / name for name in ("test.lance", "val.lance", "predict.lance")
     ]
-    copied: list[Path] = []
+    rollback_paths: list[Path] = []
     try:
         for sibling_path in sibling_paths:
+            if not sibling_path.exists():
+                rollback_paths.append(sibling_path)
             # Lance datasets are directories, so copy the whole tree.
             shutil.copytree(patch_file_path, sibling_path)
-            copied.append(sibling_path)
     except OSError:
-        for created in copied:
+        for rollback_path in rollback_paths:
+            if not rollback_path.exists():
+                continue
             try:
-                shutil.rmtree(created)
+                shutil.rmtree(rollback_path)
             except OSError:
-                logger.exception("failed to roll back partial sibling copy at %s", created)
+                logger.exception("failed to roll back partial sibling copy at %s", rollback_path)
         raise
     runner(
         num_patches,
-        output_dataset_dir_path,
-        checkpoint_path,
-        param_spec_name,
-        plugin_state_path,
-        experiment,
+        dataset_root_dir=output_dataset_dir_path,
+        checkpoint_path=checkpoint_path,
+        param_spec_name=param_spec_name,
+        plugin_state_path=plugin_state_path,
+        experiment=experiment,
     )
 
 
