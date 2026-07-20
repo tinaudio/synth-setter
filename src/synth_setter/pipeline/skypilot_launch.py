@@ -336,10 +336,10 @@ def _reset_skypilot_client_cache() -> None:
     server_common.is_api_server_local.cache_clear()
 
 
-def _restore_skypilot_client_env(previous: Mapping[str, str | None]) -> None:
-    """Restore process auth after a dispatch.
+def _restore_dispatch_env(previous: Mapping[str, str | None]) -> None:
+    """Restore process credentials after a dispatch.
 
-    :param previous: Auth environment values captured before dispatch.
+    :param previous: Environment values captured before dispatch.
     """
     for key, value in previous.items():
         if value is None:
@@ -405,12 +405,11 @@ def _skypilot_api_server_is_remote() -> bool:
 
     :returns: Whether provider checks belong to a remote API server.
     """
-    api_server_endpoint = os.environ.get(_SKYPILOT_API_SERVER_ENV)
-    if not api_server_endpoint:
-        return False
-
     from sky.server import common as server_common
 
+    api_server_endpoint = (
+        os.environ.get(_SKYPILOT_API_SERVER_ENV) or server_common.get_server_url()
+    )
     return not server_common.is_api_server_local(api_server_endpoint)
 
 
@@ -421,8 +420,8 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     via `subprocess.run(capture_output=True)` so even surprise output cannot
     reach a caller's tee'd workflow log.
 
-    A remote `SKYPILOT_API_SERVER_ENDPOINT` owns provider credentials; local
-    endpoints still bootstrap host-side credential files.
+    A remote SkyPilot API server owns provider credentials; local endpoints
+    still bootstrap host-side credential files.
 
     The subprocess inherits `os.environ` merged with `env_file_path` values
     (when provided) so a local-dev `.env` carrying provider creds bootstraps
@@ -430,8 +429,7 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     """
     if _skypilot_api_server_is_remote():
         click.echo(
-            f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
-            "creds, skipping local cred bootstrap",
+            "Remote SkyPilot API server holds provider creds; skipping local cred bootstrap",
             err=True,
         )
         return
@@ -813,7 +811,10 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     # Phase 2: commit — side effects in dependency order.
     _ensure_ci_sky_config()
-    previous_auth_env = {key: os.environ.get(key) for key in SKYPILOT_CLIENT_AUTH_ENV_KEYS}
+    r2_env_keys = tuple(key for key in worker_env if key.startswith("RCLONE_CONFIG_R2_"))
+    previous_dispatch_env = {
+        key: os.environ.get(key) for key in (*SKYPILOT_CLIENT_AUTH_ENV_KEYS, *r2_env_keys)
+    }
     try:
         if sky_cfg.local:
             _configure_local_skypilot_client()
@@ -851,7 +852,7 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             tail=sky_cfg.tail,
         )
     finally:
-        _restore_skypilot_client_env(previous_auth_env)
+        _restore_dispatch_env(previous_dispatch_env)
 
     failed = [
         (job_names[i], rcs[i])

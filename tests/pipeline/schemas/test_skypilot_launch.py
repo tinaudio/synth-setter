@@ -123,6 +123,20 @@ class TestSkypilotClientSettings:
         assert settings.api_server_endpoint == "https://config.example.com"
         assert settings.service_account_token is not None
 
+    def test_invalid_config_endpoint_is_rejected(self, tmp_path: Path) -> None:
+        """An explicit launcher override still passes through endpoint validation.
+
+        :param tmp_path: Provides an otherwise empty dotenv source.
+        """
+        env_file = tmp_path / ".env"
+        env_file.touch()
+
+        with pytest.raises(ValidationError, match=r"HTTP\(S\) URL"):
+            skypilot_client_settings_from_sources(
+                env_file,
+                api_server_endpoint="not-a-url",
+            )
+
     def test_blank_env_file_value_falls_back_to_process_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

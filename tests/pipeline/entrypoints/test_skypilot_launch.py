@@ -617,6 +617,28 @@ class TestRunCredBootstrap:
         _real_run_cred_bootstrap(provider="runpod")
         assert called == [], "bootstrap script should not be invoked in remote-server mode"
 
+    def test_persisted_remote_api_endpoint_skips_provider_bootstrap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A remote endpoint persisted by ``sky api login`` owns provider credentials.
+
+        :param monkeypatch: Supplies the SDK endpoint and records subprocess execution.
+        """
+        from sky.server import common as server_common
+
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+        monkeypatch.setattr(
+            server_common,
+            "get_server_url",
+            MagicMock(return_value="https://persisted-sky.example.com"),
+        )
+        run = MagicMock(return_value=MagicMock(stdout="", stderr="", returncode=0))
+        monkeypatch.setattr(skypilot_launch.subprocess, "run", run)
+
+        _real_run_cred_bootstrap(provider="runpod")
+
+        run.assert_not_called()
+
     def test_local_api_endpoint_runs_provider_bootstrap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1476,6 +1498,7 @@ class TestDispatchViaSkypilot:
             "synth_setter.pipeline.skypilot_launch._run_cred_bootstrap",
             MagicMock(side_effect=RuntimeError("simulated bootstrap failure")),
         )
+        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "previous-key")
 
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
@@ -1488,6 +1511,7 @@ class TestDispatchViaSkypilot:
         with pytest.raises(RuntimeError, match="simulated bootstrap failure"):
             dispatch_via_skypilot(sky_cfg)
 
+        assert os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "previous-key"
         mock_sky.jobs.launch.assert_not_called()
 
     def test_end_to_end_dispatch_uses_cmd_as_run_block(
@@ -1591,6 +1615,7 @@ class TestDispatchViaSkypilot:
 
         assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
         assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
+        assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" not in os.environ
         assert server_common.get_server_url() != "https://sky.example.com"
         skypilot_auth_request.assert_called_once_with(
             "GET",
