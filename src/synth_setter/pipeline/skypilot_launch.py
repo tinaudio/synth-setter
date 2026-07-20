@@ -778,7 +778,6 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         )
     worker_env.update(sky_cfg.extra_envs)
 
-    client_settings: SkypilotClientSettings | None = None
     if not sky_cfg.local:
         try:
             client_settings = skypilot_client_settings_from_sources(
@@ -802,7 +801,6 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         if sky_cfg.local:
             _configure_local_skypilot_client()
         else:
-            assert client_settings is not None
             _configure_remote_skypilot_client(client_settings, env_file_path)
 
         # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's

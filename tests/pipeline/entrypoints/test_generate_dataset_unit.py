@@ -2476,12 +2476,15 @@ class TestMainDispatchBranches:
         # A bare-minimum compute YAML the loader will accept (resources + envs, no run:).
         template = tmp_path / "template.yaml"
         template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        env_file = tmp_path / "launcher.env"
+        env_file.write_text("SKYPILOT_API_SERVER_ENDPOINT=https://sky.example.com\n")
 
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
             f"skypilot_launch.compute_template={template}",
+            f"skypilot_launch.env_file={env_file}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -2502,6 +2505,7 @@ class TestMainDispatchBranches:
         assert "sky_cfg" in recorded
         sky_cfg = recorded["sky_cfg"]
         assert sky_cfg.compute_template == str(template)  # type: ignore[attr-defined]
+        assert sky_cfg.env_file == str(env_file)  # type: ignore[attr-defined]
         assert sky_cfg.cmd is not None  # type: ignore[attr-defined]
         # Every operator-supplied override (sans argv[0]) round-trips into the worker cmd
         # so the worker reproduces this composition byte-for-byte.
