@@ -1,6 +1,59 @@
 # CHANGELOG
 
 
+## v10.3.0 (2026-07-20)
+
+### Features
+
+- **training**: Expose prefetch_factor on the Lance datamodule
+  ([#2235](https://github.com/tinaudio/synth-setter/pull/2235),
+  [`faffe64`](https://github.com/tinaudio/synth-setter/commit/faffe64871e1d99b6f95c471bc7217c27edc5d86))
+
+* feat(training): expose prefetch_factor on the Lance datamodule
+
+B200 runs are dataloader-latency-bound: each batch is one Lance take of batch_size random rows, and
+  workers idle on I/O. Deeper prefetch closes the remaining GPU idle gaps, but PyTorch's default of
+  2 was hard-inherited. Thread prefetch_factor (default null = PyTorch default) from the vst
+  datamodule config through LanceVSTDataModule into map_dataloader_over, passing it only when
+  workers exist since PyTorch forbids it for in-process loading.
+
+Fixes #2232
+
+* test(training): address pre-PR review findings on prefetch_factor
+
+Compare the unset-prefetch loader against a plain DataLoader instead of hard-coding PyTorch's
+  default, iterate spawn workers under a non-default prefetch depth, drive the train entrypoint with
+  a composed prefetch_factor override, and tighten two comments.
+
+* test(training): apply second-pass review findings on prefetch_factor
+
+Extract the shared Hydra compose/instantiate lifecycle into a local helper, tighten the vst.yaml and
+  in-process-loader comments, and drop a baked-in worker-count literal from a test docstring.
+
+* feat(training): forward prefetch_factor through lance_map_dataloader
+
+Close the review WARN: the public map factory now accepts the same optional prefetch depth as
+  map_dataloader_over instead of raising TypeError on the keyword.
+
+### Internal-Fix
+
+- **training**: Namespace val-audio-probe uploads per launch
+  ([#2234](https://github.com/tinaudio/synth-setter/pull/2234),
+  [`1eb9b16`](https://github.com/tinaudio/synth-setter/commit/1eb9b169aaa5622041873382773ec7bb290dcdb0))
+
+_derive_probe_uri archived every launch of one experiment under the same step-keyed prefix
+  (r2://{bucket}/probes/{config_id}), so concurrent runs interleaved and overwrote each other's
+  step-N/ snapshots (observed with three concurrent flow_simple runs on 2026-07-20).
+
+Thread the launch's recovery namespace — the same {run_id}-{uuid} instance the mid-run checkpoint
+  uploader uses — into the probe URI so snapshots land at
+  r2://{bucket}/probes/{config_id}/{namespace}/step-N/ and a launch's probes correlate with its
+  recovery checkpoints by name. train() already mints the namespace unconditionally, so probes are
+  namespaced even when training.upload_checkpoints_during_training is off.
+
+Fixes #2230
+
+
 ## v10.2.1 (2026-07-20)
 
 ### Bug Fixes
