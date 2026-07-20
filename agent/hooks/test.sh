@@ -2063,35 +2063,35 @@ T_pi_readiness_reprompts_once_per_report() {
     '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"},{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]')
   [[ "$(jq '.events == ["agent_settled"] and .sent == ["ACTION_REQUIRED: fix CI"]' <<<"$out")" == "true" ]]
 }
-it "Pi readiness: settled blocking report re-prompts once" \
-  T_pi_readiness_reprompts_once_per_report
-
 T_pi_readiness_pass_rearms_nudge() {
   local out
   out=$(run_pi_readiness_adapter \
     '[{"code":2,"stderr":"WAIT: CI pending"},{"code":0,"stderr":""},{"code":2,"stderr":"WAIT: CI pending"}]')
   [[ "$(jq '.sent == ["WAIT: CI pending", "WAIT: CI pending"]' <<<"$out")" == "true" ]]
 }
-it "Pi readiness: passing result re-arms future nudge" \
-  T_pi_readiness_pass_rearms_nudge
-
 T_pi_readiness_print_mode_does_not_reprompt() {
   local out
   out=$(run_pi_readiness_adapter \
     '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]' print)
   [[ "$(jq '.sent == []' <<<"$out")" == "true" ]]
 }
-it "Pi readiness: print mode does not re-prompt" \
-  T_pi_readiness_print_mode_does_not_reprompt
-
 T_pi_readiness_warn_mode_notifies_without_reprompt() {
   local out
   out=$(run_pi_readiness_adapter \
     '[{"code":0,"stderr":"WARNING: PR needs attention"}]')
   [[ "$(jq '.sent == [] and .notifications == [{"message":"WARNING: PR needs attention","level":"warning"}]' <<<"$out")" == "true" ]]
 }
-it "Pi readiness: warn mode displays an advisory" \
-  T_pi_readiness_warn_mode_notifies_without_reprompt
+# Pi ships with Node; Python-only CI images omit it.
+if command -v node >/dev/null 2>&1; then
+  it "Pi readiness: settled blocking report re-prompts once" \
+    T_pi_readiness_reprompts_once_per_report
+  it "Pi readiness: passing result re-arms future nudge" \
+    T_pi_readiness_pass_rearms_nudge
+  it "Pi readiness: print mode does not re-prompt" \
+    T_pi_readiness_print_mode_does_not_reprompt
+  it "Pi readiness: warn mode displays an advisory" \
+    T_pi_readiness_warn_mode_notifies_without_reprompt
+fi
 
 T_codex_readiness_notify_uses_shared_hook() {
   grep -Fxq 'notify = ["bash", "agent/hooks/pr-readiness-stop.sh"]' \
