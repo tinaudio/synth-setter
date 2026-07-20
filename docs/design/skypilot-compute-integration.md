@@ -262,9 +262,9 @@ jobs:
   controller:
     resources:
       disk_size: 40
-    autostop:
-      idle_minutes: 30
-      down: true
+      autostop:
+        idle_minutes: 30
+        down: true
 ```
 
 CI overwrites this file with its own controller shrink (`_ensure_ci_sky_config` in `src/synth_setter/pipeline/skypilot_launch.py`); the config above is for operator machines launching real RunPod jobs.
