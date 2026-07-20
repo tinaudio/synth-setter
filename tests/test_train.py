@@ -10,6 +10,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 import logging
 import os
 import re
+import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -780,6 +781,26 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Real training completes without opening a test split during fit.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    shutil.rmtree(dataset_root / "test.lance")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.test = False
+        cfg_train_lance.datamodule.num_workers = 0
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, object_dict = train(cfg_train_lance)
+
+    with pytest.raises(RuntimeError, match="test split was not built"):
+        object_dict["datamodule"].test_dataloader()
 
 
 @pytest.mark.dataloader_multiprocess
