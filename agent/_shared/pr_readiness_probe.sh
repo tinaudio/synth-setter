@@ -78,10 +78,10 @@ if [[ "$checks_rc" -eq 1 && "$checks" == *"unknown flag: --json"* ]]; then
   checks=$(jq '[.statusCheckRollup[] | {
     name: (.name // .context),
     state: (if .__typename == "CheckRun"
-      then (if .conclusion == "" then .status else .conclusion end)
+      then (if (.conclusion // "") == "" then .status else .conclusion end)
       else .state end),
     bucket: (if .__typename == "CheckRun" then
-      .conclusion as $conclusion
+      (.conclusion // "") as $conclusion
       | if .status != "COMPLETED" and $conclusion == "" then "pending"
       elif $conclusion == "CANCELLED" then "cancel"
       elif (["ACTION_REQUIRED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT"]

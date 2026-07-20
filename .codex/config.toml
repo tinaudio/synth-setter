@@ -1,3 +1,5 @@
+notify = ["bash", "agent/hooks/pr-readiness-stop.sh"]
+
 [agents]
 max_depth = 2
 
