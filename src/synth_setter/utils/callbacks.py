@@ -140,8 +140,6 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
             or trainer.sanity_checking
         ):
             return
-        if self._should_save_on_train_epoch_end(trainer):
-            return
         self._save_topk_checkpoint(trainer, self._monitor_candidates(trainer))
 
 

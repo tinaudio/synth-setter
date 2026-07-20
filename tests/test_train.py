@@ -16,6 +16,7 @@ from typing import Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
+import hydra
 import numpy as np
 import pandas as pd
 import pytest
@@ -965,14 +966,37 @@ def _prediction_file_names() -> list[str]:
     )
 
 
+def test_train_default_checkpoint_callback_is_validation_aligned(cfg_train: DictConfig) -> None:
+    """The composed train config uses validation-aligned checkpoint selection.
+
+    :param cfg_train: Composed training configuration.
+    """
+    checkpoint = hydra.utils.instantiate(cfg_train.callbacks.model_checkpoint)
+
+    assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
+
+
 @pytest.mark.parametrize("save_last", [True, "link"])
+@pytest.mark.parametrize(
+    ("limit_train_batches", "val_check_interval", "expected_score", "expected_step"),
+    [(5, 2, 1.0, 4), (6, 1.0, 2.0, 6)],
+)
 def test_train_best_checkpoint_contains_metric_producing_weights(
-    cfg_train: DictConfig, save_last: bool | Literal["link"]
+    cfg_train: DictConfig,
+    save_last: bool | Literal["link"],
+    limit_train_batches: int,
+    val_check_interval: int | float,
+    expected_score: float,
+    expected_step: int,
 ) -> None:
     """The train entrypoint keeps monitored weights aligned with validation.
 
     :param cfg_train: Tiny CPU training configuration.
     :param save_last: Recovery checkpoint mode under test.
+    :param limit_train_batches: Number of synthetic training batches.
+    :param val_check_interval: Mid-epoch or epoch-end validation cadence.
+    :param expected_score: Best score available at that cadence.
+    :param expected_step: Step that produced the best score and latest recovery save.
     """
     with open_dict(cfg_train):
         cfg_train.model = {
@@ -991,15 +1015,15 @@ def test_train_best_checkpoint_contains_metric_producing_weights(
                 "save_top_k": 1,
                 "save_last": save_last,
                 "auto_insert_metric_name": False,
-                "every_n_train_steps": 1,
+                "every_n_train_steps": 2,
             }
         }
         cfg_train.logger = None
         cfg_train.test = False
-        cfg_train.trainer.limit_train_batches = 6
+        cfg_train.trainer.limit_train_batches = limit_train_batches
         cfg_train.trainer.limit_val_batches = 1
         cfg_train.trainer.num_sanity_val_steps = 0
-        cfg_train.trainer.val_check_interval = 2
+        cfg_train.trainer.val_check_interval = val_check_interval
         cfg_train.training.val_audio_probe = False
     HydraConfig().set_config(cfg_train)
 
@@ -1009,11 +1033,11 @@ def test_train_best_checkpoint_contains_metric_producing_weights(
     assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
     best = torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)
     last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
-    assert checkpoint.best_model_score == 1.0
-    assert best["global_step"] == 4
-    assert best["state_dict"]["trained_batches"] == 4
-    assert last["global_step"] == 6
-    assert last["state_dict"]["trained_batches"] == 6
+    assert checkpoint.best_model_score == expected_score
+    assert best["global_step"] == expected_step
+    assert best["state_dict"]["trained_batches"] == expected_step
+    assert last["global_step"] == expected_step
+    assert last["state_dict"]["trained_batches"] == expected_step
 
 
 @pytest.mark.slow
