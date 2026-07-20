@@ -392,6 +392,30 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     datamodule.teardown("fit")
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_train_prefetch_factor_override_advances_with_spawn_workers(tmp_path: Path) -> None:
+    """An explicit ``datamodule.prefetch_factor`` reaches train's composed spawn loaders.
+
+    Drives the real ``train(cfg)`` entrypoint in fake mode with two spawn
+    workers so the non-default prefetch depth governs live worker buffering.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    with open_dict(cfg):
+        cfg.datamodule.num_workers = 2
+        cfg.datamodule.prefetch_factor = 3
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert object_dict["datamodule"].prefetch_factor == 3
+
+
 def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None:
     """Legacy model and callback aliases run through the train entrypoint.
 

@@ -61,7 +61,7 @@ def test_train_datamodule_prefetch_factor_defaults_to_none() -> None:
 
 
 def test_train_datamodule_prefetch_factor_override_composes() -> None:
-    """``datamodule.prefetch_factor=4`` is a valid launch override reaching the module."""
+    """A prefetch-factor launch override reaches the datamodule."""
     GlobalHydra.instance().clear()
     try:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
