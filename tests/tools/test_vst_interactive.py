@@ -26,7 +26,7 @@ SURGE_SIMPLE = "surge_simple"
 
 
 @pytest.fixture(scope="module")
-def vst_interactive():
+def vst_interactive() -> ModuleType:
     """Import the tool module lazily so collection doesn't fail on heavy imports.
 
     :returns: Loaded VST interactive module.
@@ -1222,6 +1222,28 @@ class TestRunPredict:
             assert Path(value).is_absolute(), f"{prefix} should be absolute, got {value!r}"
             assert value == str(original.resolve())
 
+    def test_explicit_experiment_when_provided_is_forwarded(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """Forward the operator-selected Hydra experiment to prediction.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        runner = _RecordingSubprocessRunner()
+
+        vst_interactive._run_predict(
+            Path("model.ckpt"),
+            Path("dataset"),
+            Path("dataset/predict.lance"),
+            Path("predictions"),
+            SURGE_SIMPLE,
+            experiment="vst/custom",
+            subprocess_runner=runner,
+        )
+
+        assert "experiment=vst/custom" in runner.calls[0]
+        assert "experiment=surge/test" not in runner.calls[0]
+
 
 class TestValidatePredictions:
     """``_validate_predictions`` checks expected files exist and tensors are finite."""
@@ -1370,7 +1392,7 @@ class _RecordingEvalRunner:
     """
 
     def __init__(self) -> None:
-        self.calls: list[tuple[int, Path, Path, str, str]] = []
+        self.calls: list[tuple[int, Path, Path, str, str, str]] = []
 
     def __call__(
         self,
@@ -1379,9 +1401,17 @@ class _RecordingEvalRunner:
         checkpoint_path: Path,
         param_spec_name: str,
         plugin_state_path: str,
+        experiment: str,
     ) -> None:
         self.calls.append(
-            (num_samples, dataset_root_dir, checkpoint_path, param_spec_name, plugin_state_path)
+            (
+                num_samples,
+                dataset_root_dir,
+                checkpoint_path,
+                param_spec_name,
+                plugin_state_path,
+                experiment,
+            )
         )
 
 
@@ -1446,6 +1476,7 @@ class TestMaybeEvalCapturedPatches:
             checkpoint_path=ckpt_path,
             param_spec_name=SURGE_SIMPLE,
             plugin_state_path="presets/surge-simple.vstpreset",
+            experiment="vst/custom",
             eval_runner=runner,
         )
 
@@ -1455,7 +1486,14 @@ class TestMaybeEvalCapturedPatches:
             copied = lance.dataset(str(tmp_path / sibling)).to_table()["param_array"]
             np.testing.assert_array_equal(copied.combine_chunks().to_numpy_ndarray(), rows)
         assert runner.calls == [
-            (3, tmp_path, ckpt_path, SURGE_SIMPLE, "presets/surge-simple.vstpreset")
+            (
+                3,
+                tmp_path,
+                ckpt_path,
+                SURGE_SIMPLE,
+                "presets/surge-simple.vstpreset",
+                "vst/custom",
+            )
         ]
 
     def test_failed_copy_rolls_back_partial_siblings(
@@ -1908,10 +1946,7 @@ class TestRenderPredictedAudioE2E:
         if not Path(plugin_state_path).exists():
             pytest.skip(f"Surge XT base preset not found at {plugin_state_path}")
 
-        # One sample is enough to prove the predict → render → validate chain works end-to-end.
-        # Surge XT exhibits sample-dependent silence on identical-zero pred rows past the first
-        # render in the same subprocess (plugin-state leak across reload+preset+flush); the
-        # _validate_rendered_audio_dir lex-sort regression is already covered by the unit suite.
+        # Use one sample because subsequent identical-zero rows can render silent in Surge XT.
         num_samples = 1
         pred_dir = tmp_path / "preds"
         audio_dir = tmp_path / "audio"

@@ -1,4 +1,7 @@
-"""Interactive VST3 preview with real-time audio streaming via pedalboard."""
+"""Interactive VST3 audition and patch capture.
+
+Run ``python -m synth_setter.tools.vst_interactive --help`` for the CLI contract.
+"""
 
 import logging
 import math
@@ -123,6 +126,7 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_MODULE = "synth_setter.cli.eval"
+_DEFAULT_EVAL_EXPERIMENT = "surge/test"
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 
@@ -141,7 +145,7 @@ _METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
 
 # Returns whatever stdlib ``subprocess.run`` / ``subprocess.check_call`` return; production
 # callers either ignore the result or read ``.returncode`` from a ``CompletedProcess``.
-SubprocessRunner = Callable[..., object]
+type SubprocessRunner = Callable[..., object]
 
 
 class AudioStreamProtocol(Protocol):
@@ -186,17 +190,15 @@ class MidiPortProtocol(Protocol):
         ...
 
 
-PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
+type PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
 
 # Factory returning an audio-output stream context manager — entered by ``play_audio`` via
 # ``with factory() as stream``. Production binds ``AudioStream.default_output_device_name``
 # lazily so test factories never trigger a real-device probe.
-AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
+type AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
 
-# Zero-arg callable returning one character per invocation. Production binds ``click.getchar``
-# at call time (so monkeypatching stays available); tests pass ``iter([...]).__next__`` to
-# drive ``keyboard_loop`` deterministically without spawning a TTY.
-KeystrokeSource = Callable[[], str]
+# Production binds click.getchar at call time; tests inject deterministic character sources.
+type KeystrokeSource = Callable[[], str]
 
 
 def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtocol]:
@@ -234,11 +236,10 @@ def _expected_prediction_filenames(num_samples: int) -> list[str]:
     :param num_samples: Number of sample indices to enumerate.
     :returns: Sorted prediction artifact filenames.
     """
-    return sorted(
-        f"{prefix}-{i}.pt"
-        for prefix in ("pred", "target-audio", "target-params")
-        for i in range(num_samples)
-    )
+    filenames = []
+    for prefix in ("pred", "target-audio", "target-params"):
+        filenames.extend(f"{prefix}-{i}.pt" for i in range(num_samples))
+    return sorted(filenames)
 
 
 def _validate_metrics_df(
@@ -507,9 +508,8 @@ def play_audio(
     Resamples to ``PLAYBACK_SAMPLE_RATE`` if it differs from ``SAMPLE_RATE`` so the output
     device gets a rate it supports.
 
-    ``audio_stream_factory`` exists for test injection (#844). ``None`` (the default)
-    builds the real pedalboard ``AudioStream`` at call time so legacy module-level
-    monkeypatches of ``AudioStream`` keep working.
+    ``audio_stream_factory=None`` builds the real pedalboard stream at call time; callers may
+    inject an output-stream factory.
 
     :param plugin: Loaded VST3 instance that produces each audio buffer.
     :param stop_event: Shutdown signal shared with the editor and keyboard loop.
@@ -743,11 +743,7 @@ def keyboard_loop(
         "q": quit_action,
         "p": record_patch,
     }
-    # NOTE: ``click.getchar()`` blocks until a key is pressed, so this loop only
-    # checks ``stop_event`` between keystrokes. If the editor closes from another
-    # thread, the loop won't exit until the user presses any key. Acceptable for
-    # the typical editor-close-then-press-q flow; a sentinel-key approach would
-    # be needed for fully event-driven shutdown.
+    # click.getchar() observes external shutdown only after the next keystroke.
     while not stop_event.is_set():
         try:
             ch = read_char()
@@ -775,6 +771,7 @@ def _run_predict(
     predictions_output_dir: Path,
     param_spec_name: str,
     *,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
     """Run model prediction via ``src/synth_setter/cli/eval.py`` with ``mode=predict``.
@@ -791,6 +788,7 @@ def _run_predict(
     :param predict_file: Lance split used as prediction input.
     :param predictions_output_dir: Destination for prediction tensors.
     :param param_spec_name: ParamSpec registry key controlling model output width.
+    :param experiment: Hydra experiment selecting the model and datamodule configuration.
     :param subprocess_runner: Optional injected subprocess runner.
     """
     runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
@@ -799,7 +797,7 @@ def _run_predict(
             sys.executable,
             "-m",
             _EVAL_MODULE,
-            "experiment=surge/test",
+            f"experiment={experiment}",
             "ckpt_path=" + str(checkpoint_path.resolve()),
             "datamodule.predict_file=" + str(predict_file.resolve()),
             "datamodule.dataset_root=" + str(dataset_root_dir.resolve()),
@@ -1043,6 +1041,7 @@ def eval_patches(
     checkpoint_path: Path,
     param_spec_name: str,
     plugin_state_path: str,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
     *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
@@ -1070,6 +1069,7 @@ def eval_patches(
         the patches were captured.
     :param plugin_state_path: Base preset to load when rendering predicted audio. Must match the preset
         used when the patches were captured.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
     :param subprocess_runner: Test seam (#844) — when set, forwarded to every subprocess-using
         helper so a single fake records all three external invocations. ``None`` (the default)
         preserves production behavior by letting each helper bind its own
@@ -1106,6 +1106,7 @@ def eval_patches(
         predict_file,
         predictions_output_dir,
         param_spec_name,
+        experiment=experiment,
         **runner_kwargs,
     )
     _validate_predictions(predictions_output_dir, num_samples)
@@ -1191,6 +1192,12 @@ def eval_patches(
     help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
 )
 @click.option(
+    "--experiment",
+    default=_DEFAULT_EVAL_EXPERIMENT,
+    show_default=True,
+    help="Hydra experiment used for checkpoint evaluation after patch capture.",
+)
+@click.option(
     "--session-recording-path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
@@ -1211,6 +1218,7 @@ def main(
     output_dataset_dir_path: Path | None,
     midi_port: str | None,
     checkpoint_path: Path | None,
+    experiment: str,
     session_recording_path: Path | None,
 ) -> None:
     """Open a VST3 plugin GUI, stream audio, and record patches to a Lance dataset.
@@ -1238,6 +1246,7 @@ def main(
     :param output_dataset_dir_path: Optional destination for captured patches.
     :param midi_port: Optional MIDI input name, or an empty string for auto-selection.
     :param checkpoint_path: Optional model checkpoint for post-capture evaluation.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
     :param session_recording_path: Optional destination for deterministic audition audio.
     :raises TypeError: The loaded plugin is not a VST3 plugin.
     :raises click.UsageError: CLI options conflict or an output path already exists.
@@ -1389,10 +1398,11 @@ def main(
         checkpoint_path,
         param_spec_name,
         plugin_state_path,
+        experiment=experiment,
     )
 
 
-EvalRunner = Callable[[int, Path, Path, str, str], None]
+type EvalRunner = Callable[[int, Path, Path, str, str, str], None]
 
 
 def _maybe_eval_captured_patches(
@@ -1403,6 +1413,7 @@ def _maybe_eval_captured_patches(
     param_spec_name: str,
     plugin_state_path: str,
     *,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
     eval_runner: EvalRunner | None = None,
 ) -> None:
     """Replicate captured patches into the eval-pipeline splits and run eval_patches.
@@ -1414,15 +1425,14 @@ def _maybe_eval_captured_patches(
     render / metrics steps decode and re-render against the same spec + preset that were used
     when the patches were captured.
 
-    ``eval_runner`` exists for test injection (#844). ``None`` (the default) resolves to the
-    module-level :func:`eval_patches` at call time so legacy ``monkeypatch.setattr(module,
-    "eval_patches", ...)`` tests keep working until they migrate to direct injection.
+    ``eval_runner`` defaults to :func:`eval_patches` at call time; callers may inject an evaluator.
     :param patch_file_path: Captured patch file used as the evaluation input.
     :param output_dataset_dir_path: Root directory for evaluation outputs.
     :param num_patches: Number of captured patches to evaluate.
     :param checkpoint_path: Optional model checkpoint for evaluation.
     :param param_spec_name: Registry key for the parameter specification.
     :param plugin_state_path: Baseline plugin-state file used for rendering.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
     :param eval_runner: Optional injected evaluation runner.
     :raises OSError: Replicating a captured split fails.
     """
@@ -1447,7 +1457,12 @@ def _maybe_eval_captured_patches(
                 logger.exception("failed to roll back partial sibling copy at %s", created)
         raise
     runner(
-        num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, plugin_state_path
+        num_patches,
+        output_dataset_dir_path,
+        checkpoint_path,
+        param_spec_name,
+        plugin_state_path,
+        experiment,
     )
 
 
