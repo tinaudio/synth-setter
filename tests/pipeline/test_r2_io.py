@@ -11,6 +11,7 @@ flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -34,6 +35,8 @@ def synthetic_unreachable_rclone_env(free_tcp_port: int) -> dict[str, str]:
     :param free_tcp_port: Unbound loopback port allocated by pytest.
     :returns: Environment that makes real rclone transfers fail locally and quickly.
     """
+    if shutil.which("rclone") is None:
+        pytest.skip("requires the real rclone binary")
     return {
         "RCLONE_CONFIG": os.devnull,
         "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "synthetic-access-id-2190",
