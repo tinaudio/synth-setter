@@ -14,7 +14,6 @@ import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from functools import partial
 from pathlib import Path
 from typing import Literal, NamedTuple, cast
 from unittest.mock import patch
@@ -34,8 +33,6 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
-from synth_setter.models.components.transformer import ASTWithProjectionHead
-from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -56,12 +53,84 @@ class _FakeOracleDataset(NamedTuple):
     datamodule_group: str | None
 
 
+class _AudioPredictionCase(NamedTuple):
+    experiment: str
+    datamodule: str
+    filename: str
+    model_overrides: tuple[str, ...]
+
+
 _AUDIO_PREDICTION_DURATION_SECONDS = 4.0
 _AUDIO_PREDICTION_SAMPLE_RATE = 44_100
 _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
+_AUDIO_PREDICTION_CASES = (
+    _AudioPredictionCase(
+        "ffn_full",
+        "fsd",
+        "FSD50K_000001.wav",
+        (
+            "model.net.d_model=32",
+            "model.net.n_heads=2",
+            "model.net.n_layers=1",
+            "model.net.patch_size=16",
+            "model.net.patch_stride=15",
+            "model.compile=false",
+        ),
+    ),
+    _AudioPredictionCase(
+        "flow_full",
+        "nsynth",
+        "bass_electronic_000-025-050.wav",
+        (
+            "model.encoder.d_model=8",
+            "model.encoder.n_heads=1",
+            "model.encoder.n_layers=1",
+            "model.encoder.n_conditioning_outputs=1",
+            "model.encoder.patch_stride=15",
+            "model.vector_field.d_model=8",
+            "model.vector_field.num_heads=1",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.d_ff=8",
+            "model.vector_field.projection.num_tokens=4",
+            "model.test_sample_steps=1",
+            "model.compile=false",
+        ),
+    ),
+    _AudioPredictionCase(
+        "flow_mlp_full",
+        "fsd",
+        "FSD50K_000002.wav",
+        (
+            "model.encoder.d_model=8",
+            "model.encoder.n_heads=1",
+            "model.encoder.n_layers=1",
+            "model.encoder.n_conditioning_outputs=1",
+            "model.encoder.patch_stride=15",
+            "model.vector_field.d_model=8",
+            "model.vector_field.d_enc=4",
+            "model.vector_field.num_layers=1",
+            "model.test_sample_steps=1",
+            "model.compile=false",
+        ),
+    ),
+    _AudioPredictionCase(
+        "vae_full",
+        "nsynth",
+        "guitar_acoustic_001-060-075.wav",
+        (
+            "+model.net.latent_flow_hidden_dim=16",
+            "+model.net.latent_flow_num_layers=2",
+            "+model.net.latent_flow_num_blocks=1",
+            "+model.net.regression_flow_hidden_dim=16",
+            "+model.net.regression_flow_num_layers=2",
+            "+model.net.regression_flow_num_blocks=1",
+            "model.compile=false",
+        ),
+    ),
+)
 _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
 
 
@@ -79,26 +148,62 @@ def _write_audio_prediction_fixture(path: Path) -> None:
         audio_file.write(stereo)
 
 
-def _save_audio_prediction_checkpoint(path: Path) -> None:
-    """Save a real checkpoint of the shipped VST feed-forward module.
+def _audio_prediction_cli_args(
+    case: _AudioPredictionCase,
+    checkpoint: Path,
+    audio_root: Path,
+    output_dir: Path,
+) -> list[str]:
+    """Build the public eval CLI invocation for a tiny checkpoint fixture.
 
+    :param case: Model and audio datamodule variant under test.
+    :param checkpoint: Real checkpoint to load.
+    :param audio_root: Directory containing one prediction WAV.
+    :param output_dir: Directory where PredictionWriter emits artifacts.
+    :returns: Complete subprocess argv.
+    """
+    return [
+        sys.executable,
+        "-m",
+        "synth_setter.cli.eval",
+        f"experiment=surge/wandb_checkpoint/{case.experiment}",
+        f"datamodule={case.datamodule}",
+        "callbacks=eval_surge",
+        "mode=predict",
+        "trainer=cpu",
+        "logger=wandb",
+        "logger.wandb.offline=true",
+        f"ckpt_path={checkpoint}",
+        f"datamodule.root={audio_root}",
+        "datamodule.stats_file=null",
+        "datamodule.batch_size=1",
+        "datamodule.num_workers=0",
+        "datamodule.shuffle=false",
+        *case.model_overrides,
+        f"paths.output_dir={output_dir}",
+        "hydra.job.chdir=false",
+        "+trainer.enable_progress_bar=false",
+        "+trainer.enable_model_summary=false",
+    ]
+
+
+def _save_audio_prediction_checkpoint(case: _AudioPredictionCase, path: Path) -> None:
+    """Save a real checkpoint from the case's shipped Hydra model config.
+
+    :param case: Model experiment and tiny architecture overrides.
     :param path: Destination checkpoint path.
     """
-    net = ASTWithProjectionHead(
-        d_model=32,
-        d_out=_SURGE_XT_PREDICTION_WIDTH,
-        n_heads=2,
-        n_layers=1,
-        patch_size=16,
-        patch_stride=15,
-        input_channels=2,
-        spec_shape=(128, 401),  # pyright: ignore[reportArgumentType]
-    )
-    model = VSTFeedForwardModule(
-        net=net,
-        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
-        scheduler=None,  # pyright: ignore[reportArgumentType]
-    )
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            overrides=[
+                f"experiment=surge/wandb_checkpoint/{case.experiment}",
+                f"datamodule={case.datamodule}",
+                "trainer=cpu",
+                *case.model_overrides,
+            ],
+        )
+    model = instantiate(cfg.model)
     trainer = Trainer(
         accelerator="cpu",
         devices=1,
@@ -111,62 +216,11 @@ def _save_audio_prediction_checkpoint(path: Path) -> None:
     trainer.save_checkpoint(path)
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize(
-    ("datamodule_name", "audio_filename"),
-    [("fsd", "FSD50K_000001.wav"), ("nsynth", "bass_electronic_000-025-050.wav")],
-)
-def test_audio_dataset_predict_entrypoint_writes_artifacts(
-    tmp_path: Path, datamodule_name: str, audio_filename: str
-) -> None:
-    """FSD50K and NSynth jobs predict from real audio with a real checkpoint.
+def _assert_audio_prediction_artifacts(output_dir: Path) -> None:
+    """Assert PredictionWriter emitted finite, correctly shaped tensors.
 
-    :param tmp_path: Pytest fixture providing isolated input and output directories.
-    :param datamodule_name: Public Hydra audio datamodule group under test.
-    :param audio_filename: Dataset-style filename for the fixture WAV.
+    :param output_dir: Eval output root containing ``predictions/``.
     """
-    audio_root = tmp_path / datamodule_name
-    audio_root.mkdir()
-    _write_audio_prediction_fixture(audio_root / audio_filename)
-    checkpoint = tmp_path / "ff.ckpt"
-    _save_audio_prediction_checkpoint(checkpoint)
-    output_dir = tmp_path / f"{datamodule_name}-output"
-
-    result = subprocess.run(  # noqa: S603 — argv is a fixed list of test-owned paths
-        [
-            sys.executable,
-            "-m",
-            "synth_setter.cli.eval",
-            "experiment=surge/wandb_checkpoint/ffn_full",
-            f"datamodule={datamodule_name}",
-            "callbacks=eval_surge",
-            "mode=predict",
-            "trainer=cpu",
-            "logger=wandb",
-            "logger.wandb.offline=true",
-            f"ckpt_path={checkpoint}",
-            f"datamodule.root={audio_root}",
-            "datamodule.stats_file=null",
-            "datamodule.batch_size=1",
-            "datamodule.num_workers=0",
-            "datamodule.shuffle=false",
-            "model.net.d_model=32",
-            "model.net.n_heads=2",
-            "model.net.n_layers=1",
-            "model.net.patch_size=16",
-            "model.net.patch_stride=15",
-            "model.compile=false",
-            f"paths.output_dir={output_dir}",
-            "hydra.job.chdir=false",
-            "+trainer.enable_progress_bar=false",
-            "+trainer.enable_model_summary=false",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-
-    assert result.returncode == 0, result.stderr
     prediction = torch.load(
         output_dir / "predictions" / "pred-0.pt", map_location="cpu", weights_only=True
     )
@@ -178,6 +232,34 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     assert prediction.shape == (1, _SURGE_XT_PREDICTION_WIDTH)
     assert torch.isfinite(prediction).all()
     assert target_audio.shape == (1, 2, _AUDIO_PREDICTION_SAMPLE_COUNT)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", _AUDIO_PREDICTION_CASES, ids=lambda case: case.experiment)
+def test_audio_dataset_predict_entrypoint_writes_artifacts(
+    tmp_path: Path, case: _AudioPredictionCase
+) -> None:
+    """Every audio checkpoint family predicts through FSD50K or NSynth.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param case: Shipped model checkpoint and audio datamodule pairing under test.
+    """
+    audio_root = tmp_path / case.datamodule
+    audio_root.mkdir()
+    _write_audio_prediction_fixture(audio_root / case.filename)
+    checkpoint = tmp_path / f"{case.experiment}.ckpt"
+    _save_audio_prediction_checkpoint(case, checkpoint)
+    output_dir = tmp_path / f"{case.experiment}-output"
+
+    result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
+        _audio_prediction_cli_args(case, checkpoint, audio_root, output_dir),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_audio_prediction_artifacts(output_dir)
 
 
 def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
