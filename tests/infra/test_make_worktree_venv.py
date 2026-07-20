@@ -10,6 +10,26 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).parents[2]
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+LINUX_HEADLESS_TOOLS = (
+    "awk",
+    "dbus-run-session",
+    "mktemp",
+    "openbox-session",
+    "pkill",
+    "ps",
+    "xdpyinfo",
+    "xsettingsd",
+    "Xvfb",
+)
+LINUX_HEADLESS_AVAILABLE = os.uname().sysname == "Linux" and all(
+    shutil.which(tool, path=SYSTEM_PATH) for tool in LINUX_HEADLESS_TOOLS
+)
+LINUX_HEADLESS_SKIP_REASON = (
+    "install the Linux headless tools, then run: ./.venv/bin/pytest "
+    "tests/infra/test_make_worktree_venv.py::"
+    "test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper"
+)
 
 
 def _write_tool(path: Path, origin: str) -> None:
@@ -60,3 +80,88 @@ def test_make_target_with_foreign_environment_uses_checkout_venv(
     )
 
     assert marker.read_text(encoding="utf-8") == "worktree\n"
+
+
+def _full_cpu_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a checkout with the real target and a recording worktree pytest.
+
+    :param tmp_path: Pytest fixture providing an isolated checkout.
+    :returns: Checkout and invocation-log paths.
+    """
+    checkout = tmp_path / "isolated-worktree"
+    wrapper = checkout / "src" / "synth_setter" / "scripts" / "run-linux-vst-headless.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy(PROJECT_ROOT / "Makefile", checkout / "Makefile")
+    shutil.copy(PROJECT_ROOT / wrapper.relative_to(checkout), wrapper)
+
+    log_path = tmp_path / "pytest-invocations.txt"
+    pytest_path = checkout / ".venv" / "bin" / "pytest"
+    pytest_path.parent.mkdir(parents=True)
+    pytest_path.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PYTEST_INVOCATION_LOG"\n',
+        encoding="utf-8",
+    )
+    pytest_path.chmod(0o755)
+    return checkout, log_path
+
+
+def _run_full_cpu(checkout: Path, log_path: Path, uname: str) -> subprocess.CompletedProcess[str]:
+    """Run the real full CPU target without an inherited Python environment.
+
+    :param checkout: Isolated checkout containing the Makefile under test.
+    :param log_path: Path where the worktree pytest harness records invocations.
+    :param uname: Platform lane selected by the Makefile.
+    :returns: Completed Make invocation.
+    """
+    make = shutil.which("make")
+    assert make is not None
+    env = {
+        "HOME": str(checkout),
+        "PATH": SYSTEM_PATH,
+        "PYTEST_INVOCATION_LOG": str(log_path),
+    }
+    return subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [make, "--no-print-directory", f"UNAME_S={uname}", "test-full-cpu"],
+        cwd=checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+@pytest.mark.infra
+@pytest.mark.skipif(not LINUX_HEADLESS_AVAILABLE, reason=LINUX_HEADLESS_SKIP_REASON)
+def test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper(
+    tmp_path: Path,
+) -> None:
+    """Verify the wrapper preserves checkout-local pytest resolution without inherited environment.
+
+    :param tmp_path: Root for the synthetic worktree and invocation log.
+    """
+    checkout, log_path = _full_cpu_checkout(tmp_path)
+
+    result = _run_full_cpu(checkout, log_path, "Linux")
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == ["-n auto -m not gpu and not mps"]
+
+
+@pytest.mark.infra
+def test_full_cpu_darwin_stripped_environment_uses_worktree_pytest_harness(
+    tmp_path: Path,
+) -> None:
+    """Verify both Darwin pytest lanes resolve from the checkout virtualenv.
+
+    :param tmp_path: Root for the synthetic worktree and invocation log.
+    """
+    checkout, log_path = _full_cpu_checkout(tmp_path)
+
+    result = _run_full_cpu(checkout, log_path, "Darwin")
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "-n auto -m not gpu and not mps and not requires_vst",
+        "-m requires_vst and not gpu and not mps",
+    ]
