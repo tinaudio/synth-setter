@@ -39,6 +39,43 @@ class _LegitimateOrigModNet(torch.nn.Module):
         self._orig_mod = torch.nn.Linear(1, 1, bias=False)
 
 
+class _ExtraStateNet(torch.nn.Module):
+    """Network persisting a non-tensor state-dict value."""
+
+    def __init__(self, value: int) -> None:
+        """Initialize the persisted value.
+
+        :param value: Value returned by ``get_extra_state``.
+        """
+        super().__init__()
+        self.value = value
+
+    def get_extra_state(self) -> dict[str, int]:
+        """Return the state persisted under ``_extra_state``.
+
+        :returns: Serializable non-tensor state.
+        """
+        return {"value": self.value}
+
+    def set_extra_state(self, state: dict[str, int]) -> None:
+        """Restore state loaded from ``_extra_state``.
+
+        :param state: Serialized value mapping.
+        """
+        self.value = state["value"]
+
+
+class _AmbiguousOrigModNet(torch.nn.Module):
+    """Network with two equal-shaped parameters sharing one canonical key."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._orig_mod = torch.nn.Module()
+        self._orig_mod.b = torch.nn.Linear(1, 1, bias=False)
+        self.b = torch.nn.Module()
+        self.b._orig_mod = torch.nn.Linear(1, 1, bias=False)
+
+
 def _feed_forward_module() -> VSTFeedForwardModule:
     """Build a compile-enabled feed-forward module with a tiny real network.
 
@@ -168,6 +205,49 @@ def test_checkpoint_load_preserves_legitimate_orig_mod_child() -> None:
     evaluated_state = evaluated.state_dict()
     assert torch.equal(evaluated_state["net.weight"], expected_weight)
     assert torch.equal(evaluated_state["net._orig_mod.weight"], expected_child_weight)
+
+
+def test_checkpoint_load_normalizes_non_tensor_extra_state() -> None:
+    """Compiled non-tensor extra state loads into an uncompiled module."""
+    trained = _CompileCompatibleFixture()
+    trained.net = cast(torch.nn.Module, torch.compile(_ExtraStateNet(value=7)))
+    checkpoint = {"state_dict": trained.state_dict()}
+    evaluated = _CompileCompatibleFixture()
+    evaluated.net = _ExtraStateNet(value=0)
+
+    evaluated.on_load_checkpoint(checkpoint)
+    evaluated.load_state_dict(checkpoint["state_dict"])
+
+    assert cast(_ExtraStateNet, evaluated.net).value == 7
+
+
+def test_checkpoint_load_ambiguous_canonical_group_remains_strict() -> None:
+    """Equal-shaped canonical collisions fail rather than swapping values."""
+    trained = _CompileCompatibleFixture()
+    trained.net = _AmbiguousOrigModNet()
+    trained_net = cast(_AmbiguousOrigModNet, trained.net)
+    with torch.no_grad():
+        cast(torch.nn.Linear, trained_net._orig_mod.b).weight.fill_(1.0)
+        cast(torch.nn.Linear, trained_net.b._orig_mod).weight.fill_(2.0)
+    checkpoint = {"state_dict": trained.state_dict()}
+    source_values = {key: value.clone() for key, value in checkpoint["state_dict"].items()}
+    source_keys = set(checkpoint["state_dict"])
+    resumed = _CompileCompatibleFixture()
+    resumed_net = _AmbiguousOrigModNet()
+    resumed_net._orig_mod.b = cast(
+        torch.nn.Module,
+        torch.compile(cast(torch.nn.Linear, resumed_net._orig_mod.b)),
+    )
+    resumed.net = resumed_net
+
+    resumed.on_load_checkpoint(checkpoint)
+
+    assert set(checkpoint["state_dict"]) == source_keys
+    assert all(
+        torch.equal(checkpoint["state_dict"][key], value) for key, value in source_values.items()
+    )
+    with pytest.raises(RuntimeError, match="(?s)Missing key.*Unexpected key"):
+        resumed.load_state_dict(checkpoint["state_dict"])
 
 
 def test_compiled_checkpoint_metadata_normalizes_to_uncompiled_module() -> None:
