@@ -163,6 +163,7 @@ def map_dataloader_over(
     pin_memory: bool = False,
     drop_last: bool = False,
     persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ) -> DataLoader:
     """Wrap an existing map-style dataset in a (spawn-safe) DataLoader.
 
@@ -180,8 +181,10 @@ def map_dataloader_over(
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
-    :returns: DataLoader over ``dataset``. Worker persistence is disabled when
-        ``num_workers`` is zero.
+    :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+        PyTorch's default.
+    :returns: DataLoader over ``dataset``. Worker persistence and prefetch depth
+        are disabled when ``num_workers`` is zero.
     """
     effective_collate = collate_fn or _prebatched_collate
     effective_persistence = persistent_workers and num_workers > 0
@@ -189,6 +192,7 @@ def map_dataloader_over(
     if num_workers == 0:
         # get_safe_loader requires workers; plain DataLoader supports in-process loading.
         # Cast bridges __getitems__' column dict with DataLoader's list-oriented stub.
+        # prefetch_factor is omitted: PyTorch forbids it without workers.
         typed_collate = cast(Callable[[list[object]], object], effective_collate)
         return DataLoader(
             dataset,
@@ -210,6 +214,7 @@ def map_dataloader_over(
         pin_memory=pin_memory,
         drop_last=drop_last,
         persistent_workers=effective_persistence,
+        prefetch_factor=prefetch_factor,
     )
 
 

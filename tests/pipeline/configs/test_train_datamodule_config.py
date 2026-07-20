@@ -41,3 +41,42 @@ def test_train_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     finally:
         GlobalHydra.instance().clear()
     assert datamodule.num_workers == 4
+
+
+def test_train_datamodule_prefetch_factor_defaults_to_none() -> None:
+    """Without an override the datamodule inherits PyTorch's prefetch default."""
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                return_hydra_config=True,
+                overrides=["datamodule=surge_simple", "model=ffn", "trainer=cpu"],
+            )
+        HydraConfig().set_config(cfg)
+        datamodule = instantiate(cfg.datamodule)
+    finally:
+        GlobalHydra.instance().clear()
+    assert datamodule.prefetch_factor is None
+
+
+def test_train_datamodule_prefetch_factor_override_composes() -> None:
+    """``datamodule.prefetch_factor=4`` is a valid launch override reaching the module."""
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                return_hydra_config=True,
+                overrides=[
+                    "datamodule=surge_simple",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "datamodule.prefetch_factor=4",
+                ],
+            )
+        HydraConfig().set_config(cfg)
+        datamodule = instantiate(cfg.datamodule)
+    finally:
+        GlobalHydra.instance().clear()
+    assert datamodule.prefetch_factor == 4
