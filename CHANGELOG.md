@@ -1,6 +1,98 @@
 # CHANGELOG
 
 
+## v10.1.1 (2026-07-20)
+
+### Bug Fixes
+
+- **training**: Align monitored checkpoints with validation weights
+  ([#2188](https://github.com/tinaudio/synth-setter/pull/2188),
+  [`3b168ef`](https://github.com/tinaudio/synth-setter/commit/3b168efa8f89d844fe68ab5f699243470dabd06c))
+
+* fix(training): align best checkpoints with validation
+
+* fix(training): preserve manual checkpoint step semantics
+
+* test(training): cover linked manual recovery checkpoints
+
+* chore(comments): apply pre-PR review fixes
+
+* fix(training): save epoch-end validation checkpoints
+
+* fix(training): honor checkpoint cadence during validation
+
+* fix(training): save manual recovery before validation
+
+* fix(training): keep manual recovery state consistent
+
+### Internal-Feat
+
+- **automation**: Route the second review pass to a free-pool
+  ([#2174](https://github.com/tinaudio/synth-setter/pull/2174),
+  [`273c62e`](https://github.com/tinaudio/synth-setter/commit/273c62ee372a2250e0fabc7daebc573fce6cdfb5))
+
+* fix(data-pipeline): drop removed loader kwarg from torchsynth stress test
+
+The #2065 stress test still passes `loader="map"` to `LanceVSTDataModule`, but that parameter was
+  removed, so the project-wide pyright pre-commit hook fails on `main` and blocks every Python
+  commit. Drop the stale kwarg; the datamodule is map-style by default, so behavior is unchanged.
+
+Refs #2157
+
+* internal-feat(automation): route the second Pi review pass through a fixed free-pool
+
+The OpenRouter free-model pool backing the second logical PR-review pass has been flaky. Replace its
+  deep/standard primary+secondary tiers with one fixed ordered pool tried in exactly this order:
+  `kimi-coding/k3`, `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`,
+  `openrouter/tencent/hy3:free`.
+
+Because the pool now spans providers, routing and provenance no longer assume every non-Codex
+  candidate is OpenRouter: the pass is renamed `openrouter` -> `free-pool`, `provenance_for_model`
+  derives its allowlist from the pool (so it reports `kimi-coding` or `openrouter`), and the
+  plan-time preflight becomes `_require_free_pool` (at least one pool model registered). The single
+  fixed pool also lets the availability split hoist out of the per-skill loop, and drops the
+  now-unused `secondary_fallback_candidates` field. Codex remains required and the cross-provider
+  Codex fallback is preserved.
+
+Policy and audit terminology are realigned across `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`,
+  `AGENTS.md`, and the review analysis doc — the second pass is no longer called "OpenRouter", and
+  the degraded-coverage sentence is now `Free-pool review failed; only Codex ran.`
+
+Refs #2155
+
+* internal-fix(automation): reword stale same-provider fallback in review analysis
+
+The free-pool second pass advances through one ordered tuple that can cross providers (kimi-coding
+  -> openrouter), so "same-provider fallback" no longer describes it. Reword to "within-pass
+  fallback".
+
+Refs #2173
+
+* internal-fix(automation): use structured Pi worker results
+
+* internal-feat(automation): raise Pi review concurrency
+
+* internal-fix(automation): address Pi review findings
+
+* internal-fix(automation): validate canonical review paths
+
+* internal-fix(automation): accept graceful review wrap-ups
+
+* internal-fix(automation): bound foreground review latency
+
+* internal-fix(automation): stabilize bounded review delivery
+
+* internal-fix(automation): harden deferred review handoff
+
+* internal-fix(automation): cap foreground verification wave
+
+* internal-fix(automation): close review delivery edge cases
+
+* internal-fix(automation): align deferred interpreter contracts
+
+* internal-fix(test): align review helper command coverage
+
+
 ## v10.1.0 (2026-07-19)
 
 ### Features
