@@ -144,17 +144,20 @@ def _configure_checkpoint_durability(
     callbacks.append(CheckpointUploader(prefix_uri, model_checkpoint))
 
 
-def _derive_probe_uri(cfg: DictConfig) -> str:
+def _derive_probe_uri(cfg: DictConfig, recovery_namespace: str) -> str:
     """Return the ``r2://`` prefix val-audio-probe snapshots are archived under.
 
-    Derives ``r2://{r2.bucket}/probes/{config_id}/``, where ``config_id`` is
-    :func:`~synth_setter.utils.resolve_run_config_id` — the same identity the
-    checkpoint URI uses, so a run's probes and checkpoint sit under one name.
+    Derives ``r2://{r2.bucket}/probes/{config_id}/{recovery_namespace}``, where
+    ``config_id`` is :func:`~synth_setter.utils.resolve_run_config_id` — the same
+    identity the checkpoint URI uses — and the namespace is the launch identifier
+    shared with :func:`_checkpoint_prefix_uri`, so concurrent runs of one config
+    cannot interleave each other's ``step-N/`` snapshots (#2230).
 
     :param cfg: Hydra-composed train cfg; reads ``r2.bucket``.
-    :returns: The ``r2://`` snapshot prefix for this run.
+    :param recovery_namespace: Collision-resistant identifier for one training launch.
+    :returns: The ``r2://`` snapshot prefix for this launch.
     """
-    return f"r2://{cfg.r2.bucket}/probes/{resolve_run_config_id(cfg)}"
+    return f"r2://{cfg.r2.bucket}/probes/{resolve_run_config_id(cfg)}/{recovery_namespace}"
 
 
 def _skip_auto_probe(reason: str) -> None:
@@ -216,7 +219,9 @@ def _probe_render_settings(cfg: DictConfig) -> ProbeRenderSettings:
     )
 
 
-def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> None:
+def _configure_val_audio_probe(
+    cfg: DictConfig, callbacks: list[Callback], recovery_namespace: str
+) -> None:
     """Append the validation audio probe when its mode and prerequisites allow.
 
     Wired here rather than through the ``callbacks`` config group because the probe
@@ -225,6 +230,7 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
 
     :param cfg: Hydra config carrying the probe mode, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
+    :param recovery_namespace: Collision-resistant identifier for one training launch.
     :raises ValueError: If any condition holds:
 
         - A present mode is not ``true``, ``false``, or ``"auto"``.
@@ -285,7 +291,9 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
         ValAudioProbe(
             probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
             probe_fn=partial(
-                run_audio_probe, settings=settings, upload_uri=_derive_probe_uri(cfg)
+                run_audio_probe,
+                settings=settings,
+                upload_uri=_derive_probe_uri(cfg, recovery_namespace),
             ),
             num_samples=num_samples,
         )
@@ -456,7 +464,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
     _configure_checkpoint_durability(cfg, callbacks, recovery_namespace)
-    _configure_val_audio_probe(cfg, callbacks)
+    _configure_val_audio_probe(cfg, callbacks, recovery_namespace)
 
     log.info("Instantiating loggers...")
     pin_wandb_run_id(cfg, run_id, "training")

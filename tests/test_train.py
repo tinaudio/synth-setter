@@ -9,6 +9,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 
 import logging
 import os
+import re
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -1270,6 +1271,9 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())
     assert landed, f"probe snapshot never reached {uploaded}"
+    # Launch namespace between config_id and step dirs keeps concurrent runs apart (#2230).
+    launch_scoped = re.compile(r"^[^/]+/[^/]+-[0-9a-f]{32}/step-\d+/")
+    assert all(launch_scoped.match(p) for p in landed), f"snapshot not launch-scoped: {landed}"
     assert any(p.endswith("pred.wav") for p in landed), f"no pred.wav in snapshot: {landed}"
     assert any(p.endswith("aggregated_metrics.csv") for p in landed), f"no metrics: {landed}"
     assert not [p for p in landed if p.endswith(".pt")], (
