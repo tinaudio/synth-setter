@@ -11,6 +11,20 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).parents[2]
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+LINUX_HEADLESS_TOOLS = (
+    "Xvfb",
+    "awk",
+    "dbus-run-session",
+    "mktemp",
+    "openbox-session",
+    "pkill",
+    "ps",
+    "xdpyinfo",
+    "xsettingsd",
+)
+LINUX_HEADLESS_AVAILABLE = os.uname().sysname == "Linux" and all(
+    shutil.which(tool, path=SYSTEM_PATH) for tool in LINUX_HEADLESS_TOOLS
+)
 
 
 def _write_tool(path: Path, origin: str) -> None:
@@ -113,13 +127,13 @@ def _run_full_cpu(checkout: Path, log_path: Path, uname: str) -> subprocess.Comp
 
 
 @pytest.mark.infra
-@pytest.mark.skipif(os.uname().sysname != "Linux", reason="Linux wrapper requires X11 tools")
+@pytest.mark.skipif(not LINUX_HEADLESS_AVAILABLE, reason="Linux headless tools are unavailable")
 def test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper(
     tmp_path: Path,
 ) -> None:
-    """The Linux headless lane executes the checkout-local pytest.
+    """Verify the wrapper preserves checkout-local pytest resolution without inherited environment.
 
-    :param tmp_path: Pytest fixture providing an isolated checkout.
+    :param tmp_path: Root for the synthetic worktree and invocation log.
     """
     checkout, log_path = _full_cpu_checkout(tmp_path)
 
@@ -133,12 +147,9 @@ def test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrappe
 def test_full_cpu_darwin_stripped_environment_uses_worktree_pytest_harness(
     tmp_path: Path,
 ) -> None:
-    """The faithfully selected Darwin lanes execute the checkout-local harness.
+    """Verify both Darwin pytest lanes resolve from the checkout virtualenv.
 
-    This selects the Makefile's Darwin branch without claiming to emulate macOS; the executable
-    harness verifies both platform-specific pytest invocations.
-
-    :param tmp_path: Pytest fixture providing an isolated checkout.
+    :param tmp_path: Root for the synthetic worktree and invocation log.
     """
     checkout, log_path = _full_cpu_checkout(tmp_path)
 
