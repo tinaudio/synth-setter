@@ -24,6 +24,7 @@ from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.workspace import operator_workspace
+from tests.helpers.xvfb import install_failing_xvfb
 
 _SAMPLE_RATE = 22_050
 _DURATION_SECONDS = 0.5
@@ -346,8 +347,10 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip_returns
     :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
     :param monkeypatch: Pins worker state, finalize auth, and a non-repository cwd.
     """
+    xvfb_marker = install_failing_xvfb(tmp_path, monkeypatch)
     run_root, spec = _generate_and_finalize_stress_run(tmp_path, fake_r2_remote, monkeypatch)
 
+    assert not xvfb_marker.exists()
     assert spec.num_shards == 4
     assert (run_root / "stats.npz").is_file()
     expected_rows = {"train": 12, "val": 6, "test": 6}

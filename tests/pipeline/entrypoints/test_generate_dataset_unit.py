@@ -62,6 +62,7 @@ from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.xvfb import install_failing_xvfb
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
@@ -173,6 +174,28 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
 def spec(tmp_path: Path) -> DatasetSpec:
     """Return a valid single-shard DatasetSpec."""
     return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+def test_generate_vst_shard_failing_xvfb_invokes_headless_wrapper(
+    spec: DatasetSpec,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VST shard reaches the real headless wrapper before renderer startup.
+
+    :param spec: VST-configured dataset specification.
+    :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+    :param tmp_path: Scratch root for the work directory and failing Xvfb.
+    :param monkeypatch: Installs a deterministic failing Xvfb executable.
+    """
+    marker = install_failing_xvfb(tmp_path, monkeypatch)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate(spec, tmp_path / "work", [])
+
+    assert marker.read_text() == "called"
 
 
 def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:

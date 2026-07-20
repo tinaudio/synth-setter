@@ -64,6 +64,7 @@ from tests._vst import (
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.xvfb import install_failing_xvfb
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -653,62 +654,32 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
-def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
+def test_from_hydra_torchsynth_experiment_bypasses_xvfb_and_uploads_shard(
     cfg_dataset_torchsynth: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """The composed torchsynth smoke experiment reaches renderer argv and fake R2.
+    """The TorchSynth worker renders and stages a shard when Xvfb cannot start.
 
-    No plugin-path or version monkeypatching is needed: the bare ``torchsynth``
-    plugin path resolves its version from the installed package.
-
-    :param cfg_dataset_torchsynth: Hydra cfg composed from the torchsynth smoke experiment.
+    :param cfg_dataset_torchsynth: Hydra cfg composed from the TorchSynth smoke experiment.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the worker contract.
+    :param monkeypatch: Pins the worker contract and installs failing Xvfb.
+    :param tmp_path: Scratch root for the Xvfb marker and rendered shard.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    xvfb_marker = install_failing_xvfb(tmp_path, monkeypatch)
     with open_dict(cfg_dataset_torchsynth):
         cfg_dataset_torchsynth.r2.prefix = "fake-r2/torchsynth-run/"
         cfg_dataset_torchsynth.logger = None
 
     spec = spec_from_cfg(cfg_dataset_torchsynth)
-    captured_renderer_argv: list[str] = []
-    render_shard = stub_renderer(spec)
+    from_hydra(cfg_dataset_torchsynth)
 
-    def _capture(args: list[str]) -> None:
-        if not (args and args[0] == "rclone"):
-            captured_renderer_argv.extend(args)
-        render_shard(args)
-
-    with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
-        side_effect=_capture,
-    ):
-        from_hydra(cfg_dataset_torchsynth)
-
-    assert spec.render.renderer_backend == "torchsynth"
-    assert spec.render.plugin_path == "torchsynth"
-    backend_index = captured_renderer_argv.index("--renderer_backend")
-    assert captured_renderer_argv[backend_index + 1] == "torchsynth"
-    # Dispatch must survive any worker cwd: the renderer script argv entry is
-    # import-anchored, so it is an absolute path to a real file.
-    script = next(a for a in captured_renderer_argv if a.endswith("generate_vst_dataset.py"))
-    assert Path(script).is_absolute()
-    assert Path(script).is_file()
-    shard = spec.shards[0]
-    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
-    staging = (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard.shard_id:06d}"
-    )
-    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+    assert not xvfb_marker.exists()
+    assert lance.dataset(str(tmp_path / spec.shards[0].filename)).count_rows() == 1
+    assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(

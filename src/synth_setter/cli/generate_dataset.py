@@ -826,11 +826,10 @@ def _render_and_upload_shard(
     # Attempt start marker — append-only; orphaned without a .valid it is
     # the observable evidence of a crashed attempt (#1776).
     write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
-    # Zipped wheels extract the wrapper to a temp file that only lives while
-    # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
-    # loop, and skips materialization on non-Linux.
+    # ExitStack keeps a zipped-wheel wrapper available across renderer retries.
+    # TorchSynth skips VST-wrapper materialization.
     with ExitStack() as stack:
-        if sys.platform == "linux":
+        if sys.platform == "linux" and spec.render.renderer_backend != "torchsynth":
             wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
             args = [str(wrapper_path)]
         else:
