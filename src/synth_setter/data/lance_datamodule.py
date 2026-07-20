@@ -295,6 +295,14 @@ class LanceVSTDataModule(VSTDataModule):
     test_dataset: _SplitDataset
     predict_dataset: _SplitDataset
 
+    _ALL_SPLITS = ("train", "val", "test", "predict")
+    _STAGE_SPLITS = {
+        "fit": ("train", "val"),
+        "validate": ("val",),
+        "test": ("test",),
+        "predict": ("predict",),
+    }
+
     def __init__(
         self,
         dataset_root: str | Path,
@@ -348,6 +356,7 @@ class LanceVSTDataModule(VSTDataModule):
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
+        self._setup_stage: str | None = None
 
     def _build_lance_split(
         self,
@@ -398,56 +407,58 @@ class LanceVSTDataModule(VSTDataModule):
         )
 
     def setup(self, stage: str | None = None) -> None:
-        """Build all sample-indexed train, validation, test, and prediction splits.
+        """Build the sample-indexed splits required by a Lightning stage.
 
-        :param stage: Lightning stage hint; all splits are built eagerly.
+        :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
         """
-        del stage
+        split_names = (
+            self._ALL_SPLITS
+            if stage is None
+            else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
+        )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
-                "train": self._build_fake_split(num_params=num_params, read_audio=False),
-                "val": self._build_fake_split(num_params=num_params, read_audio=False),
-                "test": self._build_fake_split(num_params=num_params, read_audio=False),
-                "predict": self._build_fake_split(num_params=num_params, read_audio=True),
+                name: self._build_fake_split(
+                    num_params=num_params, read_audio=name == "predict"
+                )
+                for name in split_names
             }
         else:
             train_shard = self.dataset_root / f"train{self.shard_suffix}"
             split_stats = predict_stats = None
             if self.use_saved_mean_and_variance:
-                split_stats = load_dataset_statistics(train_shard)
-                predict_stats = (
-                    split_stats
-                    if self.predict_file.parent == self.dataset_root
-                    else load_dataset_statistics(self.predict_file)
-                )
-            self._splits = {
-                "train": self._build_lance_split(
-                    train_shard, ot=self.ot, read_audio=False, stats=split_stats
-                ),
-                "val": self._build_lance_split(
-                    self.dataset_root / f"val{self.shard_suffix}",
-                    ot=False,
-                    read_audio=False,
-                    stats=split_stats,
-                ),
-                "test": self._build_lance_split(
-                    self.dataset_root / f"test{self.shard_suffix}",
-                    ot=False,
-                    read_audio=False,
-                    stats=split_stats,
-                ),
-                "predict": self._build_lance_split(
-                    self.predict_file,
-                    ot=False,
-                    read_audio=True,
-                    stats=predict_stats,
-                ),
+                if any(name != "predict" for name in split_names):
+                    split_stats = load_dataset_statistics(train_shard)
+                if "predict" in split_names:
+                    predict_stats = (
+                        split_stats
+                        if split_stats is not None
+                        and self.predict_file.parent == self.dataset_root
+                        else load_dataset_statistics(self.predict_file)
+                    )
+            shard_paths = {
+                "train": train_shard,
+                "val": self.dataset_root / f"val{self.shard_suffix}",
+                "test": self.dataset_root / f"test{self.shard_suffix}",
+                "predict": self.predict_file,
             }
-        self.train_dataset = self._splits["train"].dataset
-        self.val_dataset = self._splits["val"].dataset
-        self.test_dataset = self._splits["test"].dataset
-        self.predict_dataset = self._splits["predict"].dataset
+            self._splits = {
+                name: self._build_lance_split(
+                    shard_paths[name],
+                    ot=self.ot if name == "train" else False,
+                    read_audio=name == "predict",
+                    stats=predict_stats if name == "predict" else split_stats,
+                )
+                for name in split_names
+            }
+        for name in self._ALL_SPLITS:
+            attribute = f"{name}_dataset"
+            if name in self._splits:
+                setattr(self, attribute, self._splits[name].dataset)
+            elif hasattr(self, attribute):
+                delattr(self, attribute)
+        self._setup_stage = stage
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build one standard map-style dataloader.
@@ -456,8 +467,14 @@ class LanceVSTDataModule(VSTDataModule):
         :param shuffle: Whether to randomize sample order.
         :param drop_last: Whether to discard a ragged final batch.
         :returns: Dataloader yielding model-ready batches.
+        :raises RuntimeError: If :meth:`setup` did not build the requested split.
         """
-        pieces = self._splits[split]
+        try:
+            pieces = self._splits[split]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"{split} split was not built by setup(stage={self._setup_stage!r})"
+            ) from exc
         repeats_first_batch = self.repeat_first_batch and split != "predict"
         dataset = pieces.dataset
         if repeats_first_batch:
@@ -509,7 +526,8 @@ class LanceVSTDataModule(VSTDataModule):
         """
         del stage
         self._splits = {}
-        for name in ("train_dataset", "val_dataset", "test_dataset", "predict_dataset"):
+        for split in self._ALL_SPLITS:
+            name = f"{split}_dataset"
             if hasattr(self, name):
                 delattr(self, name)
 
