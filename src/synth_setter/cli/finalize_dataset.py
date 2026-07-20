@@ -17,6 +17,7 @@ from traceback import format_tb
 from typing import cast
 
 import hydra
+import structlog
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -36,6 +37,8 @@ from synth_setter.pipeline.spec_io import load_spec_from_root
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
+
+_failure_logger = structlog.get_logger(__name__)
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -246,8 +249,10 @@ def _log_finalize_failure(error: BaseException) -> None:
 
     :param error: Exception raised by the finalize body.
     """
-    logger.error(
-        "finalize failed ({})\n{}", type(error).__name__, "".join(format_tb(error.__traceback__))
+    _failure_logger.error(
+        "finalize_failed",
+        error_type=type(error).__name__,
+        traceback="".join(format_tb(error.__traceback__)),
     )
 
 

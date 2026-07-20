@@ -19,8 +19,8 @@ import pytest
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from loguru import logger as loguru_logger
 from omegaconf import DictConfig, OmegaConf
+from structlog.testing import capture_logs
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
@@ -425,20 +425,13 @@ def test_finalize_failure_logs_sanitized_traceback(
     output_dir.mkdir()
     cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
-    captured_logs: list[str] = []
-    handler_id = loguru_logger.add(
-        captured_logs.append, format="{message}\n{exception}", diagnose=False
-    )
-    try:
-        with pytest.raises(RuntimeError):
-            finalize_dataset.finalize(cfg)
-    finally:
-        loguru_logger.remove(handler_id)
+    with capture_logs() as captured_logs, pytest.raises(RuntimeError):
+        finalize_dataset.finalize(cfg)
 
-    log_output = "".join(captured_logs)
-    assert "finalize failed" in log_output
-    assert "RuntimeError" in log_output
-    assert signed_url not in log_output
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["error_type"] == "RuntimeError"
+    assert "in boom" in failure_log["traceback"]
+    assert signed_url not in failure_log["traceback"]
 
 
 def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
@@ -471,6 +464,16 @@ def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
         raise RuntimeError("simulated finalize_from_spec failure")
 
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
+    real_log_metrics = WandbLogger.log_metrics
+    metric_calls: list[Mapping[str, float]] = []
+
+    def capture_log_metrics(
+        self: WandbLogger, metrics: Mapping[str, float], step: int | None = None
+    ) -> None:
+        metric_calls.append(metrics)
+        real_log_metrics(self, metrics, step)
+
+    monkeypatch.setattr(WandbLogger, "log_metrics", capture_log_metrics)
 
     real_close = finalize_dataset.close_loggers
     close_statuses: list[str] = []
@@ -496,17 +499,12 @@ def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(
     )
     assert wandb.run is None, "finalize() left the wandb run open after a failed body"
 
-    run_binary = next((tmp_path / "wandb").glob("offline-run-*/run-*.wandb"))
-    rows = read_history_rows(
-        run_binary,
-        until=lambda scanned: any("finalize/elapsed_seconds" in row for row in scanned),
-    )
-    summary_rows = [row for row in rows if "finalize/elapsed_seconds" in row]
+    summary_rows = [metrics for metrics in metric_calls if "finalize/elapsed_seconds" in metrics]
     assert len(summary_rows) == 1
     # ``boom`` emits one event of each kind, so these pin callback forwarding.
-    assert json.loads(summary_rows[0]["finalize/shards_processed"]) == 1
-    assert json.loads(summary_rows[0]["finalize/artifacts_uploaded"]) == 1
-    assert json.loads(summary_rows[0]["finalize/elapsed_seconds"]) >= 0
+    assert summary_rows[0]["finalize/shards_processed"] == 1
+    assert summary_rows[0]["finalize/artifacts_uploaded"] == 1
+    assert summary_rows[0]["finalize/elapsed_seconds"] >= 0
 
 
 def test_finalize_failure_with_no_progress_omits_terminal_summary(
