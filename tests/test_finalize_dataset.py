@@ -20,6 +20,7 @@ import pytest
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
+from loguru import logger as loguru_logger
 from omegaconf import DictConfig, OmegaConf
 from structlog.testing import capture_logs
 
@@ -27,6 +28,7 @@ from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.utils import instantiators
 from tests.helpers.finalize_shards import (
     build_finalize_cfg,
     build_lance_smoke_spec,
@@ -206,6 +208,35 @@ def test_finalize_dataset_main_resolves_hydra_logging_under_at_hydra_main(
     # Existence proves @hydra.main resolved ${paths.log_dir}, ${now:…}, and
     # the ${task_name} interpolations the shared hydra group references.
     assert (tmp_path / "logs" / "finalize_dataset").is_dir()
+
+
+def test_finalize_dataset_main_failure_emits_structured_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """The decorated CLI reports a real dispatch failure with dataset identity.
+
+    :param tmp_path: Hosts the spec JSON and Hydra run dir.
+    :param monkeypatch: Points Hydra at the temporary project and dataset.
+    :param stub_finalize_setup: Installs auth and marker-probe stubs.
+    """
+    monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    spec = build_lance_smoke_spec(
+        task_name="hydra-finalize-failure",
+        train_val_test_sizes=(0, 4, 0),
+    )
+    dataset_root_uri = write_spec_to_root(spec, tmp_path)
+    monkeypatch.setattr("sys.argv", ["finalize_dataset", f"dataset_root_uri={dataset_root_uri}"])
+
+    with capture_logs() as captured_logs, pytest.raises(ValueError, match="train split is empty"):
+        finalize_dataset.main()
+
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["dataset_prefix"] == spec.r2.prefix
+    assert failure_log["run_id"] == spec.run_id
 
 
 def _build_finalize_cfg_with_offline_wandb(
@@ -460,8 +491,10 @@ def test_finalize_failure_logging_outage_preserves_finalize_exception(
 
     def fail_failure_log(*args: object, **kwargs: object) -> NoReturn:
         del args, kwargs
-        raise RuntimeError("diagnostic sink failed")
+        raise RuntimeError("diagnostic sink failed with secret=do-not-log")
 
+    fallback_logs: list[str] = []
+    handler_id = loguru_logger.add(fallback_logs.append, format="{message}")
     monkeypatch.setattr("synth_setter.cli.finalize_dataset.finalize_from_spec", boom)
     monkeypatch.setattr(
         finalize_dataset,
@@ -473,8 +506,76 @@ def test_finalize_failure_logging_outage_preserves_finalize_exception(
     output_dir.mkdir()
     cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
 
-    with pytest.raises(ValueError, match="finalize body failed"):
+    try:
+        with pytest.raises(ValueError, match="finalize body failed"):
+            finalize_dataset.finalize(cfg)
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert fallback_logs == ["structured finalize failure logging failed\n"]
+    assert "do-not-log" not in "".join(fallback_logs)
+
+
+def test_instantiate_loggers_failure_closes_previously_created_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later logger-construction failure rolls back earlier loggers.
+
+    :param monkeypatch: Makes the second Hydra logger constructor fail.
+    """
+    close_statuses: list[str] = []
+    first_logger = SimpleNamespace(finalize=close_statuses.append)
+    calls = 0
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            return first_logger
+        raise RuntimeError("second logger setup failed")
+
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    assert close_statuses == ["failed"]
+
+
+def test_finalize_logger_setup_failure_emits_structured_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_finalize_setup: Callable[[int | None], None],  # noqa: ARG001 — installs stubs only
+) -> None:
+    """Finalize reports logger-construction failures with dataset identity.
+
+    :param tmp_path: Hosts the spec JSON and scratch work dir.
+    :param monkeypatch: Makes logger construction fail.
+    :param stub_finalize_setup: Installs the auth + marker-probe stubs.
+    """
+
+    def fail_logger_setup(logger_cfg: DictConfig | None) -> NoReturn:
+        del logger_cfg
+        raise RuntimeError("logger setup failed")
+
+    monkeypatch.setattr(finalize_dataset, "instantiate_loggers", fail_logger_setup)
+    spec = build_lance_smoke_spec(task_name="finalize-logger-setup-failure")
+    output_dir = tmp_path / "work"
+    output_dir.mkdir()
+    cfg = build_finalize_cfg(write_spec_to_root(spec, tmp_path), output_dir)
+
+    with capture_logs() as captured_logs, pytest.raises(RuntimeError, match="logger setup failed"):
         finalize_dataset.finalize(cfg)
+
+    failure_log = next(log for log in captured_logs if log["event"] == "finalize_failed")
+    assert failure_log["run_id"] == spec.run_id
 
 
 def test_finalize_failure_logs_partial_summary_and_closes_failed_loggers(

@@ -251,7 +251,7 @@ def _log_finalize_failure(error: BaseException, spec: DatasetSpec) -> None:
     :param error: Exception raised by the finalize body.
     :param spec: Dataset identity attached to the failure event.
     """
-    with suppress(Exception):
+    try:
         _failure_logger.error(
             "finalize_failed",
             dataset_prefix=spec.r2.prefix,
@@ -260,6 +260,9 @@ def _log_finalize_failure(error: BaseException, spec: DatasetSpec) -> None:
             run_id=spec.run_id,
             traceback="".join(format_tb(error.__traceback__)),
         )
+    except Exception:  # noqa: BLE001 — diagnostics cannot replace the finalize failure
+        with suppress(Exception):
+            logger.warning("structured finalize failure logging failed")
 
 
 def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
@@ -311,11 +314,13 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     if OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
-    loggers = instantiate_loggers(cfg.get("logger"))
+    loggers: list[Logger] = []
     status = "success"
     started_at = perf_counter()
     log_summary: Callable[[float], None] | None = None
     try:
+        loggers = instantiate_loggers(cfg.get("logger"))
+        started_at = perf_counter()
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
         finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
         log_summary(perf_counter() - started_at)

@@ -44,6 +44,7 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     :returns: A list of instantiated loggers.
     :rtype: list[Logger]
     :raises TypeError: If ``logger_cfg`` is not a :class:`DictConfig`.
+    :raises BaseException: Re-raises a logger constructor failure after closing earlier loggers.
     """
     logger: list[Logger] = []
 
@@ -54,10 +55,14 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     if not isinstance(logger_cfg, DictConfig):
         raise TypeError("Logger config must be a DictConfig!")
 
-    for _, lg_conf in logger_cfg.items():
-        if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
-            log.info(f"Instantiating logger <{lg_conf._target_}>")
-            logger.append(hydra.utils.instantiate(lg_conf))
+    try:
+        for _, lg_conf in logger_cfg.items():
+            if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
+                log.info(f"Instantiating logger <{lg_conf._target_}>")
+                logger.append(hydra.utils.instantiate(lg_conf))
+    except BaseException:
+        close_loggers(logger, "failed")
+        raise
 
     return logger
 
