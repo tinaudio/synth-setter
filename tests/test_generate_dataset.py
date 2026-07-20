@@ -953,21 +953,21 @@ def _patch_remote_dispatch_boundaries(
 def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The generate-dataset entrypoint aborts a RunPod dispatch on insufficient balance.
 
-    Hydra wraps the launcher's ``RuntimeError`` in ``SystemExit(1)``, so the
-    balance cause is pinned via the captured error output — a pre-dispatch
-    config failure would exit identically but without the balance message.
+    ``HYDRA_FULL_ERROR=1`` is pinned so hydra re-raises the launcher's typed
+    ``RuntimeError`` instead of wrapping it in ``SystemExit(1)`` — the exception
+    type + message pin the balance cause; a pre-dispatch config failure would
+    raise something else.
 
     :param tmp_path: Scratch dir for the compute template.
     :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
-    :param capsys: Captures hydra's error output for the cause assertion.
     """
     import synth_setter.cli.generate_dataset as generate_dataset_cli
 
     fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
+    monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
     compute_template = tmp_path / "compute.yaml"
     compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     monkeypatch.setattr(
@@ -981,12 +981,9 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
         ],
     )
 
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
         cast("Callable[[], None]", generate_dataset_cli.main)()
 
-    assert excinfo.value.code == 1
-    captured = capsys.readouterr()
-    assert "insufficient RunPod balance" in captured.err + captured.out
     fake_sky.jobs.launch.assert_not_called()
 
 
