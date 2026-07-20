@@ -7,13 +7,16 @@ Lance ``add_columns`` wiring, and the vector-index path are what these tests pin
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import torch
 from click.testing import CliRunner
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, PARAM_ARRAY_FIELD
@@ -25,6 +28,8 @@ from synth_setter.pipeline.data.add_embeddings import (
     add_embeddings,
     build_clap_index,
     embeddings_record_batch,
+    load_clap_audio_encoder,
+    load_m2l_audio_encoder,
     main,
 )
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
@@ -222,6 +227,10 @@ def test_embeddings_record_batch_rejects_non_finite_embeddings(side: str, value:
 
 @pytest.mark.slow
 def test_add_embeddings_writes_searchable_columns_and_keeps_params(tmp_path: Path) -> None:
+    """Embedding augmentation preserves source columns and adds searchable vectors.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
     uri = str(tmp_path / "smoke.lance")
     audio = _audio_dataset(uri, 6, with_params=True)
 
@@ -360,6 +369,135 @@ def test_add_embeddings_rejects_rerun_when_columns_already_exist(tmp_path: Path)
         add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
 
+@pytest.mark.parametrize(
+    ("cuda_available", "mps_available", "requested", "expected"),
+    [
+        (True, True, None, "cuda"),
+        (False, True, None, "mps"),
+        (False, False, None, "cpu"),
+        (True, True, "cpu", "cpu"),
+    ],
+)
+def test_load_m2l_audio_encoder_selects_expected_device(
+    monkeypatch: pytest.MonkeyPatch,
+    cuda_available: bool,
+    mps_available: bool,
+    requested: str | None,
+    expected: str,
+) -> None:
+    """The m2l model honors overrides and the CUDA-MPS-CPU priority.
+
+    :param monkeypatch: Fixture used to control hardware availability and checkpoint loading.
+    :param cuda_available: Whether CUDA is exposed to automatic selection.
+    :param mps_available: Whether MPS is exposed to automatic selection.
+    :param requested: Explicit device override, or ``None`` for automatic selection.
+    :param expected: Device the model must receive.
+    """
+    selected_devices: list[str | None] = []
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: cuda_available)
+    monkeypatch.setattr("torch.backends.mps.is_available", lambda: mps_available)
+    monkeypatch.setattr(
+        "music2latent.EncoderDecoder",
+        lambda *, device=None: selected_devices.append(device),
+    )
+
+    load_m2l_audio_encoder(requested)
+
+    assert selected_devices == [expected]
+
+
+@pytest.mark.mps
+@pytest.mark.slow
+def test_m2l_audio_encoder_on_mps_produces_finite_latents() -> None:
+    """The real music2latent model completes inference on Apple MPS."""
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS is unavailable")
+
+    encode = load_m2l_audio_encoder("mps")
+    audio = np.zeros((1, 1, _SAMPLE_RATE), dtype=np.float32)
+
+    latents = encode(audio)
+
+    assert latents.shape[0] == 1
+    assert latents.dtype == np.float32
+    assert np.isfinite(latents).all()
+
+
+def test_load_clap_audio_encoder_defaults_to_mps_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLAP model uses Apple MPS when CUDA is unavailable.
+
+    :param monkeypatch: Fixture used to expose MPS and replace checkpoint loading.
+    """
+    selected_devices: list[str] = []
+    fake_model = SimpleNamespace()
+
+    def move_to_device(device: str) -> SimpleNamespace:
+        """Record model placement while preserving the loader chain.
+
+        :param device: Device supplied by the loader.
+        :returns: Fake model for the following ``eval`` call.
+        """
+        selected_devices.append(device)
+        return fake_model
+
+    fake_model.to = move_to_device
+    fake_model.eval = lambda: fake_model
+    fake_transformers = SimpleNamespace(
+        ClapModel=SimpleNamespace(from_pretrained=lambda checkpoint: fake_model),
+        ClapProcessor=SimpleNamespace(
+            from_pretrained=lambda checkpoint: SimpleNamespace()
+        ),
+    )
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr("torch.backends.mps.is_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    load_clap_audio_encoder()
+
+    assert selected_devices == ["mps"]
+
+
+@pytest.mark.slow
+def test_main_threads_explicit_device_to_both_encoders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI device override controls both embedding models.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "device.lance"
+    write_minimal_lance_shard(uri, spec)
+    selected_devices: list[tuple[str, str | None]] = []
+
+    def load_m2l(device: str | None) -> M2LEncodeFn:
+        selected_devices.append(("m2l", device))
+        return _fake_m2l
+
+    def load_clap(checkpoint: str, device: str | None) -> ClapEncodeFn:
+        del checkpoint
+        selected_devices.append(("clap", device))
+        return _fake_clap
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder", load_m2l
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder", load_clap
+    )
+
+    result = CliRunner().invoke(main, [str(uri), "--device", "mps", "--no-build-index"])
+
+    assert result.exit_code == 0, result.output
+    assert selected_devices == [("m2l", "mps"), ("clap", "mps")]
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
+
+
 @pytest.mark.slow
 def test_main_adds_embeddings_using_sample_rate_from_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -377,7 +515,7 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     # Loaders injected: the real encoders need checkpoints + a GPU (see the notebook).
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
-        lambda: _fake_m2l,
+        lambda device=None: _fake_m2l,
     )
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
@@ -429,7 +567,8 @@ def test_main_threads_index_tuning_options_into_build(
         return False
 
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder", lambda: _fake_m2l
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
+        lambda device=None: _fake_m2l,
     )
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
@@ -467,7 +606,8 @@ def test_main_exits_1_when_add_step_fails(tmp_path: Path, monkeypatch: pytest.Mo
     uri = tmp_path / "shard.lance"
     write_minimal_lance_shard(uri, spec)
 
-    def boom() -> M2LEncodeFn:
+    def boom(device: str | None) -> M2LEncodeFn:
+        del device
         raise RuntimeError("encoder load blew up")
 
     # Dataset opens fine; a failure in the encode/add step must still exit 1 cleanly.
