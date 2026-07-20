@@ -3,13 +3,13 @@
 from typing import Any
 
 import torch
-from lightning import LightningModule
 
 from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
+from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
 
 
-class KSinFeedForwardModule(LightningModule):
+class KSinFeedForwardModule(CompiledCheckpointModule):
     """Feed-forward LightningModule that regresses sinusoidal-synth parameters from audio."""
 
     def __init__(

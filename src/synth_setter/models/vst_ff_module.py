@@ -3,11 +3,12 @@
 from typing import Any
 
 import torch
-from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
+from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
-class VSTFeedForwardModule(LightningModule):
+
+class VSTFeedForwardModule(CompiledCheckpointModule):
     """Feed-forward LightningModule that regresses VST parameters from audio features."""
 
     def __init__(

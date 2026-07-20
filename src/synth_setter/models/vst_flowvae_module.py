@@ -3,11 +3,12 @@
 from typing import Any
 
 import torch
-from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
+from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
-class VSTFlowVAEModule(LightningModule):
+
+class VSTFlowVAEModule(CompiledCheckpointModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
 
     def __init__(

@@ -5,10 +5,10 @@ from functools import partial
 from typing import Any
 
 import torch
-from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import ConditioningMode
+from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
 
 def call_with_cfg(
@@ -41,7 +41,7 @@ def rk4_with_cfg(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-class VSTFlowMatchingModule(LightningModule):
+class VSTFlowMatchingModule(CompiledCheckpointModule):
     """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
     def __init__(

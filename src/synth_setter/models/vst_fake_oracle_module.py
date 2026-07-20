@@ -9,8 +9,9 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
-from lightning import LightningModule
 from torch import nn
+
+from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
 
 class FakeOracleNet(nn.Module):
@@ -47,7 +48,7 @@ class FakeOracleNet(nn.Module):
         return self.dummy
 
 
-class VSTFakeOracleModule(LightningModule):
+class VSTFakeOracleModule(CompiledCheckpointModule):
     """LightningModule whose predictions are an oracle copy of ``batch["params"]``."""
 
     def __init__(
