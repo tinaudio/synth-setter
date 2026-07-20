@@ -2022,6 +2022,7 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-flow-simple-440k.yaml",
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
+            "train-vast-smoke.yaml",
         ],
     )
     def test_shipped_train_config_carries_no_scientific_overrides(self, name: str) -> None:
@@ -2041,6 +2042,7 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-flow-simple-440k.yaml",
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
+            "train-vast-smoke.yaml",
         ],
     )
     def test_shipped_train_config_default_experiment_is_self_contained(self, name: str) -> None:
@@ -2082,10 +2084,11 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-flow-simple-440k.yaml",
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
+            "train-vast-smoke.yaml",
         ],
     )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
-        """Single-GPU RunPod training opts into crash-recovery checkpoints.
+        """Single-GPU cloud training opts into crash-recovery checkpoints.
 
         :param name: Shipped training launch config under ``configs/launch/``.
         """
