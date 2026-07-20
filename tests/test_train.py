@@ -967,24 +967,24 @@ def _prediction_file_names() -> list[str]:
 
 
 def test_train_default_checkpoint_callback_is_validation_aligned(cfg_train: DictConfig) -> None:
-    """The composed train config uses validation-aligned checkpoint selection.
+    """Guard the callback target against stale-metric checkpoint selection.
 
-    :param cfg_train: Composed training configuration.
+    :param cfg_train: Configuration whose default callback is instantiated.
     """
     checkpoint = hydra.utils.instantiate(cfg_train.callbacks.model_checkpoint)
 
     assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
 
 
-_CheckpointScenario = tuple[int, int | float, float, int]
+_CheckpointScenario = tuple[int, int | float, float, int, int]
 
 
 @pytest.mark.parametrize("save_last", [True, "link"])
 @pytest.mark.parametrize(
     "scenario",
     [
-        (5, 1, 1.0, 4),
-        (6, 1.0, 2.0, 6),
+        (5, 3, 2.0, 3, 4),
+        (6, 1.0, 2.0, 6, 6),
     ],
 )
 def test_train_best_checkpoint_contains_metric_producing_weights(
@@ -998,7 +998,13 @@ def test_train_best_checkpoint_contains_metric_producing_weights(
     :param save_last: Recovery checkpoint mode under test.
     :param scenario: Validation and checkpoint cadence with expected selection.
     """
-    limit_train_batches, val_check_interval, expected_score, expected_step = scenario
+    (
+        limit_train_batches,
+        val_check_interval,
+        expected_score,
+        expected_best_step,
+        expected_last_step,
+    ) = scenario
     with open_dict(cfg_train):
         cfg_train.model = {
             "_target_": "tests.helpers.checkpoint_alignment.ValidationTrajectoryModule"
@@ -1035,10 +1041,10 @@ def test_train_best_checkpoint_contains_metric_producing_weights(
     best = torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)
     last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
     assert checkpoint.best_model_score == expected_score
-    assert best["global_step"] == expected_step
-    assert best["state_dict"]["trained_batches"] == expected_step
-    assert last["global_step"] == expected_step
-    assert last["state_dict"]["trained_batches"] == expected_step
+    assert best["global_step"] == expected_best_step
+    assert best["state_dict"]["trained_batches"] == expected_best_step
+    assert last["global_step"] == expected_last_step
+    assert last["state_dict"]["trained_batches"] == expected_last_step
 
 
 @pytest.mark.slow

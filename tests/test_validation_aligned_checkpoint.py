@@ -16,9 +16,15 @@ from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 class _ManualOptimizationModule(pl.LightningModule):
     """Expose Lightning's pre-optimizer checkpoint contract."""
 
-    def __init__(self) -> None:
+    def __init__(self, checkpoint: ValidationAlignedModelCheckpoint | None = None) -> None:
+        """Initialize the manual optimizer fixture.
+
+        :param checkpoint: Optional callback inspected before ``on_train_end``.
+        """
         super().__init__()
         setattr(self, "automatic_optimization", False)
+        self.checkpoint = checkpoint
+        self.recovery_weight_at_epoch_end: float | None = None
         self.layer = torch.nn.Linear(1, 1, bias=False)
         torch.nn.init.zeros_(self.layer.weight)
         self.saved_models: dict[int, dict[str, torch.Tensor]] = {}
@@ -49,6 +55,13 @@ class _ManualOptimizationModule(pl.LightningModule):
         """
         del batch, batch_idx
         self.log("val/score", 1.0, on_epoch=True)
+
+    def on_train_epoch_end(self) -> None:
+        """Capture the step recovery file before ``on_train_end`` can overwrite it."""
+        if self.checkpoint is None or not self.checkpoint.last_model_path:
+            return
+        saved = torch.load(self.checkpoint.last_model_path, map_location="cpu", weights_only=False)
+        self.recovery_weight_at_epoch_end = saved["state_dict"]["layer.weight"].item()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Use a visible update so pre- and post-optimizer states differ.
@@ -116,3 +129,39 @@ def test_checkpoint_manual_optimization_recovery_uses_pre_update_weights(
     last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
     assert last["global_step"] == 2
     assert last["state_dict"]["layer.weight"].item() == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize("save_last", [True, "link"])
+def test_checkpoint_manual_optimization_saves_recovery_before_validation(
+    tmp_path: Path, save_last: bool | Literal["link"]
+) -> None:
+    """Manual optimization writes recovery state before a monitored metric exists.
+
+    :param tmp_path: Temporary checkpoint directory.
+    :param save_last: Recovery checkpoint mode under test.
+    """
+    checkpoint = ValidationAlignedModelCheckpoint(
+        dirpath=tmp_path,
+        monitor="val/score",
+        mode="min",
+        save_last=save_last,
+        save_on_train_epoch_end=False,
+        save_top_k=1,
+        every_n_train_steps=1,
+    )
+    trainer = pl.Trainer(
+        accelerator="cpu",
+        callbacks=[checkpoint],
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        logger=False,
+        limit_train_batches=1,
+        limit_val_batches=0,
+        max_epochs=1,
+    )
+
+    module = _ManualOptimizationModule(checkpoint)
+    trainer.fit(module)
+
+    expected_pre_update = module.saved_models[0]["weight"].item()
+    assert module.recovery_weight_at_epoch_end == expected_pre_update == 0.0

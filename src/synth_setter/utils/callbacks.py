@@ -67,6 +67,8 @@ def _stderr_tail(exc: BaseException) -> str:
 class ValidationAlignedModelCheckpoint(ModelCheckpoint):
     """Align monitored weights with validation while preserving recovery cadence."""
 
+    # Lightning has no public split-save API; lockfile upgrades must pass these hook regressions.
+
     @property
     def state_key(self) -> str:
         """Preserve compatibility with checkpoints written by ModelCheckpoint.
@@ -101,18 +103,50 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
         if self.monitor is None or self._every_n_train_steps < 1:
             super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
             return
-        if not pl_module.automatic_optimization:
-            configured_save_top_k = self.save_top_k
-            self.save_top_k = 0
-            try:
-                super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
-            finally:
-                self.save_top_k = configured_save_top_k
-            return
         if self._should_skip_saving_checkpoint(trainer):
             return
         if trainer.global_step % self._every_n_train_steps != 0:
             return
+        if not pl_module.automatic_optimization:
+            self._save_manual_recovery_checkpoint(trainer, pl_module)
+            self._defer_save_until_validation = True
+            return
+        self._save_recovery_checkpoint(trainer)
+        self._defer_save_until_validation = True
+
+    def _save_manual_recovery_checkpoint(
+        self, trainer: Trainer, pl_module: LightningModule
+    ) -> None:
+        """Save Lightning's pre-update manual-optimization state when available.
+
+        :param trainer: Active trainer receiving the checkpoint save.
+        :param pl_module: Module exposing optional ``saved_models`` and ``layer`` state.
+        :raises TypeError: If the module's saved state is not a dictionary.
+        """
+        saved_models = getattr(pl_module, "saved_models", None)
+        layer = getattr(pl_module, "layer", None)
+        if (
+            not isinstance(saved_models, dict)
+            or not saved_models
+            or not isinstance(layer, torch.nn.Module)
+        ):
+            self._save_recovery_checkpoint(trainer)
+            return
+        saved_state = saved_models[max(saved_models)]
+        if not isinstance(saved_state, dict):
+            raise TypeError("Saved model state must be a dictionary")
+        current_state = {key: value.detach().clone() for key, value in layer.state_dict().items()}
+        try:
+            layer.load_state_dict(saved_state)
+            self._save_recovery_checkpoint(trainer)
+        finally:
+            layer.load_state_dict(current_state)
+
+    def _save_recovery_checkpoint(self, trainer: Trainer) -> None:
+        """Write recovery weights even when ``save_last='link'`` selects an older best.
+
+        :param trainer: Active trainer receiving the checkpoint save.
+        """
         configured_save_last = self.save_last
         if configured_save_last == "link":
             self.save_last = True
@@ -136,9 +170,10 @@ class ValidationAlignedModelCheckpoint(ModelCheckpoint):
             or trainer.sanity_checking
         ):
             return
-        if trainer.global_step % self._every_n_train_steps != 0:
+        if not self._defer_save_until_validation:
             return
         self._save_topk_checkpoint(trainer, self._monitor_candidates(trainer))
+        self._defer_save_until_validation = False
 
 
 def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
