@@ -228,18 +228,37 @@ def add_embeddings(
         )
 
 
-def load_m2l_audio_encoder() -> M2LEncodeFn:
+def _resolve_torch_device(device: str | None) -> str:
+    """Resolve an explicit device or select the fastest available backend.
+
+    :param device: Explicit Torch device, or ``None`` to auto-select.
+    :returns: Explicit device, otherwise ``cuda``, ``mps``, or ``cpu`` in priority order.
+    """
+    import torch
+
+    if device is not None:
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     """Build a music2latent encode callable over an ``(B, C, T)`` batch.
 
     The ``music2latent`` import is deferred so this module stays importable (and
-    its core testable with a fake encoder) without loading a checkpoint. No
-    device knob: music2latent owns its own placement.
+    its core testable with a fake encoder) without loading a checkpoint.
 
+    :param device: Torch device; ``None`` selects cuda, MPS, then cpu.
     :returns: Encode callable mapping ``(B, C, T)`` to ``(B, C*D, T)`` float32.
     """
     from music2latent import EncoderDecoder
 
-    encoder = EncoderDecoder()
+    device = _resolve_torch_device(device)
+    logger.info("loading_m2l_checkpoint", device=device)
+    encoder = EncoderDecoder(device=device)
 
     def encode(audio: np.ndarray) -> np.ndarray:
         batch, channels = audio.shape[0], audio.shape[1]
@@ -261,7 +280,7 @@ def load_clap_audio_encoder(
     importable without loading a model.
 
     :param checkpoint: HuggingFace CLAP model id; its audio tower sets the embedding width.
-    :param device: Torch device; ``None`` selects cuda when available, else cpu.
+    :param device: Torch device; ``None`` selects cuda, MPS, then cpu.
     :returns: Encode callable mapping a mono ``(B, T)`` batch and sample rate to
         a ``(B, D)`` float32 embedding batch.
     """
@@ -269,8 +288,7 @@ def load_clap_audio_encoder(
     import torchaudio.functional as audio_fn
     from transformers import ClapModel, ClapProcessor
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _resolve_torch_device(device)
     logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
     # transformers' own types are too loose for the surface used below, so pyright
     # is scoped off the two offending calls (the from_pretrained `.to()` chain and
@@ -339,7 +357,7 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
 @click.option(
     "--device",
     default=None,
-    help="Torch device for CLAP (defaults to cuda when available, else cpu).",
+    help="Torch device for both encoders (defaults to cuda, MPS, then cpu).",
 )
 @click.option(
     "--batch-size",
@@ -391,7 +409,7 @@ def main(
 
     :param lance_uri: Dataset directory to augment in place.
     :param clap_checkpoint: HuggingFace CLAP model id.
-    :param device: Torch device for CLAP; ``None`` selects cuda when available, else cpu.
+    :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
     :param batch_size: Rows per UDF call; ``None`` uses the Lance default.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
@@ -413,7 +431,7 @@ def main(
         "adding_embeddings", uri=lance_uri, sample_rate=sample_rate, rows=dataset.count_rows()
     )
     try:
-        m2l_encode = load_m2l_audio_encoder()
+        m2l_encode = load_m2l_audio_encoder(device)
         clap_encode = load_clap_audio_encoder(clap_checkpoint, device)
         add_embeddings(
             dataset,
