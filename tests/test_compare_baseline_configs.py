@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from omegaconf import DictConfig, OmegaConf
 
 from tests._baseline_worktree import git, ref_exists, try_fetch_ref
 
@@ -58,6 +59,25 @@ EXPECTED_SURGE_TASKS = 8
 # fan-out); each script invokes ``python -m synth_setter.cli.eval`` once with a
 # fixed set of Hydra overrides and inherits ``ckpt_path: ${wandb:...}`` from its
 # experiment config (the v0.0.0 baseline instead sourced ``get-ckpt-from-wandb.sh``).
+AUDIO_PREDICT_CASES: tuple[tuple[str, str, str], ...] = (
+    ("jobs/predict/ffn-fsd50k.sh", "model.net.d_out", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/ffn-nsynth.sh", "model.net.d_out", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/flow-fsd50k.sh", "model.num_params", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/flow-nsynth.sh", "model.num_params", "callbacks.log_per_param_mse.param_spec"),
+    (
+        "jobs/predict/flowmlp-fsd50k.sh",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    (
+        "jobs/predict/flowmlp-nsynth.sh",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    ("jobs/predict/vae-fsd50k.sh", "model.net.latent_dim", "model.param_spec"),
+    ("jobs/predict/vae-nsynth.sh", "model.net.latent_dim", "model.param_spec"),
+)
+
 PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/ffn-fsd50k.sh",
     "jobs/predict/ffn-full.sh",
@@ -787,6 +807,47 @@ def test_surge_train_configs_are_equal(
 def test_predict_cases() -> None:
     """Sanity-check predict case fan-out matches PREDICT_SCRIPTS."""
     assert len(PREDICT_CASES) == len(PREDICT_SCRIPTS)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("script_rel", "width_path", "param_spec_path"),
+    AUDIO_PREDICT_CASES,
+    ids=[Path(case[0]).stem for case in AUDIO_PREDICT_CASES],
+)
+def test_audio_predict_script_resolves_without_datamodule_param_spec(
+    shim_factory: Callable[[], tuple[Path, Path]],
+    tmp_path: Path,
+    script_rel: str,
+    width_path: str,
+    param_spec_path: str,
+) -> None:
+    """Audio prediction jobs resolve without adding VST metadata to their datamodule.
+
+    :param shim_factory: Builds a shim that drives the real eval config entrypoint.
+    :param tmp_path: Supplies a local checkpoint override that avoids W&B resolution.
+    :param script_rel: Shipped FSD50K or NSynth prediction job under test.
+    :param width_path: Resolved checkpoint architecture width.
+    :param param_spec_path: Resolved checkpoint parameter-spec metadata.
+    """
+    fake_ckpt = tmp_path / "fake.ckpt"
+    fake_ckpt.touch()
+    shim_dir, out_yaml = shim_factory()
+
+    proc = _run_under_shim(
+        shim_dir,
+        REPO_ROOT,
+        script_rel,
+        extra_env={"EXTRA_HYDRA_OVERRIDE": f"++ckpt_path={fake_ckpt}"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    cfg = OmegaConf.load(out_yaml)
+    assert isinstance(cfg, DictConfig)
+    assert cfg["datamodule"]["_target_"] == "synth_setter.data.audio_datamodule.AudioDataModule"
+    assert "param_spec_name" not in cfg["datamodule"]
+    assert OmegaConf.select(cfg, width_path) == 300
+    assert OmegaConf.select(cfg, param_spec_path) == "surge_xt"
 
 
 @pytest.mark.slow
