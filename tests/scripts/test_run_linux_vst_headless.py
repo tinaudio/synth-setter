@@ -17,7 +17,8 @@ from tests.conftest import VST_HEADLESS_WRAPPER
 
 # The wrapper always passes ``-displayfd 3``; stubs write the display there.
 _XVFB_STUB = """\
-#!/usr/bin/env bash
+#!/bin/bash
+set -euo pipefail
 n=$(cat "$XVFB_STUB_DIR/xvfb_calls" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" > "$XVFB_STUB_DIR/xvfb_calls"
@@ -33,20 +34,27 @@ exec sleep 600
 # Succeeds only once Xvfb has been invoked at least MIN times, so a test can
 # force a readiness timeout on the first bootstrap attempt only.
 _XDPYINFO_STUB = """\
-#!/usr/bin/env bash
+#!/bin/bash
+set -euo pipefail
 n=$(cat "$XVFB_STUB_DIR/xvfb_calls" 2>/dev/null || echo 0)
-[ "$n" -ge "${XDPYINFO_STUB_MIN_XVFB_CALLS:-0}" ] || exit 1
+if [[ "$n" -lt "${XDPYINFO_STUB_MIN_XVFB_CALLS:-0}" ]]; then
+  exit 1
+fi
 exit 0
 """
 
 _DAEMON_STUB = """\
-#!/usr/bin/env bash
+#!/bin/bash
+set -euo pipefail
 exec sleep 600
 """
 
 _DBUS_STUB = """\
-#!/usr/bin/env bash
-[ "$1" = "--" ] && shift
+#!/bin/bash
+set -euo pipefail
+if [[ "${1-}" == "--" ]]; then
+  shift
+fi
 exec "$@"
 """
 
@@ -167,7 +175,7 @@ def test_bootstrap_xvfb_dies_every_attempt_fails_without_running_command(
 def test_bootstrap_attempts_env_overrides_retry_budget(
     stub_env: dict[str, str],
 ) -> None:
-    """XVFB_BOOTSTRAP_ATTEMPTS=1 restores single-attempt fail-fast.
+    """A single-attempt override restores fail-fast behavior.
 
     :param stub_env: Wrapper environment with stub X binaries on PATH.
     """
@@ -181,7 +189,7 @@ def test_bootstrap_attempts_env_overrides_retry_budget(
 def test_bootstrap_succeeds_on_final_attempt_of_budget(
     stub_env: dict[str, str],
 ) -> None:
-    """Success on the last permitted attempt (3 of 3) still runs the command.
+    """Success on the last permitted attempt still runs the command.
 
     :param stub_env: Wrapper environment with stub X binaries on PATH.
     """
@@ -322,6 +330,19 @@ def test_bootstrap_retry_with_default_jitter_recovers(
     assert result.returncode == 0, result.stderr
     assert "ran-ok DISPLAY=:99" in result.stdout
     assert _xvfb_calls(stub_env) == 2
+
+
+@pytest.mark.requires_vst
+def test_bootstrap_real_x_stack_accepts_client_connection() -> None:
+    """The wrapper's real Xvfb display accepts an X client connection."""
+    result = subprocess.run(  # noqa: S603 — argv is test-owned
+        [VST_HEADLESS_WRAPPER, "xdpyinfo"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "name of display:" in result.stdout
 
 
 def test_bootstrap_readiness_timeout_retries_and_reaps_stale_xvfb(
