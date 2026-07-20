@@ -561,6 +561,45 @@ def test_instantiate_loggers_failure_closes_previously_created_loggers(
     assert finish_calls == []
 
 
+def test_instantiate_loggers_failure_logs_finalize_error_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rollback reports logger-finalize failure type without its message.
+
+    :param monkeypatch: Makes logger finalization and the next constructor fail.
+    :param caplog: Captures the stdlib-backed ranked logger warning.
+    """
+    calls = 0
+
+    def fail_finalize(status: str) -> NoReturn:
+        del status
+        raise RuntimeError("secret=do-not-log")
+
+    def instantiate_logger(cfg: DictConfig) -> object:
+        nonlocal calls
+        del cfg
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(finalize=fail_finalize)
+        raise ValueError("second logger setup failed")
+
+    monkeypatch.setattr(instantiators.hydra.utils, "instantiate", instantiate_logger)
+    logger_cfg = OmegaConf.create(
+        {
+            "first": {"_target_": "tests.FirstLogger"},
+            "second": {"_target_": "tests.SecondLogger"},
+        }
+    )
+
+    with caplog.at_level("WARNING"), pytest.raises(ValueError, match="second logger setup failed"):
+        instantiators.instantiate_loggers(logger_cfg)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[rank: 0] logger finalize failed on SimpleNamespace (RuntimeError)" in messages
+    assert "do-not-log" not in "\n".join(messages)
+
+
 def test_instantiate_loggers_failure_finishes_new_wandb_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

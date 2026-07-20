@@ -48,9 +48,7 @@ def _finalize_loggers(loggers: list[Logger], status: str) -> None:
             logger.finalize(status)
         except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
             log.warning(
-                "logger finalize failed on {} ({})",
-                type(logger).__name__,
-                type(exc).__name__,
+                f"logger finalize failed on {type(logger).__name__} ({type(exc).__name__})"
             )
 
 
@@ -92,7 +90,7 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
                 try:
                     wandb.finish()
                 except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
-                    log.warning("wandb.finish() failed ({})", type(exc).__name__)
+                    log.warning(f"wandb.finish() failed ({type(exc).__name__})")
         raise
 
     return logger
@@ -120,4 +118,4 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
         try:
             wandb.finish()
         except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
-            log.warning("wandb.finish() failed ({})", type(exc).__name__)
+            log.warning(f"wandb.finish() failed ({type(exc).__name__})")
