@@ -14,7 +14,7 @@ from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 
 
 class _ManualOptimizationModule(pl.LightningModule):
-    """Expose Lightning's pre-optimizer checkpoint contract."""
+    """Expose a visible manual-optimizer update for recovery tests."""
 
     def __init__(self, checkpoint: ValidationAlignedModelCheckpoint | None = None) -> None:
         """Initialize the manual optimizer fixture.
@@ -27,10 +27,9 @@ class _ManualOptimizationModule(pl.LightningModule):
         self.recovery_weight_at_epoch_end: float | None = None
         self.layer = torch.nn.Linear(1, 1, bias=False)
         torch.nn.init.zeros_(self.layer.weight)
-        self.saved_models: dict[int, dict[str, torch.Tensor]] = {}
 
     def training_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Save the current-step state before updating.
+        """Apply one visible manual-optimizer update.
 
         :param batch: Unused synthetic training batch.
         :param batch_idx: Unused batch index.
@@ -38,9 +37,6 @@ class _ManualOptimizationModule(pl.LightningModule):
         """
         del batch, batch_idx
         optimizer = cast(LightningOptimizer, self.optimizers())
-        self.saved_models[self.global_step] = {
-            key: value.detach().clone() for key, value in self.layer.state_dict().items()
-        }
         loss = (self.layer.weight - 1).square().mean()
         optimizer.zero_grad()
         self.manual_backward(loss)
@@ -64,11 +60,11 @@ class _ManualOptimizationModule(pl.LightningModule):
         self.recovery_weight_at_epoch_end = saved["state_dict"]["layer.weight"].item()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Use a visible update so pre- and post-optimizer states differ.
+        """Use visible model and momentum updates at each boundary.
 
-        :returns: SGD optimizer for the scalar test layer.
+        :returns: Momentum SGD optimizer for the scalar test layer.
         """
-        return torch.optim.SGD(self.parameters(), lr=0.1)
+        return torch.optim.SGD(self.parameters(), lr=0.1, momentum=0.9)
 
     def train_dataloader(self) -> DataLoader[tuple[torch.Tensor, ...]]:
         """Provide deterministic training data.
@@ -95,10 +91,10 @@ def test_checkpoint_state_key_remains_resume_compatible() -> None:
 
 
 @pytest.mark.parametrize("save_last", [True, "link"])
-def test_checkpoint_manual_optimization_recovery_uses_pre_update_weights(
+def test_checkpoint_manual_optimization_recovery_uses_current_state(
     tmp_path: Path, save_last: bool | Literal["link"]
 ) -> None:
-    """The recovery file preserves Lightning's manual-optimization step semantics.
+    """The recovery file keeps model and optimizer at the completed update boundary.
 
     :param tmp_path: Temporary checkpoint directory.
     :param save_last: Recovery checkpoint mode under test.
@@ -124,11 +120,15 @@ def test_checkpoint_manual_optimization_recovery_uses_pre_update_weights(
         val_check_interval=1,
     )
 
-    trainer.fit(_ManualOptimizationModule())
+    module = _ManualOptimizationModule()
+    trainer.fit(module)
 
     last = torch.load(checkpoint.last_model_path, map_location="cpu", weights_only=False)
     assert last["global_step"] == 2
-    assert last["state_dict"]["layer.weight"].item() == pytest.approx(0.2)
+    assert last["state_dict"]["layer.weight"].item() == pytest.approx(module.layer.weight.item())
+    checkpoint_momentum = last["optimizer_states"][0]["state"][0]["momentum_buffer"]
+    live_momentum = trainer.optimizers[0].state[module.layer.weight]["momentum_buffer"]
+    assert torch.equal(checkpoint_momentum, live_momentum)
 
 
 @pytest.mark.parametrize("save_last", [True, "link"])
@@ -163,5 +163,4 @@ def test_checkpoint_manual_optimization_saves_recovery_before_validation(
     module = _ManualOptimizationModule(checkpoint)
     trainer.fit(module)
 
-    expected_pre_update = module.saved_models[0]["weight"].item()
-    assert module.recovery_weight_at_epoch_end == expected_pre_update == 0.0
+    assert module.recovery_weight_at_epoch_end == pytest.approx(module.layer.weight.item())

@@ -976,7 +976,7 @@ def test_train_default_checkpoint_callback_is_validation_aligned(cfg_train: Dict
     assert isinstance(checkpoint, ValidationAlignedModelCheckpoint)
 
 
-_CheckpointScenario = tuple[int, int | float, float, int, int]
+type _CheckpointScenario = tuple[int, int | float, float, int, int]
 
 
 @pytest.mark.parametrize("save_last", [True, "link"])
