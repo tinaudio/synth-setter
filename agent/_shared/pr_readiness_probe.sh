@@ -24,6 +24,9 @@ readonly BODY_PREVIEW_CHARS=100
 
 gates_only=0
 loop_mode=0
+for arg in "$@"; do
+  [[ "$arg" == "--loop" ]] && loop_mode=1
+done
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --gates-only) gates_only=1 ;;
@@ -66,6 +69,36 @@ wait_required=0
 checks_rc=0
 checks=$(gh pr checks "$PR" --json name,state,bucket,link 2>&1) \
   || checks_rc=$?
+if [[ "$checks_rc" -eq 1 && "$checks" == *"unknown flag: --json"* ]]; then
+  rollup=$(gh pr view "$PR" --json statusCheckRollup 2>&1) \
+    || fail_env "gh pr view ${PR} check fallback failed: ${rollup}"
+  jq -e '.statusCheckRollup | type == "array"' >/dev/null 2>&1 \
+    <<<"$rollup" \
+    || fail_env "gh pr view ${PR} returned invalid check fallback: ${rollup}"
+  checks=$(jq '[.statusCheckRollup[] | {
+    name: (.name // .context),
+    state: (if .__typename == "CheckRun"
+      then (if .conclusion == "" then .status else .conclusion end)
+      else .state end),
+    bucket: (if .__typename == "CheckRun" then
+      .conclusion as $conclusion
+      | if .status != "COMPLETED" and $conclusion == "" then "pending"
+      elif $conclusion == "CANCELLED" then "cancel"
+      elif (["ACTION_REQUIRED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT"]
+        | index($conclusion)) != null then "fail"
+      else "pass" end
+    elif .state == "PENDING" or .state == "EXPECTED" then "pending"
+    elif .state == "FAILURE" or .state == "ERROR" then "fail"
+    else "pass" end),
+    link: (.detailsUrl // .targetUrl)
+  }]' <<<"$rollup")
+  if [[ "$(jq 'length' <<<"$checks")" -eq 0 ]]; then
+    checks="no checks reported on PR #${PR}"
+    checks_rc=1
+  else
+    checks_rc=0
+  fi
+fi
 if [[ "$checks_rc" -ne 0 && "$checks_rc" -ne 1 && "$checks_rc" -ne 8 ]]; then
   fail_env "gh pr checks ${PR} failed (${checks_rc}): ${checks}"
 fi

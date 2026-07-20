@@ -85,6 +85,8 @@ EOF
 #   $GH_STUB_CHECKS_EXIT      exit code for `gh pr checks` (0 = query succeeded)
 #   $GH_STUB_CHECKS_JSON      check rows from `gh pr checks --json`
 #   $GH_STUB_CHECKS_MESSAGE   non-JSON message returned by `gh pr checks --json`
+#   $GH_STUB_CHECKS_UNSUPPORTED make `gh pr checks --json` reject the flag
+#   $GH_STUB_STATUS_ROLLUP_JSON raw `statusCheckRollup` entries for fallback
 #   $GH_STUB_PR_STATE         state in the probe's combined pr-view call
 #   $GH_STUB_MERGEABLE        mergeable in the combined pr-view call
 #   $GH_STUB_HEAD             headRefOid in the combined pr-view call
@@ -100,7 +102,10 @@ if [[ -n "${GH_STUB_LOG:-}" ]]; then
 fi
 if [[ "$1" == "pr" && "$2" == "checks" ]]; then
   if [[ "$*" == *"--json"* ]]; then
-    if [[ -n "${GH_STUB_CHECKS_MESSAGE:-}" ]]; then
+    if [[ "${GH_STUB_CHECKS_UNSUPPORTED:-0}" == "1" ]]; then
+      echo "unknown flag: --json" >&2
+      exit 1
+    elif [[ -n "${GH_STUB_CHECKS_MESSAGE:-}" ]]; then
       printf '%s\n' "$GH_STUB_CHECKS_MESSAGE"
     elif [[ -n "${GH_STUB_CHECKS_JSON:-}" ]]; then
       printf '%s\n' "$GH_STUB_CHECKS_JSON"
@@ -133,6 +138,10 @@ if [[ "$1" == "api" && "$2" == *"/pulls/"* ]]; then
     *"/reviews"*) printf '%s\n' "${GH_STUB_PULL_REVIEWS:-[]}" ;;
     *) printf '[]\n' ;;
   esac
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"statusCheckRollup"* ]]; then
+  printf '{"statusCheckRollup":%s}\n' "${GH_STUB_STATUS_ROLLUP_JSON:-[]}"
   exit 0
 fi
 if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"headRefOid"* ]]; then
@@ -1746,6 +1755,20 @@ T_probe_pending_ci_waits() {
 }
 it "probe: pending-only CI → exit 8 WAIT" T_probe_pending_ci_waits
 
+T_probe_old_gh_falls_back_to_status_rollup() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[{"__typename":"CheckRun","name":"unit-tests","status":"FAILURE","conclusion":"FAILURE","detailsUrl":"https://example.test/log/9"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "unit-tests (FAILURE) — https://example.test/log/9" <<<"$out" || {
+    echo "should normalize statusCheckRollup; got: $out"
+    return 1
+  }
+}
+it "probe: gh without checks --json → statusCheckRollup fallback" \
+  T_probe_old_gh_falls_back_to_status_rollup
+
 T_probe_checks_not_registered_yet_waits() {
   local out
   export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
@@ -1983,6 +2006,18 @@ T_probe_loop_mode_stops_on_unknown_option() {
 }
 it "probe: --loop stops polling on an unknown option" \
   T_probe_loop_mode_stops_on_unknown_option
+
+T_probe_loop_mode_stops_when_unknown_option_precedes_loop() {
+  local out
+  out=$(run_probe --looop --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: unknown option before --loop still stops polling" \
+  T_probe_loop_mode_stops_when_unknown_option_precedes_loop
 
 T_probe_loop_mode_stops_on_missing_pr() {
   local out
