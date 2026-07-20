@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, create_autospec
 
 import click
 import pytest
+import requests
 import sky
 import yaml
 from click.testing import CliRunner
@@ -1501,7 +1502,7 @@ class TestDispatchViaSkypilot:
         """
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
-        mock_sky.api_info.side_effect = RuntimeError("unauthorized")
+        mock_sky.api_info.side_effect = requests.HTTPError("unauthorized")
         bootstrap = MagicMock()
         monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", bootstrap)
         template = _write_runpod_yaml(tmp_path)
@@ -1516,6 +1517,63 @@ class TestDispatchViaSkypilot:
 
         bootstrap.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
+
+    def test_unexpected_api_error_propagates(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Unexpected SDK defects retain their original exception.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
+        mock_sky.api_info.side_effect = RuntimeError("SDK invariant failed")
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+        )
+
+        with pytest.raises(RuntimeError, match="SDK invariant failed"):
+            dispatch_via_skypilot(sky_cfg)
+
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_local_ignores_inherited_remote_auth(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Explicit local mode clears invalid inherited remote auth.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param monkeypatch: Pytest environment fixture.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "sky_orphan-token")
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            local=True,
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
+        assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
+        mock_sky.api_info.assert_not_called()
+        mock_sky.jobs.launch.assert_called_once()
 
     def test_dispatch_failure_raises_runtime_error(
         self,

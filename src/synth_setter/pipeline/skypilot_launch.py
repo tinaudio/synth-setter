@@ -60,6 +60,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
+import requests
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
@@ -76,6 +77,7 @@ from synth_setter.pipeline.schemas.object_storage import (
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
     ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+    SKYPILOT_CLIENT_AUTH_ENV_KEYS,
     SkypilotClientSettings,
     SkypilotLaunchConfig,
     skypilot_client_settings_from_sources,
@@ -332,12 +334,8 @@ def _configure_skypilot_client(
     :param env_file_path: Dotenv source named in user-facing failures.
     :raises click.ClickException: The remote server cannot authenticate the client.
     """
-    auth_env_keys = (
-        ENV_SKYPILOT_API_SERVER_ENDPOINT,
-        ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
-    )
     if local:
-        for key in auth_env_keys:
+        for key in SKYPILOT_CLIENT_AUTH_ENV_KEYS:
             os.environ.pop(key, None)
     else:
         os.environ.update(settings.as_env())
@@ -352,7 +350,7 @@ def _configure_skypilot_client(
         return
     try:
         sky.api_info()
-    except Exception as exc:  # noqa: BLE001 - normalize SDK transport/auth failures for the CLI.
+    except requests.RequestException as exc:
         raise click.ClickException(
             "SkyPilot API server authentication check failed before launch. "
             f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} and "
@@ -743,7 +741,10 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     try:
         client_settings = (
-            SkypilotClientSettings()
+            SkypilotClientSettings(
+                api_server_endpoint=None,
+                service_account_token=None,
+            )
             if sky_cfg.local
             else skypilot_client_settings_from_sources(
                 env_file_path,

@@ -20,6 +20,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
 ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
+SKYPILOT_CLIENT_AUTH_ENV_KEYS: Final[tuple[str, ...]] = (
+    ENV_SKYPILOT_API_SERVER_ENDPOINT,
+    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+)
 
 _ENV_IDENT_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
@@ -36,10 +40,8 @@ def _client_settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str
         candidates.update(dotenv_values(env_file))
 
     kwargs: dict[str, str] = {}
-    for env_key, field_name in (
-        (ENV_SKYPILOT_API_SERVER_ENDPOINT, "api_server_endpoint"),
-        (ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "service_account_token"),
-    ):
+    for env_key in SKYPILOT_CLIENT_AUTH_ENV_KEYS:
+        field_name = env_key.removeprefix("SKYPILOT_").lower()
         for source in (candidates, os.environ):
             value = _clean(source.get(env_key))
             if value is not None:
@@ -145,7 +147,7 @@ def skypilot_client_settings_from_sources(
     kwargs = _client_settings_kwargs_from_sources(env_file)
     if api_server_endpoint is not None:
         kwargs["api_server_endpoint"] = api_server_endpoint
-    return SkypilotClientSettings(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
+    return SkypilotClientSettings.model_validate(kwargs)
 
 
 class SkypilotLaunchConfig(BaseModel):

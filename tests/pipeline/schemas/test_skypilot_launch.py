@@ -93,7 +93,7 @@ class TestSkypilotClientSettings:
         :param tmp_path: Pytest temporary directory.
         :param monkeypatch: Pytest environment isolation fixture.
         """
-        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
         monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text(
