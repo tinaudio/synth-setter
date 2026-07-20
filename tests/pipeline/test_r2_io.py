@@ -62,6 +62,41 @@ def _assert_redacted_rclone_failure(
     assert expected_context in logs
 
 
+def _run_debug_template(
+    template_name: str, sentinel_name: str, rclone_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Execute one repository-owned rclone canary run block.
+
+    :param template_name: Repository task template to execute.
+    :param sentinel_name: Task-created file removed after execution.
+    :param rclone_env: Isolated credentials and endpoint.
+    :returns: Captured task process result.
+    """
+    template_path = (
+        Path(__file__).parents[2] / "src" / "synth_setter" / "configs" / "compute" / template_name
+    )
+    document = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+    run_script = document["run"]
+    assert isinstance(run_script, str)
+    env = {
+        **os.environ,
+        **rclone_env,
+        "R2_BUCKET": "safe-test-bucket",
+        "R2_DEBUG_PREFIX": "issue-2190",
+    }
+    try:
+        return subprocess.run(  # noqa: S603 — run block is repository-owned.
+            ["/bin/bash", "-c", run_script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+    finally:
+        (Path(tempfile.gettempdir()) / sentinel_name).unlink(missing_ok=True)
+
+
 class TestIsR2Uri:
     """Tests for is_r2_uri scheme detection."""
 
@@ -157,36 +192,9 @@ class TestRcloneDebugTemplates:
         :param sentinel_name: Task-created file removed after execution.
         :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
         """
-        template_path = (
-            Path(__file__).parents[2]
-            / "src"
-            / "synth_setter"
-            / "configs"
-            / "compute"
-            / template_name
+        result = _run_debug_template(
+            template_name, sentinel_name, synthetic_unreachable_rclone_env
         )
-        document = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-        run_script = document["run"]
-        assert isinstance(run_script, str)
-        env = {
-            **os.environ,
-            **synthetic_unreachable_rclone_env,
-            "R2_BUCKET": "safe-test-bucket",
-            "R2_DEBUG_PREFIX": "issue-2190",
-        }
-
-        try:
-            result = subprocess.run(  # noqa: S603 — run block is repository-owned.
-                ["/bin/bash", "-c", run_script],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-                env=env,
-            )
-        finally:
-            (Path(tempfile.gettempdir()) / sentinel_name).unlink(missing_ok=True)
-
         logs = f"{result.stdout}\n{result.stderr}"
         assert result.returncode != 0
         _assert_redacted_rclone_failure(logs, synthetic_unreachable_rclone_env, "safe-test-bucket")
