@@ -10,63 +10,81 @@ _LAUNCH_CONFIG_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/train.yml"
 
 
-def test_train_workflow_optional_inputs_reach_launcher_extra_env() -> None:
-    """Optional dispatch overrides are forwarded to the SkyPilot worker."""
-    workflow = yaml.safe_load(_WORKFLOW_PATH.read_text(encoding="utf-8"))
+def _load_workflow() -> dict:
+    """Parse the training workflow YAML.
+
+    :returns: The workflow document as a mapping.
+    """
+    return yaml.safe_load(_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
+def _steps_by_name(workflow: dict) -> dict[str, dict]:
+    """Index the train job's steps by their display name.
+
+    :param workflow: Parsed workflow document.
+    :returns: Mapping of step name to step definition.
+    """
+    return {step["name"]: step for step in workflow["jobs"]["train"]["steps"]}
+
+
+def test_train_workflow_requires_experiment_and_forwards_it_to_launcher() -> None:
+    """One-selector dispatch (#2196): `experiment` is the only required input."""
+    workflow = _load_workflow()
 
     # PyYAML's YAML 1.1 resolver interprets the unquoted GitHub key `on` as True.
     inputs = workflow[True]["workflow_dispatch"]["inputs"]
-    steps_by_name = {step["name"]: step for step in workflow["jobs"]["train"]["steps"]}
-    dispatch_step = steps_by_name["Dispatch via SkyPilot"]
+    assert inputs["experiment"]["required"] is True
+    assert "dataset_root_uri" not in inputs
+    assert inputs["launch_config"]["required"] is False
+    assert inputs["launch_config"]["default"] == ""
 
-    assert inputs["dataset_root_uri"]["default"] == ""
-    assert inputs["experiment"]["default"] == ""
-    assert dispatch_step["env"]["DATASET_ROOT_URI"] == "${{ inputs.dataset_root_uri }}"
-    assert dispatch_step["env"]["EXPERIMENT"] == "${{ inputs.experiment }}"
-    assert '--extra-env DATASET_ROOT_URI "$DATASET_ROOT_URI"' in dispatch_step["run"]
+    assert workflow["jobs"]["train"]["env"]["EXPERIMENT"] == "${{ inputs.experiment }}"
+    dispatch_step = _steps_by_name(workflow)["Dispatch via SkyPilot"]
     assert '--extra-env EXPERIMENT "$EXPERIMENT"' in dispatch_step["run"]
+    assert "DATASET_ROOT_URI" not in dispatch_step["run"]
+
+
+def test_train_workflow_maps_experiments_to_existing_launch_configs() -> None:
+    """The hardcoded experiment → launch-config mapping only names shipped configs."""
+    workflow = _load_workflow()
+
+    resolve_step = _steps_by_name(workflow)["Resolve launch config"]
+    script = resolve_step["run"]
+    assert "surge/flow_simple_440k)" in script
+    assert "surge/ffn_simple_smoke)" in script
+
+    mapped = [
+        token
+        for line in script.splitlines()
+        for token in line.split()
+        if token.startswith("LAUNCH_CONFIG=src/")
+    ]
+    assert mapped, "mapping must assign repo-relative launch-config paths"
+    for assignment in mapped:
+        path = _REPO_ROOT / assignment.removeprefix("LAUNCH_CONFIG=")
+        assert path.is_file(), f"mapped launch config does not exist: {path}"
 
 
 @pytest.mark.parametrize(
-    ("name", "default_experiment", "default_dataset_root_uri"),
+    ("name", "default_experiment"),
     [
-        (
-            "train-runpod-flow-simple-440k.yaml",
-            "surge/flow_simple",
-            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
-            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/",
-        ),
-        (
-            "train-runpod-smoke.yaml",
-            "surge/ffn_simple",
-            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
-            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/",
-        ),
-        (
-            "train-runpod.yaml",
-            "surge/ffn_simple",
-            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
-            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/",
-        ),
+        ("train-runpod-flow-simple-440k.yaml", "surge/flow_simple_440k"),
+        ("train-runpod-smoke.yaml", "surge/ffn_simple_smoke"),
+        ("train-runpod.yaml", "surge/ffn_simple_smoke"),
     ],
 )
-def test_train_runpod_config_uses_optional_inputs_with_existing_defaults(
+def test_train_runpod_config_defaults_to_self_contained_experiment(
     name: str,
     default_experiment: str,
-    default_dataset_root_uri: str,
 ) -> None:
-    """Each worker command honors overrides without changing its defaults.
+    """Each worker command honors the EXPERIMENT override and pins no dataset itself.
 
     :param name: Shipped training launch-config filename.
-    :param default_experiment: Experiment used when its workflow input is empty.
-    :param default_dataset_root_uri: Dataset used when its workflow input is empty.
+    :param default_experiment: Experiment used when the forwarded EXPERIMENT is empty.
     """
     launch_config_path = _LAUNCH_CONFIG_DIR / name
     launch_config = yaml.safe_load(launch_config_path.read_text(encoding="utf-8"))
 
-    expected_dataset = (
-        f'"datamodule.download_dataset_root_uri=${{DATASET_ROOT_URI:-{default_dataset_root_uri}}}"'
-    )
     expected_experiment = f'"experiment=${{EXPERIMENT:-{default_experiment}}}"'
-    assert expected_dataset in launch_config["cmd"]
     assert expected_experiment in launch_config["cmd"]
+    assert "DATASET_ROOT_URI" not in launch_config["cmd"]

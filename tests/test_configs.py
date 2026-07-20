@@ -550,6 +550,50 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     assert "prediction_writer" in cfg.callbacks
 
 
+def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> None:
+    """``surge/flow_simple_440k`` bakes the 440k contract previously spread into launch YAML.
+
+    Pins the one-selector contract (#2196): the immutable 440k dataset root, the
+    surge_simple spec on both datamodule and render, the enabled val audio probe,
+    validation cadence and checkpoint monitor, and the disabled test stage — so
+    ``experiment=surge/flow_simple_440k`` alone reproduces the full 440k run.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple_440k"])
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
+        "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
+    )
+    assert cfg.datamodule.param_spec_name == "surge_simple"
+    assert cfg.render.param_spec_name == "surge_simple"
+    assert cfg.training.val_audio_probe is True
+    assert cfg.trainer.val_check_interval == 2000
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
+    assert cfg.callbacks.model_checkpoint.every_n_train_steps == 1000
+    assert cfg.test is False
+
+
+def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
+    """``surge/ffn_simple_smoke`` bakes the RunPod smoke contract into one experiment.
+
+    Pins the one-selector smoke contract (#2196): the small finalized R2 root a fresh pod can
+    hydrate, single-process loading, the 10-step cap, and a checkpoint cadence that guarantees a
+    file exists at step 10.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_simple_smoke"])
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+        "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+    )
+    assert cfg.datamodule.num_workers == 0
+    assert cfg.datamodule.param_spec_name == "surge_simple"
+    assert cfg.trainer.max_steps == 10
+    assert cfg.trainer.min_steps == 10
+    assert cfg.callbacks.model_checkpoint.every_n_train_steps == 5
+
+
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
 

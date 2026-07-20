@@ -1,4 +1,8 @@
 # RunPod launch for flow matching on the finalized 440k Surge Simple dataset.
+#
+# The surge/flow_simple_440k experiment owns the dataset pin and every
+# scientific knob (#2196); the cmd carries only experiment selection and
+# operational flags.
 
 compute_template: src/synth_setter/configs/compute/runpod-training-template.yaml
 worker_image_tag: dev-snapshot
@@ -9,15 +13,6 @@ cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
-  "experiment=${EXPERIMENT:-surge/flow_simple}"
-  datamodule.param_spec_name=surge_simple
-  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/}"
-  render=surge_simple
-  training.val_audio_probe=true
+  "experiment=${EXPERIMENT:-surge/flow_simple_440k}"
   training.upload_checkpoints_during_training=true
-  trainer.limit_val_batches=20
-  trainer.val_check_interval=2000
-  callbacks.model_checkpoint.monitor=val/param_mse
-  callbacks.model_checkpoint.every_n_train_steps=1000
-  test=false
   hydra.run.dir=/home/build/synth-setter/train-run

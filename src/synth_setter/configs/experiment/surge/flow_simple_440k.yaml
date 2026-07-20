@@ -1,0 +1,29 @@
+# @package _global_
+
+# One-selector recipe for flow matching on the finalized 440k Surge Simple
+# dataset (#2196): the experiment owns the dataset pin and training cadence
+# that previously lived in the RunPod launch cmd.
+
+defaults:
+  - /experiment/surge/flow_simple
+  - override /render: surge_simple
+  - _self_
+
+run_name: flow_440k
+
+datamodule:
+  download_dataset_root_uri: r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/
+
+training:
+  val_audio_probe: true
+
+# The eval workflow owns test-set evaluation; skip Lightning's post-fit test stage.
+test: false
+
+trainer:
+  val_check_interval: 2000
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse
+    every_n_train_steps: 1000

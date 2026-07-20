@@ -24,6 +24,9 @@ import pytest
 import sky
 import yaml
 from click.testing import CliRunner
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
+from omegaconf import DictConfig
 from pydantic import ValidationError
 
 import synth_setter.pipeline.skypilot_launch as skypilot_launch
@@ -51,6 +54,20 @@ from synth_setter.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
 from synth_setter.resources import configs_dir
+
+
+def _compose_train_experiment(experiment: str) -> DictConfig:
+    """Compose ``train.yaml`` with the given experiment, clearing GlobalHydra around it.
+
+    :param experiment: Experiment name as passed on the worker command line.
+    :returns: The composed training config.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(config_name="train.yaml", overrides=[f"experiment={experiment}"])
+    finally:
+        GlobalHydra.instance().clear()
 
 
 @pytest.fixture()
@@ -1982,33 +1999,71 @@ class TestCheckedInLaunchConfigs:
         assert (self._LAUNCH_DIR / "train-runpod.yaml").is_file()
         assert (self._LAUNCH_DIR / "eval-runpod.yaml").is_file()
 
-    def test_flow_simple_440k_config_pins_training_contract(self) -> None:
-        """The dedicated RunPod launch uses flow matching with the finalized 440k dataset."""
+    def test_flow_simple_440k_config_selects_the_440k_experiment(self) -> None:
+        """The dedicated RunPod launch defaults to the self-contained 440k experiment."""
         cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod-flow-simple-440k.yaml")
 
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
-        assert "experiment=${EXPERIMENT:-surge/flow_simple}" in tokens
-        assert not any(token.startswith("datamodule=") for token in tokens)
-        assert "datamodule.param_spec_name=surge_simple" in tokens
-        assert (
-            "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-"
-            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
-            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/}"
-        ) in tokens
-        assert "render=surge_simple" in tokens
-        assert "training.val_audio_probe=true" in tokens
+        assert "experiment=${EXPERIMENT:-surge/flow_simple_440k}" in tokens
         assert "training.upload_checkpoints_during_training=true" in tokens
 
-    def test_default_train_config_lets_experiment_select_datamodule(self) -> None:
-        """The generic train launcher leaves the datamodule contract to the experiment."""
+    def test_default_train_config_selects_the_smoke_experiment(self) -> None:
+        """The generic train launcher defaults to the cheap self-contained smoke experiment."""
         cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod.yaml")
 
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
-        assert "experiment=${EXPERIMENT:-surge/ffn_simple}" in tokens
-        assert "datamodule=surge_lance_map" not in tokens
-        assert "datamodule.param_spec_name=surge_simple" not in tokens
+        assert "experiment=${EXPERIMENT:-surge/ffn_simple_smoke}" in tokens
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+            "train-vast-smoke.yaml",
+        ],
+    )
+    def test_shipped_train_config_carries_no_scientific_overrides(self, name: str) -> None:
+        """Scientific knobs live in experiment YAML, never in launch cmds (#2118, #2196).
+
+        :param name: Shipped training launch config under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+        assert cfg.cmd is not None
+        scientific = ("datamodule", "trainer.", "render=", "callbacks.", "test=")
+        offending = [token for token in shlex.split(cfg.cmd) if token.startswith(scientific)]
+        assert not offending, f"scientific overrides belong in the experiment: {offending}"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "train-runpod-flow-simple-440k.yaml",
+            "train-runpod-smoke.yaml",
+            "train-runpod.yaml",
+            "train-vast-smoke.yaml",
+        ],
+    )
+    def test_shipped_train_config_default_experiment_is_self_contained(self, name: str) -> None:
+        """Each train cmd's default experiment composes and pins a remote dataset (#2095).
+
+        A fresh pod has no local dataset, so the default experiment must both
+        compose against ``train.yaml`` (the #2118 failure mode) and carry its own
+        ``r2://`` download root.
+
+        :param name: Shipped training launch config under ``configs/launch/``.
+        """
+        cfg = load_launch_config(self._LAUNCH_DIR / name)
+        assert cfg.cmd is not None
+        match = re.search(r"experiment=\$\{EXPERIMENT:-([^}]+)\}", cfg.cmd)
+        assert match, "train cmd must default EXPERIMENT to a self-contained experiment"
+
+        composed = _compose_train_experiment(match.group(1))
+        uri = str(composed.datamodule.download_dataset_root_uri)
+        assert uri.startswith("r2://"), (
+            "worker cmd must default to a remote dataset root; fresh pods have no local dataset"
+        )
 
     def test_default_eval_config_matches_train_experiment_and_dataset_interface(self) -> None:
         """The generic eval launcher accepts the same env overrides as training."""
@@ -2029,31 +2084,11 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-flow-simple-440k.yaml",
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
-        ],
-    )
-    def test_shipped_train_config_pins_remote_dataset_source(self, name: str) -> None:
-        """A fresh pod has no local dataset, so every train cmd must download one (#2095).
-
-        :param name: Shipped training launch config under ``configs/launch/``.
-        """
-        cfg = load_launch_config(self._LAUNCH_DIR / name)
-        assert cfg.cmd is not None
-        assert any(
-            token.startswith("datamodule.download_dataset_root_uri=")
-            and "DATASET_ROOT_URI:-r2://" in token
-            for token in shlex.split(cfg.cmd)
-        ), "worker cmd must default to a remote dataset root; fresh pods have no local dataset"
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "train-runpod-flow-simple-440k.yaml",
-            "train-runpod-smoke.yaml",
-            "train-runpod.yaml",
+            "train-vast-smoke.yaml",
         ],
     )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
-        """Single-GPU RunPod training opts into crash-recovery checkpoints.
+        """Single-GPU cloud training opts into crash-recovery checkpoints.
 
         :param name: Shipped training launch config under ``configs/launch/``.
         """
