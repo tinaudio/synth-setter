@@ -40,6 +40,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
+- **Check the RunPod balance before launching jobs** — exhaustion shows up as
+  jobs stuck in STARTING with no visible cause. Run
+  `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('RunPod balance OK')"`
+  and never echo the raw balance amount into logs or comments.
 
 ## File a bug for out-of-scope errors
 

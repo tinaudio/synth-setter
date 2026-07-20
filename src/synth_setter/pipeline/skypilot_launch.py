@@ -52,6 +52,7 @@ import functools
 import os
 import re
 import subprocess
+import tomllib
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -155,6 +156,54 @@ def _ensure_ci_sky_config() -> None:
     config_path = sky_dir / "config.yaml"
     config_path.write_text(_CI_SKY_CONFIG_YAML, encoding="utf-8")
     config_path.chmod(0o600)
+
+
+# Floor in USD: below this, RunPod refuses/loses pods mid-run, so launches
+# would sit in STARTING indefinitely with no visible cause (#2193).
+_RUNPOD_MIN_BALANCE_USD = 5.0
+
+_RUNPOD_BALANCE_QUERY = "query { myself { clientBalance } }"
+
+
+def _fetch_runpod_balance() -> float | None:
+    """Return the RunPod account balance in USD, or ``None`` when undeterminable.
+
+    Fail-open by contract: missing or unparsable ``~/.runpod/config.toml``, API
+    errors, and malformed responses all return ``None`` — a balance probe must
+    never block a launch on its own failure.
+
+    :returns: Account balance in USD, or ``None``.
+    """
+    try:
+        import runpod
+        from runpod.api.graphql import run_graphql_query
+
+        config_text = (Path.home() / ".runpod" / "config.toml").read_text(encoding="utf-8")
+        api_key = tomllib.loads(config_text).get("default", {}).get("api_key")
+        if not api_key:
+            return None
+        runpod.api_key = api_key
+        result = run_graphql_query(_RUNPOD_BALANCE_QUERY)
+        return float(result["data"]["myself"]["clientBalance"])
+    except Exception:  # noqa: BLE001 — fail open, see docstring contract
+        return None
+
+
+def _check_runpod_balance() -> None:
+    """Abort a RunPod launch when the account balance is below the preflight floor.
+
+    The error deliberately omits the actual balance — logs are shared and the
+    amount is account-sensitive. An unknowable balance fails open.
+
+    :raises RuntimeError: Balance is known and below ``_RUNPOD_MIN_BALANCE_USD``.
+    """
+    balance = _fetch_runpod_balance()
+    if balance is not None and balance < _RUNPOD_MIN_BALANCE_USD:
+        raise RuntimeError(
+            "insufficient RunPod balance: the account is below the "
+            f"${_RUNPOD_MIN_BALANCE_USD:.0f} preflight floor. Top up before "
+            "launching (amount withheld from logs)."
+        )
 
 
 # `sky local up` uses the kubernetes backend; map both spellings.
@@ -621,6 +670,8 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+    if provider == "runpod":
+        _check_runpod_balance()
 
     if provider == "local":
         import sky.check

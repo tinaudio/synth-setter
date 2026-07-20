@@ -35,8 +35,10 @@ from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
     _SKYPILOT_API_SERVER_ENV,
     _WORKER_ENV_KEYS,
+    _check_runpod_balance,
     _detect_provider_from_doc,
     _ensure_ci_sky_config,
+    _fetch_runpod_balance,
     _load_compute_template_with_cmd,
     _override_image_id,
     dispatch_via_skypilot,
@@ -97,6 +99,20 @@ def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "synth_setter.pipeline.skypilot_launch._run_cred_bootstrap",
         lambda **_kwargs: None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_balance_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``_fetch_runpod_balance`` fail open by default so no test touches the RunPod API.
+
+    Balance-preflight tests re-patch with the real fetch or a fixed value.
+
+    :param monkeypatch: Pytest fixture used for the patch.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+        lambda: None,
     )
 
 
@@ -652,6 +668,160 @@ class TestRunCredBootstrap:
 # ---------------------------------------------------------------------------
 # _SECRET_WORKER_ENV_KEYS — module-level constant for the unconfigured-creds check
 # ---------------------------------------------------------------------------
+
+
+def _write_runpod_config_toml(home: Path, api_key: str = "rp-test-key") -> None:
+    """Write a ``~/.runpod/config.toml`` shaped like ``write_provider_creds.sh`` produces.
+
+    :param home: Directory standing in for ``Path.home()``.
+    :param api_key: API key value to embed.
+    """
+    runpod_dir = home / ".runpod"
+    runpod_dir.mkdir(parents=True)
+    (runpod_dir / "config.toml").write_text(f'[default]\napi_key = "{api_key}"\n')
+
+
+class TestRunpodBalancePreflight:
+    """Launch-blocking floor on the RunPod account balance, fail-open on probe errors."""
+
+    @pytest.fixture()
+    def real_fetch(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        """Restore the real ``_fetch_runpod_balance`` and isolate ``Path.home()``.
+
+        :param monkeypatch: Pytest fixture for the patches.
+        :param tmp_path: Stand-in home directory.
+        :return: The stand-in home directory.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            _fetch_runpod_balance,
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        return tmp_path
+
+    def test_balance_below_floor_raises_without_leaking_amount(
+        self, monkeypatch: pytest.MonkeyPatch, real_fetch: Path
+    ) -> None:
+        """A sub-floor balance aborts with an error that never contains the amount.
+
+        :param monkeypatch: Pytest fixture for the GraphQL patch.
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        """
+        _write_runpod_config_toml(real_fetch)
+        monkeypatch.setattr(
+            "runpod.api.graphql.run_graphql_query",
+            lambda _query: {"data": {"myself": {"clientBalance": 0.42}}},
+        )
+        with pytest.raises(RuntimeError, match="insufficient RunPod balance") as excinfo:
+            _check_runpod_balance()
+        assert "0.42" not in str(excinfo.value)
+
+    def test_balance_at_floor_passes(
+        self, monkeypatch: pytest.MonkeyPatch, real_fetch: Path
+    ) -> None:
+        """A balance exactly at the floor is sufficient — the launch proceeds.
+
+        :param monkeypatch: Pytest fixture for the GraphQL patch.
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        """
+        _write_runpod_config_toml(real_fetch)
+        monkeypatch.setattr(
+            "runpod.api.graphql.run_graphql_query",
+            lambda _query: {
+                "data": {"myself": {"clientBalance": skypilot_launch._RUNPOD_MIN_BALANCE_USD}}
+            },
+        )
+        _check_runpod_balance()
+
+    def test_missing_config_toml_fails_open(self, real_fetch: Path) -> None:
+        """No ``~/.runpod/config.toml`` means the balance is unknowable — never block.
+
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        """
+        _check_runpod_balance()
+
+    def test_api_error_fails_open(self, monkeypatch: pytest.MonkeyPatch, real_fetch: Path) -> None:
+        """A RunPod API failure must not block a launch.
+
+        :param monkeypatch: Pytest fixture for the GraphQL patch.
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        """
+        _write_runpod_config_toml(real_fetch)
+
+        def _raise(_query: str) -> dict[str, Any]:
+            raise RuntimeError("api down")
+
+        monkeypatch.setattr("runpod.api.graphql.run_graphql_query", _raise)
+        _check_runpod_balance()
+
+    def test_malformed_response_fails_open(
+        self, monkeypatch: pytest.MonkeyPatch, real_fetch: Path
+    ) -> None:
+        """A response without ``clientBalance`` must not block a launch.
+
+        :param monkeypatch: Pytest fixture for the GraphQL patch.
+        :param real_fetch: Stand-in home directory with the real fetch restored.
+        """
+        _write_runpod_config_toml(real_fetch)
+        monkeypatch.setattr("runpod.api.graphql.run_graphql_query", lambda _query: {"data": {}})
+        _check_runpod_balance()
+
+    def test_runpod_dispatch_low_balance_aborts_before_submission(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A sub-floor balance aborts a RunPod dispatch before any job submission.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for the balance patch.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 1.0,
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="low-balance",
+        )
+        with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_runpod_dispatch_healthy_balance_submits(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A healthy balance lets the dispatch reach job submission.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for the balance patch.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
+            lambda: 100.0,
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="healthy-balance",
+        )
+        dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_called_once()
 
 
 class TestSecretWorkerEnvKeys:
