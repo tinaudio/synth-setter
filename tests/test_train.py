@@ -469,6 +469,38 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
     assert_finite_train_loss(metric_dict)
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_train_runpod_experiment_default_datamodule_advances(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    experiment: str,
+) -> None:
+    """Train one step with each RunPod experiment's own datamodule selection.
+
+    :param tmp_path: Hydra output and log directory.
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    :param experiment: Shipped RunPod launch experiment to train.
+    """
+    cfg = _build_surge_xt_smoke_cfg(
+        accelerator="cpu",
+        param_spec_name="surge_simple",
+        experiment=experiment,
+        datamodule_group=None,
+    )
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+
+
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
 

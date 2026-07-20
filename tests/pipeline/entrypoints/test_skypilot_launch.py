@@ -1683,7 +1683,7 @@ class TestCheckedInLaunchConfigs:
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
         assert "experiment=${EXPERIMENT:-surge/flow_simple}" in tokens
-        assert "datamodule=surge_lance_map" in tokens
+        assert not any(token.startswith("datamodule=") for token in tokens)
         assert "datamodule.param_spec_name=surge_simple" in tokens
         assert (
             "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-"
