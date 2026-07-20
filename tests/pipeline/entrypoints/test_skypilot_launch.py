@@ -617,6 +617,26 @@ class TestRunCredBootstrap:
         _real_run_cred_bootstrap(provider="runpod")
         assert called == [], "bootstrap script should not be invoked in remote-server mode"
 
+    def test_local_api_endpoint_runs_provider_bootstrap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A local API server still needs host-side provider credentials.
+
+        :param monkeypatch: Sets the local endpoint and records subprocess execution.
+        """
+        from sky.server import common as server_common
+
+        monkeypatch.setenv(
+            ENV_SKYPILOT_API_SERVER_ENDPOINT,
+            server_common.DEFAULT_SERVER_URL,
+        )
+        run = MagicMock(return_value=MagicMock(stdout="", stderr="", returncode=0))
+        monkeypatch.setattr(skypilot_launch.subprocess, "run", run)
+
+        _real_run_cred_bootstrap(provider="runpod")
+
+        run.assert_called_once()
+
     def test_passes_merged_env_to_subprocess(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1229,6 +1249,32 @@ class TestDispatchViaSkypilot:
             "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
         )
 
+    def test_concurrent_dispatch_waits_for_process_state_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second dispatch cannot enter while process-wide client state is owned.
+
+        :param monkeypatch: Replaces the inner dispatch with an entry signal.
+        """
+        entered = threading.Event()
+        monkeypatch.setattr(
+            skypilot_launch,
+            "_dispatch_via_skypilot",
+            lambda _cfg: entered.set(),
+        )
+        thread = threading.Thread(
+            target=dispatch_via_skypilot,
+            args=(SkypilotLaunchConfig(),),
+        )
+
+        with skypilot_launch._SKYPILOT_DISPATCH_LOCK:
+            thread.start()
+            assert not entered.wait(timeout=0.05)
+
+        assert entered.wait(timeout=1)
+        thread.join()
+        assert not thread.is_alive()
+
     def test_missing_compute_template_raises(self) -> None:
         """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug."""
         sky_cfg = SkypilotLaunchConfig(compute_template=None, cmd="echo")
@@ -1553,6 +1599,11 @@ class TestDispatchViaSkypilot:
         with pytest.raises(click.ClickException, match="authentication check failed"):
             dispatch_via_skypilot(sky_cfg)
 
+        from sky.server import common as server_common
+
+        assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
+        assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
+        assert server_common.get_server_url() != "https://sky.example.com"
         bootstrap.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
 

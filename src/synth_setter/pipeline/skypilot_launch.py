@@ -407,20 +407,24 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     via `subprocess.run(capture_output=True)` so even surprise output cannot
     reach a caller's tee'd workflow log.
 
-    When `SKYPILOT_API_SERVER_ENDPOINT` is set the remote API server holds the
-    provider creds; the local cred-write is a no-op and this returns early.
+    A remote `SKYPILOT_API_SERVER_ENDPOINT` owns provider credentials; local
+    endpoints still bootstrap host-side credential files.
 
     The subprocess inherits `os.environ` merged with `env_file_path` values
     (when provided) so a local-dev `.env` carrying provider creds bootstraps
     cleanly without manual `export`.
     """
-    if os.environ.get(_SKYPILOT_API_SERVER_ENV):
-        click.echo(
-            f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
-            "creds, skipping local cred bootstrap",
-            err=True,
-        )
-        return
+    api_server_endpoint = os.environ.get(_SKYPILOT_API_SERVER_ENV)
+    if api_server_endpoint:
+        from sky.server import common as server_common
+
+        if not server_common.is_api_server_local(api_server_endpoint):
+            click.echo(
+                f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
+                "creds, skipping local cred bootstrap",
+                err=True,
+            )
+            return
 
     env = {**os.environ}
     if env_file_path is not None and env_file_path.is_file():
