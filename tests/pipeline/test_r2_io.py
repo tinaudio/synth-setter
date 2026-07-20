@@ -28,21 +28,38 @@ from synth_setter.pipeline.schemas.object_storage import (
 
 
 @pytest.fixture
-def synthetic_unreachable_rclone_env() -> dict[str, str]:
-    """Configure a synthetic R2 remote that fails locally without network access.
+def synthetic_unreachable_rclone_env(free_tcp_port: int) -> dict[str, str]:
+    """Configure synthetic R2 credentials against an unused loopback port.
 
-    :returns: Rclone environment settings shared by credential-redaction tests.
+    :param free_tcp_port: Unbound loopback port allocated by pytest.
+    :returns: Environment that makes real rclone transfers fail locally and quickly.
     """
     return {
         "RCLONE_CONFIG": os.devnull,
         "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "synthetic-access-id-2190",
-        "RCLONE_CONFIG_R2_ENDPOINT": "http://127.0.0.1:9",
+        "RCLONE_CONFIG_R2_ENDPOINT": f"http://127.0.0.1:{free_tcp_port}",
         "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
         "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "synthetic-secret-key-2190",
         "RCLONE_CONFIG_R2_TYPE": "s3",
         "RCLONE_LOW_LEVEL_RETRIES": "1",
         "RCLONE_RETRIES_SLEEP": "0s",
     }
+
+
+def _assert_redacted_rclone_failure(
+    logs: str, rclone_env: dict[str, str], expected_context: str
+) -> None:
+    """Require credential-free INFO/error logs that identify the failed operation.
+
+    :param logs: Combined process stdout and stderr.
+    :param rclone_env: Synthetic credentials whose values must be absent.
+    :param expected_context: Operation-specific path that diagnostics must retain.
+    """
+    assert rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] not in logs
+    assert rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] not in logs
+    assert " DEBUG " not in logs
+    assert "Failed to copy" in logs
+    assert expected_context in logs
 
 
 class TestIsR2Uri:
@@ -136,12 +153,10 @@ class TestRcloneDebugTemplates:
     ) -> None:
         """A real task run omits credentials while retaining its failure cause.
 
-        :param template_name: Compute-template filename whose run block is executed.
-        :param sentinel_name: Temporary sentinel filename written by that run block.
-        :param synthetic_unreachable_rclone_env: Synthetic unreachable rclone configuration.
+        :param template_name: Repository task template to execute.
+        :param sentinel_name: Task-created file removed after execution.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
         """
-        access_key = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"]
-        credential = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]
         template_path = (
             Path(__file__).parents[2]
             / "src"
@@ -174,10 +189,7 @@ class TestRcloneDebugTemplates:
 
         logs = f"{result.stdout}\n{result.stderr}"
         assert result.returncode != 0
-        assert access_key not in logs
-        assert credential not in logs
-        assert "Failed to copy" in logs
-        assert "safe-test-bucket" in logs
+        _assert_redacted_rclone_failure(logs, synthetic_unreachable_rclone_env, "safe-test-bucket")
 
 
 class TestToS3Uri:
@@ -597,12 +609,10 @@ class TestUploadToUri:
     ) -> None:
         """A real failed rclone upload omits credentials but retains its cause.
 
-        :param tmp_path: Pytest tmp dir used for the upload source file.
-        :param synthetic_unreachable_rclone_env: Synthetic unreachable rclone configuration.
-        :param capfd: Pytest fixture used to capture rclone's inherited file descriptors.
+        :param tmp_path: Local upload source directory.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
+        :param capfd: Captures the child rclone process's inherited descriptors.
         """
-        access_key = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"]
-        credential = synthetic_unreachable_rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]
         src = tmp_path / "in.json"
         src.write_text("{}")
 
@@ -614,10 +624,9 @@ class TestUploadToUri:
 
         captured = capfd.readouterr()
         logs = f"{captured.out}\n{captured.err}"
-        assert access_key not in logs
-        assert credential not in logs
-        assert "Failed to copyto" in logs
-        assert "issue-2190/object" in logs
+        _assert_redacted_rclone_failure(
+            logs, synthetic_unreachable_rclone_env, "issue-2190/object"
+        )
 
     def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone reliability-flag set on upload.

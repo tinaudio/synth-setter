@@ -93,7 +93,6 @@ def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     """Build an rclone argv with the shared reliability-flag block, then operands.
 
-    Centralizes shared rclone reliability flags before appending operands.
     ``--timeout`` is
     the IO idle timeout, not a wall-clock cap; only directory uploads widen it past
     the 300s single-file default.
