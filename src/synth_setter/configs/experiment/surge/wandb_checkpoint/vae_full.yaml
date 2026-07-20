@@ -8,3 +8,8 @@ defaults:
   - _self_
 
 ckpt_path: ${wandb:tinaudio/synth-setter/model-vae_full:latest}
+
+model:
+  net:
+    latent_dim: ${param_spec_width:surge_xt}
+  param_spec: surge_xt
