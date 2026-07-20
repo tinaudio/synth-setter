@@ -16,10 +16,7 @@ import pytest
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
 
-from synth_setter.cli.train import (
-    _configure_val_audio_probe as _configure_val_audio_probe_for_launch,
-)
-from synth_setter.cli.train import _derive_probe_uri
+from synth_setter.cli import train as train_cli
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
 
@@ -41,7 +38,7 @@ def _configure_val_audio_probe(cfg: DictConfig, callbacks: list[Callback]) -> No
     :param cfg: Minimal training configuration.
     :param callbacks: Callback list mutated by the production helper.
     """
-    _configure_val_audio_probe_for_launch(cfg, callbacks, _TEST_RECOVERY_NAMESPACE)
+    train_cli._configure_val_audio_probe(cfg, callbacks, _TEST_RECOVERY_NAMESPACE)
 
 
 def _cfg(
@@ -128,8 +125,12 @@ def test_probe_uri_isolates_independent_same_config_launches() -> None:
     """Separate launches of one config archive probes under separate namespaces."""
     cfg = _cfg(enabled=True)
 
-    first = _derive_probe_uri(cfg, "train-20260715T000000000Z-00000000000000000000000000000001")
-    second = _derive_probe_uri(cfg, "train-20260715T000001000Z-00000000000000000000000000000002")
+    first = train_cli._derive_probe_uri(
+        cfg, "train-20260715T000000000Z-00000000000000000000000000000001"
+    )
+    second = train_cli._derive_probe_uri(
+        cfg, "train-20260715T000001000Z-00000000000000000000000000000002"
+    )
 
     assert first == (
         "r2://intermediate-data/probes/train/"
@@ -147,8 +148,8 @@ def test_probe_uri_resume_uses_new_launch_namespace_for_recovered_run() -> None:
     cfg = _cfg(enabled=True)
     recovered_run_id = "train-20260715T000000000Z"
 
-    source = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
-    resumed = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
+    source = train_cli._derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
+    resumed = train_cli._derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
 
     assert source != resumed
     assert f"/{recovered_run_id}-" in source
