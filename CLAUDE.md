@@ -27,6 +27,8 @@ Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, 
 | `make help`          | Everything else                        |
 
 Never run `make docker-*` or RunPod commands without asking — they spend money and burn cluster state.
+
+Before launching RunPod jobs, check the account balance (exhaustion shows up as jobs stuck in STARTING with no visible cause): `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"` — the check is fail-open, so "passed" can also mean the balance was unverifiable (missing creds / API error); only a raised "insufficient RunPod balance" is a definitive stop. Never echo the raw balance amount into logs or comments.
 </important>
 
 <important if="you are writing or modifying Python code">
