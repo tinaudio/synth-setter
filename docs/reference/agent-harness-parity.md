@@ -1,10 +1,10 @@
-# Agent harness parity: Claude Code and Codex
+# Agent harness parity: Claude Code, Pi, and Codex
 
 synth-setter keeps a single agent contract in [`AGENTS.md`](../../AGENTS.md) and a single set of
 shared assets under `agent/` (`hooks/`, `skills/`). `.claude/{hooks,skills}` are symlinks to that
-tree, and the Codex CLI discovers the same skills through its plugin manifest. This doc records the
-one place the two harnesses genuinely diverge — **hook enforcement** — and the server-side CI gate
-that backstops each blocking hook when the client-side block is unavailable.
+tree, while Pi and Codex load repo-local adapters around the same assets. This doc records the one
+place the harnesses genuinely diverge — **hook enforcement** — and the server-side CI gate that
+backstops each blocking hook when the client-side block is unavailable.
 
 ## Why hooks are the divergence
 
@@ -20,6 +20,10 @@ The capability tier is expressed through the existing mode env-vars
 (`WORKTREE_GUARD_MODE`, `REVIEW_*_GATE`, `PR_READINESS_GATE`: `block` / `warn` / `off`), not a
 rewrite: under Codex, a `warn`-mode hook still emits its message post-hoc, and the CI gate is the
 real control.
+
+PR readiness uses the same `pr-readiness-stop.sh` report in all three harnesses: Claude blocks
+Stop, Pi's `.pi/extensions/pr-readiness-stop.ts` feeds a new report back after `agent_settled`, and
+Codex's `notify` command emits it as a turn-completion advisory. Only Claude hard-blocks completion.
 
 ## Blocking-hook audit
 

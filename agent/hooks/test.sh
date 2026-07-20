@@ -78,23 +78,8 @@ fi
 echo "# STUB headless agent output"
 echo "# prompt was: $*"
 EOF
-# `gh` stub: $GH_STUB_PR governs `gh pr view`'s number output. When
-# $GH_STUB_LOG is set, every invocation appends its argv there so tests can
-# assert explicit-branch arg passing (`gh pr view <branch>`).
-# pr-readiness-stop.sh / pr_readiness_probe.sh add more knobs:
-#   $GH_STUB_CHECKS_EXIT      exit code for `gh pr checks` (0 = query succeeded)
-#   $GH_STUB_CHECKS_JSON      check rows from `gh pr checks --json`
-#   $GH_STUB_CHECKS_MESSAGE   non-JSON message returned by `gh pr checks --json`
-#   $GH_STUB_CHECKS_UNSUPPORTED make `gh pr checks --json` reject the flag
-#   $GH_STUB_STATUS_ROLLUP_JSON raw `statusCheckRollup` entries for fallback
-#   $GH_STUB_PR_STATE         state in the probe's combined pr-view call
-#   $GH_STUB_MERGEABLE        mergeable in the combined pr-view call
-#   $GH_STUB_HEAD             headRefOid in the combined pr-view call
-#   $GH_STUB_PR_AUTHOR        author.login in the combined pr-view call
-#   $GH_STUB_PR_VIEW_JSON_EXIT non-zero fails the combined pr-view call
-#   $GH_STUB_REVIEW_THREADS   JSON array of reviewThreads nodes for `api graphql`
-#   $GH_STUB_PULL_COMMENTS    JSON array for `api repos/.../pulls/N/comments`
-#   $GH_STUB_PULL_REVIEWS     JSON array for `api repos/.../pulls/N/reviews`
+# GH_STUB_PR/LOG configure PR lookup and argv capture.
+# PR-readiness GH_STUB_* variables configure simulated GitHub responses.
 cat > "$STUBS/gh" <<'EOF'
 #!/usr/bin/env bash
 if [[ -n "${GH_STUB_LOG:-}" ]]; then
@@ -1769,6 +1754,20 @@ T_probe_old_gh_falls_back_to_status_rollup() {
 it "probe: gh without checks --json → statusCheckRollup fallback" \
   T_probe_old_gh_falls_back_to_status_rollup
 
+T_probe_old_gh_null_conclusion_waits() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[{"__typename":"CheckRun","name":"unit-tests","status":"IN_PROGRESS","conclusion":null,"detailsUrl":"https://example.test/log/10"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "null conclusion should remain pending; got: $out"
+    return 1
+  }
+}
+it "probe: old gh + null conclusion → WAIT" \
+  T_probe_old_gh_null_conclusion_waits
+
 T_probe_checks_not_registered_yet_waits() {
   local out
   export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
@@ -2030,6 +2029,89 @@ T_probe_loop_mode_stops_on_missing_pr() {
 }
 it "probe: --loop stops polling when the PR number is missing" \
   T_probe_loop_mode_stops_on_missing_pr
+
+run_pi_readiness_adapter() {
+  local executions="$1" mode="${2:-tui}"
+  EXTENSION_PATH="$REPO_ROOT/.pi/extensions/pr-readiness-stop.ts" \
+    EXECUTIONS="$executions" PI_MODE="$mode" \
+    node --experimental-strip-types --input-type=module <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const extension = (await import(pathToFileURL(process.env.EXTENSION_PATH).href)).default;
+const calls = [];
+const handlers = {};
+const notifications = [];
+const sent = [];
+const executions = JSON.parse(process.env.EXECUTIONS);
+const pi = {
+  on(name, handler) { handlers[name] = handler; },
+  async exec(command, args, options) {
+    calls.push({ command, args, options });
+    return executions.shift();
+  },
+  sendUserMessage(message) { sent.push(message); },
+};
+extension(pi);
+const count = executions.length;
+for (let index = 0; index < count; index += 1) {
+  const ui = { notify(message, level) { notifications.push({ message, level }); } };
+  await handlers.agent_settled({}, { cwd: "/repo", mode: process.env.PI_MODE, ui });
+}
+console.log(JSON.stringify({ calls, events: Object.keys(handlers), notifications, sent }));
+NODE
+}
+
+T_pi_readiness_reprompts_once_per_report() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"},{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]')
+  [[ "$(jq '.events == ["agent_settled"] and .sent == ["ACTION_REQUIRED: fix CI"]' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_pass_rearms_nudge() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"WAIT: CI pending"},{"code":0,"stderr":""},{"code":2,"stderr":"WAIT: CI pending"}]')
+  [[ "$(jq '.sent == ["WAIT: CI pending", "WAIT: CI pending"]' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_print_mode_does_not_reprompt() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]' print)
+  [[ "$(jq '.sent == []' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_warn_mode_notifies_without_reprompt() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":0,"stderr":"WARNING: PR needs attention"}]')
+  [[ "$(jq '.sent == [] and .notifications == [{"message":"WARNING: PR needs attention","level":"warning"}]' <<<"$out")" == "true" ]]
+}
+
+T_pi_readiness_uses_repo_absolute_hook_path() {
+  local out
+  out=$(run_pi_readiness_adapter '[{"code":0,"stderr":""}]')
+  [[ "$(jq '.calls[0].args[0] | startswith("/") and endswith("/agent/hooks/pr-readiness-stop.sh")' <<<"$out")" == "true" ]]
+}
+
+# Pi ships with Node; Python-only CI images omit it.
+if command -v node >/dev/null 2>&1; then
+  it "Pi readiness: settled blocking report re-prompts once" \
+    T_pi_readiness_reprompts_once_per_report
+  it "Pi readiness: passing result re-arms future nudge" \
+    T_pi_readiness_pass_rearms_nudge
+  it "Pi readiness: print mode does not re-prompt" \
+    T_pi_readiness_print_mode_does_not_reprompt
+  it "Pi readiness: warn mode displays an advisory" \
+    T_pi_readiness_warn_mode_notifies_without_reprompt
+  it "Pi readiness: hook path is repository-absolute" \
+    T_pi_readiness_uses_repo_absolute_hook_path
+fi
+
+T_codex_readiness_notify_uses_shared_hook() {
+  grep -Fxq 'notify = ["bash", "agent/hooks/pr-readiness-stop.sh"]' \
+    "$REPO_ROOT/.codex/config.toml"
+}
+it "Codex readiness: notify delegates to shared hook" \
+  T_codex_readiness_notify_uses_shared_hook
 
 # ===========================================================================
 # worktree-post-setup

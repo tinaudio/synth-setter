@@ -444,10 +444,14 @@ docs:
       - pattern: ".github/workflows/test-generate-dataset-from-spec-uri.yml"
         covers: "PR-tier e2e for the spec-URI operator CLI (`synth-setter-generate-dataset-from-spec-uri <uri>`): real spec upload to R2, real CLI subprocess driven by the `r2://` / `s3://` URI inside the dev-snapshot Docker image (real Surge render, real shard uploads, real R2 probes; no stubs) — `tests/integration/test_generate_dataset_from_spec_uri_r2.py`. Same-repo PRs only; unique per-run R2 prefix + best-effort rclone purge teardown."
 
-  # ── Agent harness parity (Claude + Codex) ───────────────────────
+  # ── Agent harness parity ────────────────────────────────────────
   - doc: docs/reference/agent-harness-parity.md
-    description: Claude/Codex hook-enforcement divergence, per-hook CI backstops, skill-discovery parity
+    description: Harness hook-enforcement parity
     sources:
+      - pattern: ".codex/config.toml"
+        covers: "Codex turn-completion readiness advisory"
+      - pattern: ".pi/extensions/pr-readiness-stop.ts"
+        covers: "Pi settled-turn readiness continuation"
       - pattern: "agent/hooks/_lib.sh"
         covers: "has_skill discovery globs for the Claude marketplace and Codex plugin-manifest layouts"
       - pattern: "scripts/dev/link-skills.sh"
