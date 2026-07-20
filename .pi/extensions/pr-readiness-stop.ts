@@ -1,6 +1,9 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const READINESS_HOOK = "agent/hooks/pr-readiness-stop.sh";
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const READINESS_HOOK = resolve(REPO_ROOT, "agent/hooks/pr-readiness-stop.sh");
 
 export default function (pi: ExtensionAPI) {
 	let lastReport = "";

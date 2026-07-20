@@ -2038,13 +2038,17 @@ run_pi_readiness_adapter() {
 import { pathToFileURL } from "node:url";
 
 const extension = (await import(pathToFileURL(process.env.EXTENSION_PATH).href)).default;
+const calls = [];
 const handlers = {};
 const notifications = [];
 const sent = [];
 const executions = JSON.parse(process.env.EXECUTIONS);
 const pi = {
   on(name, handler) { handlers[name] = handler; },
-  async exec() { return executions.shift(); },
+  async exec(command, args, options) {
+    calls.push({ command, args, options });
+    return executions.shift();
+  },
   sendUserMessage(message) { sent.push(message); },
 };
 extension(pi);
@@ -2053,7 +2057,7 @@ for (let index = 0; index < count; index += 1) {
   const ui = { notify(message, level) { notifications.push({ message, level }); } };
   await handlers.agent_settled({}, { cwd: "/repo", mode: process.env.PI_MODE, ui });
 }
-console.log(JSON.stringify({ events: Object.keys(handlers), notifications, sent }));
+console.log(JSON.stringify({ calls, events: Object.keys(handlers), notifications, sent }));
 NODE
 }
 
@@ -2081,6 +2085,13 @@ T_pi_readiness_warn_mode_notifies_without_reprompt() {
     '[{"code":0,"stderr":"WARNING: PR needs attention"}]')
   [[ "$(jq '.sent == [] and .notifications == [{"message":"WARNING: PR needs attention","level":"warning"}]' <<<"$out")" == "true" ]]
 }
+
+T_pi_readiness_uses_repo_absolute_hook_path() {
+  local out
+  out=$(run_pi_readiness_adapter '[{"code":0,"stderr":""}]')
+  [[ "$(jq '.calls[0].args[0] | startswith("/") and endswith("/agent/hooks/pr-readiness-stop.sh")' <<<"$out")" == "true" ]]
+}
+
 # Pi ships with Node; Python-only CI images omit it.
 if command -v node >/dev/null 2>&1; then
   it "Pi readiness: settled blocking report re-prompts once" \
@@ -2091,6 +2102,8 @@ if command -v node >/dev/null 2>&1; then
     T_pi_readiness_print_mode_does_not_reprompt
   it "Pi readiness: warn mode displays an advisory" \
     T_pi_readiness_warn_mode_notifies_without_reprompt
+  it "Pi readiness: hook path is repository-absolute" \
+    T_pi_readiness_uses_repo_absolute_hook_path
 fi
 
 T_codex_readiness_notify_uses_shared_hook() {
