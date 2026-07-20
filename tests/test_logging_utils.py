@@ -335,12 +335,36 @@ class TestPinWandbRunId:
 
     def test_sets_run_id_and_job_type(self) -> None:
         """A wandb logger cfg gets the given run id and job_type verbatim."""
-        cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "job_type": ""}}})
+        cfg = OmegaConf.create(
+            {
+                "logger": {
+                    "wandb": {
+                        "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                        "id": None,
+                        "job_type": "",
+                    }
+                }
+            }
+        )
 
         pin_wandb_run_id(cfg, "flow_simple-20260313T100000000Z", "training")
 
         assert cfg.logger.wandb.id == "flow_simple-20260313T100000000Z"
         assert cfg.logger.wandb.job_type == "training"
+
+    def test_noop_when_wandb_logger_is_partial_struct_node(self) -> None:
+        """A non-instantiable experiment overlay is left unchanged in struct mode."""
+        cfg = OmegaConf.create(
+            {"logger": {"wandb": {"project": "synth-setter", "tags": ["surge"]}}}
+        )
+        OmegaConf.set_struct(cfg, True)
+
+        pin_wandb_run_id(cfg, "flow_simple", "evaluation")
+
+        assert OmegaConf.to_container(cfg.logger.wandb) == {
+            "project": "synth-setter",
+            "tags": ["surge"],
+        }
 
     def test_noop_when_wandb_logger_absent(self) -> None:
         """A non-wandb logger group is left untouched (no KeyError)."""
