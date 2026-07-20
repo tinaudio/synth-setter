@@ -233,6 +233,8 @@ class TestUploadSpec:
         args = mock_call.call_args[0][0]
         assert args[0] == "rclone"
         assert args[1] == "copyto"
+        assert "-v" in args
+        assert "-vv" not in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args

@@ -11,18 +11,93 @@ flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.object_storage import (
     STORAGE_REQUIRED_ENV_KEYS,
 )
+
+
+@pytest.fixture
+def synthetic_unreachable_rclone_env(free_tcp_port: int) -> dict[str, str]:
+    """Configure synthetic R2 credentials against an unused loopback port.
+
+    :param free_tcp_port: Unbound loopback port allocated by pytest.
+    :returns: Environment that makes real rclone transfers fail locally and quickly.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("requires the real rclone binary")
+    return {
+        "RCLONE_CONFIG": os.devnull,
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "synthetic-access-id-2190",
+        "RCLONE_CONFIG_R2_ENDPOINT": f"http://127.0.0.1:{free_tcp_port}",
+        "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "synthetic-secret-key-2190",
+        "RCLONE_CONFIG_R2_TYPE": "s3",
+        "RCLONE_LOW_LEVEL_RETRIES": "1",
+        "RCLONE_RETRIES_SLEEP": "0s",
+    }
+
+
+def _assert_redacted_rclone_failure(
+    logs: str, rclone_env: dict[str, str], expected_context: str
+) -> None:
+    """Require credential-free INFO/error logs that identify the failed operation.
+
+    :param logs: Combined process stdout and stderr.
+    :param rclone_env: Synthetic credentials whose values must be absent.
+    :param expected_context: Operation-specific path that diagnostics must retain.
+    """
+    assert rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] not in logs
+    assert rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] not in logs
+    assert " DEBUG " not in logs
+    assert "Failed to copy" in logs
+    assert expected_context in logs
+
+
+def _run_debug_template(
+    template_name: str, sentinel_name: str, rclone_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Execute one repository-owned rclone canary run block.
+
+    :param template_name: Repository task template to execute.
+    :param sentinel_name: Task-created file removed after execution.
+    :param rclone_env: Isolated credentials and endpoint.
+    :returns: Captured task process result.
+    """
+    template_path = (
+        Path(__file__).parents[2] / "src" / "synth_setter" / "configs" / "compute" / template_name
+    )
+    document = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+    run_script = document["run"]
+    assert isinstance(run_script, str)
+    env = {
+        **os.environ,
+        **rclone_env,
+        "R2_BUCKET": "safe-test-bucket",
+        "R2_DEBUG_PREFIX": "issue-2190",
+    }
+    try:
+        return subprocess.run(  # noqa: S603 — run block is repository-owned.
+            ["/bin/bash", "-c", run_script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+    finally:
+        (Path(tempfile.gettempdir()) / sentinel_name).unlink(missing_ok=True)
 
 
 class TestIsR2Uri:
@@ -74,7 +149,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copyto", "r2:bucket/key", "dest/file") == [
             "rclone",
             "copyto",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=300s",
@@ -88,7 +163,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copy", "src/dir", "r2:bucket/p", timeout="3h") == [
             "rclone",
             "copy",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=3h",
@@ -96,6 +171,36 @@ class TestRcloneArgv:
             "src/dir",
             "r2:bucket/p",
         ]
+
+
+class TestRcloneDebugTemplates:
+    """Tests for SkyPilot rclone canary task logging."""
+
+    @pytest.mark.parametrize(
+        ("template_name", "sentinel_name"),
+        [
+            ("local-debug-rclone-template.yaml", "skypilot-local-debug-sentinel.txt"),
+            ("runpod-debug-rclone-template.yaml", "skypilot-debug-rclone-sentinel.txt"),
+        ],
+    )
+    def test_run_failure_redacts_credentials_and_keeps_error_context(
+        self,
+        template_name: str,
+        sentinel_name: str,
+        synthetic_unreachable_rclone_env: dict[str, str],
+    ) -> None:
+        """A real task run omits credentials while retaining its failure cause.
+
+        :param template_name: Repository task template to execute.
+        :param sentinel_name: Task-created file removed after execution.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
+        """
+        result = _run_debug_template(
+            template_name, sentinel_name, synthetic_unreachable_rclone_env
+        )
+        logs = f"{result.stdout}\n{result.stderr}"
+        assert result.returncode != 0
+        _assert_redacted_rclone_failure(logs, synthetic_unreachable_rclone_env, "safe-test-bucket")
 
 
 class TestToS3Uri:
@@ -335,7 +440,7 @@ class TestDownloadToPath:
             r2_io.download_to_path("r2://bucket/key.json", tmp_path / "out.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
@@ -386,7 +491,7 @@ class TestDownloadDirNoOverwrite:
         assert args[:2] == ["rclone", "copy"]
         assert "--immutable" in args
         assert "--checksum" in args
-        assert "-vv" in args
+        assert "-v" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
@@ -507,11 +612,38 @@ class TestUploadToUri:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
 
+    def test_failure_logs_redact_credentials_and_keep_error_context(
+        self,
+        tmp_path: Path,
+        synthetic_unreachable_rclone_env: dict[str, str],
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A real failed rclone upload omits credentials but retains its cause.
+
+        :param tmp_path: Local upload source directory.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
+        :param capfd: Captures the child rclone process's inherited descriptors.
+        """
+        src = tmp_path / "in.json"
+        src.write_text("{}")
+
+        with (
+            patch.dict(os.environ, synthetic_unreachable_rclone_env),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            r2_io.upload_to_uri(src, "r2://safe-test-bucket/issue-2190/object")
+
+        captured = capfd.readouterr()
+        logs = f"{captured.out}\n{captured.err}"
+        _assert_redacted_rclone_failure(
+            logs, synthetic_unreachable_rclone_env, "issue-2190/object"
+        )
+
     def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone reliability-flag set on upload.
 
         State-based tests cover the file-landing contract but cannot observe the
-        ``-vv / --checksum / --contimeout / --timeout / --retries`` flags. Losing
+        ``-v / --checksum / --contimeout / --timeout / --retries`` flags. Losing
         any of them is a silent correctness regression (e.g. dropping
         ``--checksum`` would let half-uploaded objects pass; dropping
         ``--retries`` would surface transient network blips as hard failures).
@@ -525,7 +657,7 @@ class TestUploadToUri:
             r2_io.upload_to_uri(src, "r2://bucket/key.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
