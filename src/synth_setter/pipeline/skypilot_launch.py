@@ -139,6 +139,8 @@ DEFAULT_ENV_FILE = _OPERATOR_WORKSPACE / ".env"
 # controller pod fits on GHA-kind. Operator local-dev leaves this unset.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
 _CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+_SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS = 5.0
+_SKYPILOT_AUTH_READ_TIMEOUT_SECONDS = 30.0
 
 # SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
 # ~1950m allocatable CPU after kube-system. See PR #876.
@@ -324,6 +326,27 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     return resolved
 
 
+def _reset_skypilot_client_cache() -> None:
+    """Clear endpoint values cached by the SkyPilot SDK."""
+    from sky.server import common as server_common
+
+    server_common.get_server_url.cache_clear()
+    server_common.is_api_server_local.cache_clear()
+
+
+def _restore_skypilot_client_env(previous: Mapping[str, str | None]) -> None:
+    """Restore process auth after a dispatch.
+
+    :param previous: Auth environment values captured before dispatch.
+    """
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    _reset_skypilot_client_cache()
+
+
 def _configure_skypilot_client(
     settings: SkypilotClientSettings, *, local: bool, env_file_path: Path
 ) -> None:
@@ -340,22 +363,37 @@ def _configure_skypilot_client(
     else:
         os.environ.update(settings.as_env())
 
-    from sky.server import common as server_common
-
     # SkyPilot caches the default endpoint during import, before launcher dotenv resolution.
-    server_common.get_server_url.cache_clear()
-    server_common.is_api_server_local.cache_clear()
+    _reset_skypilot_client_cache()
 
     if local or settings.api_server_endpoint is None:
         return
+
+    from sky.server import common as server_common
+
     try:
-        sky.api_info()
+        response = server_common.make_authenticated_request(
+            "GET",
+            "/api/health",
+            retry=True,
+            timeout=(
+                _SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS,
+                _SKYPILOT_AUTH_READ_TIMEOUT_SECONDS,
+            ),
+        )
+        response.raise_for_status()
+        health = response.json()
     except requests.RequestException as exc:
         raise click.ClickException(
             "SkyPilot API server authentication check failed before launch. "
             f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} and "
             f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN} in {env_file_path}."
         ) from exc
+    if not isinstance(health, dict) or health.get("status") != "healthy":
+        raise click.ClickException(
+            "SkyPilot API server authentication check did not report healthy before launch. "
+            f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} in {env_file_path}."
+        )
 
 
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
@@ -763,43 +801,47 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     # Phase 2: commit — side effects in dependency order.
     _ensure_ci_sky_config()
-    _configure_skypilot_client(
-        client_settings,
-        local=sky_cfg.local,
-        env_file_path=env_file_path,
-    )
+    previous_auth_env = {key: os.environ.get(key) for key in SKYPILOT_CLIENT_AUTH_ENV_KEYS}
+    try:
+        _configure_skypilot_client(
+            client_settings,
+            local=sky_cfg.local,
+            env_file_path=env_file_path,
+        )
 
-    # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
-    # storage backend) inherit creds resolved from .env that were never exported.
-    for key, value in worker_env.items():
-        if key.startswith("RCLONE_CONFIG_R2_"):
-            os.environ[key] = value
+        # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
+        # storage backend) inherit creds resolved from .env that were never exported.
+        for key, value in worker_env.items():
+            if key.startswith("RCLONE_CONFIG_R2_"):
+                os.environ[key] = value
 
-    if provider != "local":
-        _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-    # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
-    # holds the provider creds, so a local config.toml balance may be stale.
-    if _doc_requests_runpod(task_doc) and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
-        _check_runpod_balance()
+        if provider != "local":
+            _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+        # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
+        # holds the provider creds, so a local config.toml balance may be stale.
+        if _doc_requests_runpod(task_doc) and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
+            _check_runpod_balance()
 
-    if provider == "local":
-        import sky.check
+        if provider == "local":
+            import sky.check
 
-        sky.check.check(clouds=["kubernetes"], quiet=False)
+            sky.check.check(clouds=["kubernetes"], quiet=False)
 
-    job_names = (
-        [base_job_name]
-        if sky_cfg.num_workers == 1
-        else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
-    )
+        job_names = (
+            [base_job_name]
+            if sky_cfg.num_workers == 1
+            else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
+        )
 
-    rcs = _run_workers_from_doc(
-        worker_env_base=worker_env,
-        task_doc=task_doc,
-        job_names=job_names,
-        worker_image_tag=sky_cfg.worker_image_tag,
-        tail=sky_cfg.tail,
-    )
+        rcs = _run_workers_from_doc(
+            worker_env_base=worker_env,
+            task_doc=task_doc,
+            job_names=job_names,
+            worker_image_tag=sky_cfg.worker_image_tag,
+            tail=sky_cfg.tail,
+        )
+    finally:
+        _restore_skypilot_client_env(previous_auth_env)
 
     failed = [
         (job_names[i], rcs[i])

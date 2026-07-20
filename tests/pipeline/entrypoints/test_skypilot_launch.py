@@ -153,6 +153,22 @@ def _succeeded_run(mock_sky: MagicMock) -> None:
 
 
 @pytest.fixture()
+def skypilot_auth_request(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Replace the remote SkyPilot health request at the HTTP boundary.
+
+    :param monkeypatch: Pytest attribute patching fixture.
+    :return: Mocked authenticated request callable.
+    """
+    from sky.server import common as server_common
+
+    response = MagicMock()
+    response.json.return_value = {"status": "healthy"}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(server_common, "make_authenticated_request", request)
+    return request
+
+
+@pytest.fixture()
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the launcher's module-level ``sky`` with a MagicMock pre-configured for success.
 
@@ -1452,6 +1468,7 @@ class TestDispatchViaSkypilot:
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
+        skypilot_auth_request: MagicMock,
     ) -> None:
         """Remote client auth in dotenv is active before the first SkyPilot request.
 
@@ -1459,9 +1476,16 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file.
         :param monkeypatch: Pytest environment fixture.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
+        :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
         """
         from sky.server import common as server_common
 
+        def assert_dotenv_auth_is_active(*_args: object, **_kwargs: object) -> MagicMock:
+            assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "https://sky.example.com"
+            assert os.environ[ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN] == "sky_test-token"
+            return skypilot_auth_request.return_value
+
+        skypilot_auth_request.side_effect = assert_dotenv_auth_is_active
         monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
         assert server_common.get_server_url() == "https://stale.example.com"
         monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT)
@@ -1480,10 +1504,15 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "https://sky.example.com"
-        assert os.environ[ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN] == "sky_test-token"
-        assert server_common.get_server_url() == "https://sky.example.com"
-        mock_sky.api_info.assert_called_once_with()
+        assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
+        assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
+        assert server_common.get_server_url() != "https://sky.example.com"
+        skypilot_auth_request.assert_called_once_with(
+            "GET",
+            "/api/health",
+            retry=True,
+            timeout=(5.0, 30.0),
+        )
         mock_sky.jobs.launch.assert_called_once()
 
     def test_remote_auth_failure_stops_before_bootstrap_or_launch(
@@ -1492,6 +1521,7 @@ class TestDispatchViaSkypilot:
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
+        skypilot_auth_request: MagicMock,
     ) -> None:
         """A failed remote health check prevents provider or worker provisioning.
 
@@ -1499,10 +1529,13 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file.
         :param monkeypatch: Pytest attribute patching fixture.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
+        :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
         """
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
-        mock_sky.api_info.side_effect = requests.HTTPError("unauthorized")
+        skypilot_auth_request.return_value.raise_for_status.side_effect = requests.HTTPError(
+            "unauthorized"
+        )
         bootstrap = MagicMock()
         monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", bootstrap)
         template = _write_runpod_yaml(tmp_path)
@@ -1518,21 +1551,52 @@ class TestDispatchViaSkypilot:
         bootstrap.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
 
+    def test_unhealthy_api_response_stops_before_launch(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        skypilot_auth_request: MagicMock,
+    ) -> None:
+        """A non-SkyPilot health response cannot reach provisioning.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
+        """
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
+        skypilot_auth_request.return_value.json.return_value = {"status": "not-sky"}
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+        )
+
+        with pytest.raises(click.ClickException, match="did not report healthy"):
+            dispatch_via_skypilot(sky_cfg)
+
+        mock_sky.jobs.launch.assert_not_called()
+
     def test_unexpected_api_error_propagates(
         self,
         tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
+        skypilot_auth_request: MagicMock,
     ) -> None:
         """Unexpected SDK defects retain their original exception.
 
         :param tmp_path: Pytest temporary directory.
         :param env_file: Fixture-provided worker env file.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
+        :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
         """
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n")
-        mock_sky.api_info.side_effect = RuntimeError("SDK invariant failed")
+        skypilot_auth_request.side_effect = RuntimeError("SDK invariant failed")
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
             compute_template=str(template),
@@ -1551,6 +1615,7 @@ class TestDispatchViaSkypilot:
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
+        skypilot_auth_request: MagicMock,
     ) -> None:
         """Explicit local mode clears invalid inherited remote auth.
 
@@ -1558,8 +1623,16 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file.
         :param monkeypatch: Pytest environment fixture.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
+        :param skypilot_auth_request: Mocked SkyPilot HTTP boundary.
         """
         monkeypatch.setenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, "sky_orphan-token")
+
+        def launch_without_remote_auth(*_args: object, **_kwargs: object) -> str:
+            assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
+            assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
+            return "launch-req"
+
+        mock_sky.jobs.launch.side_effect = launch_without_remote_auth
         template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
             compute_template=str(template),
@@ -1571,8 +1644,8 @@ class TestDispatchViaSkypilot:
         dispatch_via_skypilot(sky_cfg)
 
         assert ENV_SKYPILOT_API_SERVER_ENDPOINT not in os.environ
-        assert ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN not in os.environ
-        mock_sky.api_info.assert_not_called()
+        assert os.environ[ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN] == "sky_orphan-token"
+        skypilot_auth_request.assert_not_called()
         mock_sky.jobs.launch.assert_called_once()
 
     def test_dispatch_failure_raises_runtime_error(
