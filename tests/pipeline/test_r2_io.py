@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.object_storage import (
@@ -96,6 +98,73 @@ class TestRcloneArgv:
             "src/dir",
             "r2:bucket/p",
         ]
+
+
+class TestRcloneDebugTemplates:
+    """Tests for SkyPilot rclone canary task logging."""
+
+    @pytest.mark.parametrize(
+        ("template_name", "sentinel_name"),
+        [
+            ("local-debug-rclone-template.yaml", "skypilot-local-debug-sentinel.txt"),
+            ("runpod-debug-rclone-template.yaml", "skypilot-debug-rclone-sentinel.txt"),
+        ],
+    )
+    def test_run_failure_redacts_credentials_and_keeps_error_context(
+        self,
+        template_name: str,
+        sentinel_name: str,
+    ) -> None:
+        """A real task run omits credentials while retaining its failure cause.
+
+        :param template_name: Compute-template filename whose run block is executed.
+        :param sentinel_name: Temporary sentinel filename written by that run block.
+        """
+        access_key = "synthetic-template-access-id-2190"
+        credential = "synthetic-template-secret-key-2190"
+        template_path = (
+            Path(__file__).parents[2]
+            / "src"
+            / "synth_setter"
+            / "configs"
+            / "compute"
+            / template_name
+        )
+        document = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+        run_script = document["run"]
+        assert isinstance(run_script, str)
+        env = {
+            **os.environ,
+            "R2_BUCKET": "safe-test-bucket",
+            "R2_DEBUG_PREFIX": "issue-2190",
+            "RCLONE_CONFIG": os.devnull,
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": access_key,
+            "RCLONE_CONFIG_R2_ENDPOINT": "http://127.0.0.1:9",
+            "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": credential,
+            "RCLONE_CONFIG_R2_TYPE": "s3",
+            "RCLONE_LOW_LEVEL_RETRIES": "1",
+            "RCLONE_RETRIES_SLEEP": "0s",
+        }
+
+        try:
+            result = subprocess.run(  # noqa: S603 — run block is repository-owned.
+                ["/bin/bash", "-c", run_script],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+                env=env,
+            )
+        finally:
+            (Path(tempfile.gettempdir()) / sentinel_name).unlink(missing_ok=True)
+
+        logs = f"{result.stdout}\n{result.stderr}"
+        assert result.returncode != 0
+        assert access_key not in logs
+        assert credential not in logs
+        assert "Failed to copy" in logs
+        assert "connection refused" in logs
 
 
 class TestToS3Uri:
