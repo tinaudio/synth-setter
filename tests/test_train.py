@@ -565,10 +565,16 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     """Train one real flow step through the offline pretrained-AST config.
 
     The loss must come out finite: ``global_step`` advances even past a NaN loss.
+    Validation exercises the production param-spec wiring and requires
+    ``val/param_mse_best_swap`` beside ``val/param_mse``.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
     cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
+    with open_dict(cfg):
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.val_check_interval = 1
+        cfg.model.validation_sample_steps = 1
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
@@ -576,6 +582,8 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
     assert_finite_train_loss(metric_dict)
+    assert "val/param_mse" in metric_dict
+    assert "val/param_mse_best_swap" in metric_dict
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)
