@@ -199,7 +199,7 @@ def add_embeddings(
     clap_dim: int = CLAP_EMBEDDING_DIM,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
     log_every_batch: bool = False,
-    checkpoint_file: Path | None = None,
+    resume_cache: Path | None = None,
     build_index: bool = True,
     num_partitions: int | None = None,
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
@@ -220,7 +220,7 @@ def add_embeddings(
         which Lance rewrites whole.
     :param log_every_batch: Emit an ``embedding_progress`` line for every UDF
         batch instead of only at row/time intervals.
-    :param checkpoint_file: Lance-managed cache of per-batch UDF outputs; a rerun
+    :param resume_cache: Lance-managed resume cache of per-batch UDF outputs; a rerun
         with the same file, dataset version, and ``batch_size`` skips already
         encoded batches (cached batches bypass the UDF, so resumed-run progress
         counts freshly encoded rows only). Deleted after a successful commit.
@@ -282,7 +282,7 @@ def add_embeddings(
 
     @lance.batch_udf(
         output_schema=sample_output.schema,
-        checkpoint_file=None if checkpoint_file is None else str(checkpoint_file),
+        checkpoint_file=None if resume_cache is None else str(resume_cache),
     )
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
         nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
@@ -327,16 +327,16 @@ def add_embeddings(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
-    if checkpoint_file is not None:
+    if resume_cache is not None:
         # Only useful for resuming the just-committed run; Lance leaves deletion
         # to the caller. The columns are committed, so a failed delete must not
         # fail the run (a rerun would hit the existing-column guard).
         try:
-            checkpoint_file.unlink(missing_ok=True)
+            resume_cache.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                "checkpoint_cleanup_failed",
-                checkpoint_file=str(checkpoint_file),
+                "resume_cache_cleanup_failed",
+                resume_cache=str(resume_cache),
                 error=str(exc),
             )
     logger.info(
@@ -507,7 +507,7 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     help="Rows per UDF call (ignored for v1 datasets).",
 )
 @click.option(
-    "--checkpoint-file",
+    "--resume-cache",
     type=click.Path(dir_okay=False, writable=True, path_type=Path),
     default=None,
     help=(
@@ -546,7 +546,7 @@ def main(
     clap_checkpoint: str,
     device: str | None,
     batch_size: int,
-    checkpoint_file: Path | None,
+    resume_cache: Path | None,
     build_index: bool,
     num_partitions: int | None,
     num_sub_vectors: int,
@@ -565,7 +565,7 @@ def main(
     :param clap_checkpoint: HuggingFace CLAP model id.
     :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
     :param batch_size: Rows per UDF call.
-    :param checkpoint_file: Optional per-batch output cache enabling resume of an
+    :param resume_cache: Optional per-batch output cache enabling resume of an
         interrupted run; deleted after a successful commit.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
@@ -604,7 +604,7 @@ def main(
             sample_rate,
             batch_size=batch_size,
             log_every_batch=debug,
-            checkpoint_file=checkpoint_file,
+            resume_cache=resume_cache,
             build_index=build_index,
             num_partitions=num_partitions,
             num_sub_vectors=num_sub_vectors,

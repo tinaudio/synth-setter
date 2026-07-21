@@ -367,16 +367,16 @@ def test_add_embeddings_log_every_batch_reports_each_batch(
     assert [entry["batch_rows"] for entry in progress] == [128, 128, 1]
 
 
-def test_add_embeddings_checkpoint_resumes_interrupted_run_without_reencoding(
+def test_add_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(
     tmp_path: Path,
 ) -> None:
-    """A rerun with the same checkpoint file skips batches encoded before a crash.
+    """A rerun with the same resume cache skips batches encoded before a crash.
 
-    :param tmp_path: Pytest-provided scratch directory for dataset + checkpoint.
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
     """
     uri = str(tmp_path / "resume.lance")
     audio = _audio_dataset(uri, 300)
-    checkpoint = tmp_path / "resume.ckpt"
+    resume_cache = tmp_path / "resume.cache"
     first_run_rows: list[int] = []
     second_run_rows: list[int] = []
 
@@ -394,9 +394,9 @@ def test_add_embeddings_checkpoint_resumes_interrupted_run_without_reencoding(
             _fake_clap,
             _SAMPLE_RATE,
             build_index=False,
-            checkpoint_file=checkpoint,
+            resume_cache=resume_cache,
         )
-    assert checkpoint.exists()
+    assert resume_cache.exists()
 
     def recording_m2l(batch_audio: np.ndarray) -> np.ndarray:
         second_run_rows.append(len(batch_audio))
@@ -408,30 +408,30 @@ def test_add_embeddings_checkpoint_resumes_interrupted_run_without_reencoding(
         _fake_clap,
         _SAMPLE_RATE,
         build_index=False,
-        checkpoint_file=checkpoint,
+        resume_cache=resume_cache,
     )
 
     # The schema-inference sample batch re-encodes 128 rows on every run; the
     # resumed UDF must not also re-encode the two batches cached pre-crash.
     assert sum(second_run_rows) < sum(first_run_rows)
-    assert not checkpoint.exists()
+    assert not resume_cache.exists()
     table = lance.dataset(uri).to_table()
     assert {M2L_FIELD, CLAP_FIELD} <= set(table.column_names)
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     np.testing.assert_allclose(m2l, _fake_m2l(audio))
 
 
-def test_add_embeddings_checkpoint_cleanup_failure_does_not_fail_run(
+def test_add_embeddings_resume_cache_cleanup_failure_does_not_fail_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed checkpoint delete after commit is logged, not raised.
+    """A failed resume-cache delete after commit is logged, not raised.
 
-    :param tmp_path: Pytest-provided scratch directory for dataset + checkpoint.
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
     :param monkeypatch: Pytest fixture for breaking ``Path.unlink``.
     """
     uri = str(tmp_path / "cleanup.lance")
     _audio_dataset(uri, 6)
-    checkpoint = tmp_path / "cleanup.ckpt"
+    resume_cache = tmp_path / "cleanup.cache"
 
     def deny_unlink(self: Path, missing_ok: bool = False) -> None:
         del missing_ok
@@ -445,10 +445,10 @@ def test_add_embeddings_checkpoint_cleanup_failure_does_not_fail_run(
             _fake_clap,
             _SAMPLE_RATE,
             build_index=False,
-            checkpoint_file=checkpoint,
+            resume_cache=resume_cache,
         )
 
-    assert any(entry["event"] == "checkpoint_cleanup_failed" for entry in logs)
+    assert any(entry["event"] == "resume_cache_cleanup_failed" for entry in logs)
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(uri).schema.names)
 
 
@@ -701,18 +701,18 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
 
 
 @pytest.mark.slow
-def test_main_checkpoint_file_option_completes_and_cleans_up(
+def test_main_resume_cache_option_completes_and_cleans_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The CLI ``--checkpoint-file`` run writes both columns and removes the cache.
+    """The CLI ``--resume-cache`` run writes both columns and removes the cache.
 
-    :param tmp_path: Pytest-provided scratch directory for dataset + checkpoint.
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
     :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
     """
     spec = build_lance_smoke_spec()
     uri = tmp_path / "resume-cli.lance"
     write_minimal_lance_shard(uri, spec)
-    checkpoint = tmp_path / "resume-cli.ckpt"
+    resume_cache = tmp_path / "resume-cli.cache"
 
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
@@ -725,11 +725,11 @@ def test_main_checkpoint_file_option_completes_and_cleans_up(
 
     result = CliRunner().invoke(
         main,
-        [str(uri), "--checkpoint-file", str(checkpoint), "--no-build-index"],
+        [str(uri), "--resume-cache", str(resume_cache), "--no-build-index"],
     )
 
     assert result.exit_code == 0, result.output
-    assert not checkpoint.exists()
+    assert not resume_cache.exists()
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
