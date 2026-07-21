@@ -7,7 +7,10 @@ Lance ``add_columns`` wiring, and the vector-index path are what these tests pin
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -26,7 +29,9 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     ClapEncodeFn,
     M2LEncodeFn,
+    _configure_lance_logging,
     _downmix_to_mono,
+    _open_lance_dataset,
     add_embeddings,
     build_clap_index,
     embeddings_record_batch,
@@ -138,6 +143,24 @@ def _audio_dataset(uri: str, rows: int, *, with_params: bool = False) -> np.ndar
         columns[PARAM_ARRAY_FIELD] = rng.random((rows, 3)).astype(np.float32)
     write_lance_shard(Path(uri), columns)
     return audio
+
+
+def _run_udf_in_process(
+    dataset: lance.LanceDataset,
+    udf: Any,
+    *,
+    read_columns: list[str],
+    batch_size: int,
+) -> None:
+    """Run a Lance batch UDF synchronously for deterministic log assertions.
+
+    :param dataset: Local test dataset supplying batches.
+    :param udf: Lance batch UDF under test.
+    :param read_columns: Columns supplied to the UDF.
+    :param batch_size: Maximum rows per UDF invocation.
+    """
+    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+        udf(batch)
 
 
 def _distinct_clap(mono: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -267,17 +290,7 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
         encoded_batch_sizes.append(len(audio))
         return _fake_m2l(audio)
 
-    def run_udf_in_process(
-        dataset: lance.LanceDataset,
-        udf: Any,
-        *,
-        read_columns: list[str],
-        batch_size: int,
-    ) -> None:
-        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
-            udf(batch)
-
-    monkeypatch.setattr(lance.LanceDataset, "add_columns", run_udf_in_process)
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
         add_embeddings(
             lance.dataset(uri),
@@ -287,12 +300,94 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
             build_index=False,
         )
 
+    events = [entry["event"] for entry in logs]
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert events.index("inferring_embedding_schema") < events.index(
+        "inferred_embedding_schema"
+    )
+    assert events.index("inferred_embedding_schema") < events.index("embedding_write_started")
+    assert events.index("embedding_write_started") < events.index("encoding_batch")
+    assert events.index("encoding_batch") < events.index("writing_embeddings")
+    assert events.index("writing_embeddings") < events.index("wrote_embeddings")
     assert max(encoded_batch_sizes) == DEFAULT_LANCE_BATCH_SIZE == 128
     assert progress[-1]["rows_processed"] == 300
     assert progress[-1]["total_rows"] == 300
     assert progress[-1]["percent"] == 100.0
     assert len(progress) <= 20
+
+
+def test_add_embeddings_stalled_write_emits_heartbeat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked native write remains visibly alive.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for synchronizing with the heartbeat.
+    """
+    uri = str(tmp_path / "heartbeat.lance")
+    _audio_dataset(uri, 1)
+    heartbeat_seen = threading.Event()
+
+    def record_log(event: str, **_fields: object) -> None:
+        if event == "embedding_heartbeat":
+            heartbeat_seen.set()
+
+    def wait_for_heartbeat(
+        _dataset: lance.LanceDataset,
+        _udf: Any,
+        *,
+        read_columns: list[str],
+        batch_size: int,
+    ) -> None:
+        del read_columns, batch_size
+        assert heartbeat_seen.wait(timeout=1.0)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.EMBEDDING_HEARTBEAT_SECONDS", 0.001
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.logger.info", record_log
+    )
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", wait_for_heartbeat)
+
+    add_embeddings(
+        lance.dataset(uri),
+        _fake_m2l,
+        _fake_clap,
+        _SAMPLE_RATE,
+        build_index=False,
+    )
+
+    assert heartbeat_seen.is_set()
+
+
+def test_add_embeddings_debug_logs_every_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Debug mode reports every encoder batch boundary.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
+    """
+    uri = str(tmp_path / "debug-progress.lance")
+    _audio_dataset(uri, 257)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            debug=True,
+        )
+
+    encoding = [entry for entry in logs if entry["event"] == "encoding_batch_debug"]
+    writing = [entry for entry in logs if entry["event"] == "writing_embeddings_debug"]
+    assert [entry["rows_processed"] for entry in encoding] == [0, 128, 256]
+    assert [entry["batch_rows"] for entry in encoding] == [128, 128, 1]
+    assert [entry["rows_processed"] for entry in writing] == [128, 256, 257]
 
 
 def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
@@ -612,12 +707,95 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
+def test_open_r2_dataset_configures_bounded_object_store_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 opens with an explicit retry budget matching the visible policy.
+
+    :param monkeypatch: Pytest fixture for replacing the remote dataset boundary.
+    """
+    captured: dict[str, object] = {}
+
+    def capture_dataset(uri: str, *, storage_options: dict[str, str]) -> object:
+        captured.update(uri=uri, storage_options=storage_options)
+        return object()
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.r2_io.is_r2_uri", lambda _: True)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.to_s3_uri",
+        lambda _: "s3://bucket/dataset.lance",
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.ensure_r2_env_loaded", lambda: None
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.r2_storage_options",
+        lambda: {"endpoint": "https://r2.example"},
+    )
+    monkeypatch.setattr(lance, "dataset", capture_dataset)
+
+    _open_lance_dataset("r2://bucket/dataset.lance")
+
+    assert captured["uri"] == "s3://bucket/dataset.lance"
+    assert captured["storage_options"] == {
+        "endpoint": "https://r2.example",
+        "client_max_retries": "3",
+        "client_retry_timeout": "180",
+    }
+
+
+def test_module_import_defers_lance_initialization_until_cli_configures_logging() -> None:
+    """Importing the CLI leaves native Lance logging uninitialized."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import synth_setter.pipeline.data.add_embeddings; "
+            "raise SystemExit('lance' in sys.modules)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_configure_lance_logging_default_keeps_native_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default native logging keeps warnings while heartbeats report stalls.
+
+    :param monkeypatch: Pytest fixture for clearing ambient Lance logging.
+    """
+    monkeypatch.delenv("LANCE_LOG", raising=False)
+
+    _configure_lance_logging(debug=False)
+
+    assert os.environ["LANCE_LOG"] == "warn"
+
+
+def test_configure_lance_logging_debug_enables_native_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Debug mode overrides narrower ambient Lance logging.
+
+    :param monkeypatch: Pytest fixture for setting ambient Lance logging.
+    """
+    monkeypatch.setenv("LANCE_LOG", "warn")
+
+    _configure_lance_logging(debug=True)
+
+    assert os.environ["LANCE_LOG"] == "debug"
+
+
 def test_main_exposes_batch_and_index_tuning_options() -> None:
     """The CLI documents its bounded batch default and IVF_PQ tuning flags."""
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0, result.output
     assert "--batch-size" in result.output
+    assert "--debug" in result.output
     assert "128" in result.output
     for flag in ("--num-partitions", "--num-sub-vectors", "--metric"):
         assert flag in result.output
