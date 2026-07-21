@@ -7,6 +7,7 @@ fixed-shape Lance column contract are what these tests pin.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import lance
@@ -285,6 +286,36 @@ def test_add_same_embeddings_rejects_empty_encoder_mapping(tmp_path: Path) -> No
         add_same_embeddings(lance.dataset(str(uri)), {}, SAME_SAMPLE_RATE)
 
 
+def test_add_same_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
+    """A non-positive batch size is a caller bug caught before any encode.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    uri = tmp_path / "shard.lance"
+    _audio_dataset(uri, rows=2)
+
+    with pytest.raises(ValueError, match="batch_size"):
+        add_same_embeddings(
+            lance.dataset(str(uri)), {SAME_S_FIELD: _fake_same(0.0)}, SAME_SAMPLE_RATE, batch_size=0
+        )
+
+
+def test_add_same_embeddings_rejects_empty_dataset(tmp_path: Path) -> None:
+    """A rowless dataset fails fast instead of committing empty columns.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    uri = tmp_path / "empty.lance"
+    _audio_dataset(uri, rows=2)
+    dataset = lance.dataset(str(uri))
+    dataset.delete("true")
+
+    with pytest.raises(ValueError, match="no rows"):
+        add_same_embeddings(
+            lance.dataset(str(uri)), {SAME_S_FIELD: _fake_same(0.0)}, SAME_SAMPLE_RATE
+        )
+
+
 def test_add_same_embeddings_rejects_dataset_without_audio_column(tmp_path: Path) -> None:
     """A dataset without the audio source column fails before the UDF runs.
 
@@ -298,7 +329,6 @@ def test_add_same_embeddings_rejects_dataset_without_audio_column(tmp_path: Path
         add_same_embeddings(lance.dataset(str(uri)), {SAME_S_FIELD: _fake_same(0.0)}, 44100)
 
 
-@pytest.mark.slow
 def test_main_same_mode_appends_selected_columns_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -382,3 +412,33 @@ def test_resolve_same_checkpoint_dir_keys_cache_on_full_r2_path(
     ]
     assert downloads[0][1] == dir_a
     assert downloads[1][1] == dir_b
+
+
+def test_resolve_same_checkpoint_dir_returns_existing_local_directory(tmp_path: Path) -> None:
+    """A local checkpoint directory is used as-is, with no download.
+
+    :param tmp_path: Existing local directory standing in for a checkpoint.
+    """
+    from synth_setter.pipeline.data.add_embeddings import _resolve_same_checkpoint_dir
+
+    assert _resolve_same_checkpoint_dir(str(tmp_path)) == tmp_path
+
+
+def test_load_same_audio_encoder_without_extra_names_install_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A missing stable_audio_tools import fails with the uv install command.
+
+    :param monkeypatch: Fixture blanking the optional dependency's module entry.
+    :param tmp_path: Local checkpoint directory placeholder.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_same_audio_encoder
+
+    # A None sys.modules entry makes `from stable_audio_tools...` raise
+    # ImportError even when the package is installed.
+    monkeypatch.setitem(sys.modules, "stable_audio_tools", None)
+    monkeypatch.setitem(sys.modules, "stable_audio_tools.models", None)
+    monkeypatch.setitem(sys.modules, "stable_audio_tools.models.factory", None)
+
+    with pytest.raises(ImportError, match="uv sync --extra same"):
+        load_same_audio_encoder(str(tmp_path), device="cpu")
