@@ -533,11 +533,13 @@ def test_eval_embedding_overtrained_checkpoint_improves_val_real_encoders(
         load_clap_audio_encoder,
         load_m2l_audio_encoder,
     )
+    from synth_setter.pipeline.data.hydrate_encoders import hydrated_clap_checkpoint
     from tests.helpers.embedding_fakes import assert_embedding_columns
 
     datasets = build_embeddings_smoke_datasets(
         m2l_encode=load_m2l_audio_encoder("cpu"),
-        clap_encode=load_clap_audio_encoder(device="cpu"),
+        # Prefers a synth-setter-hydrate-encoders snapshot; falls back to the HF hub.
+        clap_encode=load_clap_audio_encoder(hydrated_clap_checkpoint(), device="cpu"),
         audio_samples=44_100,
     )
     assert_embedding_columns(datasets.root / "train.lance", datasets.train_source)
