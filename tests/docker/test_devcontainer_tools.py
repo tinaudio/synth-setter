@@ -68,6 +68,18 @@ def test_codex_sandbox_prerequisites_available() -> None:
     not _RUN_DEVCONTAINER_SMOKE,
     reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
 )
+def test_doom_emacs_available() -> None:
+    """Validate Emacs and the dev user's initialized Doom installation."""
+    assert _run_text("emacs", "--batch", "--eval", '(princ "emacs-ready")') == "emacs-ready"
+    assert _run_text("doom", "version", "--short") == "2.2.0"
+    assert Path("/home/dev/.config/doom/init.el").is_file()
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
 def test_infisical_cli_installed_with_pinned_version() -> None:
     """Validate the image runs the pinned Infisical CLI version."""
     assert _run_text("infisical", "--version") == "infisical version 0.38.0"

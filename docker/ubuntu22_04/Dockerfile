@@ -567,8 +567,12 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       bubblewrap \
       curl \
+      emacs-nox \
+      fd-find \
+      ripgrep \
       tmux \
       xz-utils \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -655,6 +659,18 @@ ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
 # wandb's default staging dir (~/.local/share/wandb) isn't writable at runtime in
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
+
+# Pin Doom because its default branch is a rolling release without stable tags.
+ARG DOOM_EMACS_GIT_SHA=04b2956bafd883e5da7c530f8e0fbd22b1fe7af8
+RUN export HOME="/home/${USERNAME}" \
+ && mkdir -p "$HOME/.config/emacs" "$HOME/.local/bin" \
+ && git -C "$HOME/.config/emacs" init \
+ && git -C "$HOME/.config/emacs" remote add origin https://github.com/doomemacs/doomemacs.git \
+ && git -C "$HOME/.config/emacs" fetch --depth 1 origin "$DOOM_EMACS_GIT_SHA" \
+ && git -C "$HOME/.config/emacs" checkout --detach "$DOOM_EMACS_GIT_SHA" \
+ && ln -s "$HOME/.config/emacs/bin/doom" "$HOME/.local/bin/doom" \
+ && doom install --force --no-env --no-hooks \
+ && test "$(doom version --short)" = "2.2.0"
 
 # dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local),
 # so the user-owned agents use a writable prefix. $HOME is unset after USER, so
