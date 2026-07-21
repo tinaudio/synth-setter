@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import numpy as np
 import torch
+from lance.sampler import ShardedFragmentSampler
+from lance.torch.data import LanceDataset
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import ConditioningMode
-from synth_setter.data.lance_torch import LanceMapDataset, map_dataloader_over
+from synth_setter.data.lance_torch import (
+    LanceMapDataset,
+    batch_to_shaped_tensors,
+    map_dataloader_over,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
@@ -105,6 +111,50 @@ class PrepareBatchCollate:
             ot=self.ot,
             generator=self._live_generator(),
         )
+
+
+class _FragmentSampledIterable(torch.utils.data.IterableDataset[ModelBatch]):
+    """Lance-native fragment-sequential batch stream with per-epoch reshuffle.
+
+    Rows are read fragment-sequentially; shuffling is fragment-order-granular
+    (rows within a fragment keep stored order). Single-process, single-rank
+    (``rank=0, world_size=1``) — v1 does not support DDP.
+    """
+
+    def __init__(
+        self,
+        dataset: LanceDataset,
+        *,
+        seed: int,
+        collate: Callable[[object], ModelBatch],
+    ) -> None:
+        """Wrap a Lance iterable dataset with epoch bookkeeping and collation.
+
+        :param dataset: Lance-native iterable dataset yielding column-tensor dicts.
+        :param seed: Base seed for the per-epoch fragment-order shuffle.
+        :param collate: Model-batch transformation applied to each yielded batch.
+        """
+        self._dataset = dataset
+        self._seed = seed
+        self._collate = collate
+        self._epoch = 0
+
+    def __iter__(self) -> Iterator[ModelBatch]:
+        """Stream one epoch of model batches in a fresh fragment order.
+
+        :yields: Model-ready collated batches following this epoch's freshly randomized order.
+        :ytype: ModelBatch
+        """
+        # set_epoch follows the upstream sampler contract, but lance 7.0.0's
+        # fragment shuffle reads only the seed — so the epoch is folded into it.
+        sampler = ShardedFragmentSampler(
+            rank=0, world_size=1, randomize=True, seed=self._seed + self._epoch
+        )
+        sampler.set_epoch(self._epoch)
+        self._dataset.sampler = sampler
+        self._epoch += 1
+        for batch in self._dataset:
+            yield self._collate(batch)
 
 
 class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
@@ -298,6 +348,8 @@ class LanceVSTDataModule(VSTDataModule):
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
+        use_fragment_sampler: bool = False,
+        batch_readahead: int = 8,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -316,7 +368,18 @@ class LanceVSTDataModule(VSTDataModule):
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
+        :param use_fragment_sampler: Whether train reads fragment-sequentially
+            through Lance's native iterable path (#2251); v1 is single-rank only.
+        :param batch_readahead: Lance scanner read-ahead batches on the
+            fragment-sampler path.
+        :raises ValueError: If ``use_fragment_sampler`` is combined with
+            ``fake`` or ``repeat_first_batch``, which have no fragment path.
         """
+        if use_fragment_sampler and (fake or repeat_first_batch):
+            raise ValueError(
+                "use_fragment_sampler supports real Lance data only; "
+                "disable fake and repeat_first_batch"
+            )
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -333,6 +396,8 @@ class LanceVSTDataModule(VSTDataModule):
         )
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
+        self.use_fragment_sampler = use_fragment_sampler
+        self.batch_readahead = batch_readahead
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
 
@@ -368,6 +433,13 @@ class LanceVSTDataModule(VSTDataModule):
         """Return the prediction dataset built for the current stage."""
         return self._dataset_for("predict")
 
+    def _conditioning_column(self) -> str:
+        """Return the stored column backing the configured conditioning mode.
+
+        :returns: ``"mel_spec"`` for mel conditioning, else ``"music2latent"``.
+        """
+        return "mel_spec" if self.conditioning == "mel" else "music2latent"
+
     def _build_lance_split(
         self,
         shard_path: Path,
@@ -384,8 +456,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
         :returns: Sample-indexed dataset and collate operation.
         """
-        columns = ["param_array"]
-        columns.append("mel_spec" if self.conditioning == "mel" else "music2latent")
+        columns = ["param_array", self._conditioning_column()]
         if read_audio:
             columns.append("audio")
         mean, std = stats if stats is not None else (None, None)
@@ -506,9 +577,34 @@ class LanceVSTDataModule(VSTDataModule):
     def train_dataloader(self) -> DataLoader:
         """Return the shuffled training loader with ragged tails dropped.
 
-        :returns: Sample-indexed training dataloader.
+        :returns: Sample-indexed training dataloader, or the Lance-native
+            fragment-sequential stream when ``use_fragment_sampler`` is set
+            (which keeps a possible ragged final batch).
         """
+        if self.use_fragment_sampler:
+            return self._fragment_sampled_train_dataloader()
         return self._dataloader("train", shuffle=True, drop_last=True)
+
+    def _fragment_sampled_train_dataloader(self) -> DataLoader:
+        """Build the Lance-native fragment-sequential training loader.
+
+        :returns: In-process DataLoader over pre-batched Lance reads; batches form inside Lance's
+            scanner threads, so no spawn workers are used.
+        """
+        columns = ["param_array", self._conditioning_column()]
+        dataset = LanceDataset(
+            str(self.dataset_root / f"train{self.shard_suffix}"),
+            self.batch_size,
+            columns=columns,
+            batch_readahead=self.batch_readahead,
+            to_tensor_fn=batch_to_shaped_tensors,
+        )
+        stream = _FragmentSampledIterable(
+            dataset, seed=draw_generator_seed(), collate=self._splits["train"].collate
+        )
+        return DataLoader(
+            stream, batch_size=None, num_workers=0, pin_memory=self.pin_memory
+        )
 
     def val_dataloader(self) -> DataLoader:
         """Return the ordered validation loader, retaining a ragged tail.
