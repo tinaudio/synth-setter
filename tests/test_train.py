@@ -47,6 +47,7 @@ from tests.conftest import (
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
     REAL_VST_VARIANTS,
+    EmbeddingSmokeDatasets,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
     assert_finite_train_loss,
@@ -827,6 +828,42 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+@pytest.mark.parametrize("conditioning", ["m2l", "clap"])
+def test_train_embedding_conditioned_fast_dev_run_consumes_augmented_columns(
+    conditioning: str,
+    lance_embeddings_smoke_datasets: EmbeddingSmokeDatasets,
+    compose_embedding_train_cfg: Callable[..., DictConfig],
+) -> None:
+    """Train one step conditioned on a column the production ``add_embeddings`` wrote.
+
+    First asserts the augmented fixture itself is correct (schema, finiteness,
+    preserved source columns, deterministic ``m2l`` values, cosine ``nearest``
+    self-hits), then drives the real ``train(cfg)`` entrypoint with the
+    conditioning spec routed at that column and asserts a finite train loss —
+    proving the augmenter's output is consumable by training, not just readable.
+
+    :param conditioning: Embedding column and encoder pair under test.
+    :param lance_embeddings_smoke_datasets: Fake-encoder augmented Lance splits.
+    :param compose_embedding_train_cfg: Overtrain-profile train cfg factory.
+    """
+    from tests.helpers.embedding_fakes import assert_embedding_columns, fake_m2l_encode
+
+    datasets = lance_embeddings_smoke_datasets
+    assert_embedding_columns(
+        datasets.root / "train.lance",
+        datasets.train_source,
+        expected_m2l=fake_m2l_encode(datasets.train_source["audio"]),
+    )
+
+    cfg = compose_embedding_train_cfg(datasets.root, conditioning, overtrain=False)
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert_finite_train_loss(metric_dict)
+    spec = object_dict["datamodule"].embedding_conditioning
+    assert spec is not None and spec.column == conditioning
 
 
 def test_train_fast_dev_run_fragment_sampler_yields_finite_loss(

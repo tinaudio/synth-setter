@@ -8,6 +8,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 ``synth_setter.cli`` helper is imported here.
 """
 
+import csv
 import math
 import os
 import shutil
@@ -40,7 +41,11 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests.conftest import REAL_VST_VARIANTS, assert_log_per_param_mse_wired
+from tests.conftest import (
+    REAL_VST_VARIANTS,
+    EmbeddingSmokeDatasets,
+    assert_log_per_param_mse_wired,
+)
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
@@ -405,6 +410,148 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch[0]).all()
+
+
+_EMBEDDING_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
+
+
+def _run_embedding_overtrain_and_eval(
+    dataset_root: Path,
+    conditioning: str,
+    compose_train: Callable[..., DictConfig],
+    compose_eval: Callable[..., DictConfig],
+    *,
+    input_shape: tuple[int, ...] | None = None,
+) -> None:
+    """Overtrain on the augmented fixture, then assert the checkpoint beats an untrained model.
+
+    :param dataset_root: Augmented ``{train,val,test}.lance`` splits directory.
+    :param conditioning: Embedding column and encoder pair under test.
+    :param compose_train: ``compose_embedding_train_cfg`` fixture factory.
+    :param compose_eval: ``compose_embedding_eval_cfg`` fixture factory.
+    :param input_shape: Stored per-row embedding shape; ``None`` uses the fake default.
+    """
+    train_cfg = compose_train(dataset_root, conditioning, input_shape=input_shape)
+    HydraConfig().set_config(train_cfg)
+    try:
+        train_metrics, train_objects = train(train_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    final_loss = train_metrics["train/loss_epoch"].item()
+    assert math.isfinite(final_loss)
+    losses = _logged_train_epoch_losses(Path(train_cfg.paths.output_dir))
+    # Flow-matching losses draw fresh (t, noise) per step, so single epochs are
+    # noisy; windowed means make the decrease assert deterministic.
+    early, late = losses[:5], losses[-5:]
+    assert sum(late) / len(late) < sum(early) / len(early), (early, late)
+
+    checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
+    assert checkpoint.is_file()
+
+    param_mse = {}
+    for label, ckpt in (("baseline", None), ("trained", checkpoint)):
+        eval_cfg = compose_eval(dataset_root, conditioning, ckpt, input_shape=input_shape)
+        # evaluate() does not seed; identical seeds give the baseline and trained
+        # runs the same model init and val sampling noise, isolating the checkpoint.
+        seed_everything(eval_cfg.seed, workers=True)
+        HydraConfig().set_config(eval_cfg)
+        try:
+            metric_dict, _ = evaluate(eval_cfg)
+        finally:
+            GlobalHydra.instance().clear()
+        param_mse[label] = metric_dict["val/param_mse"].item()
+        assert math.isfinite(param_mse[label])
+
+    assert param_mse["trained"] < param_mse["baseline"] * (
+        1 - _EMBEDDING_MIN_RELATIVE_VAL_IMPROVEMENT
+    )
+
+
+def _logged_train_epoch_losses(output_dir: Path) -> list[float]:
+    """Read the per-epoch train losses from the run's CSV logger output.
+
+    :param output_dir: Training run output directory holding ``csv/``.
+    :returns: Every logged ``train/loss_epoch`` value, in epoch order.
+    """
+    metrics_path = next((output_dir / "csv").rglob("metrics.csv"), None)
+    assert metrics_path is not None, f"no metrics.csv under {output_dir}/csv"
+    with metrics_path.open() as stream:
+        rows = list(csv.DictReader(stream))
+    losses = [float(row["train/loss_epoch"]) for row in rows if row.get("train/loss_epoch")]
+    assert losses, f"no train/loss_epoch rows in {metrics_path}"
+    return losses
+
+
+@pytest.mark.parametrize("conditioning", ["m2l", "clap"])
+def test_eval_embedding_overtrained_checkpoint_improves_val(
+    conditioning: str,
+    lance_embeddings_smoke_datasets: EmbeddingSmokeDatasets,
+    compose_embedding_train_cfg: Callable[..., DictConfig],
+    compose_embedding_eval_cfg: Callable[..., DictConfig],
+) -> None:
+    """An overtrained checkpoint beats an untrained model on the memorized rows.
+
+    The fixture's embeddings come from the production ``add_embeddings`` write
+    path with deterministic fake encoders, so the loop proves augment → train →
+    checkpoint → evaluate works end-to-end per conditioning column.
+
+    :param conditioning: Embedding column and encoder pair under test.
+    :param lance_embeddings_smoke_datasets: Fake-encoder augmented Lance splits.
+    :param compose_embedding_train_cfg: Overtrain-profile train cfg factory.
+    :param compose_embedding_eval_cfg: ``mode=validate`` eval cfg factory.
+    """
+    _run_embedding_overtrain_and_eval(
+        lance_embeddings_smoke_datasets.root,
+        conditioning,
+        compose_embedding_train_cfg,
+        compose_embedding_eval_cfg,
+    )
+
+
+@pytest.mark.slow
+def test_eval_embedding_overtrained_checkpoint_improves_val_real_encoders(
+    build_embeddings_smoke_datasets: Callable[..., EmbeddingSmokeDatasets],
+    compose_embedding_train_cfg: Callable[..., DictConfig],
+    compose_embedding_eval_cfg: Callable[..., DictConfig],
+) -> None:
+    """The real music2latent + CLAP encoders feed the same overtrain-and-eval loop.
+
+    Downloads/loads the real checkpoints (CPU) over one-second fixture clips,
+    asserts the augmented dataset invariants, then overtrains with m2l
+    conditioning at the real latent shape read back from the Lance schema.
+
+    :param build_embeddings_smoke_datasets: Injected-encoder dataset builder.
+    :param compose_embedding_train_cfg: Overtrain-profile train cfg factory.
+    :param compose_embedding_eval_cfg: ``mode=validate`` eval cfg factory.
+    """
+    pytest.importorskip("music2latent", reason="real m2l encoder unavailable")
+    pytest.importorskip("transformers", reason="real CLAP encoder unavailable")
+    import lance
+
+    from synth_setter.pipeline.data.add_embeddings import (
+        load_clap_audio_encoder,
+        load_m2l_audio_encoder,
+    )
+    from tests.helpers.embedding_fakes import assert_embedding_columns
+
+    datasets = build_embeddings_smoke_datasets(
+        m2l_encode=load_m2l_audio_encoder("cpu"),
+        clap_encode=load_clap_audio_encoder(device="cpu"),
+        audio_samples=44_100,
+    )
+    assert_embedding_columns(datasets.root / "train.lance", datasets.train_source)
+
+    m2l_shape = tuple(
+        lance.dataset(str(datasets.root / "train.lance")).schema.field("m2l").type.shape
+    )
+    _run_embedding_overtrain_and_eval(
+        datasets.root,
+        "m2l",
+        compose_embedding_train_cfg,
+        compose_embedding_eval_cfg,
+        input_shape=m2l_shape,
+    )
 
 
 _FAKE_ORACLE_DATASETS = [

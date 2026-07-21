@@ -1706,12 +1706,16 @@ _LANCE_SMOKE_NUM_PARAMS = len(param_specs[_LANCE_SMOKE_PARAM_SPEC])
 _LANCE_SMOKE_ROWS = 4
 
 
-def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
+def _write_lance_smoke_split(
+    path: Path, num_rows: int, *, seed: int, audio_samples: int = 64
+) -> dict[str, np.ndarray]:
     """Write one surge-shaped ``.lance`` split readable by ``LanceVSTDataModule``.
 
     :param path: Output ``.lance`` shard file.
     :param num_rows: Rows in every column.
     :param seed: RNG seed so splits get distinguishable values.
+    :param audio_samples: Samples per audio row; real-encoder tests need real clip lengths.
+    :returns: The column arrays that were written, for source-preservation asserts.
     """
     # Local import: pulls in pyarrow, which the Docker VST CI images don't
     # install (no `data` dependency group) — module scope would break their
@@ -1719,17 +1723,14 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     from tests.helpers.lance_fixtures import write_lance_shard
 
     rng = np.random.default_rng(seed)
-    write_lance_shard(
-        path,
-        {
-            # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-            "audio": rng.uniform(-1.0, 1.0, (num_rows, 2, 64)).astype(np.float16),
-            "mel_spec": rng.standard_normal((num_rows, *_LANCE_SMOKE_MEL_SHAPE)).astype(
-                np.float32
-            ),
-            "param_array": rng.random((num_rows, _LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
-        },
-    )
+    columns = {
+        # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
+        "audio": rng.uniform(-1.0, 1.0, (num_rows, 2, audio_samples)).astype(np.float16),
+        "mel_spec": rng.standard_normal((num_rows, *_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+        "param_array": rng.random((num_rows, _LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+    }
+    write_lance_shard(path, columns)
+    return columns
 
 
 @pytest.fixture
@@ -1785,5 +1786,273 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.model.net.n_layers = 1
 
     yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+# add_embeddings-augmented Lance smoke fixtures (m2l / clap conditioning e2e).
+
+# Conditioning name -> (encoder config group, embedding column, per-row input shape).
+# Shapes match tests.helpers.embedding_fakes; the real-encoder test derives its own.
+_EMBEDDING_SMOKE_SPECS: dict[str, tuple[str, str, tuple[int, ...]]] = {
+    "m2l": ("embedpool", "m2l", (128, 4)),
+    "clap": ("vector_projection", "clap", (512,)),
+}
+_EMBEDDING_OVERTRAIN_EPOCHS = 200
+
+
+class EmbeddingSmokeDatasets(NamedTuple):
+    """Augmented Lance smoke splits plus their pre-augmentation train columns.
+
+    .. attribute :: root
+
+        Directory holding the augmented ``{train,val,test}.lance`` splits.
+
+    .. attribute :: train_source
+
+        Column arrays the train split was written from, for preservation asserts.
+    """
+
+    root: Path
+    train_source: dict[str, np.ndarray]
+
+
+def _build_embeddings_smoke_datasets(
+    dataset_root: Path,
+    *,
+    m2l_encode: Callable[[np.ndarray], np.ndarray],
+    clap_encode: Callable[[np.ndarray, int], np.ndarray],
+    audio_samples: int = 64,
+) -> EmbeddingSmokeDatasets:
+    """Write a train split, augment it via the production ``add_embeddings``, clone splits.
+
+    ``val``/``test`` are byte copies of the augmented train split so an overtrain
+    run's val improvement genuinely measures memorization of the train rows.
+
+    :param dataset_root: Directory receiving ``{train,val,test}.lance`` + ``stats.npz``.
+    :param m2l_encode: ``(B, C, T)`` audio to ``(B, C*D, T')`` latent encoder.
+    :param clap_encode: Mono ``(B, T)`` + sample rate to ``(B, dim)`` encoder.
+    :param audio_samples: Samples per audio row; real encoders need real clip lengths.
+    :returns: Dataset root and the train split's pre-augmentation columns.
+    """
+    # Local imports: lance/pyarrow are absent from the Docker VST CI images.
+    import lance
+
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    train_path = dataset_root / "train.lance"
+    source = _write_lance_smoke_split(
+        train_path, _LANCE_SMOKE_ROWS, seed=0, audio_samples=audio_samples
+    )
+    add_embeddings(
+        lance.dataset(str(train_path)),
+        m2l_encode,
+        clap_encode,
+        _SURGE_FIXTURE_SAMPLE_RATE,
+        build_index=True,
+    )
+    for split in ("val", "test"):
+        shutil.copytree(train_path, dataset_root / f"{split}.lance")
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    return EmbeddingSmokeDatasets(root=dataset_root, train_source=source)
+
+
+@pytest.fixture
+def build_embeddings_smoke_datasets(
+    tmp_path: Path,
+) -> Callable[..., EmbeddingSmokeDatasets]:
+    """Provide the augmented-dataset builder for injected (fake or real) encoders.
+
+    :param tmp_path: Per-test tmpdir receiving the dataset directory.
+    :returns: Builder accepting ``m2l_encode`` / ``clap_encode`` / ``audio_samples``.
+    """
+
+    def _build(**kwargs: Any) -> EmbeddingSmokeDatasets:
+        return _build_embeddings_smoke_datasets(tmp_path / "lance-embed-data", **kwargs)
+
+    return _build
+
+
+@pytest.fixture
+def lance_embeddings_smoke_datasets(
+    build_embeddings_smoke_datasets: Callable[..., EmbeddingSmokeDatasets],
+) -> EmbeddingSmokeDatasets:
+    """Build the fake-encoder augmented smoke dataset.
+
+    :param build_embeddings_smoke_datasets: Injected-encoder dataset builder.
+    :returns: Dataset root and pre-augmentation train columns.
+    """
+    from tests.helpers.embedding_fakes import fake_clap_encode, fake_m2l_encode
+
+    return build_embeddings_smoke_datasets(
+        m2l_encode=fake_m2l_encode, clap_encode=fake_clap_encode
+    )
+
+
+def _apply_embedding_smoke_overrides(
+    cfg: DictConfig,
+    dataset_root: Path,
+    out_dir: Path,
+    conditioning: str,
+    input_shape: tuple[int, ...],
+) -> None:
+    """Point a composed cfg at the augmented smoke dataset with a tiny flow net.
+
+    :param cfg: Composed ``train.yaml`` / ``eval.yaml`` config to mutate.
+    :param dataset_root: Directory holding the augmented ``*.lance`` splits.
+    :param out_dir: Hydra output/log directory.
+    :param conditioning: Key into ``_EMBEDDING_SMOKE_SPECS``.
+    :param input_shape: Per-row embedding shape stored in the conditioned column.
+    """
+    encoder, column, _ = _EMBEDDING_SMOKE_SPECS[conditioning]
+    spec = {"column": column, "input_shape": list(input_shape)}
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(out_dir)
+        cfg.paths.log_dir = str(out_dir)
+        cfg.seed = 123
+        # vst_flow's scheduler resolves ${trainer.max_steps}; one optimizer step per epoch.
+        cfg.trainer.max_steps = _EMBEDDING_OVERTRAIN_EPOCHS
+        cfg.datamodule.conditioning = spec
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.batch_size = _LANCE_SMOKE_ROWS
+        cfg.datamodule.param_spec_name = _LANCE_SMOKE_PARAM_SPEC
+        cfg.datamodule.ot = False
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.pin_memory = False
+        cfg.model.conditioning = spec
+        cfg.model.compile = False
+        cfg.model.optimizer.lr = 3e-3
+        # The unconditional CFG branch stays untrained in an overtrain run, so
+        # sampling must stay purely conditional to measure memorization.
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.validation_cfg_strength = 1.0
+        cfg.model.validation_sample_steps = 8
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.num_heads = 2
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        if encoder == "embedpool":
+            cfg.model.encoder.embed_dim = input_shape[0]
+        else:
+            cfg.model.encoder.input_dim = input_shape[0]
+
+
+def _compose_embedding_smoke_cfg(
+    config_name: str,
+    dataset_root: Path,
+    out_dir: Path,
+    conditioning: str,
+    input_shape: tuple[int, ...] | None,
+    extra_overrides: list[str],
+) -> DictConfig:
+    """Compose one train/eval cfg pointed at the augmented smoke dataset.
+
+    :param config_name: Root Hydra config (``train.yaml`` or ``eval.yaml``).
+    :param dataset_root: Directory holding the augmented ``*.lance`` splits.
+    :param out_dir: Hydra output/log directory.
+    :param conditioning: Key into ``_EMBEDDING_SMOKE_SPECS``.
+    :param input_shape: Stored per-row embedding shape; ``None`` uses the fake default.
+    :param extra_overrides: Config-specific compose overrides appended to the shared set.
+    :returns: Composed cfg with the shared smoke overrides applied.
+    """
+    encoder, _, default_shape = _EMBEDDING_SMOKE_SPECS[conditioning]
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name=config_name,
+            return_hydra_config=True,
+            overrides=[
+                "datamodule=surge_lance",
+                "model=vst_flow",
+                f"model/encoder={encoder}",
+                "trainer=cpu",
+                *extra_overrides,
+            ],
+        )
+    _apply_embedding_smoke_overrides(
+        cfg, dataset_root, out_dir, conditioning, input_shape or default_shape
+    )
+    return cfg
+
+
+@pytest.fixture
+def compose_embedding_train_cfg(tmp_path: Path) -> Iterator[Callable[..., DictConfig]]:
+    """Provide a factory composing overtrain-profile train cfgs for embedding conditioning.
+
+    :param tmp_path: Hydra output/log directory shared with the dataset fixture.
+    :yields: Factory taking ``(dataset_root, conditioning, input_shape=None, overtrain=True)``.
+    :ytype: Callable[..., DictConfig]
+    """
+
+    def _compose(
+        dataset_root: Path,
+        conditioning: str,
+        *,
+        input_shape: tuple[int, ...] | None = None,
+        overtrain: bool = True,
+    ) -> DictConfig:
+        cfg = _compose_embedding_smoke_cfg(
+            "train.yaml", dataset_root, tmp_path, conditioning, input_shape, ["logger=csv"]
+        )
+        with open_dict(cfg):
+            cfg.test = False
+            if overtrain:
+                cfg.trainer.max_epochs = _EMBEDDING_OVERTRAIN_EPOCHS
+                cfg.trainer.limit_train_batches = 1
+                cfg.trainer.limit_val_batches = 1
+                cfg.trainer.check_val_every_n_epoch = 1
+                cfg.trainer.val_check_interval = 1.0
+                # The flow module logs val/param_mse, not the default monitor's val/loss.
+                cfg.callbacks.model_checkpoint.monitor = "val/param_mse"
+            else:
+                cfg.trainer.fast_dev_run = True
+            # The plot callbacks require a W&B/TensorBoard logger; this cfg logs to CSV.
+            for callback in ("plot_pos_enc", "plot_proj", "plot_projii"):
+                if callback in cfg.callbacks:
+                    del cfg.callbacks[callback]
+        return cfg
+
+    yield _compose
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture
+def compose_embedding_eval_cfg(tmp_path: Path) -> Iterator[Callable[..., DictConfig]]:
+    """Provide a factory composing ``mode=validate`` eval cfgs for embedding conditioning.
+
+    :param tmp_path: Hydra output/log directory shared with the dataset fixture.
+    :yields: Factory taking ``(dataset_root, conditioning, ckpt_path, input_shape=None)``;
+        ``ckpt_path=None`` evaluates a freshly seeded untrained model as the baseline.
+    :ytype: Callable[..., DictConfig]
+    """
+
+    def _compose(
+        dataset_root: Path,
+        conditioning: str,
+        ckpt_path: Path | None,
+        *,
+        input_shape: tuple[int, ...] | None = None,
+    ) -> DictConfig:
+        cfg = _compose_embedding_smoke_cfg(
+            "eval.yaml",
+            dataset_root,
+            tmp_path,
+            conditioning,
+            input_shape,
+            ["mode=validate", "ckpt_path=null"],
+        )
+        with open_dict(cfg):
+            if ckpt_path is not None:
+                cfg.ckpt_path = str(ckpt_path)
+        return cfg
+
+    yield _compose
 
     GlobalHydra.instance().clear()
