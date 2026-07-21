@@ -367,6 +367,91 @@ def test_add_embeddings_log_every_batch_reports_each_batch(
     assert [entry["batch_rows"] for entry in progress] == [128, 128, 1]
 
 
+def test_add_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(
+    tmp_path: Path,
+) -> None:
+    """A rerun with the same resume cache skips batches encoded before a crash.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
+    """
+    uri = str(tmp_path / "resume.lance")
+    audio = _audio_dataset(uri, 300)
+    resume_cache = tmp_path / "resume.cache"
+    first_run_rows: list[int] = []
+    second_run_rows: list[int] = []
+
+    def crash_on_third_batch(batch_audio: np.ndarray) -> np.ndarray:
+        first_run_rows.append(len(batch_audio))
+        if len(first_run_rows) == 3:
+            raise RuntimeError("simulated crash")
+        return _fake_m2l(batch_audio)
+
+    # Lance surfaces UDF exceptions wrapped as OSError("Invalid user input: ...").
+    with pytest.raises(OSError, match="simulated crash"):
+        add_embeddings(
+            lance.dataset(uri),
+            crash_on_third_batch,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            resume_cache=resume_cache,
+        )
+    assert resume_cache.exists()
+
+    def recording_m2l(batch_audio: np.ndarray) -> np.ndarray:
+        second_run_rows.append(len(batch_audio))
+        return _fake_m2l(batch_audio)
+
+    add_embeddings(
+        lance.dataset(uri),
+        recording_m2l,
+        _fake_clap,
+        _SAMPLE_RATE,
+        build_index=False,
+        resume_cache=resume_cache,
+    )
+
+    # The schema-inference sample batch re-encodes 128 rows on every run; the
+    # resumed UDF must not also re-encode the two batches cached pre-crash.
+    assert sum(second_run_rows) < sum(first_run_rows)
+    assert not resume_cache.exists()
+    table = lance.dataset(uri).to_table()
+    assert {M2L_FIELD, CLAP_FIELD} <= set(table.column_names)
+    m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
+    np.testing.assert_allclose(m2l, _fake_m2l(audio))
+
+
+def test_add_embeddings_resume_cache_cleanup_failure_does_not_fail_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed resume-cache delete after commit is logged, not raised.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
+    :param monkeypatch: Pytest fixture for breaking ``Path.unlink``.
+    """
+    uri = str(tmp_path / "cleanup.lance")
+    _audio_dataset(uri, 6)
+    resume_cache = tmp_path / "cleanup.cache"
+
+    def deny_unlink(self: Path, missing_ok: bool = False) -> None:
+        del missing_ok
+        raise PermissionError(f"unlink denied: {self}")
+
+    monkeypatch.setattr(Path, "unlink", deny_unlink)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            resume_cache=resume_cache,
+        )
+
+    assert any(entry["event"] == "resume_cache_cleanup_failed" for entry in logs)
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(uri).schema.names)
+
+
 def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
     """The functional API rejects a non-positive Lance UDF batch size.
 
@@ -613,6 +698,39 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
     load_clap_audio_encoder()
 
     assert selected_devices == ["mps"]
+
+
+@pytest.mark.slow
+def test_main_resume_cache_option_completes_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI ``--resume-cache`` run writes both columns and removes the cache.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
+    :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "resume-cli.lance"
+    write_minimal_lance_shard(uri, spec)
+    resume_cache = tmp_path / "resume-cli.cache"
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
+        lambda device=None: _fake_m2l,
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device=None: _fake_clap,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [str(uri), "--resume-cache", str(resume_cache), "--no-build-index"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not resume_cache.exists()
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
 @pytest.mark.slow
