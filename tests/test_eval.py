@@ -501,6 +501,8 @@ _FLOW_LAD_EVAL_OVERRIDES = {
 }
 
 
+# slow: dominates the inner loop (#2274 profile; flow_simple case is #2280).
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment", sorted(_FLOW_LAD_EVAL_OVERRIDES))
 def test_evaluate_flow_simple_test_mode_logs_param_mse_best_swap(
     tmp_path: Path, experiment: str

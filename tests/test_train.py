@@ -119,6 +119,7 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+@pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
@@ -452,6 +453,7 @@ def test_train_prefetch_factor_override_advances_with_spawn_workers(tmp_path: Pa
     assert object_dict["datamodule"].prefetch_factor == 3
 
 
+@pytest.mark.slow
 def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None:
     """Legacy model and callback aliases run through the train entrypoint.
 
@@ -561,6 +563,7 @@ def test_train_runpod_experiment_default_datamodule_advances(
     assert_finite_train_loss(metric_dict)
 
 
+@pytest.mark.slow
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
 
@@ -799,6 +802,7 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     )
 
 
+@pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
