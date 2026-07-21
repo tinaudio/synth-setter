@@ -2,20 +2,11 @@
 # mounted volume, so it needs no 750 GB local disk — small-disk GPU hosts are
 # far easier to schedule. GPU (not CPU) pods on purpose: SkyPilot cannot SSH
 # into RunPod CPU pods (600s timeout -> teardown loop), so cheap CPU staging
-# is not currently viable. Any-of spans budget tiers plus DC-native H-class.
+# is not currently viable. Any-of is capped at sub-$1/hr tiers — an rclone
+# copy gains nothing from H-class hosts.
 resources:
   cloud: runpod
-  accelerators:
-    {
-      RTX3090:1,
-      RTX4090:1,
-      A40:1,
-      L40S:1,
-      RTX6000-Ada:1,
-      H100-SXM:1,
-      H100-NVL:1,
-      H200-SXM:1,
-    }
+  accelerators: { RTX3090:1, RTX4090:1, A40:1, L40S:1, RTX6000-Ada:1 }
   use_spot: false
   disk_size: 50
 
