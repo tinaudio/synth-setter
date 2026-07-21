@@ -436,6 +436,20 @@ jobs:
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: type=registry,ref=tinaudio/synth-setter:buildcache,mode=max
 
+      # Floating `devcontainer-tools` tag is gated to main like `dev-snapshot`:
+      # RunPod dev launches consume it, so a feature-branch dispatch must not
+      # overwrite it. The immutable `-<sha>` tag is always pushed.
+      - name: Docker metadata (devcontainer-tools)
+        id: meta_devtools
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
+          tags: |
+            type=raw,value=devcontainer-tools,enable=${{ steps.source.outputs.is_main == 'true' }}
+            type=raw,value=devcontainer-tools-${{ steps.source.outputs.sha }}
+
       - name: Build and push devcontainer-tools image
         uses: docker/build-push-action@v6
         with:
@@ -444,12 +458,8 @@ jobs:
           target: devcontainer-tools
           platforms: ${{ steps.config.outputs.target_platform }}
           push: true
-          tags: |
-            ${{ steps.config.outputs.image }}:devcontainer-tools
-            ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools-${{ steps.source.outputs.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_devtools.outputs.tags }}
+          labels: ${{ steps.meta_devtools.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
@@ -459,8 +469,21 @@ jobs:
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: ""
 
-      # Non-root sibling consumed by .devcontainer/. Reuses the devcontainer-tools
-      # layers from the shared buildcache, so this pushes only the config delta.
+      # Non-root sibling consumed by .devcontainer/. Same main-only gate as the
+      # root tag: a feature-branch dispatch must not repoint every developer's
+      # devcontainer at an unmerged build. Reuses the devcontainer-tools layers
+      # from the shared buildcache, so this pushes only the config delta.
+      - name: Docker metadata (devcontainer-tools-dev-user)
+        id: meta_devuser
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
+          tags: |
+            type=raw,value=devcontainer-tools-dev-user,enable=${{ steps.source.outputs.is_main == 'true' }}
+            type=raw,value=devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
+
       - name: Build and push devcontainer-tools-dev-user image
         uses: docker/build-push-action@v6
         with:
@@ -469,12 +492,8 @@ jobs:
           target: devcontainer-tools-dev-user
           platforms: ${{ steps.config.outputs.target_platform }}
           push: true
-          tags: |
-            ${{ steps.config.outputs.image }}:devcontainer-tools-dev-user
-            ${{ steps.config.outputs.image }}:devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools-dev-user
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_devuser.outputs.tags }}
+          labels: ${{ steps.meta_devuser.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
