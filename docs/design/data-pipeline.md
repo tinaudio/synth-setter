@@ -1130,6 +1130,8 @@ latent column, both derived from the audio column.
 
 `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
 
+`synth-setter-hydrate-encoders` (`pipeline/data/hydrate_encoders.py`) hydrates the CLAP snapshot and music2latent weights from the R2 encoder mirror (`--mirror` seeds that mirror from local sources instead), avoiding a ~850 MB Hugging Face pull per fresh venv or CI pod.
+
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
 ### Data Format Abstraction
