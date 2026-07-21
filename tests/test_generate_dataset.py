@@ -834,6 +834,74 @@ def _make_fake_worker_runtime(tmp_path: Path, trace: Path) -> Path:
     return fake_bin
 
 
+def test_main_skypilot_env_file_endpoint_active_at_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generate-dataset CLI carries env-file auth through real dispatch.
+
+    :param tmp_path: Hosts the compute template, dotenv source, and Hydra output.
+    :param monkeypatch: Isolates storage and external SkyPilot service boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    template = tmp_path / "compute.yaml"
+    template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+    env_file = tmp_path / "launcher.env"
+    env_file.write_text(
+        "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
+        "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret\n"
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+        "SKYPILOT_API_SERVER_ENDPOINT=https://sky.example.com\n"
+    )
+
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "write_spec_locally",
+        MagicMock(side_effect=lambda _spec, output_dir: Path(output_dir) / "input_spec.json"),
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "upload_spec",
+        MagicMock(return_value="r2://stub-bucket/run/input_spec.json"),
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli.r2_io,
+        "ensure_r2_env_loaded",
+        MagicMock(return_value=None),
+    )
+
+    fake_sky = MagicMock()
+
+    def assert_env_file_endpoint_is_active(*_args: object, **_kwargs: object) -> str:
+        assert os.environ["SKYPILOT_API_SERVER_ENDPOINT"] == "https://sky.example.com"
+        return "launch-req"
+
+    fake_sky.jobs.launch.side_effect = assert_env_file_endpoint_is_active
+    fake_sky.stream_and_get.return_value = ([1], MagicMock())
+    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+            f"skypilot_launch.env_file={env_file}",
+        ],
+    )
+
+    cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    task_doc = fake_sky.Task.from_yaml_config.call_args.args[0]
+    assert f"skypilot_launch.env_file={env_file}" in task_doc["run"]
+    fake_sky.jobs.launch.assert_called_once()
+
+
 @pytest.fixture()
 def remote_worker_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
