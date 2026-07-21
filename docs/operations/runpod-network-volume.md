@@ -45,9 +45,12 @@ The staging script uses `rclone copy --immutable --checksum`, checks source
 parity, and writes `.synth-setter-stage-complete` only after validation. It is
 safe to rerun after an interrupted transfer.
 
-The SkyPilot template explicitly mounts the volume at
+The SkyPilot templates explicitly mount the volume at
 `/workspace/network-volume`. This is independent of RunPod's default
-`/workspace` mount convention.
+`/workspace` mount convention. Staging uses a small-disk template
+(`runpod-network-volume-staging-template.yaml`): the copy writes straight to
+the mounted volume, and hosts with small container disks are far easier to
+schedule than the 750 GB-disk hosts training needs.
 
 ## Train from pod-local storage
 

@@ -1,0 +1,34 @@
+# Staging-only variant of the network-volume template: the copy writes R2 ->
+# mounted volume, so it needs no 750 GB local disk — hosts with small container
+# disks are far more plentiful, which is what makes staging schedulable.
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3090:1,
+      RTX4090:1,
+      A40:1,
+      L40S:1,
+      RTX6000-Ada:1,
+      H100-SXM:1,
+      H200-SXM:1,
+    }
+  use_spot: false
+  disk_size: 50
+
+volumes:
+  /workspace/network-volume: ${NETWORK_VOLUME}
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_GIT_REF: ""
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter worker ready (host: $(hostname))"
