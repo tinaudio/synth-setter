@@ -1383,6 +1383,107 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     )
 
 
+def _materialize_fake_probe_stage(argv: list[str], _stage: str, timeout: float) -> None:
+    """Materialize the prediction or metrics output expected by an audio probe.
+
+    :param argv: Captured subprocess arguments identifying the probe stage and output path.
+    :param _stage: Unused human-readable stage name.
+    :param timeout: Positive stage timeout supplied by the caller.
+    """
+    assert timeout > 0
+    from synth_setter.evaluation import audio_probe
+
+    if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
+        module_index = argv.index(audio_probe._PREDICT_VST_AUDIO_MODULE)
+        sample_dir = Path(argv[module_index + 2]) / "sample_0"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        (sample_dir / "pred.wav").write_bytes(b"RIFF-pred")
+        (sample_dir / "target.wav").write_bytes(b"RIFF-target")
+        return
+
+    module_index = argv.index(audio_probe._COMPUTE_AUDIO_METRICS_MODULE)
+    metrics_dir = Path(argv[module_index + 2])
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    (metrics_dir / "aggregated_metrics.csv").write_text(
+        ",mean,std\nmss,0.1,0.01\nwmfcc,0.2,0.02\nsot,0.3,0.03\nrms,0.4,0.04\n"
+    )
+
+
+def _run_fake_probe_launch(cfg: DictConfig, output_dir: Path) -> None:
+    """Run one training launch and require its validation probe to complete.
+
+    :param cfg: Config copied and pointed at the launch output directory.
+    :param output_dir: Launch-specific Hydra output and log directory.
+    """
+    from synth_setter.utils.callbacks import ValAudioProbe
+
+    launch_cfg = cfg.copy()
+    with open_dict(launch_cfg):
+        launch_cfg.paths.output_dir = str(output_dir)
+        launch_cfg.paths.log_dir = str(output_dir)
+    HydraConfig().set_config(launch_cfg)
+    _, object_dict = train(launch_cfg)
+
+    probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
+    assert len(probes) == 1
+    probe = probes[0]
+    assert probe._future is not None
+    assert probe._future.result(timeout=120)["val_audio/mss_mean"] == 0.1
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", [_ORACLE_EXPERIMENT], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS[:1], indirect=True)
+def test_train_same_config_launches_upload_isolated_val_audio_probes(
+    cfg_surge_fake_train: DictConfig,
+    param_spec_name: str,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Two same-config launches archive complete probe snapshots without overwriting.
+
+    :param cfg_surge_fake_train: One-step oracle config backed by tiny fake-VST data.
+    :param param_spec_name: Parameter spec shared by the data, model, and probe.
+    :param fake_r2_remote: Local filesystem backing the real ``r2:`` rclone remote.
+    :param monkeypatch: Replaces only the unavailable VST/metrics subprocess stages.
+    :param tmp_path: Parent for separate local launch output directories.
+    """
+    from synth_setter.evaluation import audio_probe
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
+    with open_dict(cfg_surge_fake_train):
+        cfg_surge_fake_train.render = {
+            "param_spec_name": param_spec_name,
+            "plugin_state_path": "presets/fake.vstpreset",
+            "plugin_path": "plugins/fake.vst3",
+            "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
+            "channels": _SURGE_FIXTURE_CHANNELS,
+            "velocity": 100,
+            "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
+        }
+        cfg_surge_fake_train.datamodule.param_spec_name = param_spec_name
+        cfg_surge_fake_train.training.val_audio_probe_samples = 1
+        cfg_surge_fake_train.trainer.val_check_interval = 1
+        cfg_surge_fake_train.trainer.num_sanity_val_steps = 0
+
+    for launch_number in (1, 2):
+        _run_fake_probe_launch(cfg_surge_fake_train, tmp_path / f"launch-{launch_number}")
+
+    config_id = resolve_run_config_id(cfg_surge_fake_train)
+    uploaded = fake_r2_remote / cfg_surge_fake_train.r2.bucket / "probes" / config_id
+    namespaces = sorted(path for path in uploaded.iterdir() if path.is_dir())
+    assert len(namespaces) == 2
+    for namespace in namespaces:
+        pred_wavs = list(namespace.rglob("pred.wav"))
+        metrics_files = list(namespace.rglob("aggregated_metrics.csv"))
+        assert len(pred_wavs) == 1
+        assert pred_wavs[0].read_bytes() == b"RIFF-pred"
+        assert len(metrics_files) == 1
+        assert not pd.read_csv(metrics_files[0]).empty
+
+
 @pytest.mark.slow
 def test_train_resume_auto_continues_from_newest_sibling_run(
     cfg_train: DictConfig, tmp_path: Path

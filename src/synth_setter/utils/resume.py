@@ -26,7 +26,7 @@ from omegaconf import DictConfig, OmegaConf
 
 log = logging.getLogger(__name__)
 
-# Recovery namespaces are ``{run_id}-{uuid4().hex}`` (cli.train._make_recovery_namespace).
+# Recovery namespaces are ``{run_id}-{uuid4().hex}`` (cli.train._make_launch_namespace).
 _RECOVERY_NAMESPACE_RE = re.compile(r"^(?P<run_id>.+)-[0-9a-f]{32}$")
 # Canonical run ids are ``{config_id}-<YYYYMMDD>T<HHMMSSmmm>Z`` (run_id.make_wandb_run_id).
 _RUN_ID_TIMESTAMP_RE = r"\d{8}T\d{9}Z"
