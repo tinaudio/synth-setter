@@ -140,7 +140,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Post-finalize CLAP and music2latent column augmentation for Lance datasets"
+        covers: "Post-finalize CLAP, music2latent, and SAME-S/SAME-L column augmentation for Lance datasets"
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
         covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass that adds an `audio_mp3` Arrow binary preview column and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes (neither a training input)."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"

@@ -27,6 +27,8 @@ DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY
 # not in DATASET_FIELD_NAMES because the writers never emit them.
 M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
+SAME_S_FIELD: str = "same_s"
+SAME_L_FIELD: str = "same_l"
 
 # Per-field on-disk dtype, matching what the Lance writer emits. Audio is
 # stored as ``float16`` for compressed storage efficiency; mel and params stay
