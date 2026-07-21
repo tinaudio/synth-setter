@@ -37,20 +37,24 @@ sync: ## Merge changes from main branch to your current branch
 UNAME_S := $(shell uname -s)
 HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
 PYTEST := ./.venv/bin/pytest
+# One BLAS/OpenMP thread per xdist worker: N workers each defaulting to a
+# full-core intra-op pool oversubscribes the host N-fold (#2274). Env form
+# (not torch.set_num_threads) so spawned DataLoader children inherit it.
+XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	$(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	$(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
 # GPU/MPS tests run serially because accelerators need exclusive access.
 test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb; Darwin: serial VST lane.
 	@if [ "$(UNAME_S)" = "Darwin" ]; then \
 		status=0; \
-		$(PYTEST) -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
+		$(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
 		$(PYTEST) -m "requires_vst and not gpu and not mps" || status=1; \
 		exit $$status; \
 	else \
-		$(HEADLESS_WRAPPER) $(PYTEST) -n auto -m "not gpu and not mps"; \
+		$(XDIST_THREAD_CAPS) $(HEADLESS_WRAPPER) $(PYTEST) -n auto -m "not gpu and not mps"; \
 	fi
 
 test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.

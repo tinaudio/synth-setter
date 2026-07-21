@@ -332,6 +332,7 @@ class TestHookCombinesCpuAndMemory:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "0")
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
         monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1}, raising=False)
@@ -344,6 +345,7 @@ class TestHookCombinesCpuAndMemory:
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "0")
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
         with patch("builtins.open", side_effect=_make_open({})):
@@ -400,6 +402,7 @@ class TestHookCombinesCpuAndMemory:
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "auto")
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "0")
         monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
         with patch("builtins.open", side_effect=_make_open({})):
@@ -413,7 +416,109 @@ class TestHookCombinesCpuAndMemory:
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "")
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "0")
         monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
+
+
+class TestHookReservesCpuHeadroom:
+    """Local runs leave CPUs free for the rest of the host; CI keeps its full allocation."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_worker_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Neutralize the unrelated worker-count env overrides.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+
+    def test_local_run_reserves_default_headroom_cpus(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Local (non-CI) run on a 32-CPU host leaves the default 2 CPUs free.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_RESERVED_CPUS", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(32)), raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 30
+
+    def test_ci_run_keeps_full_cpu_allocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CI hosts are dedicated, so no headroom is reserved there.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.setenv("CI", "1")
+        monkeypatch.delenv("PYTEST_XDIST_RESERVED_CPUS", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
+
+    def test_reserved_cpus_env_override_changes_headroom(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PYTEST_XDIST_RESERVED_CPUS overrides the default reserve.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "4")
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
+
+    def test_reserve_exceeding_cpus_floors_to_one_worker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reserve at or above the CPU count still yields one worker.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_RESERVED_CPUS", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1}, raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 1
+
+    def test_reserve_applies_to_cpu_term_not_memory_term(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When memory already clamps below CPUs, the reserve doesn't double-penalize.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_RESERVED_CPUS", raising=False)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(32)), raising=False)
+        files = {_MEMINFO: _meminfo(4 * 1024 * 1024), _V2_MEM: "max\n"}
+        with patch("builtins.open", side_effect=_make_open(files)):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 2
+
+    def test_invalid_reserve_env_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-integer reserve override is ignored, not fatal.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "lots")
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(8)), raising=False)
+        with patch("builtins.open", side_effect=_make_open({})):
+            assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 6
+
+    def test_negative_reserve_env_clamps_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A negative reserve can't inflate the worker count past the CPU allocation.
+
+        :param monkeypatch: Pytest monkeypatch fixture.
+        """
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_RESERVED_CPUS", "-3")
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
         with patch("builtins.open", side_effect=_make_open({})):
             assert pytest_xdist_auto_num_workers(cast("pytest.Config", None)) == 4
