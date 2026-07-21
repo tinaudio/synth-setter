@@ -145,6 +145,13 @@ class TestCommandModeReleaseReservation:
         )
         assert result.stdout == ""
 
+    def test_release_type_with_env_prefixed_inline_intent_passes(self) -> None:
+        """Check that release type with env prefixed inline intent passes."""
+        result = _run_command_mode(
+            'env RELEASE_INTENT=1 gh pr create --title "feat: ship the gate" --body "x"'
+        )
+        assert result.stdout == ""
+
     def test_release_type_with_ambient_intent_passes(self) -> None:
         """Check that release type with ambient intent passes."""
         result = _run_command_mode(

@@ -137,12 +137,16 @@ def _gated_titles_in_segment(tokens: list[str]) -> tuple[list[str], bool]:
     """
     intent = False
     index = 0
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
-        name, _, value = tokens[index].partition("=")
-        if name == "RELEASE_INTENT" and value == "1":
-            intent = True
-        index += 1
-    while index < len(tokens) and tokens[index] in _PREFIXES:
+    # Assignments and benign prefixes interleave (`env RELEASE_INTENT=1 gh …`),
+    # so skip both in one loop rather than two ordered passes.
+    while index < len(tokens):
+        token = tokens[index]
+        if "=" in token and not token.startswith("-"):
+            name, _, value = token.partition("=")
+            if name == "RELEASE_INTENT" and value == "1":
+                intent = True
+        elif token not in _PREFIXES:
+            break
         index += 1
     if index >= len(tokens) or tokens[index] != "gh":
         return [], intent
@@ -177,14 +181,21 @@ def check_command(command: str, root: pathlib.Path) -> list[str]:
         return []
     ambient_intent = os.environ.get("RELEASE_INTENT") == "1"
     findings: list[str] = []
+    # Config loads are deferred until a gated title is actually found, so the
+    # common non-gated command skips the .gitlint/pyproject reads entirely.
+    vocabulary: frozenset[str] | None = None
+    release_types: frozenset[str] | None = None
     for tokens in segments:
         titles, inline_intent = _gated_titles_in_segment(tokens)
         for title in titles:
+            if vocabulary is None or release_types is None:
+                vocabulary = load_vocabulary(root)
+                release_types = load_release_types(root)
             findings.extend(
                 check_title(
                     title,
-                    vocabulary=load_vocabulary(root),
-                    release_types=load_release_types(root),
+                    vocabulary=vocabulary,
+                    release_types=release_types,
                     release_intent=ambient_intent or inline_intent,
                 )
             )
@@ -208,9 +219,11 @@ def check_commit_msg(path: pathlib.Path, root: pathlib.Path) -> list[str]:
     )
     if not subject:
         return []
+    # Vocabulary is unread when enforce_vocabulary=False (gitlint owns it at
+    # this stage — including malformed subjects like `feat:x` with no space).
     return check_title(
         subject,
-        vocabulary=load_vocabulary(root),
+        vocabulary=frozenset(),
         release_types=load_release_types(root),
         release_intent=os.environ.get("RELEASE_INTENT") == "1",
         enforce_vocabulary=False,
