@@ -428,12 +428,13 @@ class TestHookReservesCpuHeadroom:
 
     @pytest.fixture(autouse=True)
     def _clear_worker_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Neutralize the unrelated worker-count env overrides.
+        """Neutralize the unrelated worker-count env overrides and the Darwin cap.
 
         :param monkeypatch: Pytest monkeypatch fixture.
         """
         monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
         monkeypatch.delenv("PYTEST_XDIST_WORKER_MEM_MB", raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
 
     def test_local_run_reserves_default_headroom_cpus(
         self, monkeypatch: pytest.MonkeyPatch
