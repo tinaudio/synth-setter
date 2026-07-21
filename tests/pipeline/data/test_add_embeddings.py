@@ -251,10 +251,13 @@ def test_add_embeddings_writes_searchable_columns_and_keeps_params(tmp_path: Pat
     assert "_distance" in hits.column_names
 
 
-def test_add_embeddings_default_bounds_batches_and_logs_progress(tmp_path: Path) -> None:
+def test_add_embeddings_default_bounds_batches_and_logs_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Default augmentation bounds UDF batches and reports completion.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
     """
     uri = str(tmp_path / "progress.lance")
     _audio_dataset(uri, 300)
@@ -264,6 +267,17 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(tmp_path: Path)
         encoded_batch_sizes.append(len(audio))
         return _fake_m2l(audio)
 
+    def run_udf_in_process(
+        dataset: lance.LanceDataset,
+        udf: Any,
+        *,
+        read_columns: list[str],
+        batch_size: int,
+    ) -> None:
+        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+            udf(batch)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", run_udf_in_process)
     with capture_logs() as logs:
         add_embeddings(
             lance.dataset(uri),
