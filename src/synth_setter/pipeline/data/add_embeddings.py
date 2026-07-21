@@ -329,8 +329,16 @@ def add_embeddings(
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
     if checkpoint_file is not None:
         # Only useful for resuming the just-committed run; Lance leaves deletion
-        # to the caller.
-        checkpoint_file.unlink(missing_ok=True)
+        # to the caller. The columns are committed, so a failed delete must not
+        # fail the run (a rerun would hit the existing-column guard).
+        try:
+            checkpoint_file.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "checkpoint_cleanup_failed",
+                checkpoint_file=str(checkpoint_file),
+                error=str(exc),
+            )
     logger.info(
         "wrote_embeddings",
         total_rows=total_rows,

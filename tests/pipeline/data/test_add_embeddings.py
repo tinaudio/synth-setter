@@ -421,6 +421,37 @@ def test_add_embeddings_checkpoint_resumes_interrupted_run_without_reencoding(
     np.testing.assert_allclose(m2l, _fake_m2l(audio))
 
 
+def test_add_embeddings_checkpoint_cleanup_failure_does_not_fail_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed checkpoint delete after commit is logged, not raised.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + checkpoint.
+    :param monkeypatch: Pytest fixture for breaking ``Path.unlink``.
+    """
+    uri = str(tmp_path / "cleanup.lance")
+    _audio_dataset(uri, 6)
+    checkpoint = tmp_path / "cleanup.ckpt"
+
+    def deny_unlink(self: Path, missing_ok: bool = False) -> None:
+        del missing_ok
+        raise PermissionError(f"unlink denied: {self}")
+
+    monkeypatch.setattr(Path, "unlink", deny_unlink)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            checkpoint_file=checkpoint,
+        )
+
+    assert any(entry["event"] == "checkpoint_cleanup_failed" for entry in logs)
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(uri).schema.names)
+
+
 def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
     """The functional API rejects a non-positive Lance UDF batch size.
 
