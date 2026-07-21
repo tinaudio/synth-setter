@@ -29,6 +29,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias
 
 import click
@@ -198,6 +199,7 @@ def add_embeddings(
     clap_dim: int = CLAP_EMBEDDING_DIM,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
     log_every_batch: bool = False,
+    checkpoint_file: Path | None = None,
     build_index: bool = True,
     num_partitions: int | None = None,
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
@@ -218,6 +220,10 @@ def add_embeddings(
         which Lance rewrites whole.
     :param log_every_batch: Emit an ``embedding_progress`` line for every UDF
         batch instead of only at row/time intervals.
+    :param checkpoint_file: Lance-managed cache of per-batch UDF outputs; a rerun
+        with the same file, dataset version, and ``batch_size`` skips already
+        encoded batches (cached batches bypass the UDF, so resumed-run progress
+        counts freshly encoded rows only). Deleted after a successful commit.
     :param build_index: Build an IVF_PQ index on ``clap`` after the column lands.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
@@ -274,7 +280,10 @@ def add_embeddings(
 
         return wrapper
 
-    @lance.batch_udf(output_schema=sample_output.schema)
+    @lance.batch_udf(
+        output_schema=sample_output.schema,
+        checkpoint_file=None if checkpoint_file is None else str(checkpoint_file),
+    )
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
         nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
         udf_started = time.monotonic()
@@ -318,6 +327,10 @@ def add_embeddings(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
+    if checkpoint_file is not None:
+        # Only useful for resuming the just-committed run; Lance leaves deletion
+        # to the caller.
+        checkpoint_file.unlink(missing_ok=True)
     logger.info(
         "wrote_embeddings",
         total_rows=total_rows,
@@ -486,6 +499,15 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     help="Rows per UDF call (ignored for v1 datasets).",
 )
 @click.option(
+    "--checkpoint-file",
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    default=None,
+    help=(
+        "Cache per-batch encoder outputs here; rerunning with the same file "
+        "resumes an interrupted run. Deleted on success."
+    ),
+)
+@click.option(
     "--build-index/--no-build-index",
     default=True,
     show_default=True,
@@ -516,6 +538,7 @@ def main(
     clap_checkpoint: str,
     device: str | None,
     batch_size: int,
+    checkpoint_file: Path | None,
     build_index: bool,
     num_partitions: int | None,
     num_sub_vectors: int,
@@ -534,6 +557,8 @@ def main(
     :param clap_checkpoint: HuggingFace CLAP model id.
     :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
     :param batch_size: Rows per UDF call.
+    :param checkpoint_file: Optional per-batch output cache enabling resume of an
+        interrupted run; deleted after a successful commit.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
@@ -571,6 +596,7 @@ def main(
             sample_rate,
             batch_size=batch_size,
             log_every_batch=debug,
+            checkpoint_file=checkpoint_file,
             build_index=build_index,
             num_partitions=num_partitions,
             num_sub_vectors=num_sub_vectors,
