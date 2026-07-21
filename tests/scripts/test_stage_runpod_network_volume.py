@@ -60,9 +60,32 @@ def test_stage_script_copies_checksums_and_marks_complete(tmp_path: Path) -> Non
         f"copy --immutable --checksum r2:bucket/finalized-dataset/ {destination}",
         f"check --one-way --checksum r2:bucket/finalized-dataset/ {destination}",
     ]
-    assert (destination / ".synth-setter-stage-complete").read_text() == (
-        "r2://bucket/finalized-dataset/\n"
+    assert (destination / ".synth-setter-stage-complete").read_bytes() == b""
+
+
+def test_stage_script_remote_root_source_is_rejected(tmp_path: Path) -> None:
+    """A remote root cannot be mistaken for one versioned dataset prefix.
+
+    :param tmp_path: Temporary stub-bin and destination parent.
+    """
+    call_log = _write_rclone_stub(tmp_path)
+    destination = tmp_path / "network-volume" / "dataset"
+
+    result = subprocess.run(  # noqa: S603 - fixed shell and repository script
+        ["/bin/bash", str(_SCRIPT), "r2://", str(destination)],
+        cwd=_REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RCLONE_CALL_LOG": str(call_log),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
     )
+
+    assert result.returncode == 2
+    assert not call_log.exists()
 
 
 def test_stage_script_failed_check_leaves_dataset_unmarked(tmp_path: Path) -> None:

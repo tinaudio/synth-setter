@@ -5,6 +5,14 @@ set -euo pipefail
 
 readonly COMPLETION_MARKER=".synth-setter-stage-complete"
 
+#######################################
+# Copy and validate one R2 dataset prefix before publishing its marker.
+# Arguments:
+#   R2 dataset URI containing a bucket and key.
+#   Destination directory on the mounted network volume.
+# Returns:
+#   2 when the arguments do not identify one dataset prefix.
+#######################################
 main() {
   if (( $# != 2 )); then
     echo "Usage: $0 <r2://source/> <destination-directory>" >&2
@@ -13,8 +21,8 @@ main() {
 
   local source_uri="$1"
   local destination="$2"
-  if [[ "${source_uri}" != r2://* ]]; then
-    echo "Dataset source must use r2://: ${source_uri}" >&2
+  if [[ ! "${source_uri}" =~ ^r2://[^/]+/.+ ]]; then
+    echo "Dataset source must include an r2:// bucket and key: ${source_uri}" >&2
     return 2
   fi
 
@@ -23,7 +31,7 @@ main() {
   rm -f "${destination}/${COMPLETION_MARKER}"
   rclone copy --immutable --checksum "${source_path}" "${destination}"
   rclone check --one-way --checksum "${source_path}" "${destination}"
-  printf '%s\n' "${source_uri}" > "${destination}/${COMPLETION_MARKER}"
+  : > "${destination}/${COMPLETION_MARKER}"
 }
 
 main "$@"

@@ -631,7 +631,7 @@ docs:
 
   # ── RunPod dataset network volume ───────────────────────────────
   - doc: docs/operations/runpod-network-volume.md
-    description: Create, stage, validate, and consume the persistent RunPod dataset cache
+    description: Persistent RunPod dataset cache operations
     sources:
       - pattern: "scripts/stage_runpod_network_volume.sh"
         covers: "Restartable checksum copy from R2 and post-copy completion marker"
