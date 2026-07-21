@@ -45,7 +45,7 @@ class _TinyEncoder(torch.nn.Module):
 
 
 class _FakeBatchDataset(Dataset):
-    """Four fixed random samples shaped like the VST datamodule's batches."""
+    """Fixed random samples shaped like the VST datamodule's batches."""
 
     def __init__(self, num_params: int) -> None:
         """Materialize the fixed samples.

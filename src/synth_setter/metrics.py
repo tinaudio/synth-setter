@@ -3,6 +3,7 @@
 import itertools
 import re
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import torch
 from scipy.optimize import linear_sum_assignment
@@ -180,7 +181,7 @@ class PartitionedLinearAssignmentDistance(Metric):
     fits the target better.
     """
 
-    def __init__(self, groups: list[list[list[int]]], num_params: int, **kwargs):
+    def __init__(self, groups: list[list[list[int]]], num_params: int, **kwargs: Any) -> None:
         """Validate the partition and register the squared-error accumulator states.
 
         :param groups: Interchangeable groups of aligned encoded-index blocks
@@ -188,8 +189,8 @@ class PartitionedLinearAssignmentDistance(Metric):
             and within ``num_params``.
         :param num_params: Width of the parameter vectors passed to ``update``.
         :param **kwargs: Forwarded to :class:`torchmetrics.Metric`.
-        :raises ValueError: If group indices overlap, fall outside ``num_params``,
-            or blocks within a group have unequal sizes.
+        :raises ValueError: If group indices repeat, overlap, fall outside
+            ``num_params``, or blocks within a group have unequal sizes.
         """
         super().__init__(**kwargs)
         self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
@@ -201,6 +202,8 @@ class PartitionedLinearAssignmentDistance(Metric):
                 raise ValueError(f"blocks within a group must share one size, got {group}")
             for block in group:
                 indices = set(block)
+                if len(indices) != len(block):
+                    raise ValueError(f"block repeats indices: {block}")
                 if indices & seen:
                     raise ValueError(f"group indices overlap: {sorted(indices & seen)}")
                 if not indices <= set(range(num_params)):
@@ -213,18 +216,20 @@ class PartitionedLinearAssignmentDistance(Metric):
         self.fixed_indices = torch.tensor(sorted(set(range(num_params)) - seen), dtype=torch.long)
         self.num_params = num_params
 
-    def update(self, predicted: torch.Tensor, target: torch.Tensor):
+    def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
         """Accumulate the batch's permutation-optimal squared error.
 
         :param predicted: ``(batch, num_params)`` predictions.
-        :param target: ``(batch, num_params)`` targets.
-        :raises ValueError: If either tensor's width differs from ``num_params``.
+        :param target: ``(batch, num_params)`` targets, shaped like ``predicted``.
+        :raises ValueError: If the tensors are not equal-shaped ``(batch, num_params)``.
         """
-        if predicted.shape[-1] != self.num_params or target.shape[-1] != self.num_params:
+        if predicted.ndim != 2 or predicted.shape != target.shape:
             raise ValueError(
-                f"expected width {self.num_params}, got predicted {predicted.shape[-1]} "
-                f"/ target {target.shape[-1]}"
+                f"expected equal (batch, num_params) shapes, got predicted "
+                f"{tuple(predicted.shape)} / target {tuple(target.shape)}"
             )
+        if predicted.shape[1] != self.num_params:
+            raise ValueError(f"expected width {self.num_params}, got {predicted.shape[1]}")
         squared_error = (predicted - target).square()
         total = squared_error[:, self.fixed_indices.to(predicted.device)].sum()
 
@@ -243,7 +248,7 @@ class PartitionedLinearAssignmentDistance(Metric):
         self.sum_squared_error += total
         self.element_count += predicted.shape[0] * predicted.shape[1]
 
-    def compute(self):
+    def compute(self) -> torch.Tensor:
         """Mean permutation-optimal squared error over all accumulated elements.
 
         :returns: Scalar tensor, comparable to a plain elementwise MSE.

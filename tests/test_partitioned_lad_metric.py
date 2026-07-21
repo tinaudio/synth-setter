@@ -37,7 +37,7 @@ class TestDeriveInterchangeableGroups:
         groups = derive_interchangeable_groups(names)
 
         block_shapes = sorted((len(group), len(group[0])) for group in groups)
-        # osc: 3 blocks x 7 params, filter: 2 x 3, lfo: 5 x 9 (lfo_6 differs and is excluded).
+        # lfo_6 lacks phase/rate, so only lfo_1..5 group.
         assert block_shapes == [(2, 3), (3, 7), (5, 9)]
 
     def test_derive_groups_surge_simple_spec_aligns_blocks_by_suffix(self) -> None:
@@ -98,9 +98,9 @@ class TestPartitionedLinearAssignmentDistance:
     """Permutation-optimal MSE semantics of the metric."""
 
     def _two_block_metric(self) -> PartitionedLinearAssignmentDistance:
-        """Build a metric over 6 params: blocks [0,1] / [2,3] interchangeable, [4,5] fixed.
+        """Build a 6-param metric with one interchangeable 2-block group.
 
-        :returns: Metric instance with one 2-block group.
+        :returns: Metric instance; the last two params stay order-fixed.
         """
         return PartitionedLinearAssignmentDistance(groups=[[[0, 1], [2, 3]]], num_params=6)
 
@@ -154,6 +154,45 @@ class TestPartitionedLinearAssignmentDistance:
         metric.update(torch.tensor([[0.0, 0.0]]), torch.zeros(1, 2))
 
         assert metric.compute() == pytest.approx(0.5)
+
+    def test_update_matches_blocks_independently_per_sample(self) -> None:
+        """A batch mixing a swapped and an identity sample still scores zero."""
+        metric = self._two_block_metric()
+        target = torch.tensor(
+            [
+                [1.0, 2.0, -1.0, -2.0, 0.0, 0.0],
+                [1.0, 2.0, -1.0, -2.0, 0.0, 0.0],
+            ]
+        )
+        prediction = torch.tensor(
+            [
+                [-1.0, -2.0, 1.0, 2.0, 0.0, 0.0],
+                [1.0, 2.0, -1.0, -2.0, 0.0, 0.0],
+            ]
+        )
+
+        metric.update(prediction, target)
+
+        assert metric.compute() == pytest.approx(0.0)
+
+    def test_update_wrong_width_raises_value_error(self) -> None:
+        """A width mismatch against ``num_params`` is rejected."""
+        metric = self._two_block_metric()
+
+        with pytest.raises(ValueError, match="width"):
+            metric.update(torch.zeros(1, 5), torch.zeros(1, 5))
+
+    def test_update_mismatched_shapes_raise_value_error(self) -> None:
+        """Unequal prediction/target shapes are rejected."""
+        metric = self._two_block_metric()
+
+        with pytest.raises(ValueError, match="shape"):
+            metric.update(torch.zeros(2, 6), torch.zeros(1, 6))
+
+    def test_init_duplicate_index_within_block_raises_value_error(self) -> None:
+        """A block repeating an index is rejected at construction."""
+        with pytest.raises(ValueError, match="repeats"):
+            PartitionedLinearAssignmentDistance(groups=[[[0, 0], [1, 2]]], num_params=4)
 
     def test_init_overlapping_group_indices_raises_value_error(self) -> None:
         """Overlapping block indices are rejected at construction."""

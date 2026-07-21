@@ -45,6 +45,37 @@ def rk4_with_cfg(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
+def _build_param_lad_metric(
+    param_spec_name: str | None, num_params: int
+) -> PartitionedLinearAssignmentDistance | None:
+    """Build the partition-aware LAD metric when the spec yields a valid partition.
+
+    :param param_spec_name: Registry spec name; ``None`` disables the metric.
+    :param num_params: Parameter-vector width the module operates on.
+    :returns: Metric instance, or ``None`` when disabled or when the spec has
+        no interchangeable blocks (the metric would degenerate to plain MSE).
+    :raises ValueError: If the spec's encoded width differs from ``num_params``.
+    """
+    if param_spec_name is None:
+        return None
+    # Deferred import: at module scope it would pull synth_setter.data.vst into model
+    # import (forbidden per tests/models/test_vst_module_aliases.py).
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec  # noqa: PLC0415
+    from synth_setter.param_spec_name import ParamSpecName  # noqa: PLC0415
+
+    spec = resolve_param_spec(ParamSpecName(param_spec_name))
+    if spec.encoded_width != num_params:
+        raise ValueError(
+            f"spec {param_spec_name!r} encoded width {spec.encoded_width} "
+            f"!= num_params {num_params}"
+        )
+    widths = [len(p) for p in spec.synth_params + spec.note_params]
+    groups = derive_interchangeable_groups(spec.names, widths)
+    if not groups:
+        return None
+    return PartitionedLinearAssignmentDistance(groups=groups, num_params=num_params)
+
+
 class VSTFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
@@ -96,42 +127,8 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
 
-        self.val_param_lad = self._build_param_lad_metric(param_spec_name, num_params)
-        self.test_param_lad = self._build_param_lad_metric(param_spec_name, num_params)
-
-    @staticmethod
-    def _build_param_lad_metric(
-        param_spec_name: str | None, num_params: int
-    ) -> PartitionedLinearAssignmentDistance | None:
-        """Build the partition-aware LAD metric when the spec yields a valid partition.
-
-        :param param_spec_name: Registry spec name; ``None`` disables the metric.
-        :param num_params: Parameter-vector width the module operates on.
-        :returns: Metric instance, or ``None`` when disabled or when the spec has
-            no interchangeable blocks (the metric would degenerate to plain MSE).
-        :raises ValueError: If the spec's encoded width differs from ``num_params``.
-        """
-        if param_spec_name is None:
-            return None
-        # Deferred: importing the registry at module scope would initialize the
-        # synth_setter.data.vst package on model import (pinned as forbidden in
-        # tests/models/test_vst_module_aliases.py).
-        from synth_setter.data.vst.param_spec_registry import (  # noqa: PLC0415
-            resolve_param_spec,
-        )
-        from synth_setter.param_spec_name import ParamSpecName  # noqa: PLC0415
-
-        spec = resolve_param_spec(ParamSpecName(param_spec_name))
-        widths = [len(p) for p in spec.synth_params + spec.note_params]
-        if spec.encoded_width != num_params:
-            raise ValueError(
-                f"spec {param_spec_name!r} encoded width {spec.encoded_width} "
-                f"!= num_params {num_params}"
-            )
-        groups = derive_interchangeable_groups(spec.names, widths)
-        if not groups:
-            return None
-        return PartitionedLinearAssignmentDistance(groups=groups, num_params=num_params)
+        self.val_param_lad = _build_param_lad_metric(param_spec_name, num_params)
+        self.test_param_lad = _build_param_lad_metric(param_spec_name, num_params)
 
     def on_train_start(self):
         pass
