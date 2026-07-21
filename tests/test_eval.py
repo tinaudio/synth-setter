@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import wandb
+from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -32,6 +33,7 @@ from omegaconf.errors import InterpolationResolutionError
 from pedalboard.io import AudioFile
 
 from synth_setter.cli.eval import evaluate
+from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -586,6 +588,59 @@ def test_evaluate_loads_compiled_cpu_training_checkpoint(
     with open_dict(cfg_eval):
         cfg_eval.ckpt_path = str(checkpoint_path)
     HydraConfig().set_config(cfg_eval)
+    metrics, _ = evaluate(cfg_eval)
+
+    assert math.isfinite(metrics["test/loss"].item())
+
+
+def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
+    tmp_path: Path,
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+) -> None:
+    """A legacy ``_orig_mod`` checkpoint fails with the migration command, which fixes it.
+
+    :param tmp_path: Shared training and evaluation output directory.
+    :param cfg_train: Tiny KSin CPU training configuration.
+    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    """
+    for cfg in (cfg_train, cfg_eval):
+        with open_dict(cfg):
+            cfg.datamodule.signal_length = 64
+            cfg.model.net.channels = 2
+            cfg.model.net.encoder_blocks = 1
+            cfg.model.net.hidden_dim = 8
+            cfg.model.net.norm = "ln"
+            cfg.model.net.trunk_blocks = 1
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint["state_dict"] = {
+        (f"net._orig_mod.{key.removeprefix('net.')}" if key.startswith("net.") else key): value
+        for key, value in checkpoint["state_dict"].items()
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg_eval)
+    with pytest.raises(RuntimeError, match="synth-setter-migrate-checkpoint"):
+        evaluate(cfg_eval)
+
+    migrated_path = tmp_path / "checkpoints" / "last.migrated.ckpt"
+    result = CliRunner().invoke(main, [str(checkpoint_path), str(migrated_path)])
+    assert result.exit_code == 0, result.output
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(migrated_path)
     metrics, _ = evaluate(cfg_eval)
 
     assert math.isfinite(metrics["test/loss"].item())
