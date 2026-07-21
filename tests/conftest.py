@@ -139,8 +139,8 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT Lance dataset is structurally sound.
 
     Verifies the three required columns exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
-    failures here rather than letting downstream training crash on opaque NaN losses.
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
+    those failures here rather than letting downstream training crash on opaque NaN losses.
     """
     import lance
 
@@ -1473,6 +1473,29 @@ def _cgroup_aware_cpu_count() -> int:
 _DEFAULT_WORKER_MEM_MB = 2048
 _LOCAL_DARWIN_XDIST_WORKERS = 4
 
+# CPUs left free on local (non-CI) runs so the host stays responsive while the
+# suite runs (#2274); override via PYTEST_XDIST_RESERVED_CPUS.
+_DEFAULT_RESERVED_CPUS = 2
+
+
+def _reserved_cpu_count() -> int:
+    """Return how many CPUs the ``-n auto`` clamp must leave unused.
+
+    ``PYTEST_XDIST_RESERVED_CPUS`` wins when set (invalid values fall back to
+    the default); otherwise CI hosts reserve nothing — they are dedicated —
+    and local runs reserve the default headroom.
+
+    :returns: Non-negative CPU count to subtract from the CPU term.
+    """
+    raw_reserve = os.environ.get("PYTEST_XDIST_RESERVED_CPUS")
+    if raw_reserve:
+        try:
+            return max(0, int(raw_reserve))
+        except ValueError:
+            pass  # non-integer override -> ignore and fall through to the defaults
+    return 0 if os.environ.get("CI") else _DEFAULT_RESERVED_CPUS
+
+
 # A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
 _MEM_UNLIMITED_SENTINEL = 1 << 62
 
@@ -1583,8 +1606,8 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
     hook wins the ``firstresult`` race. A non-integer or empty pin is ignored,
-    not fatal. Otherwise returns ``min(cpu, memory)`` and applies the local
-    Darwin worker cap so nested ML multiprocessing retains interactive headroom.
+    not fatal. Otherwise returns ``min(cpu - reserved, memory)`` and applies the
+    local Darwin worker cap so nested ML multiprocessing retains interactive headroom.
 
     :param config: The pytest config object (unused; required by the hook signature).
     :returns: Worker count clamped to the host's real CPU and memory allocation.
@@ -1595,7 +1618,7 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
             return max(1, int(env_override))
         except ValueError:
             pass  # non-integer pin -> ignore and fall through to the adaptive clamps
-    cpu_workers = _cgroup_aware_cpu_count()
+    cpu_workers = max(1, _cgroup_aware_cpu_count() - _reserved_cpu_count())
     mem_workers = _memory_aware_worker_count()
     allocated_workers = cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
     if sys.platform == "darwin" and not os.environ.get("CI"):
