@@ -670,7 +670,6 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
 
 
 @pytest.mark.slow
-@pytest.mark.slow
 def test_main_checkpoint_file_option_completes_and_cleans_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -703,6 +702,7 @@ def test_main_checkpoint_file_option_completes_and_cleans_up(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
+@pytest.mark.slow
 def test_main_threads_device_and_debug_options_to_embedding_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
