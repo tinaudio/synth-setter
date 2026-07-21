@@ -365,18 +365,7 @@ def add_embeddings(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
-    if resume_cache is not None:
-        # Only useful for resuming the just-committed run; Lance leaves deletion
-        # to the caller. The columns are committed, so a failed delete must not
-        # fail the run (a rerun would hit the existing-column guard).
-        try:
-            resume_cache.unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning(
-                "resume_cache_cleanup_failed",
-                resume_cache=str(resume_cache),
-                error=str(exc),
-            )
+    _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",
         total_rows=total_rows,
@@ -465,12 +454,34 @@ def same_record_batch(
     return pa.record_batch(columns)
 
 
+def _delete_resume_cache(resume_cache: Path | None) -> None:
+    """Delete a consumed resume cache after a successful column commit.
+
+    Only useful for resuming the just-committed run; Lance leaves deletion to
+    the caller. The columns are committed, so a failed delete must not fail the
+    run (a rerun would hit the existing-column guard).
+
+    :param resume_cache: Cache path to remove, or ``None`` for cacheless runs.
+    """
+    if resume_cache is None:
+        return
+    try:
+        resume_cache.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "resume_cache_cleanup_failed",
+            resume_cache=str(resume_cache),
+            error=str(exc),
+        )
+
+
 def add_same_embeddings(
     dataset: lance.LanceDataset,
     encoders: Mapping[str, SameEncodeFn],
     sample_rate: int,
     *,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
+    resume_cache: Path | None = None,
 ) -> None:
     """Append fixed-shape SAME latent columns to ``dataset``.
 
@@ -484,6 +495,9 @@ def add_same_embeddings(
     :param sample_rate: Dataset audio sample rate in Hz.
     :param batch_size: Rows per UDF call. Ignored for legacy (v1) Lance datasets,
         which Lance rewrites whole.
+    :param resume_cache: Lance-managed resume cache of per-batch UDF outputs; a
+        rerun with the same file, dataset version, and ``batch_size`` skips
+        already encoded batches. Deleted after a successful commit.
     :raises ValueError: ``encoders`` is empty, a target column already exists,
         the ``audio`` column is absent, the dataset is empty, or
         ``batch_size < 1``.
@@ -514,7 +528,10 @@ def add_same_embeddings(
     rows_processed = 0
     started_at = time.monotonic()
 
-    @lance.batch_udf(output_schema=sample_output.schema)
+    @lance.batch_udf(
+        output_schema=sample_output.schema,
+        checkpoint_file=None if resume_cache is None else str(resume_cache),
+    )
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
         nonlocal next_progress_row, rows_processed
         audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
@@ -534,6 +551,7 @@ def add_same_embeddings(
         return output
 
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
+    _delete_resume_cache(resume_cache)
 
 
 def _configure_lance_logging(*, debug: bool) -> None:
@@ -735,6 +753,7 @@ def _run_same_mode(
     sample_rate: int,
     device: str | None,
     batch_size: int,
+    resume_cache: Path | None,
 ) -> None:
     """Drive the SAME-only CLI mode: load encoders, append columns, exit on failure.
 
@@ -744,6 +763,8 @@ def _run_same_mode(
     :param sample_rate: Dataset audio sample rate in Hz.
     :param device: Torch device for the encoders; ``None`` auto-selects.
     :param batch_size: Rows per UDF call.
+    :param resume_cache: Optional per-batch output cache enabling resume of an
+        interrupted run; deleted after a successful commit.
     """
     existing = set(checkpoints) & set(dataset.schema.names)
     if existing:
@@ -762,7 +783,9 @@ def _run_same_mode(
             field: load_same_audio_encoder(checkpoint, device)
             for field, checkpoint in checkpoints.items()
         }
-        add_same_embeddings(dataset, encoders, sample_rate, batch_size=batch_size)
+        add_same_embeddings(
+            dataset, encoders, sample_rate, batch_size=batch_size, resume_cache=resume_cache
+        )
     # Encoder load (missing dep / weights) or the add step (validation, Lance,
     # CUDA) should exit cleanly with a logged cause, not a raw CLI traceback.
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
@@ -929,6 +952,7 @@ def main(
             sample_rate=sample_rate,
             device=device,
             batch_size=batch_size,
+            resume_cache=resume_cache,
         )
         return
     existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)

@@ -498,3 +498,51 @@ def test_main_same_mode_loader_failure_exits_1(
 
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_add_same_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(
+    tmp_path: Path,
+) -> None:
+    """A rerun with the same resume cache skips SAME batches encoded before a crash.
+
+    :param tmp_path: Per-test dataset + resume-cache root.
+    """
+    uri = tmp_path / "resume.lance"
+    _audio_dataset(uri, rows=6)
+    resume_cache = tmp_path / "resume.cache"
+    first_run_batches: list[int] = []
+    second_run_batches: list[int] = []
+
+    def crash_on_third_batch(stereo: np.ndarray) -> np.ndarray:
+        first_run_batches.append(len(stereo))
+        if len(first_run_batches) == 3:
+            raise RuntimeError("simulated crash")
+        return _fake_same(0.5)(stereo)
+
+    # Lance surfaces UDF exceptions wrapped as OSError("Invalid user input: ...").
+    with pytest.raises(OSError, match="simulated crash"):
+        add_same_embeddings(
+            lance.dataset(str(uri)),
+            {SAME_S_FIELD: crash_on_third_batch},
+            SAME_SAMPLE_RATE,
+            batch_size=2,
+            resume_cache=resume_cache,
+        )
+    assert resume_cache.exists()
+
+    def count_batches(stereo: np.ndarray) -> np.ndarray:
+        second_run_batches.append(len(stereo))
+        return _fake_same(0.5)(stereo)
+
+    add_same_embeddings(
+        lance.dataset(str(uri)),
+        {SAME_S_FIELD: count_batches},
+        SAME_SAMPLE_RATE,
+        batch_size=2,
+        resume_cache=resume_cache,
+    )
+
+    assert len(second_run_batches) < len(first_run_batches) + 3
+    reopened = lance.dataset(str(uri))
+    assert SAME_S_FIELD in reopened.schema.names
+    assert not resume_cache.exists()
