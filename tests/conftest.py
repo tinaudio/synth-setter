@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,8 +140,8 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT Lance dataset is structurally sound.
 
     Verifies the three required columns exist with the expected shapes, that no NaN/Inf leaked in
-    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface
-    those failures here rather than letting downstream training crash on opaque NaN losses.
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
+    failures here rather than letting downstream training crash on opaque NaN losses.
     """
     import lance
 
@@ -1472,6 +1473,60 @@ def _cgroup_aware_cpu_count() -> int:
 # PYTEST_XDIST_WORKER_MEM_MB); 2 GiB = measured peak RSS per worker slot (#1646).
 _DEFAULT_WORKER_MEM_MB = 2048
 _LOCAL_DARWIN_XDIST_WORKERS = 4
+
+# Wall-clock budget for the whole session (seconds); each Makefile lane pins its
+# own value (#2274) so a silently degraded run fails loudly instead of crawling.
+_SESSION_BUDGET_ENV = "PYTEST_SESSION_BUDGET_SECONDS"
+
+# Stored on the session object (not a module global) so unit tests driving fake
+# sessions through these hooks can't corrupt the live session's own budget.
+_SESSION_BUDGET_START_ATTR = "_synth_setter_session_budget_start"
+
+
+def _session_budget_seconds() -> float | None:
+    """Parse the session budget env var, failing open on anything non-positive.
+
+    :returns: Budget in seconds, or None when unset, malformed, or <= 0.
+    """
+    raw_budget = os.environ.get(_SESSION_BUDGET_ENV)
+    if not raw_budget:
+        return None
+    try:
+        budget = float(raw_budget)
+    except ValueError:
+        return None
+    return budget if budget > 0 else None
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Record the controller's session start time for budget enforcement.
+
+    :param session: The pytest session being started.
+    """
+    if hasattr(session.config, "workerinput"):
+        return  # xdist worker: only the controller owns the wall clock
+    setattr(session, _SESSION_BUDGET_START_ATTR, time.monotonic())
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail an otherwise-green session that blew its wall-clock budget.
+
+    :param session: The finishing pytest session; its exitstatus may be raised to 1.
+    :param exitstatus: Exit status the run would report; nonzero values are preserved.
+    """
+    if hasattr(session.config, "workerinput") or exitstatus != 0:
+        return
+    budget = _session_budget_seconds()
+    budget_start = getattr(session, _SESSION_BUDGET_START_ATTR, None)
+    if budget is None or budget_start is None:
+        return
+    elapsed = time.monotonic() - budget_start
+    if elapsed > budget:
+        sys.stderr.write(
+            f"\nERROR: session budget exceeded: {elapsed:.1f}s > {_SESSION_BUDGET_ENV}={budget}s\n"
+        )
+        session.exitstatus = 1
+
 
 # CPUs left free on local (non-CI) runs so the host stays responsive while the
 # suite runs (#2274); override via PYTEST_XDIST_RESERVED_CPUS.
