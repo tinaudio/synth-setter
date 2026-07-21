@@ -348,15 +348,28 @@ class TestLanceMapDataModuleSetup:
 
         assert (destination / "stats.npz").read_bytes() == b"stats"
 
-    def test_prepare_data_hydrates_dataset_root_from_file_uri(self, tmp_path: Path) -> None:
-        """A mounted directory hydrates pod-local storage without R2 credentials.
+    def test_prepare_data_hydrates_dataset_root_from_file_uri(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mounted directory dispatches hydration without R2 credentials.
 
         :param tmp_path: Parent of the mounted source and local destination.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
         """
         source = tmp_path / "network-volume"
         source.mkdir()
-        (source / "stats.npz").write_bytes(b"stats")
         destination = tmp_path / "local-ssd"
+
+        def hydrate(source_uri: str, dest_path: Path) -> None:
+            assert source_uri == source.as_uri()
+            assert dest_path == destination
+            dest_path.mkdir()
+            (dest_path / "stats.npz").write_bytes(b"stats")
+
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            hydrate,
+        )
         module = LanceVSTDataModule(
             dataset_root=destination,
             download_dataset_root_uri=source.as_uri(),

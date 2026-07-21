@@ -467,9 +467,12 @@ class TestDownloadDirNoOverwrite:
         assert (dest / "train.lance").read_text() == "train"
         assert (dest / "stats.npz").read_text() == "stats"
 
-    def test_lands_file_uri_tree_under_dest_dir(self, tmp_path: Path) -> None:
+    def test_lands_file_uri_tree_under_dest_dir(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
         """Every file under a local URI is copied into ``dest_path``.
 
+        :param fake_r2_remote: Fixture that requires and configures the rclone binary.
         :param tmp_path: Pytest tmp dir holding the source and destination trees.
         """
         source = tmp_path / "network volume"
