@@ -834,7 +834,7 @@ def _make_fake_worker_runtime(tmp_path: Path, trace: Path) -> Path:
     return fake_bin
 
 
-def test_main_skypilot_env_file_authenticates_before_submission(
+def test_main_skypilot_env_file_endpoint_active_at_submission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The generate-dataset CLI carries env-file auth through real dispatch.
@@ -842,8 +842,6 @@ def test_main_skypilot_env_file_authenticates_before_submission(
     :param tmp_path: Hosts the compute template, dotenv source, and Hydra output.
     :param monkeypatch: Isolates storage and external SkyPilot service boundaries.
     """
-    from sky.server import common as server_common
-
     import synth_setter.cli.generate_dataset as generate_dataset_cli
     import synth_setter.pipeline.skypilot_launch as skypilot_launch
 
@@ -876,13 +874,13 @@ def test_main_skypilot_env_file_authenticates_before_submission(
         MagicMock(return_value=None),
     )
 
-    auth_response = MagicMock()
-    auth_response.json.return_value = []
-    auth_request = MagicMock(return_value=auth_response)
-    monkeypatch.setattr(server_common, "make_authenticated_request", auth_request)
-
     fake_sky = MagicMock()
-    fake_sky.jobs.launch.return_value = "launch-req"
+
+    def assert_env_file_endpoint_is_active(*_args: object, **_kwargs: object) -> str:
+        assert os.environ["SKYPILOT_API_SERVER_ENDPOINT"] == "https://sky.example.com"
+        return "launch-req"
+
+    fake_sky.jobs.launch.side_effect = assert_env_file_endpoint_is_active
     fake_sky.stream_and_get.return_value = ([1], MagicMock())
     monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
     monkeypatch.setattr(
@@ -901,7 +899,6 @@ def test_main_skypilot_env_file_authenticates_before_submission(
 
     task_doc = fake_sky.Task.from_yaml_config.call_args.args[0]
     assert f"skypilot_launch.env_file={env_file}" in task_doc["run"]
-    auth_request.assert_called_once()
     fake_sky.jobs.launch.assert_called_once()
 
 

@@ -8,46 +8,18 @@ resolved separately via ``resolve_worker_env``.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
-from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
 ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
-SKYPILOT_CLIENT_AUTH_ENV_KEYS: Final[tuple[str, ...]] = (
-    ENV_SKYPILOT_API_SERVER_ENDPOINT,
-    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
-)
 
 _ENV_IDENT_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-
-
-def _clean(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return value.strip() or None
-
-
-def _client_settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
-    candidates: dict[str, str | None] = {}
-    if env_file is not None and env_file.is_file():
-        candidates.update(dotenv_values(env_file))
-
-    kwargs: dict[str, str] = {}
-    for env_key in SKYPILOT_CLIENT_AUTH_ENV_KEYS:
-        field_name = env_key.removeprefix("SKYPILOT_").lower()
-        for source in (candidates, os.environ):
-            value = _clean(source.get(env_key))
-            if value is not None:
-                kwargs[field_name] = value
-                break
-    return kwargs
 
 
 class SkypilotClientSettings(BaseSettings):
@@ -78,22 +50,41 @@ class SkypilotClientSettings(BaseSettings):
     api_server_endpoint: str | None = None
     service_account_token: SecretStr | None = None
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Rank the launcher's configured env_file above ambient process env.
+
+        :param settings_cls: Settings class being constructed.
+        :param init_settings: Explicit constructor arguments.
+        :param env_settings: Process-environment source.
+        :param dotenv_settings: Configured ``env_file`` source.
+        :param file_secret_settings: Unused secrets-directory source.
+        :returns: Sources ordered by descending priority.
+        """
+        return (init_settings, dotenv_settings, env_settings)
+
     @field_validator("api_server_endpoint")
     @classmethod
     def _endpoint_is_http_url(cls, value: str | None) -> str | None:
         """Require a remote endpoint to use HTTP(S) and name a host.
 
         :param value: Candidate SkyPilot API server endpoint.
-        :returns: Stripped endpoint, if configured.
+        :returns: Validated endpoint, if configured.
         :raises ValueError: The endpoint is not an HTTP(S) URL with a host.
         """
         if value is None:
             return None
-        endpoint = value.strip()
-        parsed = urlsplit(endpoint)
+        parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
             raise ValueError("must be an HTTP(S) URL with a host")
-        return endpoint
+        return value
 
     @field_validator("service_account_token")
     @classmethod
@@ -144,10 +135,11 @@ def skypilot_client_settings_from_sources(
     :param api_server_endpoint: Optional launch-config endpoint override.
     :returns: Validated SkyPilot client settings.
     """
-    kwargs = _client_settings_kwargs_from_sources(env_file)
+    overrides: dict[str, str] = {}
     if api_server_endpoint is not None:
-        kwargs["api_server_endpoint"] = api_server_endpoint
-    return SkypilotClientSettings.model_validate(kwargs)
+        overrides["api_server_endpoint"] = api_server_endpoint
+    # Pydantic's synthesized __init__ hides BaseSettings' runtime `_env_file` kwarg.
+    return SkypilotClientSettings(_env_file=env_file, **overrides)  # pyright: ignore[reportCallIssue]
 
 
 class SkypilotLaunchConfig(BaseModel):

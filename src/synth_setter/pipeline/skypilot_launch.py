@@ -53,7 +53,6 @@ import functools
 import os
 import re
 import subprocess
-import threading
 import tomllib
 import uuid
 from collections.abc import Callable, Mapping
@@ -61,7 +60,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
-import requests
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
@@ -78,7 +76,6 @@ from synth_setter.pipeline.schemas.object_storage import (
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
     ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
-    SKYPILOT_CLIENT_AUTH_ENV_KEYS,
     SkypilotClientSettings,
     SkypilotLaunchConfig,
     skypilot_client_settings_from_sources,
@@ -140,9 +137,6 @@ DEFAULT_ENV_FILE = _OPERATOR_WORKSPACE / ".env"
 # controller pod fits on GHA-kind. Operator local-dev leaves this unset.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
 _CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
-_SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS = 5.0
-_SKYPILOT_AUTH_READ_TIMEOUT_SECONDS = 30.0
-_SKYPILOT_DISPATCH_LOCK = threading.Lock()
 
 # SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in GHA-kind's
 # ~1950m allocatable CPU after kube-system. See PR #876.
@@ -336,81 +330,20 @@ def _reset_skypilot_client_cache() -> None:
     server_common.is_api_server_local.cache_clear()
 
 
-def _restore_dispatch_env(previous: Mapping[str, str | None]) -> None:
-    """Restore process credentials after a dispatch.
-
-    :param previous: Environment values captured before dispatch.
-    """
-    for key, value in previous.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-    _reset_skypilot_client_cache()
-
-
 def _configure_local_skypilot_client() -> None:
-    """Force the local API endpoint over environment and persisted SkyPilot config."""
-    from sky.server import common as server_common
-
-    os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] = server_common.DEFAULT_SERVER_URL
+    """Drop remote client auth so the SDK targets its default local server."""
+    os.environ.pop(ENV_SKYPILOT_API_SERVER_ENDPOINT, None)
     os.environ.pop(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, None)
     _reset_skypilot_client_cache()
 
 
-def _configure_remote_skypilot_client(
-    settings: SkypilotClientSettings, env_file_path: Path
-) -> None:
-    """Apply and verify remote SkyPilot client auth before provisioning.
+def _configure_remote_skypilot_client(settings: SkypilotClientSettings) -> None:
+    """Project validated client auth into the env the SkyPilot SDK reads.
 
     :param settings: Validated client authentication settings.
-    :param env_file_path: Dotenv source named in user-facing failures.
-    :raises click.ClickException: The remote server cannot authenticate the client.
     """
     os.environ.update(settings.as_env())
     _reset_skypilot_client_cache()
-    if settings.api_server_endpoint is None:
-        return
-
-    from sky.server import common as server_common
-
-    try:
-        response = server_common.make_authenticated_request(
-            "GET",
-            "/api/status",
-            params={"fields": ["request_id"], "limit": 1},
-            retry=True,
-            timeout=(
-                _SKYPILOT_AUTH_CONNECT_TIMEOUT_SECONDS,
-                _SKYPILOT_AUTH_READ_TIMEOUT_SECONDS,
-            ),
-        )
-        response.raise_for_status()
-        request_status = response.json()
-    except requests.RequestException as exc:
-        raise click.ClickException(
-            "SkyPilot API server authentication check failed before launch. "
-            f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} and "
-            f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN} in {env_file_path}."
-        ) from exc
-    if not isinstance(request_status, list):
-        raise click.ClickException(
-            "SkyPilot API server authentication check returned an invalid response before launch. "
-            f"Verify {ENV_SKYPILOT_API_SERVER_ENDPOINT} in {env_file_path}."
-        )
-
-
-def _skypilot_api_server_is_remote() -> bool:
-    """Return whether the active endpoint delegates provider state to another host.
-
-    :returns: Whether provider checks belong to a remote API server.
-    """
-    from sky.server import common as server_common
-
-    api_server_endpoint = (
-        os.environ.get(_SKYPILOT_API_SERVER_ENV) or server_common.get_server_url()
-    )
-    return not server_common.is_api_server_local(api_server_endpoint)
 
 
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
@@ -420,16 +353,17 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     via `subprocess.run(capture_output=True)` so even surprise output cannot
     reach a caller's tee'd workflow log.
 
-    A remote SkyPilot API server owns provider credentials; local endpoints
-    still bootstrap host-side credential files.
+    When `SKYPILOT_API_SERVER_ENDPOINT` is set the remote API server holds the
+    provider creds; the local cred-write is a no-op and this returns early.
 
     The subprocess inherits `os.environ` merged with `env_file_path` values
     (when provided) so a local-dev `.env` carrying provider creds bootstraps
     cleanly without manual `export`.
     """
-    if _skypilot_api_server_is_remote():
+    if os.environ.get(_SKYPILOT_API_SERVER_ENV):
         click.echo(
-            "Remote SkyPilot API server holds provider creds; skipping local cred bootstrap",
+            f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
+            "creds, skipping local cred bootstrap",
             err=True,
         )
         return
@@ -731,7 +665,7 @@ def _run_workers_from_doc(
     return _run_workers_detached(job_names, launch_get_job_id)
 
 
-def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
+def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     """Dispatch ``sky_cfg.cmd`` to the SkyPilot template named in ``sky_cfg``.
 
     ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be non-None.
@@ -793,6 +727,7 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         )
     worker_env.update(sky_cfg.extra_envs)
 
+    client_settings: SkypilotClientSettings | None = None
     if not sky_cfg.local:
         try:
             client_settings = skypilot_client_settings_from_sources(
@@ -811,48 +746,42 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     # Phase 2: commit — side effects in dependency order.
     _ensure_ci_sky_config()
-    r2_env_keys = tuple(key for key in worker_env if key.startswith("RCLONE_CONFIG_R2_"))
-    previous_dispatch_env = {
-        key: os.environ.get(key) for key in (*SKYPILOT_CLIENT_AUTH_ENV_KEYS, *r2_env_keys)
-    }
-    try:
-        if sky_cfg.local:
-            _configure_local_skypilot_client()
-        else:
-            _configure_remote_skypilot_client(client_settings, env_file_path)
+    if client_settings is None:
+        _configure_local_skypilot_client()
+    else:
+        _configure_remote_skypilot_client(client_settings)
 
-        # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
-        # storage backend) inherit creds resolved from .env that were never exported.
-        for key, value in worker_env.items():
-            if key.startswith("RCLONE_CONFIG_R2_"):
-                os.environ[key] = value
+    # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
+    # storage backend) inherit creds resolved from .env that were never exported.
+    for key, value in worker_env.items():
+        if key.startswith("RCLONE_CONFIG_R2_"):
+            os.environ[key] = value
 
-        if provider != "local":
-            _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
-        # A remote server owns the authoritative RunPod account and balance.
-        if _doc_requests_runpod(task_doc) and not _skypilot_api_server_is_remote():
-            _check_runpod_balance()
+    if provider != "local":
+        _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+    # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
+    # holds the provider creds, so a local config.toml balance may be stale.
+    if _doc_requests_runpod(task_doc) and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
+        _check_runpod_balance()
 
-        if provider == "local":
-            import sky.check
+    if provider == "local":
+        import sky.check
 
-            sky.check.check(clouds=["kubernetes"], quiet=False)
+        sky.check.check(clouds=["kubernetes"], quiet=False)
 
-        job_names = (
-            [base_job_name]
-            if sky_cfg.num_workers == 1
-            else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
-        )
+    job_names = (
+        [base_job_name]
+        if sky_cfg.num_workers == 1
+        else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
+    )
 
-        rcs = _run_workers_from_doc(
-            worker_env_base=worker_env,
-            task_doc=task_doc,
-            job_names=job_names,
-            worker_image_tag=sky_cfg.worker_image_tag,
-            tail=sky_cfg.tail,
-        )
-    finally:
-        _restore_dispatch_env(previous_dispatch_env)
+    rcs = _run_workers_from_doc(
+        worker_env_base=worker_env,
+        task_doc=task_doc,
+        job_names=job_names,
+        worker_image_tag=sky_cfg.worker_image_tag,
+        tail=sky_cfg.tail,
+    )
 
     failed = [
         (job_names[i], rcs[i])
@@ -864,15 +793,6 @@ def _dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{len(failed)} of {sky_cfg.num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
-
-
-def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
-    """Dispatch while isolating the SkyPilot SDK's process-wide client state.
-
-    :param sky_cfg: Validated launcher configuration.
-    """
-    with _SKYPILOT_DISPATCH_LOCK:
-        _dispatch_via_skypilot(sky_cfg)
 
 
 def load_launch_config(path: Path) -> SkypilotLaunchConfig:

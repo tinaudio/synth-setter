@@ -2493,13 +2493,6 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        from sky.server import common as server_common
-
-        auth_response = MagicMock()
-        auth_response.json.return_value = []
-        auth_request = MagicMock(return_value=auth_response)
-        monkeypatch.setattr(server_common, "make_authenticated_request", auth_request)
-
         fake_sky = MagicMock()
         fake_sky.jobs.launch.return_value = "launch-req"
         fake_sky.stream_and_get.return_value = ([1], MagicMock())
@@ -2518,7 +2511,6 @@ class TestMainDispatchBranches:
             assert override in worker_cmd, (
                 f"override {override!r} missing from worker cmd: {worker_cmd!r}"
             )
-        auth_request.assert_called_once()
         fake_sky.jobs.launch.assert_called_once()
 
     def test_remote_dawdreamer_dispatch_does_not_validate_launcher_runtime(

@@ -597,10 +597,10 @@ SKYPILOT_API_SERVER_ENDPOINT=https://skypilot:YOUR_PASSWORD@sky.yourdomain.com
 # SKYPILOT_SERVICE_ACCOUNT_TOKEN=sky_YOUR_SERVICE_ACCOUNT_TOKEN
 ```
 
-The launcher loads these values without shell exports and verifies the remote
-API server before provider credential bootstrap or job submission. A service
-account token requires an endpoint; malformed values and failed authentication
-stop the launch before provisioning.
+The launcher loads these values without shell exports. A service account
+token requires an endpoint, and malformed values stop the launch before
+provisioning; an unreachable or auth-rejecting server surfaces as a SkyPilot
+error at job submission.
 
 For direct `sky` CLI and Python SDK use, add the following to the shell rc file
 (`~/.zshrc`, `~/.bashrc`):
