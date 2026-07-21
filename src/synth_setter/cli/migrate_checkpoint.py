@@ -4,6 +4,7 @@ Checkpoints written before in-place compilation (#2259) carry ``_orig_mod``
 path parts that strict Lightning loading rejects; this strips them.
 """
 
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -93,11 +94,13 @@ def checkpoint_migration_hint(ckpt_path: object) -> Iterator[None]:
             or _COMPILED_KEY_PART not in message
         ):
             raise
+        quoted_input = shlex.quote(str(ckpt_path))
+        quoted_output = shlex.quote(f"{ckpt_path}.migrated")
         raise RuntimeError(
             f"Checkpoint {ckpt_path} was written by a torch.compile run before "
             f"in-place compilation and carries {_COMPILED_KEY_PART!r} keys (#2259). "
-            f"Migrate it with: synth-setter-migrate-checkpoint {ckpt_path} "
-            f"{ckpt_path}.migrated — then point ckpt_path at the migrated file."
+            f"Migrate it with: synth-setter-migrate-checkpoint {quoted_input} "
+            f"{quoted_output} — then point ckpt_path at the migrated file."
         ) from err
 
 

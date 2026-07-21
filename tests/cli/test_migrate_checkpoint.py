@@ -116,3 +116,16 @@ def test_migration_hint_leaves_unrelated_orig_mod_errors_untouched() -> None:
     with pytest.raises(RuntimeError, match="^compiled _orig_mod graph break$"):
         with checkpoint_migration_hint("model.ckpt"):
             raise RuntimeError("compiled _orig_mod graph break")
+
+
+def test_migration_hint_shell_quotes_paths_in_suggested_command() -> None:
+    """The advertised command stays copy-pasteable for paths with spaces.
+
+    :raises RuntimeError: Re-raised by the hint; asserted via ``pytest.raises``.
+    """
+    with pytest.raises(RuntimeError, match="'my run/last.ckpt' 'my run/last.ckpt.migrated'"):
+        with checkpoint_migration_hint("my run/last.ckpt"):
+            raise RuntimeError(
+                "Error(s) in loading state_dict for Module:\n"
+                '\tUnexpected key(s) in state_dict: "net._orig_mod.weight".'
+            )
