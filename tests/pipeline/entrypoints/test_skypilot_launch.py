@@ -11,6 +11,7 @@ per-rank fan-out, the uuid-stem job-name fallback, and the checked-in ``configs/
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shlex
@@ -49,6 +50,7 @@ from synth_setter.pipeline.skypilot_launch import (
     _fetch_runpod_balance,
     _inject_network_volume,
     _load_compute_template_with_cmd,
+    _operator_ssh_pubkeys_b64,
     _override_image_id,
     dispatch_via_skypilot,
     load_launch_config,
@@ -189,6 +191,65 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
     _succeeded_run(fake)
     return fake
+
+
+class TestOperatorSshPubkeys:
+    """``_operator_ssh_pubkeys_b64`` forwards the operator's public keys to pods."""
+
+    def test_reads_identity_and_authorized_keys_deduped(self, tmp_path: Path) -> None:
+        """Both key files merge, junk lines drop, duplicates collapse.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        (ssh_dir / "authorized_keys").write_text(
+            "ssh-ed25519 AAAAkey1 box-a\n# a comment line\nssh-rsa AAAAkey2 box-b\n\n"
+        )
+        encoded = _operator_ssh_pubkeys_b64(ssh_dir)
+        decoded = base64.b64decode(encoded).decode()
+        assert decoded.splitlines() == [
+            "ssh-ed25519 AAAAkey1 box-a",
+            "ssh-rsa AAAAkey2 box-b",
+        ]
+
+    def test_missing_files_yield_empty_string(self, tmp_path: Path) -> None:
+        """No key material means no env injection, not an error.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        assert _operator_ssh_pubkeys_b64(tmp_path / "absent-ssh-dir") == ""
+
+    def test_dispatch_forwards_keys_env_to_worker(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The submitted rank env carries the operator keys, base64-encoded.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for env/attribute patching.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._operator_ssh_dir", lambda: ssh_dir
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+        )
+        dispatch_via_skypilot(sky_cfg)
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert base64.b64decode(injected["OPERATOR_SSH_PUBKEYS_B64"]).decode() == (
+            "ssh-ed25519 AAAAkey1 box-a\n"
+        )
 
 
 # ---------------------------------------------------------------------------

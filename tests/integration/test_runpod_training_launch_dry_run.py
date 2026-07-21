@@ -121,6 +121,28 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
 
 
 @pytest.mark.parametrize(
+    "template_file",
+    [
+        "runpod-network-volume-staging-template.yaml",
+        "runpod-network-volume-training-template.yaml",
+        "runpod-network-volume-training-hclass-template.yaml",
+    ],
+)
+def test_volume_templates_install_operator_ssh_keys(template_file: str) -> None:
+    """Each volume template's setup decodes forwarded operator keys into authorized_keys.
+
+    :param template_file: Compute template filename under ``configs/compute/``.
+    """
+    template = yaml.safe_load(
+        (_REPO_ROOT / "src/synth_setter/configs/compute" / template_file).read_text()
+    )
+    setup = template["setup"]
+    assert "OPERATOR_SSH_PUBKEYS_B64" in setup
+    assert "base64 -d >> ~/.ssh/authorized_keys" in setup
+    assert "OPERATOR_SSH_PUBKEYS_B64" in template["envs"]
+
+
+@pytest.mark.parametrize(
     ("volume_file", "zone"),
     [
         ("ss-datasets-us-ca-2.yaml", "US-CA-2"),

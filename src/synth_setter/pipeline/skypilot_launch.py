@@ -49,6 +49,7 @@ SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
 
 from __future__ import annotations
 
+import base64
 import functools
 import os
 import re
@@ -276,6 +277,40 @@ def load_worker_env(path: Path) -> dict[str, str]:
     `None`); coerce to a plain `dict[str, str]` for `task.update_envs(...)` and skip None entries.
     """
     return {k: v for k, v in dotenv_values(path).items() if v is not None}
+
+
+def _operator_ssh_dir() -> Path:
+    """Return the launching operator's ``~/.ssh`` directory.
+
+    :return: The resolved ``~/.ssh`` path (existence not required).
+    """
+    return Path.home() / ".ssh"
+
+
+def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
+    """Collect the operator's public keys as a base64 blob for pod authorized_keys.
+
+    Reads ``id_ed25519.pub`` and ``authorized_keys`` under ``ssh_dir`` so the
+    launching machine — and every machine already trusted to reach it — can SSH
+    into the pods it launches (#2297). Base64 keeps the multiline material safe
+    through SkyPilot's env serialization.
+
+    :param ssh_dir: Directory holding the operator's SSH files.
+    :return: Base64 of newline-joined unique key lines; ``""`` when none exist.
+    """
+    lines: list[str] = []
+    for name in ("id_ed25519.pub", "authorized_keys"):
+        path = ssh_dir / name
+        if not path.is_file():
+            continue
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
+                lines.append(line)
+    if not lines:
+        return ""
+    joined = "\n".join(lines) + "\n"
+    return base64.b64encode(joined.encode("utf-8")).decode("ascii")
 
 
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
@@ -772,6 +807,10 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "Expected access key id, secret access key, and endpoint URL."
         )
     worker_env.update(sky_cfg.extra_envs)
+
+    operator_keys = _operator_ssh_pubkeys_b64(_operator_ssh_dir())
+    if operator_keys:
+        worker_env.setdefault("OPERATOR_SSH_PUBKEYS_B64", operator_keys)
 
     client_settings: SkypilotClientSettings | None = None
     if not sky_cfg.local:
