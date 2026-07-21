@@ -291,6 +291,19 @@ class TestOperatorSshPubkeys:
             locked.chmod(0o600)
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
+    def test_binary_junk_in_key_file_salvages_valid_lines(self, tmp_path: Path) -> None:
+        """Non-UTF-8 bytes in a key file drop out; intact key lines still forward.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "authorized_keys").write_bytes(
+            b"\x80\x81binary-junk\xff\nssh-ed25519 AAAAkey1 box-a\n"
+        )
+        encoded = _operator_ssh_pubkeys_b64(ssh_dir)
+        assert base64.b64decode(encoded).decode() == "ssh-ed25519 AAAAkey1 box-a\n"
+
     def test_dispatch_forwards_keys_env_to_worker(
         self,
         tmp_path: Path,

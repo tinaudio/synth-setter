@@ -306,7 +306,9 @@ def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
             if not path.is_file():
                 missing.append(name)
                 continue
-            for raw in path.read_text(encoding="utf-8").splitlines():
+            # errors="replace" salvages intact key lines from a partially
+            # corrupted file; mangled lines can't pass the prefix filter.
+            for raw in path.read_bytes().decode("utf-8", errors="replace").splitlines():
                 line = raw.strip()
                 if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
                     lines.append(line)
