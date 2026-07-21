@@ -331,7 +331,11 @@ def _reset_skypilot_client_cache() -> None:
 
 
 def _configure_local_skypilot_client() -> None:
-    """Drop remote client auth so the SDK targets its default local server."""
+    """Drop remote client auth so the SDK targets its default local server.
+
+    Mutates os.environ for the remaining process lifetime by design: the launcher is a one-shot
+    CLI, and dispatch owns the process env from here on.
+    """
     os.environ.pop(ENV_SKYPILOT_API_SERVER_ENDPOINT, None)
     os.environ.pop(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, None)
     _reset_skypilot_client_cache()
