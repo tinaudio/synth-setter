@@ -263,11 +263,11 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
     assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
 
 
-def test_pi_project_subagents_allow_twenty_concurrent_workers() -> None:
-    """Allow twenty Pi review workers to bypass Tintin's default queue."""
+def test_pi_project_subagents_enforce_model_scope_with_twenty_workers() -> None:
+    """Keep Tintin workers concurrent while rejecting models outside Pi's scope."""
     settings = json.loads((REPO_ROOT / ".pi" / "subagents.json").read_text())
 
-    assert settings == {"maxConcurrent": 20}
+    assert settings == {"maxConcurrent": 20, "scopeModels": True}
 
 
 def test_pi_project_explore_agent_is_disabled() -> None:
