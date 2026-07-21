@@ -531,9 +531,8 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     """Train one real flow step through the offline pretrained-AST config.
 
     The loss must come out finite: ``global_step`` advances even past a NaN loss.
-    One 1-step-sampler validation batch runs so the production config's
-    ``model.param_spec_name`` wiring proves itself: surge_simple has
-    interchangeable blocks, so ``val/param_lad`` must land beside ``val/param_mse``.
+    Validation exercises the production param-spec wiring and requires
+    ``val/param_lad`` beside ``val/param_mse``.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """

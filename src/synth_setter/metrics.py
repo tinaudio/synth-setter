@@ -3,7 +3,6 @@
 import itertools
 import re
 from collections.abc import Callable, Sequence
-from typing import Any
 
 import torch
 from scipy.optimize import linear_sum_assignment
@@ -181,18 +180,17 @@ class PartitionedLinearAssignmentDistance(Metric):
     fits the target better.
     """
 
-    def __init__(self, groups: list[list[list[int]]], num_params: int, **kwargs: Any) -> None:
+    def __init__(self, groups: list[list[list[int]]], num_params: int) -> None:
         """Validate the partition and register the squared-error accumulator states.
 
         :param groups: Interchangeable groups of aligned encoded-index blocks
             (see :func:`derive_interchangeable_groups`); indices must be disjoint
             and within ``num_params``.
         :param num_params: Width of the parameter vectors passed to ``update``.
-        :param **kwargs: Forwarded to :class:`torchmetrics.Metric`.
         :raises ValueError: If group indices repeat, overlap, fall outside
             ``num_params``, or blocks within a group have unequal sizes.
         """
-        super().__init__(**kwargs)
+        super().__init__()
         self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
 
@@ -210,10 +208,20 @@ class PartitionedLinearAssignmentDistance(Metric):
                     raise ValueError(f"group indices out of range [0, {num_params}): {block}")
                 seen |= indices
 
-        self.groups = [
-            [torch.tensor(block, dtype=torch.long) for block in group] for group in groups
-        ]
-        self.fixed_indices = torch.tensor(sorted(set(range(num_params)) - seen), dtype=torch.long)
+        # Registered as buffers so the index tensors follow the metric across devices.
+        self._group_buffer_names: list[list[str]] = []
+        for group_number, group in enumerate(groups):
+            block_names = []
+            for block_number, block in enumerate(group):
+                name = f"_group_{group_number}_block_{block_number}"
+                self.register_buffer(name, torch.tensor(block, dtype=torch.long), persistent=False)
+                block_names.append(name)
+            self._group_buffer_names.append(block_names)
+        self.register_buffer(
+            "fixed_indices",
+            torch.tensor(sorted(set(range(num_params)) - seen), dtype=torch.long),
+            persistent=False,
+        )
         self.num_params = num_params
 
     def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
@@ -231,12 +239,12 @@ class PartitionedLinearAssignmentDistance(Metric):
         if predicted.shape[1] != self.num_params:
             raise ValueError(f"expected width {self.num_params}, got {predicted.shape[1]}")
         squared_error = (predicted - target).square()
-        total = squared_error[:, self.fixed_indices.to(predicted.device)].sum()
+        total = squared_error[:, self.fixed_indices].sum()
 
-        for group in self.groups:
-            block_indices = [block.to(predicted.device) for block in group]
-            predicted_blocks = torch.stack([predicted[:, b] for b in block_indices], dim=1)
-            target_blocks = torch.stack([target[:, b] for b in block_indices], dim=1)
+        for block_names in self._group_buffer_names:
+            block_indices = [getattr(self, name) for name in block_names]
+            predicted_blocks = torch.stack([predicted[:, block] for block in block_indices], dim=1)
+            target_blocks = torch.stack([target[:, block] for block in block_indices], dim=1)
             cost = (
                 (predicted_blocks.unsqueeze(2) - target_blocks.unsqueeze(1)).square().sum(dim=-1)
             )

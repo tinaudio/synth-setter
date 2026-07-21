@@ -483,6 +483,60 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert logger.used_artifacts == ["data-lineage-eval:lineage-eval-20260520T000000000Z"]
 
 
+def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path) -> None:
+    """``mode=test`` through the flow_simple config logs ``test/param_lad`` beside the MSE.
+
+    Pins the production ``model.param_spec_name`` wiring end-to-end: surge_simple
+    has interchangeable blocks, so the eval entrypoint must emit the metric.
+
+    :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_simple",
+                "trainer=cpu",
+                "mode=test",
+                "model.encoder.d_model=8",
+                "model.encoder.n_heads=1",
+                "model.encoder.n_layers=1",
+                "model.encoder.n_conditioning_outputs=1",
+                "model.encoder.patch_stride=15",
+                "model.vector_field.d_model=8",
+                "model.vector_field.num_heads=1",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.d_ff=8",
+                "model.vector_field.projection.num_tokens=4",
+                "model.test_sample_steps=1",
+                "model.compile=false",
+            ],
+        )
+
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.fake = True
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.ckpt_path = None
+        cfg.logger = None
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert "test/param_mse" in metric_dict
+    param_lad = metric_dict["test/param_lad"]
+    assert torch.isfinite(param_lad)
+    assert param_lad.item() <= metric_dict["test/param_mse"].item() + 1e-6
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)

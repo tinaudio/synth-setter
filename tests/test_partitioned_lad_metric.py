@@ -46,7 +46,7 @@ class TestDeriveInterchangeableGroups:
 
         groups = derive_interchangeable_groups(names)
 
-        osc_group = next(g for g in groups if len(g) == 3)
+        osc_group = next(group for group in groups if len(group) == 3)
         position = osc_group[0].index(names.index("a_osc_1_pitch"))
         assert osc_group[1][position] == names.index("a_osc_2_pitch")
         assert osc_group[2][position] == names.index("a_osc_3_pitch")
@@ -55,12 +55,10 @@ class TestDeriveInterchangeableGroups:
         """Layout-mismatched lfo_6 and unnumbered note params stay order-fixed."""
         names = _surge_simple_names()
 
-        grouped = {
-            index
-            for group in derive_interchangeable_groups(names)
-            for block in group
-            for index in block
-        }
+        grouped: set[int] = set()
+        for group in derive_interchangeable_groups(names):
+            for block in group:
+                grouped.update(block)
 
         assert names.index("a_lfo_6_amplitude") not in grouped
         assert names.index("pitch") not in grouped
