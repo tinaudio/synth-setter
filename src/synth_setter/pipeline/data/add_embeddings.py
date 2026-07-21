@@ -70,8 +70,9 @@ DEFAULT_NUM_SUB_VECTORS: int = 16
 # Cosine matches CLAP's L2-normalized audio embeddings.
 DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
-# Row-interval progress alone can stay silent for minutes early in a slow run;
-# a progress line is also forced whenever this much wall-clock has passed.
+# Checked at batch boundaries only: forces a progress line on the next batch when
+# batches are slow, so early progress isn't silent. Deliberately not a stall
+# detector — a hard stall shows as log silence, plus LANCE_LOG telemetry under --debug.
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 
 M2LEncodeFn: TypeAlias = Callable[[np.ndarray], np.ndarray]
