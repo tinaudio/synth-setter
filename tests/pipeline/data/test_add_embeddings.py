@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,7 +30,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     M2LEncodeFn,
     _configure_lance_logging,
     _downmix_to_mono,
-    _open_lance_dataset,
     add_embeddings,
     build_clap_index,
     embeddings_record_batch,
@@ -306,9 +304,8 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
         "inferred_embedding_schema"
     )
     assert events.index("inferred_embedding_schema") < events.index("embedding_write_started")
-    assert events.index("embedding_write_started") < events.index("encoding_batch")
-    assert events.index("encoding_batch") < events.index("writing_embeddings")
-    assert events.index("writing_embeddings") < events.index("wrote_embeddings")
+    assert events.index("embedding_write_started") < events.index("embedding_progress")
+    assert events.index("embedding_progress") < events.index("wrote_embeddings")
     assert max(encoded_batch_sizes) == DEFAULT_LANCE_BATCH_SIZE == 128
     assert progress[-1]["rows_processed"] == 300
     assert progress[-1]["total_rows"] == 300
@@ -316,101 +313,17 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
     assert len(progress) <= 20
 
 
-def test_add_embeddings_stalled_write_emits_heartbeat(
+def test_add_embeddings_progress_reports_per_stage_timings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A blocked native write remains visibly alive.
-
-    :param tmp_path: Pytest-provided scratch directory for the dataset.
-    :param monkeypatch: Pytest fixture for synchronizing with the heartbeat.
-    """
-    uri = str(tmp_path / "heartbeat.lance")
-    _audio_dataset(uri, 1)
-    heartbeat_seen = threading.Event()
-
-    def record_log(event: str, **_fields: object) -> None:
-        if event == "embedding_heartbeat":
-            heartbeat_seen.set()
-
-    def wait_for_heartbeat(
-        _dataset: lance.LanceDataset,
-        _udf: Any,
-        *,
-        read_columns: list[str],
-        batch_size: int,
-    ) -> None:
-        del read_columns, batch_size
-        assert heartbeat_seen.wait(timeout=1.0)
-
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.EMBEDDING_HEARTBEAT_SECONDS", 0.001
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.logger.info", record_log
-    )
-    monkeypatch.setattr(lance.LanceDataset, "add_columns", wait_for_heartbeat)
-
-    add_embeddings(
-        lance.dataset(uri),
-        _fake_m2l,
-        _fake_clap,
-        _SAMPLE_RATE,
-        build_index=False,
-    )
-
-    assert heartbeat_seen.is_set()
-
-
-def test_add_embeddings_failed_write_stops_heartbeat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failing native write leaves no heartbeat thread running.
-
-    :param tmp_path: Pytest-provided scratch directory for the dataset.
-    :param monkeypatch: Pytest fixture for replacing the native write.
-    """
-    uri = str(tmp_path / "failed-heartbeat.lance")
-    _audio_dataset(uri, 1)
-
-    def fail_write(
-        _dataset: lance.LanceDataset,
-        _udf: Any,
-        *,
-        read_columns: list[str],
-        batch_size: int,
-    ) -> None:
-        del read_columns, batch_size
-        raise RuntimeError("write failed")
-
-    monkeypatch.setattr(lance.LanceDataset, "add_columns", fail_write)
-
-    with pytest.raises(RuntimeError, match="write failed"):
-        add_embeddings(
-            lance.dataset(uri),
-            _fake_m2l,
-            _fake_clap,
-            _SAMPLE_RATE,
-            build_index=False,
-        )
-
-    assert not any(
-        thread.name == "add-embeddings-heartbeat" and thread.is_alive()
-        for thread in threading.enumerate()
-    )
-
-
-def test_add_embeddings_debug_logs_every_batch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Debug mode reports every encoder batch boundary.
+    """Progress entries carry the encode/write timing split that localizes a slowdown.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
     :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
     """
-    uri = str(tmp_path / "debug-progress.lance")
-    _audio_dataset(uri, 257)
+    uri = str(tmp_path / "timings.lance")
+    _audio_dataset(uri, 32)
 
-    monkeypatch.setenv("LANCE_LOG", "debug")
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
         add_embeddings(
@@ -421,11 +334,37 @@ def test_add_embeddings_debug_logs_every_batch(
             build_index=False,
         )
 
-    encoding = [entry for entry in logs if entry["event"] == "encoding_batch_debug"]
-    writing = [entry for entry in logs if entry["event"] == "writing_embeddings_debug"]
-    assert [entry["rows_processed"] for entry in encoding] == [0, 128, 256]
-    assert [entry["batch_rows"] for entry in encoding] == [128, 128, 1]
-    assert [entry["rows_processed"] for entry in writing] == [128, 256, 257]
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert progress
+    for field in ("m2l_ms", "clap_ms", "batch_ms", "interbatch_ms", "rows_per_second"):
+        assert progress[-1][field] >= 0.0
+
+
+def test_add_embeddings_log_every_batch_reports_each_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``log_every_batch`` emits one progress entry per UDF batch.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
+    """
+    uri = str(tmp_path / "debug-progress.lance")
+    _audio_dataset(uri, 257)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            log_every_batch=True,
+        )
+
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert [entry["rows_processed"] for entry in progress] == [128, 256, 257]
+    assert [entry["batch_rows"] for entry in progress] == [128, 128, 1]
 
 
 def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
@@ -705,6 +644,8 @@ def test_main_threads_device_and_debug_options_to_embedding_run(
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder", load_clap
     )
+    # Guard: --debug mutates LANCE_LOG in-process; monkeypatch restores it.
+    monkeypatch.setenv("LANCE_LOG", "warn")
 
     with capture_logs() as logs:
         result = CliRunner().invoke(
@@ -713,7 +654,8 @@ def test_main_threads_device_and_debug_options_to_embedding_run(
         )
 
     assert result.exit_code == 0, result.output
-    assert any(entry["event"] == "encoding_batch_debug" for entry in logs)
+    assert os.environ["LANCE_LOG"] == "debug"
+    assert any(entry["event"] == "embedding_progress" for entry in logs)
     assert selected_devices == [("m2l", "mps"), ("clap", "mps")]
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
@@ -750,51 +692,6 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
-def test_open_r2_dataset_reports_environment_overridden_retry_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R2 reports the retry budget Lance resolves from its environment.
-
-    :param monkeypatch: Pytest fixture for replacing the remote dataset boundary.
-    """
-    captured: dict[str, object] = {}
-
-    def capture_dataset(uri: str, *, storage_options: dict[str, str]) -> object:
-        captured.update(uri=uri, storage_options=storage_options)
-        return object()
-
-    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.r2_io.is_r2_uri", lambda _: True)
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.r2_io.to_s3_uri",
-        lambda _: "s3://bucket/dataset.lance",
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.r2_io.ensure_r2_env_loaded", lambda: None
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.r2_io.r2_storage_options",
-        lambda: {"endpoint": "https://r2.example"},
-    )
-    monkeypatch.setattr(lance, "dataset", capture_dataset)
-    monkeypatch.setenv("CLIENT_MAX_RETRIES", "5")
-    monkeypatch.setenv("CLIENT_RETRY_TIMEOUT", "90")
-
-    with capture_logs() as logs:
-        _open_lance_dataset("r2://bucket/dataset.lance")
-
-    retry_policy = next(entry for entry in logs if entry["event"] == "object_store_retry_policy")
-    assert retry_policy["max_retries"] == "5"
-    assert retry_policy["retry_timeout_seconds"] == "90"
-    assert captured == {
-        "uri": "s3://bucket/dataset.lance",
-        "storage_options": {
-            "endpoint": "https://r2.example",
-            "client_max_retries": "5",
-            "client_retry_timeout": "90",
-        },
-    }
-
-
 def test_module_import_defers_lance_initialization_until_cli_configures_logging() -> None:
     """Importing the CLI leaves native Lance logging uninitialized."""
     result = subprocess.run(
@@ -802,7 +699,7 @@ def test_module_import_defers_lance_initialization_until_cli_configures_logging(
             sys.executable,
             "-c",
             "import sys; import synth_setter.pipeline.data.add_embeddings; "
-            "raise SystemExit('lance' in sys.modules)",
+            "sys.exit('lance was imported at module load' if 'lance' in sys.modules else 0)",
         ],
         check=False,
         capture_output=True,
@@ -815,7 +712,7 @@ def test_module_import_defers_lance_initialization_until_cli_configures_logging(
 def test_configure_lance_logging_default_keeps_native_warnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default native logging keeps warnings while heartbeats report stalls.
+    """Default native logging keeps warnings without clobbering an ambient override.
 
     :param monkeypatch: Pytest fixture for clearing ambient Lance logging.
     """
