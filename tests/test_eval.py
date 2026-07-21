@@ -552,6 +552,45 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     )
 
 
+def test_evaluate_loads_compiled_cpu_training_checkpoint(
+    tmp_path: Path,
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+) -> None:
+    """Uncompiled CPU evaluation loads a checkpoint written by compiled training.
+
+    :param tmp_path: Shared training and evaluation output directory.
+    :param cfg_train: Tiny KSin CPU training configuration.
+    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    """
+    for cfg in (cfg_train, cfg_eval):
+        with open_dict(cfg):
+            cfg.datamodule.signal_length = 64
+            cfg.model.net.channels = 2
+            cfg.model.net.encoder_blocks = 1
+            cfg.model.net.hidden_dim = 8
+            cfg.model.net.norm = "ln"
+            cfg.model.net.trunk_blocks = 1
+    with open_dict(cfg_train):
+        cfg_train.model.compile = True
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg_eval)
+    metrics, _ = evaluate(cfg_eval)
+
+    assert math.isfinite(metrics["test/loss"].item())
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow

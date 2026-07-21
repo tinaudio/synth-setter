@@ -468,8 +468,8 @@ class KSinFlowMatchingModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.vector_field = torch.compile(self.vector_field)
-            self.encoder = torch.compile(self.encoder)
+            self.vector_field.compile()
+            self.encoder.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
         encoder_norms = grad_norm(self.encoder, 2.0)

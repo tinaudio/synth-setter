@@ -118,7 +118,7 @@ class VSTFlowVAEModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
         norms = grad_norm(self.net, 2.0)

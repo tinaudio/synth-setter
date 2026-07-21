@@ -240,6 +240,40 @@ def test_train_fast_dev_run_gpu_compile(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+def test_train_cpu_compile_writes_clean_checkpoint(
+    tmp_path: Path,
+    cfg_train: DictConfig,
+) -> None:
+    """Compiled training persists uncompiled-layout keys evaluation loads strictly.
+
+    :param tmp_path: Training output directory containing the checkpoint.
+    :param cfg_train: Tiny KSin CPU training configuration.
+    """
+    with open_dict(cfg_train):
+        cfg_train.datamodule.signal_length = 64
+        cfg_train.model.net.channels = 2
+        cfg_train.model.net.encoder_blocks = 1
+        cfg_train.model.net.hidden_dim = 8
+        cfg_train.model.net.norm = "ln"
+        cfg_train.model.net.trunk_blocks = 1
+        cfg_train.model.compile = True
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    checkpoint = torch.load(
+        tmp_path / "checkpoints" / "last.ckpt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    state_dict = checkpoint["state_dict"]
+    assert state_dict
+    assert all("_orig_mod" not in key for key in state_dict)
+
+
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow

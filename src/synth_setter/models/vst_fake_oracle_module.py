@@ -165,7 +165,7 @@ class VSTFakeOracleModule(LightningModule):
         :param stage: Lightning lifecycle stage ("fit", "validate", "test", "predict").
         """
         if self.hparams["compile"] and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Instantiate the optimizer and (optional) warmup/scheduler chain.
