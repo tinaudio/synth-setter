@@ -107,6 +107,8 @@ make train EXPERIMENT=surge/flow_simple
 python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/train/.../checkpoints/last.ckpt
 ```
 
+Resuming from a checkpoint written by a `compile: true` run before in-place compilation (#2241) fails strict loading on its `_orig_mod` keys; the error names the fix — run `synth-setter-migrate-checkpoint <ckpt> <output>` first (#2259).
+
 ### RunPod training (target state)
 
 ```bash
