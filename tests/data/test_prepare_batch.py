@@ -209,6 +209,26 @@ def test_prepare_batch_float32_cast_overflow_raises_value_error() -> None:
         )
 
 
+def test_prepare_batch_conditioning_float32_overflow_raises_value_error() -> None:
+    """Finite embeddings must remain finite after model-facing conversion."""
+    raw = _make_raw(read_mel=False)
+    conditioning = np.ones((_BATCH, 3), dtype=np.float64)
+    conditioning.flat[0] = float(np.finfo(np.float32).max) * 2
+    raw["conditioning"] = conditioning
+
+    with pytest.raises(
+        ValueError, match="conditioning float32 conversion produced non-finite values"
+    ):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_prepare_batch_parameter_out_of_range_raises_value_error(value: float) -> None:
     """Stored parameters outside their normalized range fail before rescaling.

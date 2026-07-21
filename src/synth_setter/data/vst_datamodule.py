@@ -112,6 +112,8 @@ def prepare_batch(
         if conditioning_raw is not None
         else None
     )
+    if conditioning is not None and not torch.isfinite(conditioning).all():
+        raise ValueError("conditioning float32 conversion produced non-finite values")
 
     param_array = raw["param_array"]
     if rescale_params:
