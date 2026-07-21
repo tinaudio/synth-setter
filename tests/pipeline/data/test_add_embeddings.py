@@ -251,7 +251,6 @@ def test_add_embeddings_writes_searchable_columns_and_keeps_params(tmp_path: Pat
     assert "_distance" in hits.column_names
 
 
-@pytest.mark.slow
 def test_add_embeddings_default_bounds_batches_and_logs_progress(tmp_path: Path) -> None:
     """Default augmentation bounds UDF batches and reports completion.
 
@@ -280,6 +279,42 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(tmp_path: Path)
     assert progress[-1]["total_rows"] == 300
     assert progress[-1]["percent"] == 100.0
     assert len(progress) <= 20
+
+
+def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
+    """The functional API rejects a non-positive Lance UDF batch size.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "bad-batch.lance")
+    _audio_dataset(uri, 1)
+
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            batch_size=0,
+            build_index=False,
+        )
+
+
+def test_add_embeddings_rejects_empty_dataset(tmp_path: Path) -> None:
+    """The functional API rejects an empty source before schema inference.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "empty.lance")
+    tensor_type = pa.fixed_shape_tensor(pa.float16(), [2, 16])
+    storage = pa.array([], type=tensor_type.storage_type)
+    audio = pa.ExtensionArray.from_storage(tensor_type, storage)
+    lance.write_dataset(pa.table({AUDIO_FIELD: audio}), uri)
+
+    with pytest.raises(ValueError, match="no rows"):
+        add_embeddings(
+            lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False
+        )
 
 
 @pytest.mark.slow
