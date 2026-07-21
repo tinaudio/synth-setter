@@ -18,10 +18,12 @@ import pyarrow as pa
 import pytest
 import torch
 from click.testing import CliRunner
+from structlog.testing import capture_logs
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
+    DEFAULT_LANCE_BATCH_SIZE,
     ClapEncodeFn,
     M2LEncodeFn,
     _downmix_to_mono,
@@ -247,6 +249,37 @@ def test_add_embeddings_writes_searchable_columns_and_keeps_params(tmp_path: Pat
     )
     assert hits.num_rows == 3
     assert "_distance" in hits.column_names
+
+
+@pytest.mark.slow
+def test_add_embeddings_default_bounds_batches_and_logs_progress(tmp_path: Path) -> None:
+    """Default augmentation bounds UDF batches and reports completion.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    """
+    uri = str(tmp_path / "progress.lance")
+    _audio_dataset(uri, 300)
+    encoded_batch_sizes: list[int] = []
+
+    def recording_m2l(audio: np.ndarray) -> np.ndarray:
+        encoded_batch_sizes.append(len(audio))
+        return _fake_m2l(audio)
+
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            recording_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+        )
+
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert max(encoded_batch_sizes) == DEFAULT_LANCE_BATCH_SIZE == 128
+    assert progress[-1]["rows_processed"] == 300
+    assert progress[-1]["total_rows"] == 300
+    assert progress[-1]["percent"] == 100.0
+    assert len(progress) <= 20
 
 
 @pytest.mark.slow
@@ -530,11 +563,13 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
-def test_main_exposes_index_tuning_options() -> None:
-    """The CLI surfaces the IVF_PQ tuning flags threaded into ``add_embeddings``."""
+def test_main_exposes_batch_and_index_tuning_options() -> None:
+    """The CLI documents its bounded batch default and IVF_PQ tuning flags."""
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0, result.output
+    assert "--batch-size" in result.output
+    assert "128" in result.output
     for flag in ("--num-partitions", "--num-sub-vectors", "--metric"):
         assert flag in result.output
 
