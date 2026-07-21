@@ -1,9 +1,8 @@
 """Pins ``val/param_mse_best_swap`` / ``test/param_mse_best_swap`` logging.
 
-The metric is unconditional and spec-free;
-specs with interchangeable blocks (surge_simple) turn the metric on, degenerate
-specs (surge_4) and the default ``None`` leave it off. Driven through a real CPU
-``Trainer`` so the logged-metric names are the actual contract under test.
+The metric is unconditional and spec-free: every ``VSTFlowMatchingModule``
+logs it beside ``param_mse`` in both loops, with the floor property
+``best_swap <= mse`` guaranteed by the sort-based optimal matching.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ class _TinyEncoder(torch.nn.Module):
         return self.linear(mel_spec.flatten(start_dim=1)).unsqueeze(1)
 
 
-class _FakeBatchDataset(Dataset):
+class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
     """Fixed random samples shaped like the VST datamodule's batches."""
 
     def __init__(self, num_params: int) -> None:
