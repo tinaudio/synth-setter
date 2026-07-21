@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 import ot as pot
 import torch
+from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 from scipy.optimize import linear_sum_assignment
 
@@ -15,7 +16,6 @@ from synth_setter.metrics import (
     LinearAssignmentDistance,
     LogSpectralDistance,
 )
-from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 from synth_setter.utils.math import divmod
 
 
@@ -59,7 +59,7 @@ def rk4_with_cfg(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-class KSinFlowMatchingModule(CompiledCheckpointModule):
+class KSinFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for k-sinusoidal parameter prediction (optional OT)."""
 
     def __init__(
@@ -468,8 +468,8 @@ class KSinFlowMatchingModule(CompiledCheckpointModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.vector_field = torch.compile(self.vector_field)
-            self.encoder = torch.compile(self.encoder)
+            self.vector_field.compile()
+            self.encoder.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
         encoder_norms = grad_norm(self.encoder, 2.0)

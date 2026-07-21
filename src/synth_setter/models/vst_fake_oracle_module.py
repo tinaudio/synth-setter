@@ -9,9 +9,8 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
+from lightning import LightningModule
 from torch import nn
-
-from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
 
 class FakeOracleNet(nn.Module):
@@ -48,7 +47,7 @@ class FakeOracleNet(nn.Module):
         return self.dummy
 
 
-class VSTFakeOracleModule(CompiledCheckpointModule):
+class VSTFakeOracleModule(LightningModule):
     """LightningModule whose predictions are an oracle copy of ``batch["params"]``."""
 
     def __init__(
@@ -166,7 +165,7 @@ class VSTFakeOracleModule(CompiledCheckpointModule):
         :param stage: Lightning lifecycle stage ("fit", "validate", "test", "predict").
         """
         if self.hparams["compile"] and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Instantiate the optimizer and (optional) warmup/scheduler chain.

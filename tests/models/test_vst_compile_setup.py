@@ -1,79 +1,14 @@
 """Regression tests for compile-enabled VST module stage transitions."""
 
-import logging
 from functools import partial
-from typing import cast
 
 import pytest
 import torch
 
-from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 from synth_setter.models.vst_fake_oracle_module import FakeOracleNet, VSTFakeOracleModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
-
-
-class _NestedNet(torch.nn.Module):
-    """Tiny network with a nested compilation boundary."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.block: torch.nn.Module = torch.nn.Linear(1, 1)
-
-
-class _CompileCompatibleFixture(CompiledCheckpointModule):
-    """Minimal module exposing the shared checkpoint hook."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.net: torch.nn.Module = _NestedNet()
-
-
-class _LegitimateOrigModNet(torch.nn.Module):
-    """Network whose real child shares the compile wrapper's reserved name."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.weight = torch.nn.Parameter(torch.ones(2))
-        self._orig_mod = torch.nn.Linear(1, 1, bias=False)
-
-
-class _ExtraStateNet(torch.nn.Module):
-    """Network persisting a non-tensor state-dict value."""
-
-    def __init__(self, value: int) -> None:
-        """Initialize the persisted value.
-
-        :param value: Value returned by ``get_extra_state``.
-        """
-        super().__init__()
-        self.value = value
-
-    def get_extra_state(self) -> dict[str, int]:
-        """Return the state persisted under ``_extra_state``.
-
-        :returns: Serializable non-tensor state.
-        """
-        return {"value": self.value}
-
-    def set_extra_state(self, state: dict[str, int]) -> None:
-        """Restore state loaded from ``_extra_state``.
-
-        :param state: Serialized value mapping.
-        """
-        self.value = state["value"]
-
-
-class _AmbiguousOrigModNet(torch.nn.Module):
-    """Network with two equal-shaped parameters sharing one canonical key."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._orig_mod = torch.nn.Module()
-        self._orig_mod.b = torch.nn.Linear(1, 1, bias=False)
-        self.b = torch.nn.Module()
-        self.b._orig_mod = torch.nn.Linear(1, 1, bias=False)
 
 
 def _feed_forward_module() -> VSTFeedForwardModule:
@@ -117,153 +52,67 @@ def _fake_oracle_module() -> VSTFakeOracleModule:
     )
 
 
-def test_feed_forward_setup_fit_then_test_compiles_net_once() -> None:
-    """The test stage preserves the network wrapper created during fit setup."""
+def _flowvae_module() -> VSTFlowVAEModule:
+    """Build a compile-enabled Flow-VAE module with a tiny real network.
+
+    :returns: Module suitable for setup-stage tests.
+    """
+    return VSTFlowVAEModule(
+        net=torch.nn.Linear(1, 1),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        param_spec="surge_simple",
+        compile=True,
+    )
+
+
+def _assert_compiled_in_place_with_clean_keys(
+    module: torch.nn.Module,
+    net: torch.nn.Module,
+) -> None:
+    """Assert fit setup compiled a child in place without renaming state keys.
+
+    :param module: LightningModule whose ``setup("fit")`` already ran.
+    :param net: Child expected to remain the same object after compilation.
+    """
+    assert net._compiled_call_impl is not None  # only signal that in-place compile took effect
+    assert all("_orig_mod" not in key for key in module.state_dict())
+
+
+def test_feed_forward_setup_fit_then_test_compiles_net_in_place() -> None:
+    """Fit setup compiles the network without replacing it or renaming keys."""
     module = _feed_forward_module()
     original_net = module.net
 
     module.setup("fit")
-    compiled_net = module.net
     module.setup("test")
 
-    assert compiled_net is not original_net
-    assert module.net is compiled_net
+    assert module.net is original_net
+    _assert_compiled_in_place_with_clean_keys(module, module.net)
 
 
-def test_feed_forward_compiled_checkpoint_loads_into_uncompiled_module(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """An eval-stage module consumes weights saved through ``torch.compile``.
-
-    :param caplog: Captures the one-line normalization summary.
-    """
+def test_feed_forward_compiled_state_dict_loads_strict_into_uncompiled_module() -> None:
+    """An eval-stage module strictly consumes weights saved by compiled training."""
     trained = _feed_forward_module()
     trained.setup("fit")
-    checkpoint = {"state_dict": trained.state_dict()}
     evaluated = _feed_forward_module()
 
-    with caplog.at_level(logging.INFO):
-        evaluated.on_load_checkpoint(checkpoint)
-    evaluated.load_state_dict(checkpoint["state_dict"])
+    evaluated.load_state_dict(trained.state_dict())
 
     inputs = torch.tensor([[2.0]])
     assert torch.equal(evaluated.net(inputs), trained.net(inputs))
-    normalization_logs = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "synth_setter.models.compiled_checkpoint_module"
-    ]
-    assert normalization_logs == ["Normalized 2 compiled checkpoint keys"]
 
 
-def test_feed_forward_uncompiled_checkpoint_loads_into_compiled_module() -> None:
-    """A compiled resume-stage module consumes weights saved without compilation."""
+def test_feed_forward_uncompiled_state_dict_loads_strict_into_compiled_module() -> None:
+    """A compiled resume-stage module strictly consumes uncompiled weights."""
     trained = _feed_forward_module()
-    checkpoint = {"state_dict": trained.state_dict()}
     resumed = _feed_forward_module()
     resumed.setup("fit")
 
-    resumed.on_load_checkpoint(checkpoint)
-    resumed.load_state_dict(checkpoint["state_dict"])
+    resumed.load_state_dict(trained.state_dict())
 
     inputs = torch.tensor([[2.0]])
     assert torch.equal(resumed.net(inputs), trained.net(inputs))
-
-
-def test_checkpoint_load_wrapper_moved_between_nested_modules_succeeds() -> None:
-    """Canonical keys load when compile wraps a different module boundary."""
-    trained = _CompileCompatibleFixture()
-    trained_net = cast(_NestedNet, trained.net)
-    trained_net.block = cast(torch.nn.Module, torch.compile(trained_net.block))
-    checkpoint = {"state_dict": trained.state_dict()}
-    resumed = _CompileCompatibleFixture()
-    resumed.net = cast(torch.nn.Module, torch.compile(cast(_NestedNet, resumed.net)))
-
-    resumed.on_load_checkpoint(checkpoint)
-    resumed.load_state_dict(checkpoint["state_dict"])
-
-    assert torch.equal(
-        resumed.state_dict()["net._orig_mod.block.weight"],
-        trained.state_dict()["net.block._orig_mod.weight"],
-    )
-
-
-def test_checkpoint_load_preserves_legitimate_orig_mod_child() -> None:
-    """Compile wrapper keys remain distinct from a real ``_orig_mod`` child."""
-    trained = _CompileCompatibleFixture()
-    trained.net = cast(torch.nn.Module, torch.compile(_LegitimateOrigModNet()))
-    trained_state = trained.state_dict()
-    expected_weight = trained_state["net._orig_mod.weight"].clone()
-    expected_child_weight = trained_state["net._orig_mod._orig_mod.weight"].clone()
-    checkpoint = {"state_dict": trained_state}
-    evaluated = _CompileCompatibleFixture()
-    evaluated.net = _LegitimateOrigModNet()
-
-    evaluated.on_load_checkpoint(checkpoint)
-    evaluated.load_state_dict(checkpoint["state_dict"])
-
-    evaluated_state = evaluated.state_dict()
-    assert torch.equal(evaluated_state["net.weight"], expected_weight)
-    assert torch.equal(evaluated_state["net._orig_mod.weight"], expected_child_weight)
-
-
-def test_checkpoint_load_normalizes_non_tensor_extra_state() -> None:
-    """Compiled non-tensor extra state loads into an uncompiled module."""
-    trained = _CompileCompatibleFixture()
-    trained.net = cast(torch.nn.Module, torch.compile(_ExtraStateNet(value=7)))
-    checkpoint = {"state_dict": trained.state_dict()}
-    evaluated = _CompileCompatibleFixture()
-    evaluated.net = _ExtraStateNet(value=0)
-
-    evaluated.on_load_checkpoint(checkpoint)
-    evaluated.load_state_dict(checkpoint["state_dict"])
-
-    assert cast(_ExtraStateNet, evaluated.net).value == 7
-
-
-def test_checkpoint_load_ambiguous_canonical_group_remains_strict() -> None:
-    """Equal-shaped canonical collisions fail rather than swapping values."""
-    trained = _CompileCompatibleFixture()
-    trained.net = _AmbiguousOrigModNet()
-    trained_net = cast(_AmbiguousOrigModNet, trained.net)
-    with torch.no_grad():
-        cast(torch.nn.Linear, trained_net._orig_mod.b).weight.fill_(1.0)
-        cast(torch.nn.Linear, trained_net.b._orig_mod).weight.fill_(2.0)
-    checkpoint = {"state_dict": trained.state_dict()}
-    source_values = {key: value.clone() for key, value in checkpoint["state_dict"].items()}
-    source_keys = set(checkpoint["state_dict"])
-    resumed = _CompileCompatibleFixture()
-    resumed_net = _AmbiguousOrigModNet()
-    resumed_net._orig_mod.b = cast(
-        torch.nn.Module,
-        torch.compile(cast(torch.nn.Linear, resumed_net._orig_mod.b)),
-    )
-    resumed.net = resumed_net
-
-    resumed.on_load_checkpoint(checkpoint)
-
-    assert set(checkpoint["state_dict"]) == source_keys
-    assert all(
-        torch.equal(checkpoint["state_dict"][key], value) for key, value in source_values.items()
-    )
-    with pytest.raises(RuntimeError, match="(?s)Missing key.*Unexpected key"):
-        resumed.load_state_dict(checkpoint["state_dict"])
-
-
-def test_compiled_checkpoint_metadata_normalizes_to_uncompiled_module() -> None:
-    """Underlying-module metadata replaces compile-wrapper metadata on eval."""
-    trained = _feed_forward_module()
-    trained.setup("fit")
-    state_dict = trained.state_dict()
-    metadata = getattr(state_dict, "_metadata")
-    expected_net_metadata = metadata["net._orig_mod"].copy()
-    evaluated = _feed_forward_module()
-
-    evaluated.on_load_checkpoint({"state_dict": state_dict})
-
-    normalized_metadata = getattr(state_dict, "_metadata")
-    assert normalized_metadata["net"] == expected_net_metadata
-    assert "net._orig_mod" not in normalized_metadata
 
 
 def test_flow_matching_constructor_without_num_params_raises_type_error() -> None:
@@ -289,77 +138,57 @@ def test_flow_matching_constructor_num_params_positional_raises_type_error() -> 
         )
 
 
-def test_flow_matching_setup_fit_then_test_compiles_components_once() -> None:
-    """The test stage preserves both component wrappers created during fit setup."""
+def test_flow_matching_setup_fit_then_test_compiles_components_in_place() -> None:
+    """Fit setup compiles both components without replacing them or renaming keys."""
     module = _flow_matching_module()
     original_encoder = module.encoder
     original_vector_field = module.vector_field
 
     module.setup("fit")
-    compiled_encoder = module.encoder
-    compiled_vector_field = module.vector_field
     module.setup("test")
 
-    assert compiled_encoder is not original_encoder
-    assert compiled_vector_field is not original_vector_field
-    assert module.encoder is compiled_encoder
-    assert module.vector_field is compiled_vector_field
+    assert module.encoder is original_encoder
+    assert module.vector_field is original_vector_field
+    _assert_compiled_in_place_with_clean_keys(module, module.encoder)
+    _assert_compiled_in_place_with_clean_keys(module, module.vector_field)
 
 
-def test_flow_matching_compiled_checkpoint_loads_into_uncompiled_module() -> None:
-    """Flow eval consumes checkpoints with both compiled component prefixes."""
+def test_flow_matching_compiled_state_dict_loads_strict_into_uncompiled_module() -> None:
+    """Flow eval strictly consumes weights saved with both components compiled."""
     trained = _flow_matching_module()
-    expected_state = trained.state_dict()
     trained.setup("fit")
-    checkpoint = {"state_dict": trained.state_dict()}
     evaluated = _flow_matching_module()
 
-    evaluated.on_load_checkpoint(checkpoint)
-    evaluated.load_state_dict(checkpoint["state_dict"])
+    evaluated.load_state_dict(trained.state_dict())
 
     evaluated_state = evaluated.state_dict()
-    assert torch.equal(evaluated_state["encoder.weight"], expected_state["encoder.weight"])
+    trained_state = trained.state_dict()
+    assert torch.equal(evaluated_state["encoder.weight"], trained_state["encoder.weight"])
     assert torch.equal(
         evaluated_state["vector_field.weight"],
-        expected_state["vector_field.weight"],
+        trained_state["vector_field.weight"],
     )
 
 
-def _flowvae_module() -> VSTFlowVAEModule:
-    """Build a compile-enabled Flow-VAE module with a tiny real network.
-
-    :returns: Module suitable for setup-stage tests.
-    """
-    return VSTFlowVAEModule(
-        net=torch.nn.Linear(1, 1),
-        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
-        scheduler=None,  # pyright: ignore[reportArgumentType]
-        param_spec="surge_simple",
-        compile=True,
-    )
-
-
-def test_fake_oracle_setup_fit_then_test_compiles_net_once() -> None:
-    """The test stage preserves the network wrapper created during fit setup."""
+def test_fake_oracle_setup_fit_then_test_compiles_net_in_place() -> None:
+    """Fit setup compiles the network without replacing it or renaming keys."""
     module = _fake_oracle_module()
     original_net = module.net
 
     module.setup("fit")
-    compiled_net = module.net
     module.setup("test")
 
-    assert compiled_net is not original_net
-    assert module.net is compiled_net
+    assert module.net is original_net
+    _assert_compiled_in_place_with_clean_keys(module, module.net)
 
 
-def test_flowvae_setup_fit_then_test_compiles_net_once() -> None:
-    """The test stage preserves the network wrapper created during fit setup."""
+def test_flowvae_setup_fit_then_test_compiles_net_in_place() -> None:
+    """Fit setup compiles the network without replacing it or renaming keys."""
     module = _flowvae_module()
     original_net = module.net
 
     module.setup("fit")
-    compiled_net = module.net
     module.setup("test")
 
-    assert compiled_net is not original_net
-    assert module.net is compiled_net
+    assert module.net is original_net
+    _assert_compiled_in_place_with_clean_keys(module, module.net)

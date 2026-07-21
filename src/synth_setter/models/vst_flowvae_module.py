@@ -3,12 +3,11 @@
 from typing import Any
 
 import torch
+from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 
-
-class VSTFlowVAEModule(CompiledCheckpointModule):
+class VSTFlowVAEModule(LightningModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
 
     def __init__(
@@ -119,7 +118,7 @@ class VSTFlowVAEModule(CompiledCheckpointModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
         norms = grad_norm(self.net, 2.0)

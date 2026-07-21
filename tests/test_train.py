@@ -239,11 +239,11 @@ def test_train_fast_dev_run_gpu_compile(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-def test_train_cpu_compile_writes_wrapped_checkpoint(
+def test_train_cpu_compile_writes_clean_checkpoint(
     tmp_path: Path,
     cfg_train: DictConfig,
 ) -> None:
-    """CPU compilation persists the wrapper-prefixed keys evaluation must load.
+    """Compiled training persists uncompiled-layout keys evaluation loads strictly.
 
     :param tmp_path: Training output directory containing the checkpoint.
     :param cfg_train: Tiny KSin CPU training configuration.
@@ -268,7 +268,9 @@ def test_train_cpu_compile_writes_wrapped_checkpoint(
         map_location="cpu",
         weights_only=False,
     )
-    assert any("._orig_mod." in key for key in checkpoint["state_dict"])
+    state_dict = checkpoint["state_dict"]
+    assert state_dict
+    assert all("_orig_mod" not in key for key in state_dict)
 
 
 @pytest.mark.gpu

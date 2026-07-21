@@ -3,13 +3,13 @@
 from typing import Any
 
 import torch
+from lightning import LightningModule
 
 from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
-from synth_setter.models.compiled_checkpoint_module import CompiledCheckpointModule
 from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
 
 
-class KSinFeedForwardModule(CompiledCheckpointModule):
+class KSinFeedForwardModule(LightningModule):
     """Feed-forward LightningModule that regresses sinusoidal-synth parameters from audio."""
 
     def __init__(
@@ -115,7 +115,7 @@ class KSinFeedForwardModule(CompiledCheckpointModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
