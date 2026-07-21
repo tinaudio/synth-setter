@@ -37,7 +37,7 @@ ______________________________________________________________________
 
 ## 2. Running tests
 
-All common selectors are defined as Makefile targets — read [`Makefile`](../../Makefile) for the exact `pytest` flags each invokes (they evolve; don't memorize):
+All common selectors are defined as Makefile targets — read [`Makefile`](../../Makefile) for the exact `pytest` flags each invokes (they evolve; don't memorize). Each lane also enforces a wall-clock session budget (`PYTEST_SESSION_BUDGET_SECONDS`, enforced in `tests/conftest.py`'s `pytest_sessionfinish`) — a run that blows its budget fails even if every test passed; the per-lane values live in the Makefile.
 
 - `make test-fast` — quick CPU-only suite. Excludes slow, gpu, mps, requires_vst.
 - `make test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded). Linux bootstraps Xvfb; Darwin runs the VST subset serially after the parallel non-VST subset.

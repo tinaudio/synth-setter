@@ -42,8 +42,11 @@ PYTEST := ./.venv/bin/pytest
 # (not torch.set_num_threads) so spawned DataLoader children inherit it.
 XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
+# Wall-clock budgets per lane (enforced by tests/conftest.py, #2274): a run that
+# blows its budget fails even when every test passes, so degraded hosts and
+# slow-test regressions surface in the run itself instead of silently crawling.
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	$(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
 # GPU/MPS tests run serially because accelerators need exclusive access.
@@ -92,13 +95,13 @@ codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plug
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
 test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
-	uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
+	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
 
 test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests, excludes gpu/mps/vst.
-	uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
+	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
 
 test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
-	uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
+	PYTEST_SESSION_BUDGET_SECONDS=4800 uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
 
 # Local mirror of .github/workflows/deflake-mps.yml — see that workflow for the rationale on each flag.
 # `pipefail` (target-scoped via bash) ensures pytest's non-zero exit propagates through `tee`.
