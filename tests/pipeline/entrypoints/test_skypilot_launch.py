@@ -91,6 +91,14 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[N
     server_common.get_server_url.cache_clear()
     server_common.is_api_server_local.cache_clear()
     yield
+    # Dispatch intentionally leaves projected client auth and mirrored R2 creds
+    # in os.environ; scrub them so they cannot leak into later test modules.
+    for key in (
+        ENV_SKYPILOT_API_SERVER_ENDPOINT,
+        ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+        *(key for key in list(os.environ) if key.startswith("RCLONE_CONFIG_R2_")),
+    ):
+        os.environ.pop(key, None)
     server_common.get_server_url.cache_clear()
     server_common.is_api_server_local.cache_clear()
 
