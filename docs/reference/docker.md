@@ -97,10 +97,11 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target               | Source code            | Typical use                                   |
-| -------------------- | ---------------------- | --------------------------------------------- |
-| `dev-snapshot`       | Git clone at `GIT_REF` | CI, cloud, evaluation                         |
-| `devcontainer-tools` | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root dev) |
+| Target                        | Source code            | Typical use                                            |
+| ----------------------------- | ---------------------- | ------------------------------------------------------ |
+| `dev-snapshot`                | Git clone at `GIT_REF` | CI, cloud, evaluation                                  |
+| `devcontainer-tools`          | Git clone at `GIT_REF` | CLI tools, defaults to root (SkyPilot/RunPod dev pods) |
+| `devcontainer-tools-dev-user` | Git clone at `GIT_REF` | `devcontainer-tools` + non-root `dev` (local VS Code)  |
 
 Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 
@@ -110,9 +111,14 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij; defaults to root
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
+  GIT_REF="$(git rev-parse HEAD)" \
+  DOCKER_BUILD_FLAGS="--load"
+
+# devcontainer-tools-dev-user — devcontainer-tools with a non-root `dev` default user, for local VS Code devcontainers
+make docker-build-devcontainer-tools-dev-user \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 ```
@@ -136,7 +142,10 @@ doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the
 multiplexer (pinned upstream musl binary, SHA256-verified, in `/usr/local/bin`),
 a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
-`uv pip install` and editable installs work without sudo, and adds a
+`uv pip install` and editable installs work without sudo (the `dev`-owned tools
+above are installed mid-stage, but the stage ends with `USER root` so SkyPilot's
+RunPod backend can bootstrap sshd; the non-root default lives in the
+`devcontainer-tools-dev-user` sibling stage), and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The VS Code terminal defaults to the
@@ -154,7 +163,7 @@ overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
 baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
 without it, the host's gitignored `plugins/` would shadow the baked file and
 VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
-stage via `FROM tinaudio/synth-setter:devcontainer-tools`.
+non-root sibling via `FROM tinaudio/synth-setter:devcontainer-tools-dev-user`.
 
 ### Build variables
 
@@ -368,20 +377,25 @@ dev-snapshot image, pushes to Docker Hub (and mirrors to
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
-as build validation — no push, no smoke tests.
+as build validation, plus in-image smoke tests
+(`tests/docker/test_devcontainer_tools.py`) for the `devcontainer-tools` and
+`devcontainer-tools-dev-user` targets — but no push and no smoke test against
+the pushed SHA-pinned `dev-snapshot` tag.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                                          |
-| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
-| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+| Tag                                                       | Mutable? | Purpose                                                                          |
+| --------------------------------------------------------- | -------- | -------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                            | Yes      | Convenience pointer to the most recent default-branch build                      |
+| `tinaudio/synth-setter:dev-snapshot`                      | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`             | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`                | No       | Immutable, used for smoke tests                                                  |
+| `tinaudio/synth-setter:devcontainer-tools`                | Yes      | Latest devcontainer-tools, root default (SkyPilot/RunPod dev pods)               |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>`          | No       | Immutable root-default pin                                                       |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user`       | Yes      | Non-root `dev` default (consumed by `.devcontainer/`)                            |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
 
 Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
 as a Docker Hub pull mirror.

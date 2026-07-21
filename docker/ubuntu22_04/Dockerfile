@@ -553,8 +553,11 @@ RUN pytest -k "not slow" -v
 CMD ["/bin/bash"]
 
 # ==========================================
-# devcontainer-tools: dev-base + CLI tools + non-root user.
-# Published as tinaudio/synth-setter:devcontainer-tools.
+# devcontainer-tools: dev-base + CLI tools, defaulting to root so SkyPilot's
+# RunPod backend can bootstrap sshd. Tools that live under /home/dev are still
+# installed as the dev user mid-stage; the stage ends with USER root.
+# Published as tinaudio/synth-setter:devcontainer-tools; the non-root
+# devcontainer-tools-dev-user stage derives from it.
 # ==========================================
 FROM dev-base AS devcontainer-tools
 
@@ -691,6 +694,17 @@ RUN export HOME="/home/${USERNAME}" \
  && bash /tmp/agy-install.sh \
  && rm /tmp/agy-install.sh \
  && agy --version
+
+# Default the image back to root: SkyPilot's RunPod backend runs the container
+# start command as the image's USER and installs sshd there, which needs root
+# (a non-root default leaves the pod stuck in INIT). Local devcontainers use the
+# devcontainer-tools-dev-user stage below (or devcontainer.json's remoteUser).
+USER root
+
+# devcontainer-tools-dev-user: non-root default for local VS Code devcontainers.
+FROM devcontainer-tools AS devcontainer-tools-dev-user
+ARG USERNAME=dev
+USER $USERNAME
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility

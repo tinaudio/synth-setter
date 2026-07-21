@@ -33,7 +33,7 @@ name: Job Queue Dispatch
 #
 # Queue state is rooted via XDG_DATA_HOME so the persisted path is the same
 # regardless of whether the image runs as root or as a non-root user (e.g.
-# `devcontainer-tools` sets `USER dev`).
+# `devcontainer-tools-dev-user` sets `USER dev`).
 
 on:
   workflow_dispatch:
@@ -130,7 +130,7 @@ jobs:
       # Mount path uses XDG_DATA_HOME=/queue-state rather than the
       # backend-default `~/.local/share/pueue` so the persisted directory is
       # the same whether the image runs as root or as a non-root user (e.g.
-      # the `devcontainer-tools` image sets `USER dev`). Pueue honors
+      # the `devcontainer-tools-dev-user` image sets `USER dev`). Pueue honors
       # XDG_DATA_HOME for its data_local_dir lookup.
       - name: Run job_queue CLI
         if: ${{ !inputs.dry_run }}
