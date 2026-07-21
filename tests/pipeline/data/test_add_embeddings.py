@@ -372,6 +372,7 @@ def test_add_embeddings_debug_logs_every_batch(
     uri = str(tmp_path / "debug-progress.lance")
     _audio_dataset(uri, 257)
 
+    monkeypatch.setenv("LANCE_LOG", "debug")
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
         add_embeddings(
@@ -380,7 +381,6 @@ def test_add_embeddings_debug_logs_every_batch(
             _fake_clap,
             _SAMPLE_RATE,
             build_index=False,
-            debug=True,
         )
 
     encoding = [entry for entry in logs if entry["event"] == "encoding_batch_debug"]
@@ -639,10 +639,10 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
 
 
 @pytest.mark.slow
-def test_main_threads_explicit_device_to_both_encoders(
+def test_main_threads_device_and_debug_options_to_embedding_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The CLI device override controls both embedding models.
+    """CLI device and debug overrides control encoders and batch telemetry.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
     :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
@@ -668,9 +668,14 @@ def test_main_threads_explicit_device_to_both_encoders(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder", load_clap
     )
 
-    result = CliRunner().invoke(main, [str(uri), "--device", "mps", "--no-build-index"])
+    with capture_logs() as logs:
+        result = CliRunner().invoke(
+            main,
+            [str(uri), "--debug", "--device", "mps", "--no-build-index"],
+        )
 
     assert result.exit_code == 0, result.output
+    assert any(entry["event"] == "encoding_batch_debug" for entry in logs)
     assert selected_devices == [("m2l", "mps"), ("clap", "mps")]
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
@@ -707,10 +712,10 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
-def test_open_r2_dataset_configures_bounded_object_store_retries(
+def test_open_r2_dataset_reports_environment_overridden_retry_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2 opens with an explicit retry budget matching the visible policy.
+    """R2 reports the retry budget Lance resolves from its environment.
 
     :param monkeypatch: Pytest fixture for replacing the remote dataset boundary.
     """
@@ -733,14 +738,18 @@ def test_open_r2_dataset_configures_bounded_object_store_retries(
         lambda: {"endpoint": "https://r2.example"},
     )
     monkeypatch.setattr(lance, "dataset", capture_dataset)
+    monkeypatch.setenv("OBJECT_STORE_CLIENT_MAX_RETRIES", "5")
+    monkeypatch.setenv("OBJECT_STORE_CLIENT_RETRY_TIMEOUT", "90")
 
-    _open_lance_dataset("r2://bucket/dataset.lance")
+    with capture_logs() as logs:
+        _open_lance_dataset("r2://bucket/dataset.lance")
 
-    assert captured["uri"] == "s3://bucket/dataset.lance"
-    assert captured["storage_options"] == {
-        "endpoint": "https://r2.example",
-        "client_max_retries": "3",
-        "client_retry_timeout": "180",
+    retry_policy = next(entry for entry in logs if entry["event"] == "object_store_retry_policy")
+    assert retry_policy["max_retries"] == "5"
+    assert retry_policy["retry_timeout_seconds"] == "90"
+    assert captured == {
+        "uri": "s3://bucket/dataset.lance",
+        "storage_options": {"endpoint": "https://r2.example"},
     }
 
 

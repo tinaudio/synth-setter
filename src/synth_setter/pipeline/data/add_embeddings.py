@@ -69,8 +69,8 @@ DEFAULT_NUM_SUB_VECTORS: int = 16
 DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
 EMBEDDING_HEARTBEAT_SECONDS: float = 30.0
-OBJECT_STORE_MAX_RETRIES: int = 3
-OBJECT_STORE_RETRY_TIMEOUT_SECONDS: int = 180
+DEFAULT_OBJECT_STORE_MAX_RETRIES: str = "3"
+DEFAULT_OBJECT_STORE_RETRY_TIMEOUT_SECONDS: str = "180"
 
 M2LEncodeFn: TypeAlias = Callable[[np.ndarray], np.ndarray]
 ClapEncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
@@ -195,7 +195,6 @@ def add_embeddings(
     clap_dim: int = CLAP_EMBEDDING_DIM,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
     build_index: bool = True,
-    debug: bool = False,
     num_partitions: int | None = None,
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
     metric: str = DEFAULT_INDEX_METRIC,
@@ -214,7 +213,6 @@ def add_embeddings(
     :param batch_size: Rows per UDF call. Ignored for legacy (v1) Lance datasets,
         which Lance rewrites whole.
     :param build_index: Build an IVF_PQ index on ``clap`` after the column lands.
-    :param debug: Log every encoder batch boundary.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
     :param metric: Vector-index distance metric.
@@ -262,6 +260,8 @@ def add_embeddings(
     next_progress_row = progress_interval
     rows_processed = 0
     started_at = time.monotonic()
+    native_log_level = os.environ.get("LANCE_LOG", "").split(",", maxsplit=1)[0].lower()
+    debug_batches = native_log_level in {"debug", "trace"}
 
     @lance.batch_udf(output_schema=sample_output.schema)
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -271,7 +271,7 @@ def add_embeddings(
             rows_processed=rows_processed,
             batch_rows=batch.num_rows,
         )
-        if debug:
+        if debug_batches:
             logger.debug(
                 "encoding_batch_debug",
                 rows_processed=rows_processed,
@@ -296,7 +296,7 @@ def add_embeddings(
             rows_processed=rows_processed,
             batch_rows=batch.num_rows,
         )
-        if debug:
+        if debug_batches:
             logger.debug(
                 "writing_embeddings_debug",
                 rows_processed=rows_processed,
@@ -325,14 +325,23 @@ def add_embeddings(
             ) * progress_interval
         return output
 
-    logger.info("embedding_write_started", total_rows=total_rows, batch_size=batch_size)
+    logger.info(
+        "embedding_write_started",
+        total_rows=total_rows,
+        batch_size=batch_size,
+        source_version=dataset.version,
+    )
     heartbeat_thread.start()
     try:
         dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join()
-    logger.info("wrote_embeddings", total_rows=total_rows)
+    logger.info(
+        "wrote_embeddings",
+        total_rows=total_rows,
+        committed_version=dataset.version,
+    )
     if build_index:
         build_clap_index(
             dataset, num_partitions=num_partitions, num_sub_vectors=num_sub_vectors, metric=metric
@@ -466,15 +475,16 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
         uri = r2_io.to_s3_uri(uri)
     if uri.startswith("s3://"):
         r2_io.ensure_r2_env_loaded()
-        storage_options = {
-            **r2_io.r2_storage_options(),
-            "client_max_retries": str(OBJECT_STORE_MAX_RETRIES),
-            "client_retry_timeout": str(OBJECT_STORE_RETRY_TIMEOUT_SECONDS),
-        }
+        storage_options = r2_io.r2_storage_options()
         logger.info(
             "object_store_retry_policy",
-            max_retries=OBJECT_STORE_MAX_RETRIES,
-            retry_timeout_seconds=OBJECT_STORE_RETRY_TIMEOUT_SECONDS,
+            max_retries=os.environ.get(
+                "OBJECT_STORE_CLIENT_MAX_RETRIES", DEFAULT_OBJECT_STORE_MAX_RETRIES
+            ),
+            retry_timeout_seconds=os.environ.get(
+                "OBJECT_STORE_CLIENT_RETRY_TIMEOUT",
+                DEFAULT_OBJECT_STORE_RETRY_TIMEOUT_SECONDS,
+            ),
         )
         return lance.dataset(uri, storage_options=storage_options)
     return lance.dataset(uri)
@@ -594,7 +604,6 @@ def main(
             sample_rate,
             batch_size=batch_size,
             build_index=build_index,
-            debug=debug,
             num_partitions=num_partitions,
             num_sub_vectors=num_sub_vectors,
             metric=metric,
