@@ -24,7 +24,6 @@ from synth_setter.cli.train import (
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
 
-# Shaped like _make_recovery_namespace output: "{run_id}-{uuid4().hex}".
 _LAUNCH_NAMESPACE = f"train-20260720T000000000Z-{'0' * 32}"
 
 
@@ -117,15 +116,35 @@ def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:
         _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [], _LAUNCH_NAMESPACE)
 
 
-def test_derive_probe_uri_places_namespace_between_config_id_and_steps() -> None:
-    """Snapshots archive under probes/{config_id}/{launch namespace} (#2230)."""
-    uri = _derive_probe_uri(_cfg(enabled=True), _LAUNCH_NAMESPACE)
+def test_probe_uri_isolates_independent_same_config_launches() -> None:
+    """Separate launches of one config archive probes under separate namespaces."""
+    cfg = _cfg(enabled=True)
+    first_namespace = f"train-20260715T000000000Z-{'0' * 31}1"
+    second_namespace = f"train-20260715T000001000Z-{'0' * 31}2"
 
-    assert uri == f"r2://intermediate-data/probes/train/{_LAUNCH_NAMESPACE}"
+    first = _derive_probe_uri(cfg, first_namespace)
+    second = _derive_probe_uri(cfg, second_namespace)
+
+    assert first == f"r2://intermediate-data/probes/train/{first_namespace}"
+    assert second == f"r2://intermediate-data/probes/train/{second_namespace}"
+    assert first != second
+
+
+def test_probe_uri_resume_uses_new_launch_namespace_for_recovered_run() -> None:
+    """A resumed W&B run preserves its ID but starts a new probe launch namespace."""
+    cfg = _cfg(enabled=True)
+    recovered_run_id = "train-20260715T000000000Z"
+
+    source = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
+    resumed = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
+
+    assert source != resumed
+    assert f"/{recovered_run_id}-" in source
+    assert f"/{recovered_run_id}-" in resumed
 
 
 def test_derive_probe_uri_shares_namespace_segment_with_checkpoint_prefix() -> None:
-    """One launch namespace names both the probe prefix and the recovery-checkpoint prefix."""
+    """One launch namespace names both probe and recovery-checkpoint prefixes."""
     cfg = _cfg(enabled=True)
 
     probe_uri = _derive_probe_uri(cfg, _LAUNCH_NAMESPACE)
@@ -136,18 +155,14 @@ def test_derive_probe_uri_shares_namespace_segment_with_checkpoint_prefix() -> N
 
 
 def test_configure_val_audio_probe_namespaces_upload_uri_without_durability() -> None:
-    """The wired upload URI carries the launch namespace even with durability off.
-
-    The fixture cfg never sets ``training.upload_checkpoints_during_training``,
-    so this pins that probe namespacing does not depend on the durability flag.
-    """
+    """Probe namespacing does not depend on checkpoint durability."""
     callbacks: list[Callback] = []
 
     _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
 
     probe = callbacks[0]
     assert isinstance(probe, ValAudioProbe)
-    upload_uri = probe._probe_fn.keywords["upload_uri"]  # noqa: SLF001 — pins the wired partial
+    upload_uri = probe._probe_fn.keywords["upload_uri"]  # noqa: SLF001
     assert upload_uri == f"r2://intermediate-data/probes/train/{_LAUNCH_NAMESPACE}"
 
 

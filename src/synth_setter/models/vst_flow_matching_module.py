@@ -9,6 +9,7 @@ from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import ConditioningMode
+from synth_setter.metrics import BestSwapParamMSE
 
 
 def call_with_cfg(
@@ -87,6 +88,9 @@ class VSTFlowMatchingModule(LightningModule):
 
         self.encoder = encoder
         self.vector_field = vector_field
+
+        self.val_param_mse_best_swap = BestSwapParamMSE()
+        self.test_param_mse_best_swap = BestSwapParamMSE()
 
     def on_train_start(self):
         pass
@@ -225,6 +229,14 @@ class VSTFlowMatchingModule(LightningModule):
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
+        self.val_param_mse_best_swap.update(pred_params, batch["params"])
+        self.log(
+            "val/param_mse_best_swap",
+            self.val_param_mse_best_swap,
+            on_step=False,
+            on_epoch=True,
+        )
+
         return {"param_mse": param_mse, "per_param_mse": per_param_mse, "preds": pred_params}
 
     def on_validation_epoch_end(self):
@@ -241,6 +253,14 @@ class VSTFlowMatchingModule(LightningModule):
 
         param_mse = (pred_params - batch["params"]).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
+
+        self.test_param_mse_best_swap.update(pred_params, batch["params"])
+        self.log(
+            "test/param_mse_best_swap",
+            self.test_param_mse_best_swap,
+            on_step=False,
+            on_epoch=True,
+        )
 
         return param_mse
 

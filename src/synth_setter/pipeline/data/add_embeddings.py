@@ -25,13 +25,13 @@ CLI: ``python -m synth_setter.pipeline.data.add_embeddings DATASET.lance``.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import click
-import lance
 import numpy as np
 import pyarrow as pa
 import structlog
@@ -39,7 +39,12 @@ from einops import rearrange
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import read_shard_metadata, tensor_array
+
+# lance (and lance_shard, which imports it) is imported lazily everywhere below:
+# native Lance logging locks in LANCE_LOG at first import, so _configure_lance_logging
+# must run first. Hoisting any of these imports silently breaks --debug telemetry.
+if TYPE_CHECKING:
+    import lance
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +69,11 @@ MIN_ROWS_FOR_INDEX: int = 256
 DEFAULT_NUM_SUB_VECTORS: int = 16
 # Cosine matches CLAP's L2-normalized audio embeddings.
 DEFAULT_INDEX_METRIC: str = "cosine"
+DEFAULT_LANCE_LOG: str = "warn"
+# Checked at batch boundaries only: forces a progress line on the next batch when
+# batches are slow, so early progress isn't silent. Deliberately not a stall
+# detector — a hard stall shows as log silence, plus LANCE_LOG telemetry under --debug.
+PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 
 M2LEncodeFn: TypeAlias = Callable[[np.ndarray], np.ndarray]
 ClapEncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
@@ -111,6 +121,8 @@ def embeddings_record_batch(
         ``(B, clap_dim)``, or either embedding is non-finite (the columns are
         permanent — a NaN/inf row from a degenerate clip must not be written).
     """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
     rows = len(audio)
     m2l = np.ascontiguousarray(m2l_encode(audio), dtype=np.float32)
     clap = np.ascontiguousarray(
@@ -185,6 +197,7 @@ def add_embeddings(
     *,
     clap_dim: int = CLAP_EMBEDDING_DIM,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
+    log_every_batch: bool = False,
     build_index: bool = True,
     num_partitions: int | None = None,
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
@@ -203,6 +216,8 @@ def add_embeddings(
     :param clap_dim: CLAP embedding width; the ``clap`` fixed-size-list length.
     :param batch_size: Rows per UDF call. Ignored for legacy (v1) Lance datasets,
         which Lance rewrites whole.
+    :param log_every_batch: Emit an ``embedding_progress`` line for every UDF
+        batch instead of only at row/time intervals.
     :param build_index: Build an IVF_PQ index on ``clap`` after the column lands.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
@@ -212,6 +227,8 @@ def add_embeddings(
         already exists" error), or lacks the ``audio`` column the UDF reads
         (an absent source column would otherwise fail opaquely mid-transaction).
     """
+    import lance
+
     existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
     if existing:
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
@@ -223,6 +240,7 @@ def add_embeddings(
     total_rows = dataset.count_rows()
     if total_rows < 1:
         raise ValueError("dataset has no rows to embed")
+    logger.info("inferring_embedding_schema")
     sample = next(dataset.to_batches(columns=[AUDIO_FIELD], limit=1))
     sample_output = embeddings_record_batch(
         sample.column(AUDIO_FIELD).to_numpy_ndarray(),
@@ -231,39 +249,95 @@ def add_embeddings(
         sample_rate,
         clap_dim=clap_dim,
     )
+    logger.info("inferred_embedding_schema")
     progress_interval = max(batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS)
     next_progress_row = progress_interval
     rows_processed = 0
     started_at = time.monotonic()
+    last_progress_at = started_at
+    last_udf_end = started_at
+    stage_ms: dict[str, float] = {}
+
+    def timed(stage: str, encode: Callable[..., np.ndarray]) -> Callable[..., np.ndarray]:
+        """Record ``encode``'s wall-clock per call under ``stage`` in ``stage_ms``.
+
+        :param stage: Key the duration is stored under.
+        :param encode: Encoder to wrap.
+        :returns: Wrapped encoder with unchanged signature and result.
+        """
+
+        def wrapper(*args: object) -> np.ndarray:
+            encode_started = time.monotonic()
+            result = encode(*args)
+            stage_ms[stage] = (time.monotonic() - encode_started) * 1000
+            return result
+
+        return wrapper
 
     @lance.batch_udf(output_schema=sample_output.schema)
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
-        nonlocal next_progress_row, rows_processed
+        nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
+        udf_started = time.monotonic()
         audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
         output = embeddings_record_batch(
-            audio, m2l_encode, clap_encode, sample_rate, clap_dim=clap_dim
+            audio,
+            timed("m2l", m2l_encode),
+            timed("clap", clap_encode),
+            sample_rate,
+            clap_dim=clap_dim,
         )
         rows_processed += batch.num_rows
-        if rows_processed >= next_progress_row or rows_processed == total_rows:
-            elapsed_seconds = time.monotonic() - started_at
+        now = time.monotonic()
+        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+        time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
+        if log_every_batch or interval_due or time_due:
             logger.info(
                 "embedding_progress",
                 rows_processed=rows_processed,
                 total_rows=total_rows,
                 percent=round(rows_processed / total_rows * 100, 1),
-                rows_per_second=round(rows_processed / max(elapsed_seconds, 1e-9), 1),
-                batch_size=batch_size,
+                rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
+                batch_rows=batch.num_rows,
+                m2l_ms=round(stage_ms["m2l"], 1),
+                clap_ms=round(stage_ms["clap"], 1),
+                batch_ms=round((now - udf_started) * 1000, 1),
+                # Gap since the previous batch returned: Lance read/write + native
+                # overhead — high values point at I/O, not the encoders.
+                interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
             )
-            next_progress_row = (
-                rows_processed // progress_interval + 1
-            ) * progress_interval
+            last_progress_at = now
+        if interval_due:
+            next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
+        last_udf_end = time.monotonic()
         return output
 
+    logger.info(
+        "embedding_write_started",
+        total_rows=total_rows,
+        batch_size=batch_size,
+        source_version=dataset.version,
+    )
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
+    logger.info(
+        "wrote_embeddings",
+        total_rows=total_rows,
+        committed_version=dataset.version,
+    )
     if build_index:
         build_clap_index(
             dataset, num_partitions=num_partitions, num_sub_vectors=num_sub_vectors, metric=metric
         )
+
+
+def _configure_lance_logging(*, debug: bool) -> None:
+    """Configure native Lance warnings or full debug telemetry before import.
+
+    :param debug: Replace ambient Lance logging with debug-level native telemetry.
+    """
+    if debug:
+        os.environ["LANCE_LOG"] = "debug"
+    else:
+        os.environ.setdefault("LANCE_LOG", DEFAULT_LANCE_LOG)
 
 
 def _resolve_torch_device(device: str | None) -> str:
@@ -376,6 +450,8 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     :param uri: Local path, ``r2://bucket/key``, or ``s3://bucket/key`` (R2).
     :returns: The opened dataset, credentialed when ``uri`` is on R2.
     """
+    import lance
+
     if r2_io.is_r2_uri(uri):
         uri = r2_io.to_s3_uri(uri)
     if uri.startswith("s3://"):
@@ -386,6 +462,11 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
 
 @click.command()
 @click.argument("lance_uri", type=str)
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Log every batch with stage timings and enable native Lance debug telemetry.",
+)
 @click.option(
     "--clap-checkpoint",
     default=DEFAULT_CLAP_CHECKPOINT,
@@ -431,6 +512,7 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
 )
 def main(
     lance_uri: str,
+    debug: bool,
     clap_checkpoint: str,
     device: str | None,
     batch_size: int,
@@ -447,6 +529,8 @@ def main(
     fixed-size list; with ``--build-index`` it also gets an IVF_PQ index.
 
     :param lance_uri: Dataset directory to augment in place.
+    :param debug: Log every batch with stage timings and enable native Lance
+        debug telemetry.
     :param clap_checkpoint: HuggingFace CLAP model id.
     :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
     :param batch_size: Rows per UDF call.
@@ -455,7 +539,11 @@ def main(
     :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
     :param metric: Vector-index distance metric.
     """
+    _configure_lance_logging(debug=debug)
+    logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
+        from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+
         dataset = _open_lance_dataset(lance_uri)
         sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
     # RuntimeError covers missing R2 creds / rclone from the cloud-URI path.
@@ -482,6 +570,7 @@ def main(
             clap_encode,
             sample_rate,
             batch_size=batch_size,
+            log_every_batch=debug,
             build_index=build_index,
             num_partitions=num_partitions,
             num_sub_vectors=num_sub_vectors,

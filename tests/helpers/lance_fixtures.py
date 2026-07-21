@@ -84,14 +84,11 @@ def write_mel_stats(dataset_dir: Path, *, mean: float = 0.0, std: float = 1.0) -
     )
 
 
-def write_lance_shard(path: Path, columns: Mapping[str, np.ndarray]) -> None:
-    """Write ``columns`` as a Lance dataset directory with one fixed-shape tensor column each.
+def shard_record_batch(columns: Mapping[str, np.ndarray]) -> pa.RecordBatch:
+    """Encode column arrays as one record batch of fixed-shape tensor columns.
 
-    Goes through the pipeline's :func:`write_lance_dataset` so fixtures carry the
-    exact on-disk format the finalize step emits.
-
-    :param path: Output ``.lance`` dataset directory.
     :param columns: Mapping of column name to ``(num_rows, ...)`` array.
+    :returns: Record batch carrying the shard schema the pipeline emits.
     """
     items = list(columns.items())
     fields = [
@@ -103,8 +100,20 @@ def write_lance_shard(path: Path, columns: Mapping[str, np.ndarray]) -> None:
         for name, data in items
     ]
     schema = pa.schema(fields)
-    batch = pa.record_batch(
+    return pa.record_batch(
         [tensor_array(data, data.dtype, data.shape[1:]) for _, data in items],
         schema=schema,
     )
-    write_lance_dataset(path, schema, [batch])
+
+
+def write_lance_shard(path: Path, columns: Mapping[str, np.ndarray]) -> None:
+    """Write ``columns`` as a Lance dataset directory with one fixed-shape tensor column each.
+
+    Goes through the pipeline's :func:`write_lance_dataset` so fixtures carry the
+    exact on-disk format the finalize step emits.
+
+    :param path: Output ``.lance`` dataset directory.
+    :param columns: Mapping of column name to ``(num_rows, ...)`` array.
+    """
+    batch = shard_record_batch(columns)
+    write_lance_dataset(path, batch.schema, [batch])

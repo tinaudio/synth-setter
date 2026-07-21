@@ -2476,21 +2476,27 @@ class TestMainDispatchBranches:
         # A bare-minimum compute YAML the loader will accept (resources + envs, no run:).
         template = tmp_path / "template.yaml"
         template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+        env_file = tmp_path / "launcher.env"
+        env_file.write_text(
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret\n"
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+            "SKYPILOT_API_SERVER_ENDPOINT=https://sky.example.com\n"
+        )
 
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
             f"skypilot_launch.compute_template={template}",
+            f"skypilot_launch.env_file={env_file}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
-        recorded: dict[str, object] = {}
-
-        def _fake_dispatch(sky_cfg: object) -> None:
-            recorded["sky_cfg"] = sky_cfg
-
-        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+        fake_sky = MagicMock()
+        fake_sky.jobs.launch.return_value = "launch-req"
+        fake_sky.stream_and_get.return_value = ([1], MagicMock())
+        monkeypatch.setattr(sl, "sky", fake_sky)
 
         def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("generate must not be called on the dispatch branch")
@@ -2499,16 +2505,13 @@ class TestMainDispatchBranches:
 
         _call_hydra_main(gd.main)
 
-        assert "sky_cfg" in recorded
-        sky_cfg = recorded["sky_cfg"]
-        assert sky_cfg.compute_template == str(template)  # type: ignore[attr-defined]
-        assert sky_cfg.cmd is not None  # type: ignore[attr-defined]
-        # Every operator-supplied override (sans argv[0]) round-trips into the worker cmd
-        # so the worker reproduces this composition byte-for-byte.
+        task_doc = fake_sky.Task.from_yaml_config.call_args.args[0]
+        worker_cmd = task_doc["run"]
         for override in argv[1:]:
-            assert override in sky_cfg.cmd, (  # type: ignore[attr-defined]
-                f"override {override!r} missing from worker cmd: {sky_cfg.cmd!r}"  # type: ignore[attr-defined]
+            assert override in worker_cmd, (
+                f"override {override!r} missing from worker cmd: {worker_cmd!r}"
             )
+        fake_sky.jobs.launch.assert_called_once()
 
     def test_remote_dawdreamer_dispatch_does_not_validate_launcher_runtime(
         self,

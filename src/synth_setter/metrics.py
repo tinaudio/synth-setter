@@ -123,3 +123,46 @@ class LinearAssignmentDistance(Metric):
 
     def compute(self):
         return self.linear_assignment_distance / self.count
+
+
+class BestSwapParamMSE(Metric):
+    """MSE after the error-minimizing one-to-one swap of predicted and target scalars.
+
+    The optimistic bracket to plain ``param_mse``: invariant to every permutation
+    of parameter values — including sound-changing ones — so it is a floor, never
+    a quality verdict. Read the pair as bounds: ``param_mse`` is pessimistic
+    (penalizes sound-equivalent reorderings), this metric is optimistic (credits
+    non-equivalent ones); a widening gap over training tracks the model producing
+    right values in different arrangements. For squared error the optimal scalar
+    matching is sort-both-and-compare (rearrangement inequality), so no explicit
+    assignment is solved.
+    """
+
+    def __init__(self) -> None:
+        """Register the squared-error accumulator states."""
+        super().__init__()
+        self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
+        """Accumulate per-sample sorted-match squared errors.
+
+        :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+        :param target: Ground-truth vectors, same shape as ``predicted``.
+        :raises ValueError: If shapes differ or inputs are not 2-D.
+        """
+        if predicted.ndim != 2 or predicted.shape != target.shape:
+            raise ValueError(
+                f"expected matching 2-D shapes, got {tuple(predicted.shape)} "
+                f"and {tuple(target.shape)}"
+            )
+        error = predicted.sort(dim=1).values.float() - target.sort(dim=1).values.float()
+        self.sum_squared_error = self.sum_squared_error + error.square().sum()
+        self.element_count = self.element_count + error.numel()
+
+    def compute(self) -> torch.Tensor:
+        """Return the accumulated mean squared error under optimal swapping.
+
+        :returns: Scalar mean over every accumulated element.
+        """
+        return self.sum_squared_error / self.element_count
