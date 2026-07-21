@@ -88,7 +88,7 @@ def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None
     task = sky.Task.from_yaml_config(task_doc)
 
     assert task.to_yaml_config()["volumes"] == {
-        "/workspace/network-volume": "synth-setter-datasets-us-ks-2"
+        "/workspace/network-volume": "synth-setter-datasets-us-tx-3"
     }
     assert isinstance(task.run, str)
     assert "download_dataset_root_uri=file:///workspace/network-volume/" in task.run
@@ -108,7 +108,7 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
     task = sky.Task.from_yaml_config(task_doc)
 
     assert task.to_yaml_config()["volumes"] == {
-        "/workspace/network-volume": "synth-setter-datasets-us-ks-2"
+        "/workspace/network-volume": "synth-setter-datasets-us-tx-3"
     }
     assert isinstance(task.run, str)
     assert "scripts/stage_runpod_network_volume.sh" in task.run
@@ -117,11 +117,11 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
 
 def test_runpod_network_volume_definition_is_valid() -> None:
     """The committed volume definition targets RunPod's network-volume tier."""
-    volume_path = _REPO_ROOT / "src/synth_setter/configs/volumes/runpod-datasets-us-ks-2.yaml"
+    volume_path = _REPO_ROOT / "src/synth_setter/configs/volumes/runpod-datasets-us-tx-3.yaml"
     config = yaml.safe_load(volume_path.read_text())
     volume = Volume.from_yaml_config(config)
 
     volume.validate()
     assert volume.type == "runpod-network-volume"
-    assert volume.zone == "US-KS-2"
+    assert volume.zone == "US-TX-3"
     assert volume.size == "750"

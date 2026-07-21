@@ -6,12 +6,12 @@ the pod's local disk before loading Lance.
 
 ## Create the volume
 
-The checked-in definition selects RunPod data center `US-KS-2` and requests
+The checked-in definition selects RunPod data center `US-TX-3` and requests
 750 GB. Creating it starts persistent storage billing:
 
 ```bash
 uv run sky volumes apply \
-  src/synth_setter/configs/volumes/runpod-datasets-us-ks-2.yaml
+  src/synth_setter/configs/volumes/runpod-datasets-us-tx-3.yaml
 uv run sky volumes ls --refresh --verbose
 ```
 
@@ -59,5 +59,5 @@ Delete the persistent volume only when its cached datasets are no longer
 needed:
 
 ```bash
-uv run sky volumes delete synth-setter-datasets-us-ks-2
+uv run sky volumes delete synth-setter-datasets-us-tx-3
 ```

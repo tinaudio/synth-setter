@@ -8,7 +8,7 @@ resources:
   disk_size: 750
 
 volumes:
-  /workspace/network-volume: synth-setter-datasets-us-ks-2
+  /workspace/network-volume: synth-setter-datasets-us-tx-3
 
 envs:
   RCLONE_CONFIG_R2_TYPE: ""

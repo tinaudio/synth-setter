@@ -1,4 +1,0 @@
-name: synth-setter-datasets-us-ks-2
-type: runpod-network-volume
-infra: runpod/US/US-KS-2
-size: 750GB
