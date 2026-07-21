@@ -42,13 +42,13 @@ def _compose_task_doc(launch_config: SkypilotLaunchConfig) -> dict[str, object]:
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
         "train-runpod-flow-simple-440k-volume.yaml",
-        "train-runpod-flow-simple-440k-volume-jp-b200.yaml",
+        "train-runpod-flow-simple-440k-volume-jp.yaml",
     ],
     ids=[
         "smoke",
         "flow-simple-440k",
         "flow-simple-440k-volume",
-        "flow-simple-440k-volume-jp-b200",
+        "flow-simple-440k-volume-jp",
     ],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(

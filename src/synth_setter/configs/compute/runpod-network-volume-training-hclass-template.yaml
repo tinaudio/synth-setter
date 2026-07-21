@@ -1,8 +1,9 @@
-# B200-pinned variant of the network-volume training template for runs that
-# must land on RunPod's top training tier rather than the cheapest available.
+# H-class variant of the network-volume training template: any-of over the
+# top training tiers so the scheduler takes whichever the volume's data
+# center stocks (B200 > H200 > H100 by capability, priced accordingly).
 resources:
   cloud: runpod
-  accelerators: { B200:1 }
+  accelerators: { H100-SXM:1, H200-SXM:1, B200:1 }
   use_spot: false
   disk_size: 750
 
