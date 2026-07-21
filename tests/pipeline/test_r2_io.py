@@ -484,6 +484,21 @@ class TestDownloadDirNoOverwrite:
 
         assert (dest / "train.lance").read_text() == "train"
 
+    def test_file_uri_command_uses_decoded_local_path(self, tmp_path: Path) -> None:
+        """The file-URI branch reaches rclone without requiring an installed binary.
+
+        :param tmp_path: Pytest tmp dir used to form source and destination paths.
+        """
+        source = tmp_path / "network volume"
+        destination = tmp_path / "root"
+
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.download_dir_no_overwrite(source.as_uri(), destination)
+
+        args = mock_call.call_args[0][0]
+        assert str(source) in args
+        assert str(destination) in args
+
     def test_rejects_unsupported_source_uri(self, tmp_path: Path) -> None:
         """A source outside the R2 and local-file contracts is rejected.
 
