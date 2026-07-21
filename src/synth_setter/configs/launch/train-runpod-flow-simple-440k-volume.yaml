@@ -3,6 +3,7 @@
 compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-template.yaml
 worker_image_tag: dev-snapshot
 env_file: .env
+network_volume: synth-setter-datasets-us-ca-2
 tail: false
 cmd: >-
   cd /home/build/synth-setter &&

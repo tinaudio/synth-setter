@@ -506,6 +506,47 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:
 
 
 _WORKER_CMD_SENTINEL = "${WORKER_CMD}"
+_NETWORK_VOLUME_SENTINEL = "${NETWORK_VOLUME}"
+
+
+def _inject_network_volume(
+    task_doc: dict[str, object], network_volume: str | None, *, source: Path
+) -> dict[str, object]:
+    """Substitute ``${NETWORK_VOLUME}`` in the template's ``volumes:`` values.
+
+    Sentinel and config must agree: a template that mounts the sentinel
+    requires ``network_volume``, and a configured name with no sentinel to
+    land in is a config error — never a silent no-op against the wrong volume.
+
+    :param task_doc: Parsed compute YAML dict, mutated in place.
+    :param network_volume: SkyPilot volume name to mount, or ``None``.
+    :param source: Template path, named in error messages only.
+    :return: ``task_doc`` with sentinel values substituted.
+    :raises ValueError: the sentinel is present without ``network_volume``,
+        or ``network_volume`` is set but the template has no sentinel.
+    """
+    volumes = task_doc.get("volumes")
+    sentinel_keys = (
+        [k for k, v in volumes.items() if v == _NETWORK_VOLUME_SENTINEL]
+        if isinstance(volumes, dict)
+        else []
+    )
+    if sentinel_keys and network_volume is None:
+        raise ValueError(
+            f"compute template {source} mounts {_NETWORK_VOLUME_SENTINEL} but the "
+            "launch config does not set network_volume; set it to the SkyPilot "
+            "volume name for the target data center."
+        )
+    if network_volume is not None and not sentinel_keys:
+        raise ValueError(
+            f"launch config sets network_volume={network_volume!r} but compute "
+            f"template {source} has no {_NETWORK_VOLUME_SENTINEL} in its `volumes:` "
+            "mapping to substitute."
+        )
+    if isinstance(volumes, dict):
+        for key in sentinel_keys:
+            volumes[key] = network_volume
+    return task_doc
 
 
 def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:
@@ -660,6 +701,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     template_path = Path(sky_cfg.compute_template).expanduser().resolve()
     task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+    task_doc = _inject_network_volume(task_doc, sky_cfg.network_volume, source=template_path)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -784,8 +826,18 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     metavar="KEY VALUE",
     help="Worker environment entry; repeat to set multiple values.",
 )
+@click.option(
+    "--network-volume",
+    default=None,
+    metavar="NAME",
+    help="SkyPilot volume name overriding the config's network_volume.",
+)
 @click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
+def main(
+    launch_config: Path,
+    extra_env: tuple[tuple[str, str], ...],
+    network_volume: str | None,
+) -> None:
     """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
 
     Relative paths inside the config (``compute_template``, ``env_file``) are
@@ -793,6 +845,8 @@ def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
 
     :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
     :param extra_env: Worker environment entries that override config ``extra_envs``.
+    :param network_volume: Volume-name override; retargets the launch to another
+        data center's volume without editing the config.
     :raises click.ClickException: The config or worker environment fails validation.
     """
     try:
@@ -801,6 +855,7 @@ def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
             {
                 **sky_cfg.model_dump(),
                 "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
+                **({"network_volume": network_volume} if network_volume is not None else {}),
             }
         )
     except (ValueError, yaml.YAMLError) as exc:

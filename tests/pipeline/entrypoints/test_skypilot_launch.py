@@ -42,6 +42,7 @@ from synth_setter.pipeline.skypilot_launch import (
     _detect_provider_from_doc,
     _ensure_ci_sky_config,
     _fetch_runpod_balance,
+    _inject_network_volume,
     _load_compute_template_with_cmd,
     _override_image_id,
     dispatch_via_skypilot,
@@ -1037,6 +1038,19 @@ def _write_runpod_yaml(
     return path
 
 
+def _write_sentinel_volume_runpod_yaml(tmp_path: Path) -> Path:
+    """Write a RunPod template that mounts the ``${NETWORK_VOLUME}`` sentinel.
+
+    :param tmp_path: Directory under which ``compute.yaml`` is written.
+    :return: Path to the written ``compute.yaml``.
+    """
+    template = _write_runpod_yaml(tmp_path)
+    template.write_text(
+        template.read_text() + 'volumes:\n  /workspace/network-volume: "${NETWORK_VOLUME}"\n'
+    )
+    return template
+
+
 class TestLoadComputeTemplateWithCmd:
     """``_load_compute_template_with_cmd`` injects cmd as run and rejects pre-existing runs."""
 
@@ -1107,6 +1121,49 @@ class TestLoadComputeTemplateWithCmd:
         path.write_text("- not\n- a\n- mapping\n")
         with pytest.raises(ValueError, match="must be a mapping"):
             _load_compute_template_with_cmd(path, "x")
+
+
+class TestInjectNetworkVolume:
+    """``_inject_network_volume`` substitutes ${NETWORK_VOLUME} in the volumes: mapping."""
+
+    def test_sentinel_with_value_substitutes_volume_name(self) -> None:
+        """A ${NETWORK_VOLUME} volumes: value becomes the configured volume name."""
+        doc: dict[str, object] = {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
+        }
+        result = _inject_network_volume(
+            doc, "synth-setter-datasets-us-ca-2", source=Path("template.yaml")
+        )
+        assert result["volumes"] == {"/workspace/network-volume": "synth-setter-datasets-us-ca-2"}
+
+    def test_sentinel_without_value_raises(self) -> None:
+        """A template needing a volume fails loudly when network_volume is unset."""
+        doc: dict[str, object] = {
+            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
+        }
+        with pytest.raises(ValueError, match="network_volume"):
+            _inject_network_volume(doc, None, source=Path("template.yaml"))
+
+    def test_value_without_sentinel_raises(self) -> None:
+        """A configured volume name with nowhere to land is a config error, not a no-op."""
+        doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
+        with pytest.raises(ValueError, match=r"\$\{NETWORK_VOLUME\}"):
+            _inject_network_volume(
+                doc, "synth-setter-datasets-us-ca-2", source=Path("template.yaml")
+            )
+
+    def test_no_sentinel_no_value_leaves_doc_unchanged(self) -> None:
+        """Templates without volume needs pass through untouched."""
+        doc: dict[str, object] = {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/data": "some-static-volume"},
+        }
+        result = _inject_network_volume(doc, None, source=Path("template.yaml"))
+        assert result == {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/data": "some-static-volume"},
+        }
 
 
 class TestDetectProviderFromDoc:
@@ -1239,6 +1296,22 @@ class TestDispatchViaSkypilot:
         template = _write_runpod_yaml(tmp_path, include_run=True)
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
         with pytest.raises(ValueError, match="has a non-empty `run:` block"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_sentinel_template_without_network_volume_raises_before_launch(
+        self,
+        tmp_path: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A volume-mounting template with no configured volume name never reaches SkyPilot.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
+        with pytest.raises(ValueError, match="does not set network_volume"):
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
@@ -1946,6 +2019,67 @@ class TestSkypilotLaunchCli:
         injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
         assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
         assert injected["EXPERIMENT"] == "surge/flow_simple"
+
+    def test_network_volume_option_overrides_config_volume(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """--network-volume redirects the mounted volume without editing the launch config.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+            network_volume="synth-setter-datasets-us-ca-2",
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--network-volume", "synth-setter-datasets-ap-jp-1", str(cfg_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert task_doc["volumes"] == {
+            "/workspace/network-volume": "synth-setter-datasets-ap-jp-1"
+        }
+
+    def test_config_network_volume_reaches_submitted_task(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Without a CLI override, the launch config's volume name lands in the task.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+            network_volume="synth-setter-datasets-us-ca-2",
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code == 0, result.output
+        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert task_doc["volumes"] == {
+            "/workspace/network-volume": "synth-setter-datasets-us-ca-2"
+        }
 
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.

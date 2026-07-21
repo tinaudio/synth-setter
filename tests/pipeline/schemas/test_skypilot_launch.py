@@ -35,6 +35,10 @@ class TestDefaults:
         """No dispatch-mode preference by default; honor inherited env."""
         assert SkypilotLaunchConfig().local is False
 
+    def test_default_network_volume_is_none(self) -> None:
+        """Network volume defaults to None — templates without the sentinel need no value."""
+        assert SkypilotLaunchConfig().network_volume is None
+
 
 class TestValidation:
     """Pydantic field validators reject invalid combinations early."""
@@ -61,6 +65,20 @@ class TestValidation:
         """Surrounding whitespace is trimmed so the eventual env-export round-trips cleanly."""
         cfg = SkypilotLaunchConfig(api_server="  https://api.example.com  ")
         assert cfg.api_server == "https://api.example.com"
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_blank_network_volume_rejected(self, blank: str) -> None:
+        """Empty or whitespace-only network_volume is rejected to surface typos loudly.
+
+        :param blank: Parametrized blank/whitespace-only network_volume value.
+        """
+        with pytest.raises(ValidationError, match="network_volume must be a non-empty name"):
+            SkypilotLaunchConfig(network_volume=blank)
+
+    def test_network_volume_is_stripped(self) -> None:
+        """Surrounding whitespace is trimmed so the substituted volume name matches exactly."""
+        cfg = SkypilotLaunchConfig(network_volume="  synth-setter-datasets-us-ca-2  ")
+        assert cfg.network_volume == "synth-setter-datasets-us-ca-2"
 
     def test_extra_fields_rejected_naming_the_offender(self) -> None:
         """``extra='forbid'`` catches misspelled Hydra overrides loudly and names the bad field."""

@@ -1,4 +1,0 @@
-name: synth-setter-datasets-us-tx-3
-type: runpod-network-volume
-infra: runpod/US/US-TX-3
-size: 750GB

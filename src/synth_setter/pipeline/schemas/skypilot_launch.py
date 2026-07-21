@@ -58,6 +58,12 @@ class SkypilotLaunchConfig(BaseModel):
 
         Run the job on the local SkyPilot context instead of remote.
 
+    .. attribute :: network_volume
+
+        SkyPilot volume name substituted into the compute template's
+        ``${NETWORK_VOLUME}`` sentinel; the volume's data center decides
+        where the task runs.
+
     .. attribute :: extra_envs
 
         Caller-supplied env vars merged into every rank's worker env after
@@ -79,6 +85,7 @@ class SkypilotLaunchConfig(BaseModel):
     tail: bool = False
     api_server: str | None = None
     local: bool = False
+    network_volume: str | None = None
     extra_envs: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("num_workers")
@@ -122,6 +129,21 @@ class SkypilotLaunchConfig(BaseModel):
             return v
         if not v.strip():
             raise ValueError("env_file must be a non-empty path when set")
+        return v.strip()
+
+    @field_validator("network_volume")
+    @classmethod
+    def network_volume_must_be_non_blank(cls, v: str | None) -> str | None:
+        """Reject blank/whitespace-only network_volume values; strip surrounding whitespace.
+
+        :param v: Candidate ``network_volume`` value pre-validation (``None`` permitted).
+        :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
+        :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
+        """
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("network_volume must be a non-empty name when set")
         return v.strip()
 
     @field_validator("extra_envs")

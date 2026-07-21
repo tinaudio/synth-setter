@@ -1,0 +1,4 @@
+name: synth-setter-datasets-ap-jp-1
+type: runpod-network-volume
+infra: runpod/JP/AP-JP-1
+size: 750GB
