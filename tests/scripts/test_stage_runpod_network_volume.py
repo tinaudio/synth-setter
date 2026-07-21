@@ -58,7 +58,7 @@ def test_stage_script_copies_checksums_and_marks_complete(tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr
     assert call_log.read_text().splitlines() == [
         f"copy --immutable --checksum r2:bucket/finalized-dataset/ {destination}",
-        f"check --one-way --checksum r2:bucket/finalized-dataset/ {destination}",
+        f"check --checksum r2:bucket/finalized-dataset/ {destination}",
     ]
     assert (destination / ".synth-setter-stage-complete").read_bytes() == b""
 

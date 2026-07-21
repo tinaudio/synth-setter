@@ -30,7 +30,7 @@ main() {
   mkdir -p "${destination}"
   rm -f "${destination}/${COMPLETION_MARKER}"
   rclone copy --immutable --checksum "${source_path}" "${destination}"
-  rclone check --one-way --checksum "${source_path}" "${destination}"
+  rclone check --checksum "${source_path}" "${destination}"
   : > "${destination}/${COMPLETION_MARKER}"
 }
 
