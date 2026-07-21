@@ -9,6 +9,25 @@ the attached task runs. The compute template mounts `${NETWORK_VOLUME}`, and
 each launch config (or a `--network-volume` CLI override) names the volume —
 so the volume name is effectively the region selector.
 
+## One registry: volumes live in the API server that applied them
+
+A SkyPilot volume is a record in one API server's registry — the server
+resolves the name to the cloud volume ID at provision time, so **a volume is
+only mountable through the server that knows it**. All commands below assume
+the shared remote API server (`SKYPILOT_API_SERVER_ENDPOINT`, resolved from
+`.env` by the launcher); create and delete volumes through it exclusively.
+
+- Keep names ≤ 16 characters before suffixing: `sky volumes apply` appends
+  `-<userhash>-<uuid6>` on the cloud side, and SkyPilot rejects RunPod volume
+  *names* over 30 characters — which blocks `use_existing` adoption of its
+  own longer generated names.
+- To migrate an existing volume to another server, rename it on RunPod to
+  ≤ 30 characters if needed, then apply a definition with `use_existing: true`
+  and `name:` set to the exact cloud-side name.
+- **Never register one cloud volume in two servers and delete from both** —
+  `sky volumes delete` destroys the underlying RunPod volume, not just the
+  registry row.
+
 ## Create a volume
 
 One definition per data center lives in `src/synth_setter/configs/volumes/`
@@ -17,7 +36,7 @@ persistent storage billing:
 
 ```bash
 uv run sky volumes apply \
-  src/synth_setter/configs/volumes/runpod-datasets-us-ca-2.yaml
+  src/synth_setter/configs/volumes/ss-datasets-us-ca-2.yaml
 uv run sky volumes ls --refresh --verbose
 ```
 
@@ -38,7 +57,7 @@ uv run synth-setter-skypilot-launch \
   src/synth_setter/configs/launch/stage-runpod-surge-simple-440k-volume.yaml
 uv run synth-setter-skypilot-launch \
   src/synth_setter/configs/launch/stage-runpod-surge-simple-440k-volume.yaml \
-  --network-volume synth-setter-datasets-ap-jp-1
+  --network-volume ss-datasets-ap-jp-1
 ```
 
 The staging script uses `rclone copy --immutable --checksum`, checks source
@@ -74,5 +93,5 @@ Delete a persistent volume only when its cached datasets are no longer needed �
 each staged region can be re-seeded from R2 at any time:
 
 ```bash
-uv run sky volumes delete synth-setter-datasets-us-ca-2
+uv run sky volumes delete ss-datasets-us-ca-2
 ```

@@ -85,8 +85,8 @@ class TestValidation:
 
     def test_network_volume_is_stripped(self) -> None:
         """Surrounding whitespace is trimmed so the substituted volume name matches exactly."""
-        cfg = SkypilotLaunchConfig(network_volume="  synth-setter-datasets-us-ca-2  ")
-        assert cfg.network_volume == "synth-setter-datasets-us-ca-2"
+        cfg = SkypilotLaunchConfig(network_volume="  ss-datasets-us-ca-2  ")
+        assert cfg.network_volume == "ss-datasets-us-ca-2"
 
     def test_extra_fields_rejected_naming_the_offender(self) -> None:
         """``extra='forbid'`` catches misspelled Hydra overrides loudly and names the bad field."""

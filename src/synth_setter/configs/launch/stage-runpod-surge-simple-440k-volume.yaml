@@ -3,7 +3,7 @@
 compute_template: src/synth_setter/configs/compute/runpod-network-volume-staging-template.yaml
 worker_image_tag: dev-snapshot
 env_file: .env
-network_volume: synth-setter-datasets-us-ca-2
+network_volume: ss-datasets-us-ca-2
 job_name: stage-surge-simple-440k
 tail: true
 cmd: >-

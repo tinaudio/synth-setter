@@ -1,0 +1,24 @@
+# B200-pinned variant of the network-volume training template for runs that
+# must land on RunPod's top training tier rather than the cheapest available.
+resources:
+  cloud: runpod
+  accelerators: { B200:1 }
+  use_spot: false
+  disk_size: 750
+
+volumes:
+  /workspace/network-volume: ${NETWORK_VOLUME}
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_GIT_REF: ""
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter worker ready (host: $(hostname))"

@@ -1187,10 +1187,8 @@ class TestInjectNetworkVolume:
             "resources": {"cloud": "runpod"},
             "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
         }
-        result = _inject_network_volume(
-            doc, "synth-setter-datasets-us-ca-2", source=Path("template.yaml")
-        )
-        assert result["volumes"] == {"/workspace/network-volume": "synth-setter-datasets-us-ca-2"}
+        result = _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
+        assert result["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
 
     def test_sentinel_without_value_raises(self) -> None:
         """A template needing a volume fails loudly when network_volume is unset."""
@@ -1204,9 +1202,7 @@ class TestInjectNetworkVolume:
         """A configured volume name with nowhere to land is a config error, not a no-op."""
         doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
         with pytest.raises(ValueError, match=r"\$\{NETWORK_VOLUME\}"):
-            _inject_network_volume(
-                doc, "synth-setter-datasets-us-ca-2", source=Path("template.yaml")
-            )
+            _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
 
     def test_no_sentinel_no_value_leaves_doc_unchanged(self) -> None:
         """Templates without volume needs pass through untouched."""
@@ -2172,19 +2168,17 @@ class TestSkypilotLaunchCli:
             compute_template=str(template),
             cmd="echo hello",
             env_file=str(env_file),
-            network_volume="synth-setter-datasets-us-ca-2",
+            network_volume="ss-datasets-us-ca-2",
         )
 
         result = CliRunner().invoke(
             main,
-            ["--network-volume", "synth-setter-datasets-ap-jp-1", str(cfg_path)],
+            ["--network-volume", "ss-datasets-ap-jp-1", str(cfg_path)],
         )
 
         assert result.exit_code == 0, result.output
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert task_doc["volumes"] == {
-            "/workspace/network-volume": "synth-setter-datasets-ap-jp-1"
-        }
+        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-ap-jp-1"}
 
     def test_config_network_volume_reaches_submitted_task(
         self,
@@ -2204,16 +2198,14 @@ class TestSkypilotLaunchCli:
             compute_template=str(template),
             cmd="echo hello",
             env_file=str(env_file),
-            network_volume="synth-setter-datasets-us-ca-2",
+            network_volume="ss-datasets-us-ca-2",
         )
 
         result = CliRunner().invoke(main, [str(cfg_path)])
 
         assert result.exit_code == 0, result.output
         task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert task_doc["volumes"] == {
-            "/workspace/network-volume": "synth-setter-datasets-us-ca-2"
-        }
+        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
 
     def test_network_volume_without_sentinel_exits_with_clean_error(
         self,
@@ -2235,7 +2227,7 @@ class TestSkypilotLaunchCli:
 
         result = CliRunner().invoke(
             main,
-            ["--network-volume", "synth-setter-datasets-us-ca-2", str(cfg_path)],
+            ["--network-volume", "ss-datasets-us-ca-2", str(cfg_path)],
         )
 
         assert result.exit_code != 0

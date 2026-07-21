@@ -42,8 +42,14 @@ def _compose_task_doc(launch_config: SkypilotLaunchConfig) -> dict[str, object]:
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
         "train-runpod-flow-simple-440k-volume.yaml",
+        "train-runpod-flow-simple-440k-volume-jp-b200.yaml",
     ],
-    ids=["smoke", "flow-simple-440k", "flow-simple-440k-volume"],
+    ids=[
+        "smoke",
+        "flow-simple-440k",
+        "flow-simple-440k-volume",
+        "flow-simple-440k-volume-jp-b200",
+    ],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
@@ -94,9 +100,7 @@ def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None
 
     task = sky.Task.from_yaml_config(_compose_task_doc(launch_config))
 
-    assert task.to_yaml_config()["volumes"] == {
-        "/workspace/network-volume": "synth-setter-datasets-us-ca-2"
-    }
+    assert task.to_yaml_config()["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
     assert isinstance(task.run, str)
     assert "download_dataset_root_uri=file:///workspace/network-volume/" in task.run
     assert "test -f /workspace/network-volume/" in task.run
@@ -110,9 +114,7 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
 
     task = sky.Task.from_yaml_config(_compose_task_doc(launch_config))
 
-    assert task.to_yaml_config()["volumes"] == {
-        "/workspace/network-volume": "synth-setter-datasets-us-ca-2"
-    }
+    assert task.to_yaml_config()["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
     assert isinstance(task.run, str)
     assert "scripts/stage_runpod_network_volume.sh" in task.run
     assert "surge-simple-lance-440k-20k-20k-20260706T005448315Z" in task.run
@@ -121,8 +123,8 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
 @pytest.mark.parametrize(
     ("volume_file", "zone"),
     [
-        ("runpod-datasets-us-ca-2.yaml", "US-CA-2"),
-        ("runpod-datasets-ap-jp-1.yaml", "AP-JP-1"),
+        ("ss-datasets-us-ca-2.yaml", "US-CA-2"),
+        ("ss-datasets-ap-jp-1.yaml", "AP-JP-1"),
     ],
     ids=["us-ca-2", "ap-jp-1"],
 )
