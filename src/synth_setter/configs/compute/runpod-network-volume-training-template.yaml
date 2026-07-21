@@ -1,9 +1,21 @@
 # Full-dataset RunPod template backed by the persistent dataset network volume.
 # The launcher injects commands, credentials, and provenance.
 
+# Any-of spans budget SKUs plus data-center-native tiers so the scheduler can
+# still place the task in whichever DC hosts the mounted volume (e.g. US-CA-2
+# and AP-JP-1 stock RTX6000-Ada/L40S/H100/H200 but rarely consumer cards).
 resources:
   cloud: runpod
-  accelerators: { RTX3090:1, RTX4090:1, A40:1 }
+  accelerators:
+    {
+      RTX3090:1,
+      RTX4090:1,
+      A40:1,
+      L40S:1,
+      RTX6000-Ada:1,
+      H100-SXM:1,
+      H200-SXM:1,
+    }
   use_spot: false
   disk_size: 750
 
