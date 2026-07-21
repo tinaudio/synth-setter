@@ -860,7 +860,10 @@ def main(
         )
     except (ValueError, yaml.YAMLError) as exc:
         raise click.ClickException(str(exc)) from exc
-    dispatch_via_skypilot(sky_cfg)
+    try:
+        dispatch_via_skypilot(sky_cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 if __name__ == "__main__":

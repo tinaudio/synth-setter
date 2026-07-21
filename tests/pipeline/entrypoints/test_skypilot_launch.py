@@ -2081,6 +2081,33 @@ class TestSkypilotLaunchCli:
             "/workspace/network-volume": "synth-setter-datasets-us-ca-2"
         }
 
+    def test_network_volume_without_sentinel_exits_with_clean_error(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+    ) -> None:
+        """A volume/template mismatch surfaces as a CLI error message, not a traceback.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--network-volume", "synth-setter-datasets-us-ca-2", str(cfg_path)],
+        )
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "no ${NETWORK_VOLUME}" in result.output
+
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.
 
