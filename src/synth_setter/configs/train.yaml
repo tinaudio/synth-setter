@@ -18,6 +18,10 @@ defaults:
   # when training.val_audio_probe is on (e.g. `render=surge_xt`)
   - render: null
 
+  # embedding-conditioning profiles pairing a stored Lance column with its
+  # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
+  - conditioning: null
+
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
   - experiment: null

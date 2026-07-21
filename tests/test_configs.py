@@ -202,6 +202,42 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
+@pytest.mark.parametrize("profile", ["same_s", "same_l"])
+def test_same_conditioning_profile_fake_batch_pools_through_encoder(profile: str) -> None:
+    """A SAME profile routes a (256, 44) fake batch end-to-end into the encoder.
+
+    :param profile: Conditioning profile under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            "model=vst_flow",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == profile
+    assert datamodule.embedding_conditioning.input_shape == (256, 44)
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, 256, 44)
+    pooled = encoder(batch["conditioning"])
+    assert pooled.shape == (2, cfg.model.vector_field.d_model)
+    assert cfg.model.conditioning.column == profile
+
+
 def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     """A CLAP spec selects generic routing and the vector projection encoder."""
     cfg = _compose(
