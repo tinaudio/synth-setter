@@ -656,8 +656,11 @@ def _resolve_same_checkpoint_dir(checkpoint: str) -> Path:
     :returns: Directory holding ``model.safetensors`` + ``model_config.json``.
     """
     if r2_io.is_r2_uri(checkpoint):
-        model_name = checkpoint.rstrip("/").rsplit("/", 1)[-1]
-        cache_dir = Path.home() / ".cache" / "synth-setter" / "models" / model_name
+        # Key on the full bucket/key path: distinct URIs sharing a final path
+        # component must not collide (download_dir_no_overwrite hard-fails on
+        # a populated directory holding a different checkpoint).
+        cache_key = checkpoint.removeprefix("r2://").strip("/")
+        cache_dir = Path.home() / ".cache" / "synth-setter" / "models" / cache_key
         r2_io.ensure_r2_env_loaded()
         r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
         return cache_dir

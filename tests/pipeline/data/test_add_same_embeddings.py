@@ -354,3 +354,31 @@ def test_same_profile_shape_feeds_embedpool_encoder() -> None:
     pooled = encoder(torch.randn(2, SAME_EMBEDDING_DIM, SAME_LATENT_FRAMES))
 
     assert pooled.shape == (2, 32)
+
+
+def test_resolve_same_checkpoint_dir_keys_cache_on_full_r2_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct R2 URIs sharing a final path component get distinct cache dirs.
+
+    :param monkeypatch: Fixture stubbing the credentialed rclone download.
+    """
+    from synth_setter.pipeline.data.add_embeddings import _resolve_same_checkpoint_dir
+
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, dest: downloads.append((uri, dest)),
+    )
+
+    dir_a = _resolve_same_checkpoint_dir("r2://bucket/team-a/same-s")
+    dir_b = _resolve_same_checkpoint_dir("r2://bucket/team-b/same-s/")
+
+    assert dir_a != dir_b
+    assert [uri for uri, _ in downloads] == [
+        "r2://bucket/team-a/same-s",
+        "r2://bucket/team-b/same-s/",
+    ]
+    assert downloads[0][1] == dir_a
+    assert downloads[1][1] == dir_b
