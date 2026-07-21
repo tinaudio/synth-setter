@@ -7,6 +7,8 @@ Lance ``add_columns`` wiring, and the vector-index path are what these tests pin
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +28,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     ClapEncodeFn,
     M2LEncodeFn,
+    _configure_lance_logging,
     _downmix_to_mono,
     add_embeddings,
     build_clap_index,
@@ -138,6 +141,24 @@ def _audio_dataset(uri: str, rows: int, *, with_params: bool = False) -> np.ndar
         columns[PARAM_ARRAY_FIELD] = rng.random((rows, 3)).astype(np.float32)
     write_lance_shard(Path(uri), columns)
     return audio
+
+
+def _run_udf_in_process(
+    dataset: lance.LanceDataset,
+    udf: Any,
+    *,
+    read_columns: list[str],
+    batch_size: int,
+) -> None:
+    """Run a Lance batch UDF synchronously for deterministic log assertions.
+
+    :param dataset: Local test dataset supplying batches.
+    :param udf: Lance batch UDF under test.
+    :param read_columns: Columns supplied to the UDF.
+    :param batch_size: Maximum rows per UDF invocation.
+    """
+    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+        udf(batch)
 
 
 def _distinct_clap(mono: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -267,17 +288,7 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
         encoded_batch_sizes.append(len(audio))
         return _fake_m2l(audio)
 
-    def run_udf_in_process(
-        dataset: lance.LanceDataset,
-        udf: Any,
-        *,
-        read_columns: list[str],
-        batch_size: int,
-    ) -> None:
-        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
-            udf(batch)
-
-    monkeypatch.setattr(lance.LanceDataset, "add_columns", run_udf_in_process)
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
         add_embeddings(
             lance.dataset(uri),
@@ -287,12 +298,73 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
             build_index=False,
         )
 
+    events = [entry["event"] for entry in logs]
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert events.index("inferring_embedding_schema") < events.index(
+        "inferred_embedding_schema"
+    )
+    assert events.index("inferred_embedding_schema") < events.index("embedding_write_started")
+    assert events.index("embedding_write_started") < events.index("embedding_progress")
+    assert events.index("embedding_progress") < events.index("wrote_embeddings")
     assert max(encoded_batch_sizes) == DEFAULT_LANCE_BATCH_SIZE == 128
     assert progress[-1]["rows_processed"] == 300
     assert progress[-1]["total_rows"] == 300
     assert progress[-1]["percent"] == 100.0
     assert len(progress) <= 20
+
+
+def test_add_embeddings_progress_reports_per_stage_timings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Progress entries carry the encode/write timing split that localizes a slowdown.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
+    """
+    uri = str(tmp_path / "timings.lance")
+    _audio_dataset(uri, 32)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+        )
+
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert progress
+    for field in ("m2l_ms", "clap_ms", "batch_ms", "interbatch_ms", "rows_per_second"):
+        assert progress[-1][field] >= 0.0
+
+
+def test_add_embeddings_log_every_batch_reports_each_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``log_every_batch`` emits one progress entry per UDF batch.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for running Lance's UDF in-process.
+    """
+    uri = str(tmp_path / "debug-progress.lance")
+    _audio_dataset(uri, 257)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
+    with capture_logs() as logs:
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+            log_every_batch=True,
+        )
+
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert [entry["rows_processed"] for entry in progress] == [128, 256, 257]
+    assert [entry["batch_rows"] for entry in progress] == [128, 128, 1]
 
 
 def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
@@ -544,10 +616,10 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
 
 
 @pytest.mark.slow
-def test_main_threads_explicit_device_to_both_encoders(
+def test_main_threads_device_and_debug_options_to_embedding_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The CLI device override controls both embedding models.
+    """CLI device and debug overrides control encoders and batch telemetry.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
     :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
@@ -572,10 +644,18 @@ def test_main_threads_explicit_device_to_both_encoders(
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder", load_clap
     )
+    # Guard: --debug mutates LANCE_LOG in-process; monkeypatch restores it.
+    monkeypatch.setenv("LANCE_LOG", "warn")
 
-    result = CliRunner().invoke(main, [str(uri), "--device", "mps", "--no-build-index"])
+    with capture_logs() as logs:
+        result = CliRunner().invoke(
+            main,
+            [str(uri), "--debug", "--device", "mps", "--no-build-index"],
+        )
 
     assert result.exit_code == 0, result.output
+    assert os.environ["LANCE_LOG"] == "debug"
+    assert any(entry["event"] == "embedding_progress" for entry in logs)
     assert selected_devices == [("m2l", "mps"), ("clap", "mps")]
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
@@ -612,12 +692,58 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
+def test_module_import_defers_lance_initialization_until_cli_configures_logging() -> None:
+    """Importing the CLI leaves native Lance logging uninitialized."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import synth_setter.pipeline.data.add_embeddings; "
+            "sys.exit('lance was imported at module load' if 'lance' in sys.modules else 0)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_configure_lance_logging_default_keeps_native_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default native logging keeps warnings without clobbering an ambient override.
+
+    :param monkeypatch: Pytest fixture for clearing ambient Lance logging.
+    """
+    monkeypatch.delenv("LANCE_LOG", raising=False)
+
+    _configure_lance_logging(debug=False)
+
+    assert os.environ["LANCE_LOG"] == "warn"
+
+
+def test_configure_lance_logging_debug_enables_native_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Debug mode overrides narrower ambient Lance logging.
+
+    :param monkeypatch: Pytest fixture for setting ambient Lance logging.
+    """
+    monkeypatch.setenv("LANCE_LOG", "warn")
+
+    _configure_lance_logging(debug=True)
+
+    assert os.environ["LANCE_LOG"] == "debug"
+
+
 def test_main_exposes_batch_and_index_tuning_options() -> None:
     """The CLI documents its bounded batch default and IVF_PQ tuning flags."""
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0, result.output
     assert "--batch-size" in result.output
+    assert "--debug" in result.output
     assert "128" in result.output
     for flag in ("--num-partitions", "--num-sub-vectors", "--metric"):
         assert flag in result.output
