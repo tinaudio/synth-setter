@@ -73,4 +73,13 @@ jobs:
       - name: Run SAME e2e tests (real weights, CPU)
         env:
           PYTEST_SESSION_BUDGET_SECONDS: "1500"
-        run: uv run --no-sync pytest -m same_e2e tests/pipeline/data/test_same_encoder_e2e.py -vv -s
+        run: uv run --no-sync pytest -m same_e2e tests/pipeline/data/test_same_encoder_e2e.py -vv -s --cov=src --cov-branch --cov-report=xml
+
+      # The real loader/encode path only executes here, so this lane's report
+      # is what covers load_same_audio_encoder in codecov.
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: same-e2e
+          token: ${{ secrets.CODECOV_TOKEN }}

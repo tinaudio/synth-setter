@@ -42,6 +42,10 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    # Real-weights SAME encoder lane; the only suite executing the SAME loader.
+    - name: same-e2e
+      paths:
+        - src/synth_setter/pipeline/data/add_embeddings.py
     # GPU/MPS/VST suites don't exercise `scripts/ci/`, so it's omitted from
     # their path scope (CPU flags above still include it).
     - name: unit-gpu

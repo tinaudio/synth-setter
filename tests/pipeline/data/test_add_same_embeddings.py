@@ -442,3 +442,59 @@ def test_load_same_audio_encoder_without_extra_names_install_command(
 
     with pytest.raises(ImportError, match="uv sync --extra same"):
         load_same_audio_encoder(str(tmp_path), device="cpu")
+
+
+def test_same_num_latent_frames_rejects_non_positive_inputs() -> None:
+    """Zero/negative lengths or rates are caller bugs, not zero-frame clips."""
+    with pytest.raises(ValueError, match="positive"):
+        same_num_latent_frames(0, SAME_SAMPLE_RATE)
+    with pytest.raises(ValueError, match="positive"):
+        same_num_latent_frames(SAME_SAMPLE_RATE, 0)
+
+
+def test_main_same_mode_existing_column_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running --same against an already-augmented dataset exits 1 cleanly.
+
+    :param tmp_path: Per-test dataset root.
+    :param monkeypatch: Fixture injecting a fake SAME encoder loader.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "shard.lance"
+    write_minimal_lance_shard(uri, spec)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
+        lambda checkpoint, device=None: _fake_same(0.5),
+    )
+    assert CliRunner().invoke(main, [str(uri), "--same", "s"]).exit_code == 0
+
+    result = CliRunner().invoke(main, [str(uri), "--same", "s"])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_main_same_mode_loader_failure_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing SAME encoder load exits 1 with a logged cause, not a traceback.
+
+    :param tmp_path: Per-test dataset root.
+    :param monkeypatch: Fixture injecting a loader that raises.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "shard.lance"
+    write_minimal_lance_shard(uri, spec)
+
+    def boom(checkpoint: str, device: str | None = None) -> SameEncodeFn:
+        raise RuntimeError("weights unavailable")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder", boom
+    )
+
+    result = CliRunner().invoke(main, [str(uri), "--same", "l"])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
