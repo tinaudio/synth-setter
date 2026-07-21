@@ -1,20 +1,12 @@
 # Staging-only variant of the network-volume template: the copy writes R2 ->
-# mounted volume, so it needs no 750 GB local disk — hosts with small container
-# disks are far more plentiful, which is what makes staging schedulable.
+# mounted volume, so it needs no GPU and no 750 GB local disk. CPU pods are
+# the schedulability win — their stock stays High while every GPU tier runs
+# Low. RunPod caps CPU-instance container disks at 40 GB (#2197).
 resources:
   cloud: runpod
-  accelerators:
-    {
-      RTX3090:1,
-      RTX4090:1,
-      A40:1,
-      L40S:1,
-      RTX6000-Ada:1,
-      H100-SXM:1,
-      H200-SXM:1,
-    }
+  instance_type: cpu3c-8-16
   use_spot: false
-  disk_size: 50
+  disk_size: 40
 
 volumes:
   /workspace/network-volume: ${NETWORK_VOLUME}
