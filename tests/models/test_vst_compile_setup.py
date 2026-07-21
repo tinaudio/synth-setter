@@ -5,6 +5,7 @@ from functools import partial
 import pytest
 import torch
 
+from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.models.vst_fake_oracle_module import FakeOracleNet, VSTFakeOracleModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -168,6 +169,35 @@ def test_flow_matching_compiled_state_dict_loads_strict_into_uncompiled_module()
         evaluated_state["vector_field.weight"],
         trained_state["vector_field.weight"],
     )
+
+
+def _ksin_flow_matching_module() -> KSinFlowMatchingModule:
+    """Build a compile-enabled KSin flow module with tiny real component networks.
+
+    :returns: Module suitable for setup-stage tests.
+    """
+    return KSinFlowMatchingModule(
+        encoder=torch.nn.Linear(1, 1),
+        vector_field=torch.nn.Linear(1, 1),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        compile=True,
+    )
+
+
+def test_ksin_flow_matching_setup_fit_then_test_compiles_components_in_place() -> None:
+    """Fit setup compiles both components without replacing them or renaming keys."""
+    module = _ksin_flow_matching_module()
+    original_encoder = module.encoder
+    original_vector_field = module.vector_field
+
+    module.setup("fit")
+    module.setup("test")
+
+    assert module.encoder is original_encoder
+    assert module.vector_field is original_vector_field
+    _assert_compiled_in_place_with_clean_keys(module, module.encoder)
+    _assert_compiled_in_place_with_clean_keys(module, module.vector_field)
 
 
 def test_fake_oracle_setup_fit_then_test_compiles_net_in_place() -> None:
