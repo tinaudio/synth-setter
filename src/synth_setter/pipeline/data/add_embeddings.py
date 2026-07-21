@@ -21,8 +21,9 @@ All embedders are injected callables, so the core runs without a checkpoint;
 :func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` /
 :func:`load_same_audio_encoder` build the real encoders behind lazy
 ``music2latent`` / ``transformers`` / ``stable_audio_tools`` imports
-(``stable_audio_tools`` is deliberately not a project dependency — it pins an
-incompatible torch — and is installed ad hoc on the encode host).
+(``stable_audio_tools`` ships in the optional ``same`` extra — install with
+``uv sync --extra same``; its stale upstream pins are relaxed via the
+``[[tool.uv.dependency-metadata]]`` block in pyproject.toml).
 
 This is a sanctioned post-finalize augmenter: it commits a new Lance version of
 an existing dataset rather than writing fresh ``data/`` shards, so it does not
@@ -97,7 +98,12 @@ PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
-# Latent frames for the project's standard 4 s render: ceil(176400 / 4096).
+# The encoder zero-pads input to a multiple of two latent hops before striding
+# (verified empirically on SAME-S across lengths 4096..180224), so frame counts
+# come in even blocks of this many samples.
+SAME_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
+# Latent frames for the project's standard 4 s render:
+# ceil(176400 / 8192) * 2 == 44.
 SAME_LATENT_FRAMES: int = 44
 # Per-forward sub-batch cap: SAME-L is a ~3.4 GB model, so the whole Lance read
 # batch cannot hit the GPU at once.
@@ -387,14 +393,15 @@ def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
 
     :param num_samples: Clip length in samples at ``sample_rate``.
     :param sample_rate: Clip sample rate in Hz.
-    :returns: ``ceil(resampled_samples / SAME_DOWNSAMPLING_RATIO)``, matching
-        torchaudio's ``ceil``-length resample output.
+    :returns: ``ceil(resampled / SAME_PAD_BLOCK_SAMPLES) * 2`` — the resampled
+        length (torchaudio's ``ceil`` convention) zero-padded to a whole
+        two-hop block, then one frame per ``SAME_DOWNSAMPLING_RATIO`` samples.
     :raises ValueError: ``num_samples`` or ``sample_rate`` is non-positive.
     """
     if num_samples < 1 or sample_rate < 1:
         raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
     resampled = math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
-    return math.ceil(resampled / SAME_DOWNSAMPLING_RATIO)
+    return 2 * math.ceil(resampled / SAME_PAD_BLOCK_SAMPLES)
 
 
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -684,7 +691,8 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
         from stable_audio_tools.models.factory import create_model_from_config
     except ImportError as exc:
         raise ImportError(
-            "loading SAME encoders requires the optional stable_audio_tools package"
+            "loading SAME encoders requires the optional `same` extra — "
+            "install it with `uv sync --extra same`"
         ) from exc
 
     checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
@@ -698,7 +706,11 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray) -> np.ndarray:
         wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32)).to(device)
-        return model.encode(wav).float().cpu().numpy()
+        # The factory returns an untyped union of model classes whose `encode`
+        # pyright cannot resolve; the SAME autoencoder returns a plain Tensor
+        # (pinned by the real-weights e2e tests), so the call is scoped off.
+        latents: torch.Tensor = model.encode(wav)  # pyright: ignore
+        return latents.float().cpu().numpy()
 
     def encode(stereo: np.ndarray) -> np.ndarray:
         # Sub-batch the forward so the whole UDF read batch never hits the GPU

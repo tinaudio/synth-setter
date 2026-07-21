@@ -37,9 +37,9 @@ from synth_setter.pipeline.data.add_embeddings import (
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
-# Fixture audio: 16 samples @ 44.1 kHz -> a single SAME latent frame per row.
+# Fixture audio: 16 samples @ 44.1 kHz pad to one two-hop block -> 2 latent frames.
 _FIXTURE_SAMPLES = 16
-_FIXTURE_FRAMES = 1
+_FIXTURE_FRAMES = 2
 
 
 def _fake_same(fill: float) -> SameEncodeFn:
@@ -81,6 +81,14 @@ def test_same_num_latent_frames_resampled_rate_counts_output_samples() -> None:
     """Frame math follows the resampled 44.1 kHz length, not the source length."""
     # 8192 samples @ 22.05 kHz resample to 16384 @ 44.1 kHz -> exactly 4 frames.
     assert same_num_latent_frames(2 * SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE // 2) == 4
+
+
+def test_same_num_latent_frames_pads_to_even_two_hop_blocks() -> None:
+    """Frame counts land on even two-hop blocks, matching the real encoder."""
+    # 1 s @ 44.1 kHz: ceil(44100 / 8192) = 6 blocks -> 12 frames (not ceil=11).
+    assert same_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 12
+    # One hop of input still pads up to a full block of two frames.
+    assert same_num_latent_frames(SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE) == 2
 
 
 def test_same_encoder_input_mono_duplicates_to_stereo() -> None:
@@ -155,7 +163,7 @@ def test_same_record_batch_stub_receives_prepared_stereo_input() -> None:
         seen.append(stereo)
         return _fake_same(1.0)(stereo)
 
-    same_record_batch(mono, {SAME_S_FIELD: recording}, SAME_SAMPLE_RATE, num_frames=1)
+    same_record_batch(mono, {SAME_S_FIELD: recording}, SAME_SAMPLE_RATE, num_frames=_FIXTURE_FRAMES)
 
     assert seen[0].shape == (2, 2, _FIXTURE_SAMPLES)
     assert seen[0].dtype == np.float32
@@ -169,7 +177,7 @@ def test_same_record_batch_rejects_wrong_latent_shape() -> None:
         return np.zeros((stereo.shape[0], SAME_EMBEDDING_DIM // 2, 1), dtype=np.float32)
 
     with pytest.raises(ValueError, match="shape"):
-        same_record_batch(audio, {SAME_S_FIELD: wrong_dim}, SAME_SAMPLE_RATE, num_frames=1)
+        same_record_batch(audio, {SAME_S_FIELD: wrong_dim}, SAME_SAMPLE_RATE, num_frames=_FIXTURE_FRAMES)
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
@@ -186,7 +194,7 @@ def test_same_record_batch_rejects_non_finite_latents(value: float) -> None:
         return out
 
     with pytest.raises(ValueError, match="non-finite"):
-        same_record_batch(audio, {SAME_S_FIELD: poisoned}, SAME_SAMPLE_RATE, num_frames=1)
+        same_record_batch(audio, {SAME_S_FIELD: poisoned}, SAME_SAMPLE_RATE, num_frames=_FIXTURE_FRAMES)
 
 
 def test_add_same_embeddings_appends_columns_and_round_trips(tmp_path: Path) -> None:
