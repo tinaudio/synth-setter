@@ -241,6 +241,56 @@ class TestOperatorSshPubkeys:
         assert _operator_ssh_pubkeys_b64(ssh_dir) != ""
         assert "forwarding 1 operator SSH key(s)" in capsys.readouterr().out
 
+    def test_unresolvable_home_fails_open_without_blocking_dispatch(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A machine with no resolvable home still launches — keys just aren't forwarded.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for env/attribute patching.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+
+        def _raise() -> Path:
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr("synth_setter.pipeline.skypilot_launch._operator_ssh_dir", _raise)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+        )
+        dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_called_once()
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert "OPERATOR_SSH_PUBKEYS_B64" not in injected
+        assert "operator SSH key forwarding skipped" in capsys.readouterr().out
+
+    def test_unreadable_key_file_fails_open(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An unreadable key file degrades to no-keys instead of raising.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        locked = ssh_dir / "authorized_keys"
+        locked.write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        locked.chmod(0o000)
+        try:
+            assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
+        finally:
+            locked.chmod(0o600)
+        assert "operator SSH key forwarding skipped" in capsys.readouterr().out
+
     def test_dispatch_forwards_keys_env_to_worker(
         self,
         tmp_path: Path,

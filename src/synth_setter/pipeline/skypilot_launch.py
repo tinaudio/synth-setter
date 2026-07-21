@@ -300,15 +300,20 @@ def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
     """
     lines: list[str] = []
     missing: list[str] = []
-    for name in ("id_ed25519.pub", "authorized_keys"):
-        path = ssh_dir / name
-        if not path.is_file():
-            missing.append(name)
-            continue
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
-                lines.append(line)
+    try:
+        for name in ("id_ed25519.pub", "authorized_keys"):
+            path = ssh_dir / name
+            if not path.is_file():
+                missing.append(name)
+                continue
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
+                    lines.append(line)
+    except OSError as exc:
+        # Fail open: key forwarding is a convenience and must never block a launch.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        return ""
     if missing:
         click.echo(f"operator SSH keys: {', '.join(missing)} not found under {ssh_dir}")
     if not lines:
@@ -814,7 +819,13 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         )
     worker_env.update(sky_cfg.extra_envs)
 
-    operator_keys = _operator_ssh_pubkeys_b64(_operator_ssh_dir())
+    try:
+        operator_keys = _operator_ssh_pubkeys_b64(_operator_ssh_dir())
+    except (RuntimeError, OSError) as exc:
+        # Path.home() raises RuntimeError on hosts with no resolvable home
+        # (headless CI containers); a launch must survive that.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        operator_keys = ""
     if operator_keys:
         worker_env.setdefault("OPERATOR_SSH_PUBKEYS_B64", operator_keys)
 
