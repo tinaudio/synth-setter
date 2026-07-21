@@ -1,6 +1,51 @@
 # CHANGELOG
 
 
+## v10.4.0 (2026-07-21)
+
+### Chores
+
+- Migrate-checkpoint CLI for legacy _orig_mod ckpts
+  ([#2260](https://github.com/tinaudio/synth-setter/pull/2260),
+  [`7e0540c`](https://github.com/tinaudio/synth-setter/commit/7e0540cee41097698335526db5d33289c0e5e694))
+
+* feat(evaluation): add CLI migrating legacy _orig_mod checkpoints
+
+synth-setter-migrate-checkpoint strips torch.compile wrapper path parts from a checkpoint's state
+  dict so pre-in-place-compilation artifacts (#2241) strict-load again. Train/eval entrypoints wrap
+  their Trainer calls with a hint that names the exact migration command when a strict load fails on
+  _orig_mod keys.
+
+* docs(evaluation): document legacy checkpoint migration path
+
+Doc-drift advisory for the migrate-checkpoint CLI: doc-map entries for the new module and tests/cli,
+  plus legacy-checkpoint notes in the eval and training design docs.
+
+* fix(evaluation): harden migrate-checkpoint against races and false hints
+
+Reserve the migration destination with exclusive create so a file that appears between the existence
+  check and the save cannot be clobbered, and unlink partial output on a failed save. Scope the
+  migration hint to strict load_state_dict failures so unrelated RuntimeErrors mentioning _orig_mod
+  propagate unchanged.
+
+* fix(evaluation): shell-quote paths in the migration hint command
+
+The advertised synth-setter-migrate-checkpoint invocation now survives copy-paste for checkpoint
+  paths with spaces or shell metacharacters.
+
+### Features
+
+- **data-pipeline**: Bound add-embeddings batches and report progress
+  ([#2261](https://github.com/tinaudio/synth-setter/pull/2261),
+  [`a4a8941`](https://github.com/tinaudio/synth-setter/commit/a4a8941863583a0321ed7d7d65ad736655fa92db))
+
+* feat(data-pipeline): bound embedding batches and log progress
+
+* test(data-pipeline): cover embedding batch boundaries
+
+* test(data-pipeline): cover embedding UDF in process
+
+
 ## v10.3.2 (2026-07-21)
 
 ### Bug Fixes
