@@ -1,6 +1,162 @@
 # CHANGELOG
 
 
+## v10.4.0 (2026-07-21)
+
+### Chores
+
+- Migrate-checkpoint CLI for legacy _orig_mod ckpts
+  ([#2260](https://github.com/tinaudio/synth-setter/pull/2260),
+  [`7e0540c`](https://github.com/tinaudio/synth-setter/commit/7e0540cee41097698335526db5d33289c0e5e694))
+
+* feat(evaluation): add CLI migrating legacy _orig_mod checkpoints
+
+synth-setter-migrate-checkpoint strips torch.compile wrapper path parts from a checkpoint's state
+  dict so pre-in-place-compilation artifacts (#2241) strict-load again. Train/eval entrypoints wrap
+  their Trainer calls with a hint that names the exact migration command when a strict load fails on
+  _orig_mod keys.
+
+* docs(evaluation): document legacy checkpoint migration path
+
+Doc-drift advisory for the migrate-checkpoint CLI: doc-map entries for the new module and tests/cli,
+  plus legacy-checkpoint notes in the eval and training design docs.
+
+* fix(evaluation): harden migrate-checkpoint against races and false hints
+
+Reserve the migration destination with exclusive create so a file that appears between the existence
+  check and the save cannot be clobbered, and unlink partial output on a failed save. Scope the
+  migration hint to strict load_state_dict failures so unrelated RuntimeErrors mentioning _orig_mod
+  propagate unchanged.
+
+* fix(evaluation): shell-quote paths in the migration hint command
+
+The advertised synth-setter-migrate-checkpoint invocation now survives copy-paste for checkpoint
+  paths with spaces or shell metacharacters.
+
+### Features
+
+- **data-pipeline**: Bound add-embeddings batches and report progress
+  ([#2261](https://github.com/tinaudio/synth-setter/pull/2261),
+  [`a4a8941`](https://github.com/tinaudio/synth-setter/commit/a4a8941863583a0321ed7d7d65ad736655fa92db))
+
+* feat(data-pipeline): bound embedding batches and log progress
+
+* test(data-pipeline): cover embedding batch boundaries
+
+* test(data-pipeline): cover embedding UDF in process
+
+
+## v10.3.2 (2026-07-21)
+
+### Bug Fixes
+
+- **evaluation**: Compile in place so checkpoint keys stay uncompiled
+  ([#2241](https://github.com/tinaudio/synth-setter/pull/2241),
+  [`8ec1b38`](https://github.com/tinaudio/synth-setter/commit/8ec1b38ecbb2f00aba376ca8ac9fcae9f6b6d72d))
+
+* fix(evaluation): normalize compiled checkpoint keys on load
+
+Compare checkpoint keys with the live module state before Lightning loads weights. Normalize
+  torch.compile wrapper segments only when the matching live key exists, preserving strict
+  diagnostics while supporting compiled-to-uncompiled evaluation and the inverse resume path.
+
+* fix(evaluation): harden compiled checkpoint remapping
+
+* fix(evaluation): compile nets in place so checkpoints keep uncompiled keys
+
+Replace the load-time _orig_mod key remapping (CompiledCheckpointModule) with nn.Module.compile() at
+  the six compile sites. In-place compilation never wraps the child module, so compiled and
+  uncompiled runs share one state-dict layout: strict Lightning loading works in both directions
+  with no key surgery, and genuine architecture mismatches keep failing loudly.
+
+Previously written checkpoints containing _orig_mod keys are intentionally abandoned; a one-off
+  strip of _orig_mod path parts recovers one if needed.
+
+* test(models): cover in-place compile setup for KSin flow matching
+
+The two KSin compile-site lines were the only uncovered patch lines; no test instantiated
+  KSinFlowMatchingModule before.
+
+### Build System
+
+- Devcontainer-tools defaults to root; add dev-user stage
+  ([#2248](https://github.com/tinaudio/synth-setter/pull/2248),
+  [`b29450b`](https://github.com/tinaudio/synth-setter/commit/b29450bfa8bca85953828e9efea34678e5a0a685))
+
+* fix(docker): default devcontainer-tools to root, add dev-user variant
+
+The devcontainer-tools stage ended with USER dev (non-root). SkyPilot's RunPod backend runs the
+  container start command as the image USER and installs sshd there, which needs root; as the
+  sudo-less dev user the bootstrap fails, sshd never starts, and the pod hangs in INIT while
+  billing. Every compute config already used the root dev-snapshot image; devcontainer-tools was the
+  outlier.
+
+End the stage with USER root so RunPod dev launches work out of the box, and add a
+  devcontainer-tools-dev-user sibling (FROM devcontainer-tools + USER dev) for local VS Code
+  devcontainers. The dev-owned CLIs are still installed mid-stage as dev; only the default user
+  changes. .devcontainer and the CI publish job now build/consume the dev-user tag, which shares all
+  layers with the root image (publish cost is the config delta only).
+
+Refs #2247
+
+* fix(ci): gate floating devcontainer-tools tags to main-only
+
+Both devcontainer-tools push steps hardcoded their tag lists and pushed the floating tags
+  unconditionally, so a workflow_dispatch build of a feature branch would overwrite the shared
+  devcontainer-tools and devcontainer-tools-dev-user tags. Since .devcontainer consumes the dev-user
+  tag and RunPod dev launches consume the root tag, that repoints developers and dev pods at an
+  unmerged build.
+
+Route both through docker/metadata-action with the same enable=is_main gate dev-snapshot/latest use;
+  the immutable -<sha> tags still publish on every dispatch.
+
+* docs(docker): correct PR smoke-test claim and test docstring
+
+The docker.md CI-flow section claimed PR validation runs "no smoke tests", but the docker-validate
+  job already smoke-tested devcontainer-tools and this PR adds a devcontainer-tools-dev-user smoke
+  step to the same PR-only job. Reword to distinguish the in-image devcontainer smoke tests (run on
+  PRs) from the SHA-pinned dev-snapshot smoke test (dispatch/push-to-main only), and widen the test
+  module docstring to cover both images.
+
+### Internal-Feat
+
+- **training**: One-selector train dispatch with hardcoded wiring
+  ([#2221](https://github.com/tinaudio/synth-setter/pull/2221),
+  [`93cafcb`](https://github.com/tinaudio/synth-setter/commit/93cafcbad41aa1a5dd9e1835ae78883ede94b638))
+
+* feat(training): one-selector training dispatch with hardcoded experiment wiring
+
+Deliver the experiment-UX rollout's first step: self-contained surge/flow_simple_440k and
+  surge/ffn_simple_smoke experiments own their dataset pins and scientific knobs, launch cmds shrink
+  to experiment selection plus operational flags, and train.yml takes one required experiment input
+  with a hardcoded experiment-to-launch-config mapping. Deletes the stale datamodule=surge_lance_map
+  overrides that broke worker-side composition.
+
+Closes #2196 Fixes #2118
+
+* feat(training): extend experiment-selection cmd contract to the Vast smoke launch
+
+train-vast-smoke.yaml landed on main with the pre-#2196 cmd shape; align it with the RunPod launches
+  so every shipped train cmd selects a self-contained experiment and carries no scientific
+  overrides.
+
+Refs #2196
+
+### Testing
+
+- Use worktree pytest in full CPU target
+  ([#2223](https://github.com/tinaudio/synth-setter/pull/2223),
+  [`cf77ec6`](https://github.com/tinaudio/synth-setter/commit/cf77ec6bf91e5d386a732f56f4efe9d4c2406c42))
+
+* test(testing): reproduce full CPU worktree pytest failure
+
+* fix(testing): use worktree pytest for full CPU tests
+
+* test(testing): guard full CPU headless prerequisites
+
+* test(testing): document headless verification prerequisite
+
+
 ## v10.3.1 (2026-07-20)
 
 ### Bug Fixes

@@ -115,7 +115,7 @@ class KSinFeedForwardModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())

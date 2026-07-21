@@ -1,8 +1,9 @@
-FROM tinaudio/synth-setter:devcontainer-tools
+FROM tinaudio/synth-setter:devcontainer-tools-dev-user
 
 # Extension point for per-developer customizations.
-# All tools are baked into tinaudio/synth-setter:devcontainer-tools
-# (built from docker/ubuntu22_04/Dockerfile, devcontainer-tools stage).
+# All tools are baked into tinaudio/synth-setter:devcontainer-tools-dev-user
+# (built from docker/ubuntu22_04/Dockerfile, devcontainer-tools-dev-user stage:
+# devcontainer-tools + a non-root default user for local VS Code sessions).
 #
 # To add a package without modifying the base image:
 #

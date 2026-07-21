@@ -17,7 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.train import (
     _checkpoint_prefix_uri,
     _configure_checkpoint_durability,
-    _make_recovery_namespace,
+    _make_launch_namespace,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import callbacks as callbacks_module
@@ -543,18 +543,18 @@ def test_checkpoint_prefix_uri_strips_the_basename() -> None:
     )
 
 
-def test_make_recovery_namespace_distinguishes_same_run_id_launches(
+def test_make_launch_namespace_distinguishes_same_run_id_launches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Each launch gets an exact isolated namespace even when its run ID collides.
 
     :param monkeypatch: Supplies deterministic UUIDs at the production use site.
     """
-    recovery_uuids = iter((UUID(int=1), UUID(int=2)))
-    monkeypatch.setattr("synth_setter.cli.train.uuid4", lambda: next(recovery_uuids))
+    launch_uuids = iter((UUID(int=1), UUID(int=2)))
+    monkeypatch.setattr("synth_setter.cli.train.uuid4", lambda: next(launch_uuids))
     run_id = "flow-simple-20260715T000000000Z"
-    assert _make_recovery_namespace(run_id) == f"{run_id}-{'0' * 31}1"
-    assert _make_recovery_namespace(run_id) == f"{run_id}-{'0' * 31}2"
+    assert _make_launch_namespace(run_id) == f"{run_id}-{'0' * 31}1"
+    assert _make_launch_namespace(run_id) == f"{run_id}-{'0' * 31}2"
 
 
 def test_checkpoint_prefix_uri_honors_override() -> None:

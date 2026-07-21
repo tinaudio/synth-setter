@@ -26,6 +26,7 @@ CLI: ``python -m synth_setter.pipeline.data.add_embeddings DATASET.lance``.
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable
 from typing import TypeAlias
 
@@ -53,6 +54,9 @@ CLAP_EMBEDDING_DIM: int = 512
 # large dataset OOMs the GPU (a 256-row CLAP forward alone needs ~5 GiB).
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
+# Bounds each Lance read/UDF call while amortizing remote-I/O and Python overhead.
+DEFAULT_LANCE_BATCH_SIZE: int = 128
+MAX_PROGRESS_LOGS: int = 20
 # IVF_PQ needs ~256 training vectors (256 PQ centroids); below this the index is
 # skipped and callers fall back to Lance's exact (brute-force) ``nearest`` scan.
 MIN_ROWS_FOR_INDEX: int = 256
@@ -180,7 +184,7 @@ def add_embeddings(
     sample_rate: int,
     *,
     clap_dim: int = CLAP_EMBEDDING_DIM,
-    batch_size: int | None = None,
+    batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
     build_index: bool = True,
     num_partitions: int | None = None,
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
@@ -197,8 +201,8 @@ def add_embeddings(
     :param clap_encode: Maps a mono ``(B, T)`` batch and ``sample_rate`` to ``(B, clap_dim)``.
     :param sample_rate: Passed through to ``clap_encode``.
     :param clap_dim: CLAP embedding width; the ``clap`` fixed-size-list length.
-    :param batch_size: Rows per UDF call; ``None`` uses the Lance default. Ignored
-        for legacy (v1) Lance datasets, which Lance rewrites whole.
+    :param batch_size: Rows per UDF call. Ignored for legacy (v1) Lance datasets,
+        which Lance rewrites whole.
     :param build_index: Build an IVF_PQ index on ``clap`` after the column lands.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
@@ -213,13 +217,47 @@ def add_embeddings(
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
     if AUDIO_FIELD not in dataset.schema.names:
         raise ValueError(f"dataset has no {AUDIO_FIELD!r} column to embed")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
-    @lance.batch_udf()
+    total_rows = dataset.count_rows()
+    if total_rows < 1:
+        raise ValueError("dataset has no rows to embed")
+    sample = next(dataset.to_batches(columns=[AUDIO_FIELD], limit=1))
+    sample_output = embeddings_record_batch(
+        sample.column(AUDIO_FIELD).to_numpy_ndarray(),
+        m2l_encode,
+        clap_encode,
+        sample_rate,
+        clap_dim=clap_dim,
+    )
+    progress_interval = max(batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS)
+    next_progress_row = progress_interval
+    rows_processed = 0
+    started_at = time.monotonic()
+
+    @lance.batch_udf(output_schema=sample_output.schema)
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
+        nonlocal next_progress_row, rows_processed
         audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
-        return embeddings_record_batch(
+        output = embeddings_record_batch(
             audio, m2l_encode, clap_encode, sample_rate, clap_dim=clap_dim
         )
+        rows_processed += batch.num_rows
+        if rows_processed >= next_progress_row or rows_processed == total_rows:
+            elapsed_seconds = time.monotonic() - started_at
+            logger.info(
+                "embedding_progress",
+                rows_processed=rows_processed,
+                total_rows=total_rows,
+                percent=round(rows_processed / total_rows * 100, 1),
+                rows_per_second=round(rows_processed / max(elapsed_seconds, 1e-9), 1),
+                batch_size=batch_size,
+            )
+            next_progress_row = (
+                rows_processed // progress_interval + 1
+            ) * progress_interval
+        return output
 
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
     if build_index:
@@ -361,9 +399,10 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
 )
 @click.option(
     "--batch-size",
-    type=int,
-    default=None,
-    help="Rows per UDF call; defaults to the Lance default (ignored for v1 datasets).",
+    type=click.IntRange(min=1),
+    default=DEFAULT_LANCE_BATCH_SIZE,
+    show_default=True,
+    help="Rows per UDF call (ignored for v1 datasets).",
 )
 @click.option(
     "--build-index/--no-build-index",
@@ -394,7 +433,7 @@ def main(
     lance_uri: str,
     clap_checkpoint: str,
     device: str | None,
-    batch_size: int | None,
+    batch_size: int,
     build_index: bool,
     num_partitions: int | None,
     num_sub_vectors: int,
@@ -410,7 +449,7 @@ def main(
     :param lance_uri: Dataset directory to augment in place.
     :param clap_checkpoint: HuggingFace CLAP model id.
     :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
-    :param batch_size: Rows per UDF call; ``None`` uses the Lance default.
+    :param batch_size: Rows per UDF call.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
@@ -428,7 +467,11 @@ def main(
         logger.error("embeddings_already_present", uri=lance_uri, columns=sorted(existing))
         sys.exit(1)
     logger.info(
-        "adding_embeddings", uri=lance_uri, sample_rate=sample_rate, rows=dataset.count_rows()
+        "adding_embeddings",
+        uri=lance_uri,
+        sample_rate=sample_rate,
+        rows=dataset.count_rows(),
+        batch_size=batch_size,
     )
     try:
         m2l_encode = load_m2l_audio_encoder(device)

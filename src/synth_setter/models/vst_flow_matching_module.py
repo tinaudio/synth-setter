@@ -285,8 +285,8 @@ class VSTFlowMatchingModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
-            self.vector_field = torch.compile(self.vector_field)
-            self.encoder = torch.compile(self.encoder)
+            self.vector_field.compile()
+            self.encoder.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
         vf_norms = grad_norm(self.vector_field, 2.0)

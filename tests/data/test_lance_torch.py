@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
-    _batch_to_shaped_tensors,
+    batch_to_shaped_tensors,
     lance_iterable_dataloader,
     lance_map_dataloader,
     map_dataloader_over,
@@ -632,12 +632,12 @@ def test_zero_row_dataset_yields_no_batches(tmp_path: Path) -> None:
     assert list(iterable_loader) == []
 
 
-def test_batch_to_shaped_tensors_preserves_shapes_on_handbuilt_batch() -> None:
+def testbatch_to_shaped_tensors_preserves_shapes_on_handbuilt_batch() -> None:
     """The conversion keeps per-row tensor shapes and dtypes on a hand-built batch."""
     values = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     batch = pa.record_batch({"mel": pa.FixedShapeTensorArray.from_numpy_ndarray(values)})
 
-    tensors = _batch_to_shaped_tensors(batch)
+    tensors = batch_to_shaped_tensors(batch)
 
     assert tensors["mel"].shape == (2, 3, 4)
     assert tensors["mel"].dtype == torch.float32
@@ -650,7 +650,7 @@ def test_column_with_nulls_raises_value_error() -> None:
     batch = pa.record_batch({"clap": column})
 
     with pytest.raises(ValueError, match="clap"):
-        _batch_to_shaped_tensors(batch)
+        batch_to_shaped_tensors(batch)
 
 
 def test_blob_projected_dict_batch_raises_type_error() -> None:
@@ -661,7 +661,7 @@ def test_blob_projected_dict_batch_raises_type_error() -> None:
     not support.
     """
     with pytest.raises(TypeError, match="blob columns"):
-        _batch_to_shaped_tensors({"audio_mp3": [b"\x00"]})
+        batch_to_shaped_tensors({"audio_mp3": [b"\x00"]})
 
 
 def _collect_ddp_rank_rows(rank: int, world_size: int, dataset_dir: str, out_dir: str) -> None:

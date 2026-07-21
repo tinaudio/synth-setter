@@ -30,22 +30,22 @@ docs:
     description: Docker build, run, debug reference
     sources:
       - pattern: "docker/**"
-        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools stage"
+        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools (root) and devcontainer-tools-dev-user stages"
       - pattern: ".devcontainer/Dockerfile"
-        covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
+        covers: "Dev container wrapper over the devcontainer-tools-dev-user stage, per-developer customization"
       - pattern: "src/synth_setter/pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "src/synth_setter/configs/image/**"
         covers: "YAML field names and values, build parameters, defaults"
       - pattern: "Makefile"
-        covers: "docker-build-* targets (dev-snapshot, devcontainer-tools), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
+        covers: "docker-build-* targets (dev-snapshot, devcontainer-tools, devcontainer-tools-dev-user), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
         scope: "docker"
       - pattern: "src/synth_setter/scripts/load_vst3_check.py"
         covers: "Per-synth VST3 load check run at image build and as the in-image smoke test"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
-        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools + devcontainer-tools-dev-user publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
 
   # ── W&B integration reference ───────────────────────────────────
   - doc: docs/reference/wandb-integration.md
@@ -291,6 +291,8 @@ docs:
     sources:
       - pattern: "src/synth_setter/cli/eval.py"
         covers: "Evaluation entry point, checkpoint loading, Hydra config composition"
+      - pattern: "src/synth_setter/cli/migrate_checkpoint.py"
+        covers: "synth-setter-migrate-checkpoint console script (strips legacy _orig_mod key parts; refuses overwrites, aborts on collisions/no-op) and checkpoint_migration_hint wrapping train/eval Trainer calls"
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
@@ -409,6 +411,8 @@ docs:
         covers: "Lance pipeline stress/integration coverage — shard claims, resume, partitioning, dataset lineage, spec/R2 IO, torchsynth-backed stress suite"
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
+      - pattern: "tests/cli/**"
+        covers: "CLI-entrypoint unit tests (e.g. checkpoint migration)"
       - pattern: "tests/helpers/lance_fixtures.py"
         covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures and the lance_torch dataloader test datasets (tests/helpers/lance_torch_datasets.py)"
       - pattern: "tests/helpers/run_if.py"

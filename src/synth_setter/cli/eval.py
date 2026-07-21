@@ -16,6 +16,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import (
     METRICS_TIMEOUT_OVERHEAD_SECONDS,
     METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
@@ -371,29 +372,32 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
-        trainer.test(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.test(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                weights_only=False,
+            )
     # Accept both spellings for backwards compatibility with older configs.
     elif mode == "val" or mode == "validate":
         log.info("Starting validating!")
-        trainer.validate(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.validate(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                weights_only=False,
+            )
     elif mode == "predict":
-        trainer.predict(
-            model=model,
-            dataloaders=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            return_predictions=False,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.predict(
+                model=model,
+                dataloaders=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                return_predictions=False,
+                weights_only=False,
+            )
         # Rank-zero gate: trainer.predict runs on every rank in DDP/multi-device
         # setups, but the postprocessing subprocesses share one output_dir.
         if trainer.is_global_zero:

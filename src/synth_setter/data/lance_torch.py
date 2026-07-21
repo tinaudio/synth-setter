@@ -57,7 +57,7 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray, name: str) -> torch.Ten
     return torch.from_numpy(values if values.flags.writeable else values.copy())
 
 
-def _batch_to_shaped_tensors(
+def batch_to_shaped_tensors(
     batch: pa.RecordBatch | dict[str, Any],
     *,
     hf_converter: dict[str, Any] | None = None,
@@ -328,7 +328,7 @@ def lance_iterable_dataloader(
         dataset_options=_dataset_options(storage_options),
         columns=list(columns) if columns is not None else None,
         shard_granularity="batch",
-        to_tensor_fn=_batch_to_shaped_tensors,
+        to_tensor_fn=batch_to_shaped_tensors,
         sampler=sampler,
     )
     return DataLoader(dataset, batch_size=None, num_workers=0)
