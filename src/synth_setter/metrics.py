@@ -177,10 +177,11 @@ class PartitionedLinearAssignmentDistance(Metric):
 
     Directly comparable to a plain elementwise MSE over the same tensors: equal
     when the identity matching is optimal, lower when permuting a group's blocks
-    fits the target better.
+    fits the target better. Matching runs per sample on CPU via SciPy — an
+    accepted validation/test-time cost for the small per-group block counts.
     """
 
-    def __init__(self, groups: list[list[list[int]]], num_params: int) -> None:
+    def __init__(self, groups: Sequence[Sequence[Sequence[int]]], num_params: int) -> None:
         """Validate the partition and register the squared-error accumulator states.
 
         :param groups: Interchangeable groups of aligned encoded-index blocks
@@ -248,7 +249,8 @@ class PartitionedLinearAssignmentDistance(Metric):
             cost = (
                 (predicted_blocks.unsqueeze(2) - target_blocks.unsqueeze(1)).square().sum(dim=-1)
             )
-            cost_cpu = cost.detach().cpu()
+            # SciPy rejects bfloat16 tensors, so cast before the assignment boundary.
+            cost_cpu = cost.detach().float().cpu()
             for sample in range(cost_cpu.shape[0]):
                 row_ind, col_ind = linear_sum_assignment(cost_cpu[sample])
                 total = total + cost[sample, row_ind, col_ind].sum()

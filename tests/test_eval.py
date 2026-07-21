@@ -483,20 +483,38 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert logger.used_artifacts == ["data-lineage-eval:lineage-eval-20260520T000000000Z"]
 
 
-def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path) -> None:
-    """``mode=test`` through the flow_simple config logs ``test/param_lad`` beside the MSE.
+_FLOW_LAD_EVAL_OVERRIDES = {
+    "flow_simple": (
+        "model.vector_field.d_model=8",
+        "model.vector_field.num_heads=1",
+        "model.vector_field.num_layers=1",
+        "model.vector_field.d_ff=8",
+        "model.vector_field.projection.num_tokens=4",
+    ),
+    "flow_mlp_simple": (
+        "model.vector_field.d_model=8",
+        "model.vector_field.d_enc=4",
+        "model.vector_field.num_layers=1",
+    ),
+}
+
+
+@pytest.mark.parametrize("experiment", sorted(_FLOW_LAD_EVAL_OVERRIDES))
+def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path, experiment: str) -> None:
+    """``mode=test`` through both flow configs logs ``test/param_lad`` beside the MSE.
 
     Pins the production ``model.param_spec_name`` wiring end-to-end: surge_simple
     has interchangeable blocks, so the eval entrypoint must emit the metric.
 
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
+    :param experiment: Surge flow experiment variant under test.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_simple",
+                f"experiment=surge/{experiment}",
                 "trainer=cpu",
                 "mode=test",
                 "model.encoder.d_model=8",
@@ -504,11 +522,7 @@ def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path) -> None:
                 "model.encoder.n_layers=1",
                 "model.encoder.n_conditioning_outputs=1",
                 "model.encoder.patch_stride=15",
-                "model.vector_field.d_model=8",
-                "model.vector_field.num_heads=1",
-                "model.vector_field.num_layers=1",
-                "model.vector_field.d_ff=8",
-                "model.vector_field.projection.num_tokens=4",
+                *_FLOW_LAD_EVAL_OVERRIDES[experiment],
                 "model.test_sample_steps=1",
                 "model.compile=false",
             ],

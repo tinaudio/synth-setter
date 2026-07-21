@@ -187,6 +187,16 @@ class TestPartitionedLinearAssignmentDistance:
         with pytest.raises(ValueError, match="shape"):
             metric.update(torch.zeros(2, 6), torch.zeros(1, 6))
 
+    def test_update_bfloat16_inputs_compute_finite_distance(self) -> None:
+        """Mixed-precision inputs survive the SciPy assignment boundary."""
+        metric = self._two_block_metric()
+        target = torch.zeros(2, 6, dtype=torch.bfloat16)
+        prediction = torch.ones(2, 6, dtype=torch.bfloat16)
+
+        metric.update(prediction, target)
+
+        assert torch.isfinite(metric.compute())
+
     def test_init_duplicate_index_within_block_raises_value_error(self) -> None:
         """A block repeating an index is rejected at construction."""
         with pytest.raises(ValueError, match="repeats"):
