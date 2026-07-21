@@ -9,10 +9,7 @@ from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import ConditioningMode
-from synth_setter.metrics import (
-    PartitionedLinearAssignmentDistance,
-    derive_interchangeable_groups,
-)
+from synth_setter.metrics import BestSwapParamMSE
 
 
 def call_with_cfg(
@@ -45,37 +42,6 @@ def rk4_with_cfg(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-def _build_param_lad_metric(
-    param_spec_name: str | None, num_params: int
-) -> PartitionedLinearAssignmentDistance | None:
-    """Build the partition-aware LAD metric when the spec yields a valid partition.
-
-    :param param_spec_name: Registry spec name; ``None`` disables the metric.
-    :param num_params: Parameter-vector width the module operates on.
-    :returns: Metric instance, or ``None`` when disabled or when the spec has
-        no interchangeable blocks (the metric would degenerate to plain MSE).
-    :raises ValueError: If the spec's encoded width differs from ``num_params``.
-    """
-    if param_spec_name is None:
-        return None
-    # Deferred import: at module scope it would pull synth_setter.data.vst into model
-    # import (forbidden per tests/models/test_vst_module_aliases.py).
-    from synth_setter.data.vst.param_spec_registry import resolve_param_spec  # noqa: PLC0415
-    from synth_setter.param_spec_name import ParamSpecName  # noqa: PLC0415
-
-    spec = resolve_param_spec(ParamSpecName(param_spec_name))
-    if spec.encoded_width != num_params:
-        raise ValueError(
-            f"spec {param_spec_name!r} encoded width {spec.encoded_width} "
-            f"!= num_params {num_params}"
-        )
-    widths = [len(p) for p in spec.synth_params + spec.note_params]
-    groups = derive_interchangeable_groups(spec.names, widths)
-    if not groups:
-        return None
-    return PartitionedLinearAssignmentDistance(groups=groups, num_params=num_params)
-
-
 class VSTFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
@@ -88,7 +54,6 @@ class VSTFlowMatchingModule(LightningModule):
         # Keyword-only: a stale positional caller would silently train at a bogus width.
         *,
         num_params: int,
-        param_spec_name: str | None = None,
         conditioning: ConditioningMode = "mel",
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
@@ -107,9 +72,6 @@ class VSTFlowMatchingModule(LightningModule):
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
-        :param param_spec_name: Registry spec the partition-aware LAD metric derives its
-            interchangeable blocks from; ``None`` (or a spec without interchangeable
-            blocks) leaves ``val/param_lad`` / ``test/param_lad`` off.
         :param conditioning: Which batch key conditions the field (``"mel"`` or ``"m2l"``).
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
@@ -127,8 +89,8 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
 
-        self.val_param_lad = _build_param_lad_metric(param_spec_name, num_params)
-        self.test_param_lad = _build_param_lad_metric(param_spec_name, num_params)
+        self.val_param_mse_best_swap = BestSwapParamMSE()
+        self.test_param_mse_best_swap = BestSwapParamMSE()
 
     def on_train_start(self):
         pass
@@ -267,9 +229,13 @@ class VSTFlowMatchingModule(LightningModule):
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
-        if self.val_param_lad is not None:
-            self.val_param_lad.update(pred_params, batch["params"])
-            self.log("val/param_lad", self.val_param_lad, on_step=False, on_epoch=True)
+        self.val_param_mse_best_swap.update(pred_params, batch["params"])
+        self.log(
+            "val/param_mse_best_swap",
+            self.val_param_mse_best_swap,
+            on_step=False,
+            on_epoch=True,
+        )
 
         return {"param_mse": param_mse, "per_param_mse": per_param_mse, "preds": pred_params}
 
@@ -288,9 +254,13 @@ class VSTFlowMatchingModule(LightningModule):
         param_mse = (pred_params - batch["params"]).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
-        if self.test_param_lad is not None:
-            self.test_param_lad.update(pred_params, batch["params"])
-            self.log("test/param_lad", self.test_param_lad, on_step=False, on_epoch=True)
+        self.test_param_mse_best_swap.update(pred_params, batch["params"])
+        self.log(
+            "test/param_mse_best_swap",
+            self.test_param_mse_best_swap,
+            on_step=False,
+            on_epoch=True,
+        )
 
         return param_mse
 

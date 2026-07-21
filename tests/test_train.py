@@ -532,7 +532,7 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
 
     The loss must come out finite: ``global_step`` advances even past a NaN loss.
     Validation exercises the production param-spec wiring and requires
-    ``val/param_lad`` beside ``val/param_mse``.
+    ``val/param_mse_best_swap`` beside ``val/param_mse``.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
@@ -549,7 +549,7 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
     assert_finite_train_loss(metric_dict)
     assert "val/param_mse" in metric_dict
-    assert "val/param_lad" in metric_dict
+    assert "val/param_mse_best_swap" in metric_dict
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)

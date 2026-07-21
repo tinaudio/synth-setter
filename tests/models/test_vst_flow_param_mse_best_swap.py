@@ -1,6 +1,6 @@
-"""Pins ``val/param_lad`` / ``test/param_lad`` logging in ``VSTFlowMatchingModule``.
+"""Pins ``val/param_mse_best_swap`` / ``test/param_mse_best_swap`` logging.
 
-The module derives the interchangeable-block partition from ``param_spec_name``;
+The metric is unconditional and spec-free;
 specs with interchangeable blocks (surge_simple) turn the metric on, degenerate
 specs (surge_4) and the default ``None`` leave it off. Driven through a real CPU
 ``Trainer`` so the logged-metric names are the actual contract under test.
@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from functools import partial
 
-import pytest
 import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from synth_setter.data.vst.param_spec_registry import resolve_param_spec_width
+from synth_setter.metrics import BestSwapParamMSE
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -68,10 +67,9 @@ class _FakeBatchDataset(Dataset):
         return {"params": self._params[index], "mel_spec": self._mels[index]}
 
 
-def _flow_module(param_spec_name: str | None, num_params: int) -> VSTFlowMatchingModule:
+def _flow_module(num_params: int) -> VSTFlowMatchingModule:
     """Build a tiny real flow-matching module with a 1-step sampler.
 
-    :param param_spec_name: Spec name forwarded to the module (partition source).
     :param num_params: Parameter-vector width.
     :returns: Module wired for the fake batch shapes.
     """
@@ -100,7 +98,6 @@ def _flow_module(param_spec_name: str | None, num_params: int) -> VSTFlowMatchin
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=num_params,
-        param_spec_name=param_spec_name,
         validation_sample_steps=1,
         validation_cfg_strength=1.0,
         test_sample_steps=1,
@@ -124,64 +121,31 @@ def _tiny_trainer() -> Trainer:
     )
 
 
-def test_ctor_surge_simple_spec_enables_lad_metric() -> None:
-    """A spec with interchangeable blocks instantiates both LAD metrics."""
-    module = _flow_module("surge_simple", resolve_param_spec_width("surge_simple"))
+def test_ctor_instantiates_best_swap_metrics_unconditionally() -> None:
+    """Both loop metrics exist without any spec plumbing."""
+    module = _flow_module(6)
 
-    assert module.val_param_lad is not None
-    assert module.test_param_lad is not None
-
-
-def test_ctor_spec_without_interchangeable_blocks_disables_lad_metric() -> None:
-    """A degenerate spec leaves the metric off rather than logging plain MSE twice."""
-    module = _flow_module("surge_4", resolve_param_spec_width("surge_4"))
-
-    assert module.val_param_lad is None
+    assert isinstance(module.val_param_mse_best_swap, BestSwapParamMSE)
+    assert isinstance(module.test_param_mse_best_swap, BestSwapParamMSE)
 
 
-def test_ctor_default_none_spec_disables_lad_metric() -> None:
-    """The default ``None`` spec keeps the module's existing behavior."""
-    module = _flow_module(None, 6)
-
-    assert module.val_param_lad is None
-
-
-def test_ctor_spec_width_mismatch_raises_value_error() -> None:
-    """A spec whose encoded width mismatches ``num_params`` fails fast."""
-    with pytest.raises(ValueError, match="width"):
-        _flow_module("surge_simple", 6)
-
-
-def test_validation_loop_surge_simple_spec_logs_param_lad_alongside_param_mse() -> None:
-    """``val/param_lad`` lands beside ``val/param_mse`` and never exceeds it."""
-    num_params = resolve_param_spec_width("surge_simple")
-    module = _flow_module("surge_simple", num_params)
-    loader = DataLoader(_FakeBatchDataset(num_params), batch_size=2)
-
-    metrics = _tiny_trainer().validate(module, dataloaders=loader)[0]
-
-    assert "val/param_lad" in metrics
-    assert "val/param_mse" in metrics
-    assert metrics["val/param_lad"] <= metrics["val/param_mse"] + 1e-6
-
-
-def test_test_loop_surge_simple_spec_logs_param_lad() -> None:
-    """``test/param_lad`` is logged by the test loop."""
-    num_params = resolve_param_spec_width("surge_simple")
-    module = _flow_module("surge_simple", num_params)
-    loader = DataLoader(_FakeBatchDataset(num_params), batch_size=2)
-
-    metrics = _tiny_trainer().test(module, dataloaders=loader)[0]
-
-    assert "test/param_lad" in metrics
-
-
-def test_validation_loop_none_spec_logs_no_param_lad() -> None:
-    """Without a spec the validation loop logs only the existing metrics."""
-    module = _flow_module(None, 6)
+def test_validation_loop_logs_best_swap_alongside_param_mse() -> None:
+    """``val/param_mse_best_swap`` lands beside ``val/param_mse`` and never exceeds it."""
+    module = _flow_module(6)
     loader = DataLoader(_FakeBatchDataset(6), batch_size=2)
 
     metrics = _tiny_trainer().validate(module, dataloaders=loader)[0]
 
-    assert "val/param_lad" not in metrics
+    assert "val/param_mse_best_swap" in metrics
     assert "val/param_mse" in metrics
+    assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse"] + 1e-6
+
+
+def test_test_loop_logs_best_swap() -> None:
+    """``test/param_mse_best_swap`` is logged by the test loop."""
+    module = _flow_module(6)
+    loader = DataLoader(_FakeBatchDataset(6), batch_size=2)
+
+    metrics = _tiny_trainer().test(module, dataloaders=loader)[0]
+
+    assert "test/param_mse_best_swap" in metrics

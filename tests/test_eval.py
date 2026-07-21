@@ -500,8 +500,10 @@ _FLOW_LAD_EVAL_OVERRIDES = {
 
 
 @pytest.mark.parametrize("experiment", sorted(_FLOW_LAD_EVAL_OVERRIDES))
-def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path, experiment: str) -> None:
-    """``mode=test`` through both flow configs logs ``test/param_lad`` beside the MSE.
+def test_evaluate_flow_simple_test_mode_logs_param_mse_best_swap(
+    tmp_path: Path, experiment: str
+) -> None:
+    """``mode=test`` through both flow configs logs ``test/param_mse_best_swap`` beside the MSE.
 
     Pins the production ``model.param_spec_name`` wiring end-to-end: surge_simple
     has interchangeable blocks, so the eval entrypoint must emit the metric.
@@ -546,9 +548,9 @@ def test_evaluate_flow_simple_test_mode_logs_param_lad(tmp_path: Path, experimen
         GlobalHydra.instance().clear()
 
     assert "test/param_mse" in metric_dict
-    param_lad = metric_dict["test/param_lad"]
-    assert torch.isfinite(param_lad)
-    assert param_lad.item() <= metric_dict["test/param_mse"].item() + 1e-6
+    param_mse_best_swap = metric_dict["test/param_mse_best_swap"]
+    assert torch.isfinite(param_mse_best_swap)
+    assert param_mse_best_swap.item() <= metric_dict["test/param_mse"].item() + 1e-6
 
 
 @pytest.mark.requires_vst

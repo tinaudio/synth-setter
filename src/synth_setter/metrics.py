@@ -1,8 +1,6 @@
 """TorchMetrics-based audio and parameter-space distance metrics."""
 
-import itertools
-import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 
 import torch
 from scipy.optimize import linear_sum_assignment
@@ -127,140 +125,44 @@ class LinearAssignmentDistance(Metric):
         return self.linear_assignment_distance / self.count
 
 
-def derive_interchangeable_groups(
-    names: Sequence[str], widths: Sequence[int] | None = None
-) -> list[list[list[int]]]:
-    """Derive interchangeable parameter blocks from numbered param-name prefixes.
+class BestSwapParamMSE(Metric):
+    """MSE after the error-minimizing one-to-one swap of predicted and target scalars.
 
-    A name matching ``<base>_<number>_<suffix>`` belongs to block ``number`` of
-    family ``base``; blocks of one family with an identical suffix-to-width layout
-    form one interchangeable group (>=2 blocks required). Block index lists are
-    suffix-sorted, so position ``i`` addresses the same suffix in every block.
-
-    :param names: Param names in encoded-vector order.
-    :param widths: Encoded width per name (one-hot params span several indices);
-        ``None`` means every name is one scalar index.
-    :returns: Groups of aligned encoded-index blocks; ``[]`` when no family has
-        two structurally identical blocks.
-    """
-    if widths is None:
-        widths = [1] * len(names)
-
-    offsets = list(itertools.accumulate(widths, initial=0))[:-1]
-
-    pattern = re.compile(r"^(?P<base>.+)_(?P<block>\d+)_(?P<suffix>.+)$")
-    families: dict[str, dict[str, dict[str, tuple[int, int]]]] = {}
-    for name, offset, width in zip(names, offsets, widths, strict=True):
-        match = pattern.match(name)
-        if match is None:
-            continue
-        blocks = families.setdefault(match["base"], {})
-        blocks.setdefault(match["block"], {})[match["suffix"]] = (offset, width)
-
-    groups: list[list[list[int]]] = []
-    for blocks in families.values():
-        layouts: dict[tuple[tuple[str, int], ...], list[list[int]]] = {}
-        for block in blocks.values():
-            signature = tuple(sorted((suffix, width) for suffix, (_, width) in block.items()))
-            indices: list[int] = []
-            for suffix in sorted(block):
-                offset, width = block[suffix]
-                indices.extend(range(offset, offset + width))
-            layouts.setdefault(signature, []).append(indices)
-        groups.extend(group for group in layouts.values() if len(group) >= 2)
-
-    return groups
-
-
-class PartitionedLinearAssignmentDistance(Metric):
-    """Permutation-optimal MSE: Hungarian-matched over interchangeable blocks, plain elsewhere.
-
-    Directly comparable to a plain elementwise MSE over the same tensors: equal
-    when the identity matching is optimal, lower when permuting a group's blocks
-    fits the target better. Matching runs per sample on CPU via SciPy — an
-    accepted validation/test-time cost for the small per-group block counts.
+    The optimistic bracket to plain ``param_mse``: invariant to every permutation
+    of parameter values — including sound-changing ones — so it is a floor, never
+    a quality verdict. Read the pair as bounds: ``param_mse`` is pessimistic
+    (penalizes sound-equivalent reorderings), this metric is optimistic (credits
+    non-equivalent ones); a widening gap over training tracks the model producing
+    right values in different arrangements. For squared error the optimal scalar
+    matching is sort-both-and-compare (rearrangement inequality), so no explicit
+    assignment is solved.
     """
 
-    def __init__(self, groups: Sequence[Sequence[Sequence[int]]], num_params: int) -> None:
-        """Validate the partition and register the squared-error accumulator states.
-
-        :param groups: Interchangeable groups of aligned encoded-index blocks
-            (see :func:`derive_interchangeable_groups`); indices must be disjoint
-            and within ``num_params``.
-        :param num_params: Width of the parameter vectors passed to ``update``.
-        :raises ValueError: If group indices repeat, overlap, fall outside
-            ``num_params``, or blocks within a group have unequal sizes.
-        """
+    def __init__(self) -> None:
+        """Register the squared-error accumulator states."""
         super().__init__()
         self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
 
-        seen: set[int] = set()
-        for group in groups:
-            if len({len(block) for block in group}) > 1:
-                raise ValueError(f"blocks within a group must share one size, got {group}")
-            for block in group:
-                indices = set(block)
-                if len(indices) != len(block):
-                    raise ValueError(f"block repeats indices: {block}")
-                if indices & seen:
-                    raise ValueError(f"group indices overlap: {sorted(indices & seen)}")
-                if not indices <= set(range(num_params)):
-                    raise ValueError(f"group indices out of range [0, {num_params}): {block}")
-                seen |= indices
-
-        # Registered as buffers so the index tensors follow the metric across devices.
-        self._group_buffer_names: list[list[str]] = []
-        for group_number, group in enumerate(groups):
-            block_names = []
-            for block_number, block in enumerate(group):
-                name = f"_group_{group_number}_block_{block_number}"
-                self.register_buffer(name, torch.tensor(block, dtype=torch.long), persistent=False)
-                block_names.append(name)
-            self._group_buffer_names.append(block_names)
-        self.register_buffer(
-            "fixed_indices",
-            torch.tensor(sorted(set(range(num_params)) - seen), dtype=torch.long),
-            persistent=False,
-        )
-        self.num_params = num_params
-
     def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
-        """Accumulate the batch's permutation-optimal squared error.
+        """Accumulate per-sample sorted-match squared errors.
 
-        :param predicted: ``(batch, num_params)`` predictions.
-        :param target: ``(batch, num_params)`` targets, shaped like ``predicted``.
-        :raises ValueError: If the tensors are not equal-shaped ``(batch, num_params)``.
+        :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+        :param target: Ground-truth vectors, same shape as ``predicted``.
+        :raises ValueError: If shapes differ or inputs are not 2-D.
         """
         if predicted.ndim != 2 or predicted.shape != target.shape:
             raise ValueError(
-                f"expected equal (batch, num_params) shapes, got predicted "
-                f"{tuple(predicted.shape)} / target {tuple(target.shape)}"
+                f"expected matching 2-D shapes, got {tuple(predicted.shape)} "
+                f"and {tuple(target.shape)}"
             )
-        if predicted.shape[1] != self.num_params:
-            raise ValueError(f"expected width {self.num_params}, got {predicted.shape[1]}")
-        squared_error = (predicted - target).square()
-        total = squared_error[:, self.fixed_indices].sum()
-
-        for block_names in self._group_buffer_names:
-            block_indices = [getattr(self, name) for name in block_names]
-            predicted_blocks = torch.stack([predicted[:, block] for block in block_indices], dim=1)
-            target_blocks = torch.stack([target[:, block] for block in block_indices], dim=1)
-            cost = (
-                (predicted_blocks.unsqueeze(2) - target_blocks.unsqueeze(1)).square().sum(dim=-1)
-            )
-            # SciPy rejects bfloat16 tensors, so cast before the assignment boundary.
-            cost_cpu = cost.detach().float().cpu()
-            for sample in range(cost_cpu.shape[0]):
-                row_ind, col_ind = linear_sum_assignment(cost_cpu[sample])
-                total = total + cost[sample, row_ind, col_ind].sum()
-
-        self.sum_squared_error += total
-        self.element_count += predicted.shape[0] * predicted.shape[1]
+        error = predicted.sort(dim=1).values.float() - target.sort(dim=1).values.float()
+        self.sum_squared_error = self.sum_squared_error + error.square().sum()
+        self.element_count = self.element_count + error.numel()
 
     def compute(self) -> torch.Tensor:
-        """Mean permutation-optimal squared error over all accumulated elements.
+        """Return the accumulated mean squared error under optimal swapping.
 
-        :returns: Scalar tensor, comparable to a plain elementwise MSE.
+        :returns: Scalar mean over every accumulated element.
         """
         return self.sum_squared_error / self.element_count
