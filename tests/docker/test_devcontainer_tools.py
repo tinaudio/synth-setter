@@ -1,4 +1,4 @@
-"""Smoke tests for the built devcontainer-tools Docker image."""
+"""Smoke tests for the devcontainer-tools and devcontainer-tools-dev-user Docker images."""
 
 from __future__ import annotations
 

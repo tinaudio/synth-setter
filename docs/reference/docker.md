@@ -377,7 +377,10 @@ dev-snapshot image, pushes to Docker Hub (and mirrors to
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
-as build validation — no push, no smoke tests.
+as build validation, plus in-image smoke tests
+(`tests/docker/test_devcontainer_tools.py`) for the `devcontainer-tools` and
+`devcontainer-tools-dev-user` targets — but no push and no smoke test against
+the pushed SHA-pinned `dev-snapshot` tag.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
