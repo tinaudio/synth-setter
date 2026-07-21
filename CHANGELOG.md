@@ -1,6 +1,338 @@
 # CHANGELOG
 
 
+## v10.5.0 (2026-07-21)
+
+### Chores
+
+- Expose add-embeddings write stalls ([#2266](https://github.com/tinaudio/synth-setter/pull/2266),
+  [`40917ca`](https://github.com/tinaudio/synth-setter/commit/40917caff9067ed3bda920f9b09dff4e42a194c5))
+
+* fix(data-pipeline): expose embedding write stalls
+
+* fix(data-pipeline): honor retry logging overrides
+
+* test(data-pipeline): cover heartbeat cleanup
+
+* internal-fix(data-pipeline): replace embedding heartbeat thread with timed batch progress
+
+Drop the background heartbeat thread, the LANCE_LOG-sniffed duplicate per-batch events, and the
+  object-store retry knobs. A single throttled embedding_progress event now carries
+  m2l_ms/clap_ms/batch_ms/interbatch_ms so a slow run localizes to encoder vs Lance I/O; --debug
+  logs every batch via an explicit log_every_batch parameter and still enables native
+  LANCE_LOG=debug telemetry before the deferred lance import.
+
+* internal-fix(data-pipeline): clarify progress interval is batch-boundary, not a stall detector
+
+- **ci**: Enforce scoped Pi subagent models
+  ([#2269](https://github.com/tinaudio/synth-setter/pull/2269),
+  [`ab3b1a9`](https://github.com/tinaudio/synth-setter/commit/ab3b1a956727bf3cc81481de425cccbc6640b2fa))
+
+- **training**: Isolate validation probe artifacts by launch
+  ([#2222](https://github.com/tinaudio/synth-setter/pull/2222),
+  [`c057308`](https://github.com/tinaudio/synth-setter/commit/c057308a83cf76ce197626b1a6fb3f81d915a55a))
+
+* fix(training): isolate validation probes by launch
+
+Thread the existing collision-resistant recovery namespace into validation probe prefixes so
+  same-config launches cannot overwrite each other. Resumed W&B runs retain their recovered run ID
+  while receiving a fresh launch namespace.
+
+Fixes #2192
+
+* test(training): bound validation probe completion wait
+
+* test(training): focus probe isolation regression
+
+* test(training): group probe helper imports
+
+* refactor(training): name shared launch namespace
+
+### Features
+
+- **data-pipeline**: Same embedding writer and conditioning profiles
+  ([#2283](https://github.com/tinaudio/synth-setter/pull/2283),
+  [`ac94c9c`](https://github.com/tinaudio/synth-setter/commit/ac94c9ce45bf6602f7b1d09a29e67c58c4b416da))
+
+* internal-feat(data-pipeline): SAME-S/SAME-L embedding writer and conditioning profiles
+
+Add a SAME mode to the add_embeddings CLI (--same s / --same l) that appends fixed-shape (256, T)
+  same_s / same_l latent columns to a Lance dataset without touching its m2l/clap columns, with
+  mono-to-stereo duplication and 44.1 kHz resampling in the writer core and injected encoder
+  callables for testing. Weights resolve from a local dir, the R2 mirror, or a HuggingFace repo id
+  behind a lazy stable_audio_tools import (not a project dependency: it pins an incompatible torch).
+
+Add Hydra conditioning profiles (conditioning=same_s / same_l) pairing the stored column with the
+  embedpool encoder (embed_dim 256, max_seq_len 44) on both the datamodule and the model.
+
+Refs #2276
+
+* internal-feat(data-pipeline): lock SAME extra and add real-weights encoder CI
+
+Declare stable-audio-tools==0.0.20 as the optional same extra. Its stale pins (torch==2.7.1,
+  sentencepiece 0.1.99 and PyWavelets 1.4.1 without py3.12 wheels, importlib-resources==5.12.0) are
+  relaxed via a [[tool.uv.dependency-metadata]] block scoped to that one package; a global
+  override-dependencies would rewrite the project's own extra-conditioned torch requirements and
+  collapse the cpu/cu128 lock fork. The lock stays on torch 2.11.0+cu128 / 2.12.0 / 2.12.0+cpu, and
+  the SAME-S encode path was independently measured equivalent across torch 2.7.1 and this lock
+  (max_abs_diff 9.5e-5 on latents with std 1.795).
+
+Correct same_num_latent_frames to the encoder's real padding: SAME-S zero-pads input to whole
+  two-hop (8192-sample) blocks, so frame counts are even (1 s -> 12 frames, not ceil 11; the 4 s
+  render stays 44).
+
+Add real-weights e2e coverage (marker same_e2e, HF-cached public SAME-S download): an
+  encode-contract test and a golden-latents equivalence test against a committed fixture generated
+  on this lock, run by the new path-scoped test-same-encoder.yml workflow (PR/main push + weekly
+  drift-canary cron).
+
+* internal-fix(data-pipeline): key SAME R2 checkpoint cache on full bucket path
+
+Two distinct r2:// checkpoints sharing a final path component previously collided in one cache
+  directory, where download_dir_no_overwrite hard-fails on the second fetch instead of loading the
+  requested model.
+
+* internal-test(data-pipeline): cover SAME CLI mode and loader guards in unit lane
+
+Unmark the stub-driven --same CLI test as slow (it runs in 0.2 s) and add validation coverage for
+  batch_size/empty-dataset rejection, the local-checkpoint-dir path, and the missing-extra
+  ImportError message, so the unit coverage lane sees the SAME surface (codecov/patch).
+
+* test(data-pipeline): close SAME patch-coverage gaps
+
+Cover the frame-guard raise and the SAME CLI existing-column and loader-failure exits, and upload
+  coverage from the same_e2e lane (new same-e2e codecov flag) — the only suite that executes the
+  real load_same_audio_encoder body. The remaining uncovered SAME lines are the lance batch_udf
+  callback, which runs on a Rust-owned thread that coverage.py cannot trace.
+
+* internal-feat(data-pipeline): thread --resume-cache through SAME mode
+
+The SAME-only CLI mode accepted --resume-cache but silently ignored it; an interrupted SAME run lost
+  all encode work. Wire the cache into add_same_embeddings' batch_udf like the m2l/clap path (#2290)
+  and share the post-commit cleanup helper.
+
+### Internal-Feat
+
+- Load SkyPilot auth from launcher env files
+  ([#2229](https://github.com/tinaudio/synth-setter/pull/2229),
+  [`4d0f036`](https://github.com/tinaudio/synth-setter/commit/4d0f0363e27666dac7a8d9c8ead0a8b0ae162dc6))
+
+* fix(training): load SkyPilot auth from launcher env file
+
+* fix(training): preserve local SkyPilot auth isolation
+
+* fix(training): scope SkyPilot client authentication
+
+* fix(training): force explicit SkyPilot client modes
+
+* test(training): cover generated launcher env files
+
+* fix(training): authenticate SkyPilot preflight requests
+
+* fix(training): close SkyPilot auth review gaps
+
+* fix(training): preserve local RunPod balance preflight
+
+* fix(training): isolate dispatch credentials
+
+* fix(training): slim client auth to stock pydantic-settings loading
+
+Replace the hand-rolled dotenv merge with BaseSettings(_env_file=...) plus a source reorder that
+  keeps the launcher's env_file ranked above ambient process env. Drop machinery beyond the #2123
+  contract: the /api/status preflight (an unreachable or auth-rejecting server now surfaces at job
+  submission), the dispatch env snapshot/restore and module lock (the launcher is a one-shot CLI),
+  and persisted-config remote detection (remote mode is a property of resolved launcher config;
+  provider bootstrap and balance probes key off the projected endpoint env as before).
+
+* fix(training): scrub dispatch-projected env in launcher test teardown
+
+dispatch_via_skypilot intentionally leaves projected SkyPilot client auth and mirrored
+  RCLONE_CONFIG_R2_* values in os.environ; without teardown scrubbing they leak into later test
+  modules in the same process and break tests whose env isolation assumes an unset token.
+
+* docs(training): document one-shot env mutation and same-source auth pairing
+
+- **data-pipeline**: Add-embeddings resume via --resume-cache
+  ([#2290](https://github.com/tinaudio/synth-setter/pull/2290),
+  [`fa3c0c4`](https://github.com/tinaudio/synth-setter/commit/fa3c0c4a97821670fc30f62ac07bf32f2bdfd3d9))
+
+* internal-feat(data-pipeline): resumable add-embeddings via lance batch_udf checkpoint_file
+
+A killed add-embeddings run loses all encode work because the Lance column-add is one transaction.
+  Thread an optional --checkpoint-file through to lance.batch_udf's native per-batch output cache so
+  a rerun with the same file skips already-encoded batches; the file is deleted after a successful
+  commit. Resume assumes the same dataset version and batch size.
+
+* internal-fix(data-pipeline): document checkpoint resume in design doc, restore stolen slow mark
+
+* internal-fix(data-pipeline): log failed checkpoint cleanup instead of aborting index build
+
+* chore(data-pipeline): retrigger CI after PR title fix
+
+* internal-fix(data-pipeline): rename --checkpoint-file to --resume-cache
+
+'checkpoint' collides with model-weight checkpoints (--clap-checkpoint in the same CLI, checkpoints/
+  in R2). The Lance API kwarg keeps its upstream name at the single batch_udf call site.
+
+- **training**: Add fixed-shape embedding conditioning
+  ([#2279](https://github.com/tinaudio/synth-setter/pull/2279),
+  [`b5594bd`](https://github.com/tinaudio/synth-setter/commit/b5594bd9cb1c78d2ccad89feb1aa6881b391089b))
+
+* internal-feat(training): support fixed-shape embedding conditioning
+
+* internal-fix(training): reject conditioning cast overflow
+
+- **training**: Log param_mse_best_swap beside VST flow param_mse
+  ([#2257](https://github.com/tinaudio/synth-setter/pull/2257),
+  [`6acbf99`](https://github.com/tinaudio/synth-setter/commit/6acbf99b32cde3fdeb1b5bb44f02c69704c9b36e))
+
+* feat(training): log partition-aware LAD alongside param_mse in VST flow val/test
+
+val/param_mse penalizes sound-equivalent predictions that permute interchangeable parameter blocks
+  (osc/filter/LFO families in surge_simple), making the monitor metric structurally pessimistic for
+  the approximately-equivariant flow model. Add PartitionedLinearAssignmentDistance — a
+  permutation-optimal MSE that Hungarian-matches interchangeable blocks per sample and scores
+  everything else elementwise — with the partition derived from the param spec's names (identical
+  numbered-prefix suffix layouts), never hardcoded indices. VSTFlowMatchingModule logs val/param_lad
+  and test/param_lad when the configured spec yields a valid partition; specs without
+  interchangeable blocks (surge_4) and the default null leave the metric off. Checkpoint selection
+  is unchanged.
+
+Fixes #2249
+
+* internal-fix(training): address pre-PR review findings on partitioned LAD
+
+Reject rank-3 / unequal-shape / duplicate-index inputs in the metric, annotate its public methods,
+  move the module's metric builder to a module-level helper, add per-sample-matching and
+  shape-rejection tests, and tighten test prose.
+
+Refs #2249
+
+* internal-fix(training): address round-2 review findings on partitioned LAD
+
+Drop the untyped kwargs passthrough, register the partition index tensors as non-persistent buffers
+  so they follow the metric across devices, guard the config key with oc.select so compositions
+  without a datamodule param_spec_name (audio-eval overlays) still resolve, add an eval-entrypoint
+  e2e asserting test/param_lad, and apply style/prose fixes.
+
+* internal-fix(training): address round-3 review findings on partitioned LAD
+
+Cast the Hungarian cost to float32 before the SciPy boundary (bf16 validation raised TypeError), pin
+  it with a bfloat16 test, cover the flowmlp config wiring by parametrizing the eval e2e over both
+  flow experiments, widen the metric ctor to Sequence types, and document the CPU-assignment
+  evaluation cost.
+
+* feat(training): replace partitioned LAD with assumption-free param_mse_best_swap
+
+Redesign per PR review discussion: the name-heuristic block derivation injected structural
+  assumptions of uneven validity (osc swaps are provably sound-equivalent, filter/LFO swaps only
+  conditionally), and a partitioned Hungarian metric measured the model against our grouping
+  intuition. param_mse_best_swap instead logs the loosest honest floor: MSE under the
+  error-minimizing one-to-one scalar matching, which for squared error is exactly
+  sort-both-and-compare — no partition, no spec coupling, no SciPy. Read as a bracket: param_mse is
+  the pessimistic bound, best_swap the optimistic floor (invariant to all scalar permutations,
+  including sound-changing ones); a widening gap tracks arrangement learning; audio metrics stay the
+  judge. Metric is unconditional; the param_spec_name model plumbing and both model-config edits are
+  reverted.
+
+* chore(training): retrigger PR checks after title fix
+
+The four check-pr-title runs from intermediate title-edit events replay their original event
+  payloads and can never pass by rerun; a fresh head SHA supersedes them.
+
+* internal-fix(training): apply redesign review findings and sync with main
+
+Adds the ValueError-branch tests for BestSwapParamMSE.update, seeds the bf16 draw, parameterizes the
+  fake Dataset generic, and rewrites the test docstrings that restated their names. The review
+  round's four BLOCKs were stale-base artifacts (compile wiring and tests this branch never touched,
+  present on current main); merging origin/main removes that diff illusion.
+
+- **training**: Opt-in Lance fragment sampler for sequential-read train batches
+  ([#2253](https://github.com/tinaudio/synth-setter/pull/2253),
+  [`49f0d51`](https://github.com/tinaudio/synth-setter/commit/49f0d5115caa3227e1bf2d2f04d8b48158f05ab4))
+
+The map-style train path issues one scattered ds.take per batch, starving the GPU and inflating
+  per-worker RSS at large batch sizes. Route train reads through Lance's native iterable path when
+  datamodule.use_fragment_sampler is set: ShardedFragmentSampler (randomize=True) + batch_readahead
+  give near-sequential fragment reads with per-epoch fragment-order reshuffle, in-process
+  (num_workers=0). Batches reuse the exact PrepareBatchCollate the map path uses, so normalization,
+  param rescale, and OT semantics are unchanged; val/test/predict loaders are untouched. v1 is
+  single-rank only.
+
+lance 7.0.0's ShardedFragmentSampler ignores its stored epoch in the fragment shuffle, so the
+  wrapper folds the epoch into a fresh sampler's seed (mirroring upstream's seed + epoch convention)
+  and still calls set_epoch per the upstream contract.
+
+Also promotes lance_torch's batch_to_shaped_tensors to a public name for its new cross-module
+  consumer.
+
+Fixes #2251
+
+### Internal-Fix
+
+- **testing**: Cap test-lane BLAS threads, reserve CPU headroom
+  ([#2278](https://github.com/tinaudio/synth-setter/pull/2278),
+  [`68b92d4`](https://github.com/tinaudio/synth-setter/commit/68b92d432ecf9762796e8dd96b174017d788d575))
+
+* internal-fix(testing): reserve local CPU headroom and cap worker BLAS threads in parallel test
+  lanes
+
+Local `make test-fast` saturated the whole host: each of N xdist workers built a full-core
+  torch/OpenMP intra-op pool (N x cores threads), and the -n auto clamp handed every allocated CPU
+  to the suite. Prefix the parallel local lanes with OMP/MKL/OpenBLAS=1 so process-level parallelism
+  owns the cores (env form propagates to spawned DataLoader children), and subtract a default 2-CPU
+  reserve (PYTEST_XDIST_RESERVED_CPUS override; no-op on CI) from the hook's CPU term so the host
+  stays responsive.
+
+Refs #2274
+
+* chore(testing): retrigger CI after PR title shortened
+
+The check-pr-title job reruns reuse the original pull_request event payload, which carries the
+  pre-edit title; a fresh synchronize event is needed for it to see the shortened title.
+
+* fix(testing): pin sys.platform in CPU-headroom hook tests
+
+The new TestHookReservesCpuHeadroom tests delete CI, which on macOS runners activates the
+  local-Darwin 4-worker cap and overrides the expected reserve arithmetic. Pin the platform to linux
+  in the class autouse fixture, matching the existing Darwin-specific tests that pin it the other
+  way.
+
+- **testing**: Mark six inner-loop outlier tests slow
+  ([#2284](https://github.com/tinaudio/synth-setter/pull/2284),
+  [`ceae0db`](https://github.com/tinaudio/synth-setter/commit/ceae0dbc0530408a42c44318717de0624f72757a))
+
+The #2274 durations profile shows make test-fast's wall time is dominated by a handful of
+  Lightning-fit integration tests; the worst (#2280, 1183s for the flow_simple param_mse_best_swap
+  eval case) is 71% of the whole suite. Move the six >13s outliers to the slow lane (cpu-slow.yml /
+  nightly still run them) so the inner loop stays fast.
+
+Refs #2274 Refs #2280
+
+### Testing
+
+- Fail test lanes that blow wall-clock budgets
+  ([#2286](https://github.com/tinaudio/synth-setter/pull/2286),
+  [`03f6ab1`](https://github.com/tinaudio/synth-setter/commit/03f6ab16379157514852fbe7c702bf962d2116c9))
+
+* internal-feat(testing): fail test lanes that blow wall-clock budgets
+
+The #2274 profile showed make test-fast silently degrading from ~80s to 28+ minutes (a pathological
+  test plus a memory-starved worker clamp). Add PYTEST_SESSION_BUDGET_SECONDS: when set,
+  tests/conftest.py fails an otherwise-green session whose wall time exceeds the budget (controller
+  only; real failures preserved; malformed or non-positive values fail open). Pin per-lane budgets
+  grounded in measured runs — test-fast 600s, test-ci-unit 1500s, test-ci-slow 4500s,
+  test-ci-nightly 4800s — with an infra test locking each lane's pin.
+
+Refs #2274
+
+* docs(testing): document per-lane wall-clock session budgets
+
+Point the testing primer and doc-map at the new PYTEST_SESSION_BUDGET_SECONDS enforcement so a red
+  lane with zero test failures is explainable; values stay in the Makefile per the primer's
+  no-echoed-flags convention.
+
+
 ## v10.4.0 (2026-07-21)
 
 ### Chores
