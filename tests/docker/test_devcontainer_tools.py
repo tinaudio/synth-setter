@@ -85,6 +85,8 @@ def test_doom_emacs_available() -> None:
     doom_version = _run_as_dev_text(
         "emacs",
         "--batch",
+        "--load",
+        "/home/dev/.config/emacs/init.el",
         "--eval",
         "(princ doom-version)",
     )
