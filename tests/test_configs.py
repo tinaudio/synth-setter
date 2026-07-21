@@ -202,6 +202,31 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
+def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
+    """A CLAP spec selects generic routing and the vector projection encoder."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            "model=vst_flow",
+            "model/encoder=vector_projection",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.conditioning={column:clap,input_shape:[512]}",
+            "datamodule.conditioning={column:clap,input_shape:[512]}",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == "clap"
+    assert encoder(torch.randn(2, 512)).shape == (2, 512)
+    assert cfg.model.vector_field.conditioning_dim == 512
+
+
 @pytest.mark.parametrize(
     "model_name",
     ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],

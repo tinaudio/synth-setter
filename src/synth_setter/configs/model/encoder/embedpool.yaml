@@ -3,3 +3,4 @@ embed_dim: 128
 d_model: ${model.vector_field.d_model}
 num_heads: ${model.vector_field.num_heads}
 pos_enc: sin
+max_seq_len: 42

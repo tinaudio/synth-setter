@@ -60,9 +60,12 @@ class PosEnc(nn.Module):
             ``x.shape[1]`` positions of the encoding are used.
         :returns: A tensor of the same shape as ``x`` with the positional encoding added.
         :rtype: torch.Tensor
+        :raises ValueError: If the input sequence exceeds the configured maximum.
         """
-        x = x + self.pe[:, : x.shape[1], :]
-        return x
+        max_seq_len = self.pe.shape[1]
+        if x.shape[1] > max_seq_len:
+            raise ValueError(f"sequence length {x.shape[1]} exceeds max_seq_len {max_seq_len}")
+        return x + self.pe[:, : x.shape[1], :]
 
 
 class EmbeddingPool(nn.Module):
@@ -76,6 +79,7 @@ class EmbeddingPool(nn.Module):
     :param d_model: Output dimensionality and the attention model dimension.
     :param num_heads: Number of attention heads.
     :param pos_enc: Positional-encoding variant forwarded to :class:`PosEnc`.
+    :param max_seq_len: Maximum fixed sequence length accepted by the encoder.
     """
 
     def __init__(
@@ -84,12 +88,13 @@ class EmbeddingPool(nn.Module):
         d_model: int,
         num_heads: int,
         pos_enc: Literal["sin", "learned"] = "sin",
+        max_seq_len: int = 42,
     ):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, d_model))
-        self.positional_encoding = PosEnc(embed_dim, 42, pos_enc)
+        self.positional_encoding = PosEnc(embed_dim, max_seq_len, pos_enc)
 
         self.ffn = nn.Sequential(
             nn.LayerNorm(embed_dim),

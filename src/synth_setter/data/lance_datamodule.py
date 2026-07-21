@@ -7,13 +7,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import lance
 import numpy as np
+import pyarrow as pa
 import torch
 from lance.sampler import ShardedFragmentSampler
 from lance.torch.data import LanceDataset
 from torch.utils.data import DataLoader
 
-from synth_setter.conditioning import ConditioningMode
+from synth_setter.conditioning import (
+    Conditioning,
+    EmbeddingConditioningSpec,
+    resolve_embedding_conditioning,
+)
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
     batch_to_shaped_tensors,
@@ -32,10 +38,76 @@ from synth_setter.param_spec_name import ParamSpecName
 
 _FAKE_BATCHES_PER_EPOCH = 10_000
 _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
-_FAKE_M2L_SHAPE = (128, 42)
 _FAKE_MEL_SHAPE = (2, 128, 401)
 
 type ModelBatch = dict[str, torch.Tensor | None]
+
+
+def _fixed_embedding_shape(field: pa.Field) -> tuple[int, ...]:
+    """Return a supported embedding field's fixed per-row shape.
+
+    :param field: Arrow field selected by an embedding conditioning spec.
+    :returns: Fixed per-row shape.
+    :raises TypeError: If storage is variable-length, non-tensor, or non-floating.
+    """
+    field_type = field.type
+    if pa.types.is_list(field_type) or pa.types.is_large_list(field_type):
+        raise TypeError(
+            f"conditioning column {field.name!r} uses variable-length type {field_type}; "
+            "expected fixed-size list or Lance fixed-shape tensor"
+        )
+    if isinstance(field_type, pa.FixedShapeTensorType):
+        shape = tuple(field_type.shape)
+        value_type = field_type.value_type
+    elif pa.types.is_fixed_size_list(field_type):
+        shape = (field_type.list_size,)
+        value_type = field_type.value_type
+    else:
+        raise TypeError(
+            f"conditioning column {field.name!r} has unsupported type {field_type}; "
+            "expected fixed-size list or Lance fixed-shape tensor"
+        )
+    if not pa.types.is_floating(value_type):
+        raise TypeError(
+            f"conditioning column {field.name!r} must contain floating-point values, "
+            f"got {value_type}"
+        )
+    return shape
+
+
+def _validate_embedding_column(
+    shard_path: Path, spec: EmbeddingConditioningSpec
+) -> None:
+    """Validate one Lance split against a fixed-shape embedding specification.
+
+    :param shard_path: Lance dataset selected for a Lightning split.
+    :param spec: Expected column and per-row shape.
+    :raises KeyError: If the configured column is absent.
+    :raises ValueError: If shape differs, the split is empty, or its sample is non-finite.
+    """
+    dataset = lance.dataset(str(shard_path))
+    column_index = dataset.schema.get_field_index(spec.column)
+    if column_index < 0:
+        raise KeyError(
+            f"conditioning column {spec.column!r} is absent from {shard_path}"
+        )
+    shape = _fixed_embedding_shape(dataset.schema.field(column_index))
+    if shape != spec.input_shape:
+        raise ValueError(
+            f"conditioning column {spec.column!r} has shape {shape}, "
+            f"expected {spec.input_shape}"
+        )
+    if dataset.count_rows() == 0:
+        raise ValueError(
+            f"conditioning column {spec.column!r} cannot be sampled from empty {shard_path}"
+        )
+    sample = dataset.take([0], columns=[spec.column]).combine_chunks()
+    record_batch = sample.to_batches()[0]
+    values = batch_to_shaped_tensors(record_batch)[spec.column]
+    if not torch.isfinite(values).all():
+        raise ValueError(
+            f"conditioning column {spec.column!r} sample contains non-finite values"
+        )
 
 
 class PrepareBatchCollate:
@@ -48,6 +120,8 @@ class PrepareBatchCollate:
         std: np.ndarray | None,
         rescale_params: bool,
         ot: bool,
+        conditioning_column: str | None = None,
+        preserve_legacy_m2l: bool = False,
     ) -> None:
         """Configure model-batch transformation semantics.
 
@@ -55,11 +129,15 @@ class PrepareBatchCollate:
         :param std: Mel standard deviation, or ``None`` to skip normalization.
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
+        :param conditioning_column: Generic embedding column to expose as ``conditioning``.
+        :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
         """
         self.mean = mean
         self.std = std
         self.rescale_params = rescale_params
         self.ot = ot
+        self.conditioning_column = conditioning_column
+        self.preserve_legacy_m2l = preserve_legacy_m2l
         self._rank = (
             torch.distributed.get_rank()
             if torch.distributed.is_available() and torch.distributed.is_initialized()
@@ -102,7 +180,13 @@ class PrepareBatchCollate:
         :returns: Float32 model batch with generated noise.
         """
         columns = cast(dict[str, torch.Tensor], batch)
-        raw = cast(RawBatch, {name: tensor.numpy() for name, tensor in columns.items()})
+        raw_values = {name: tensor.numpy() for name, tensor in columns.items()}
+        if self.conditioning_column is not None:
+            conditioning = raw_values[self.conditioning_column]
+            raw_values["conditioning"] = conditioning
+            if self.conditioning_column == "music2latent" and not self.preserve_legacy_m2l:
+                del raw_values["music2latent"]
+        raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
             mean=self.mean,
@@ -166,7 +250,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         batch_size: int,
         num_params: int,
         read_audio: bool,
-        conditioning: ConditioningMode,
+        conditioning: Conditioning,
     ) -> None:
         """Configure synthetic sample shapes and epoch length.
 
@@ -178,7 +262,10 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
         self._read_audio = read_audio
-        self._conditioning = conditioning
+        self._preserve_legacy_m2l = (
+            isinstance(conditioning, str) and conditioning == "m2l"
+        )
+        self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
 
     def __len__(self) -> int:
         """Return the sample count corresponding to 10,000 full batches.
@@ -196,19 +283,21 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         audio = torch.randn(num_rows, *_FAKE_AUDIO_SHAPE) if self._read_audio else None
         mel_spec = (
             torch.randn(num_rows, *_FAKE_MEL_SHAPE)
-            if self._conditioning == "mel"
+            if self._embedding_conditioning is None
             else None
         )
-        m2l = (
-            torch.randn(num_rows, *_FAKE_M2L_SHAPE)
-            if self._conditioning == "m2l"
+        conditioning = (
+            torch.randn(num_rows, *self._embedding_conditioning.input_shape)
+            if self._embedding_conditioning is not None
             else None
         )
+        m2l = conditioning if self._preserve_legacy_m2l else None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
         noise = torch.randn_like(params)
         return {
             "mel_spec": mel_spec,
             "m2l": m2l,
+            "conditioning": conditioning,
             "params": params,
             "noise": noise,
             "audio": audio,
@@ -343,7 +432,7 @@ class LanceVSTDataModule(VSTDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
-        conditioning: ConditioningMode = "mel",
+        conditioning: Conditioning = "mel",
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
@@ -362,7 +451,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param fake: Whether to synthesize samples instead of reading Lance.
         :param repeat_first_batch: Whether non-predict loaders repeat their first batch.
         :param predict_file: Prediction split; defaults to ``test.lance``.
-        :param conditioning: Conditioning feature, ``"mel"`` or ``"m2l"``.
+        :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
@@ -434,11 +523,12 @@ class LanceVSTDataModule(VSTDataModule):
         return self._dataset_for("predict")
 
     def _conditioning_column(self) -> str:
-        """Return the stored column backing the configured conditioning mode.
+        """Return the stored column backing the configured conditioning.
 
-        :returns: ``"mel_spec"`` for mel conditioning, else ``"music2latent"``.
+        :returns: Legacy mel column or the resolved embedding column.
         """
-        return "mel_spec" if self.conditioning == "mel" else "music2latent"
+        spec = self.embedding_conditioning
+        return "mel_spec" if spec is None else spec.column
 
     def _build_lance_split(
         self,
@@ -456,6 +546,9 @@ class LanceVSTDataModule(VSTDataModule):
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
         :returns: Sample-indexed dataset and collate operation.
         """
+        spec = self.embedding_conditioning
+        if spec is not None:
+            _validate_embedding_column(shard_path, spec)
         columns = ["param_array", self._conditioning_column()]
         if read_audio:
             columns.append("audio")
@@ -467,6 +560,10 @@ class LanceVSTDataModule(VSTDataModule):
                 std=std,
                 rescale_params=True,
                 ot=ot,
+                conditioning_column=spec.column if spec is not None else None,
+                preserve_legacy_m2l=(
+                    isinstance(self.conditioning, str) and self.conditioning == "m2l"
+                ),
             ),
         )
 
@@ -495,7 +592,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = None
-        if self.use_saved_mean_and_variance:
+        if self.use_saved_mean_and_variance and self.embedding_conditioning is None:
             if any(name != "predict" for name in split_names):
                 split_stats = load_dataset_statistics(train_shard)
             if "predict" in split_names:

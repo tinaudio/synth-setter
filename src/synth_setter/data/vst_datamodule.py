@@ -7,7 +7,11 @@ import numpy as np
 import torch
 from lightning import LightningDataModule
 
-from synth_setter.conditioning import ConditioningMode
+from synth_setter.conditioning import (
+    Conditioning,
+    EmbeddingConditioningSpec,
+    resolve_embedding_conditioning,
+)
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
@@ -22,14 +26,15 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
 
     Shapes are ``(batch, ...)``: ``param_array`` is ``(batch, num_params)`` and
     always present; ``mel_spec`` is ``(batch, channels, n_mels, n_frames)``,
-    ``music2latent`` is ``(batch, latent_dim, n_frames)``, and ``audio`` is
-    ``(batch, channels, samples)``. Optional unread modalities may be absent or
-    ``None``.
+    ``music2latent`` is ``(batch, latent_dim, n_frames)``, ``conditioning`` is
+    one configured fixed-shape embedding column, and ``audio`` is ``(batch,
+    channels, samples)``. Optional unread modalities may be absent or ``None``.
     """
 
     param_array: np.ndarray
     mel_spec: NotRequired[np.ndarray | None]
     music2latent: NotRequired[np.ndarray | None]
+    conditioning: NotRequired[np.ndarray | None]
     audio: NotRequired[np.ndarray | None]
 
 
@@ -43,6 +48,7 @@ def _raw_batch_validation_error(raw: RawBatch) -> str | None:
         "param_array": raw["param_array"],
         "mel_spec": raw.get("mel_spec"),
         "music2latent": raw.get("music2latent"),
+        "conditioning": raw.get("conditioning"),
         "audio": raw.get("audio"),
     }
     for column, array in arrays.items():
@@ -100,19 +106,31 @@ def prepare_batch(
     m2l_raw = raw.get("music2latent")
     m2l = torch.from_numpy(m2l_raw).to(dtype=torch.float32) if m2l_raw is not None else None
 
+    conditioning_raw = raw.get("conditioning")
+    conditioning = (
+        torch.from_numpy(conditioning_raw).to(dtype=torch.float32)
+        if conditioning_raw is not None
+        else None
+    )
+    if conditioning is not None and not torch.isfinite(conditioning).all():
+        raise ValueError("conditioning float32 conversion produced non-finite values")
+
     param_array = raw["param_array"]
     if rescale_params:
         param_array = param_array * 2 - 1
     params = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, m2l, audio = _hungarian_match(
-            noise, params, mel_spec, m2l, audio
+        noise, params, mel_spec, m2l, conditioning, audio = _hungarian_match(
+            noise, params, mel_spec, m2l, conditioning, audio
         )
 
     return {
         "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
         "m2l": m2l.contiguous() if m2l is not None else None,
+        "conditioning": (
+            conditioning.contiguous() if conditioning is not None else None
+        ),
         "params": params.contiguous(),
         "noise": noise.contiguous(),
         "audio": audio.contiguous() if audio is not None else None,
@@ -185,7 +203,7 @@ class VSTDataModule(LightningDataModule):
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
-        conditioning: ConditioningMode = "mel",
+        conditioning: Conditioning = "mel",
         pin_memory: bool = True,
         *,
         param_spec_name: ParamSpecName,
@@ -201,7 +219,7 @@ class VSTDataModule(LightningDataModule):
         :param fake: Whether to synthesize samples instead of reading Lance.
         :param repeat_first_batch: Whether non-predict loaders repeat their first full batch.
         :param predict_file: Prediction split; defaults to ``test.lance``.
-        :param conditioning: Conditioning feature, ``"mel"`` or ``"m2l"``.
+        :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         """
@@ -219,7 +237,10 @@ class VSTDataModule(LightningDataModule):
             if predict_file is not None
             else self.dataset_root / f"test{self.shard_suffix}"
         )
-        self.conditioning: ConditioningMode = conditioning
+        self.conditioning: Conditioning = conditioning
+        self.embedding_conditioning: EmbeddingConditioningSpec | None = (
+            resolve_embedding_conditioning(conditioning)
+        )
         self.pin_memory = pin_memory
         self.param_spec_name = param_spec_name
 
