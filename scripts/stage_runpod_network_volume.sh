@@ -29,7 +29,13 @@ main() {
   local source_path="r2:${source_uri#r2://}"
   mkdir -p "${destination}"
   rm -f "${destination}/${COMPLETION_MARKER}"
-  rclone copy --immutable --checksum "${source_path}" "${destination}"
+  # Reliability flags mirror r2_io.py's shared argv; --transfers/--multi-thread-streams
+  # parallelize the ~10 GiB objects; --stats keeps the long copy observable in job logs.
+  rclone copy --immutable --checksum -v \
+    --contimeout=30s --timeout=300s --retries=3 \
+    --transfers=8 --multi-thread-streams=8 \
+    --stats 60s --stats-one-line \
+    "${source_path}" "${destination}"
   rclone check --checksum "${source_path}" "${destination}"
   : > "${destination}/${COMPLETION_MARKER}"
 }
