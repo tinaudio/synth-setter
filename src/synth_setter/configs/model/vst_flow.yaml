@@ -46,6 +46,9 @@ vector_field:
   outer_residual: false
 
 num_params: ${param_spec_width:${datamodule.param_spec_name}}
+# Sources the partition-aware val/test param_lad metric; a spec without
+# interchangeable blocks leaves the metric off.
+param_spec_name: ${datamodule.param_spec_name}
 
 # training
 cfg_dropout_rate: 0.1
