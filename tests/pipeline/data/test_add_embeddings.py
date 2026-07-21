@@ -29,6 +29,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     ClapEncodeFn,
     M2LEncodeFn,
     _configure_lance_logging,
+    _default_resume_cache,
     _downmix_to_mono,
     add_embeddings,
     build_clap_index,
@@ -698,6 +699,102 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
     load_clap_audio_encoder()
 
     assert selected_devices == ["mps"]
+
+
+def test_default_resume_cache_changes_with_each_identity_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The derived cache path is stable per identity and distinct per component.
+
+    :param tmp_path: Stand-in cache root.
+    :param monkeypatch: Pytest fixture for pinning ``XDG_CACHE_HOME``.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    base = _default_resume_cache("r2://b/d.lance", 3, 128, "laion/clap-htsat-unfused")
+
+    assert base == _default_resume_cache("r2://b/d.lance", 3, 128, "laion/clap-htsat-unfused")
+    assert base.is_relative_to(tmp_path / "synth-setter" / "add-embeddings")
+    assert base.suffix == ".resume-cache"
+    variants = {
+        _default_resume_cache("r2://b/other.lance", 3, 128, "laion/clap-htsat-unfused"),
+        _default_resume_cache("r2://b/d.lance", 4, 128, "laion/clap-htsat-unfused"),
+        _default_resume_cache("r2://b/d.lance", 3, 64, "laion/clap-htsat-unfused"),
+        _default_resume_cache("r2://b/d.lance", 3, 128, "laion/clap-fused"),
+    }
+    assert base not in variants
+    assert len(variants) == 4
+
+
+@pytest.mark.slow
+def test_main_derives_resume_cache_by_default_and_reports_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare CLI run derives an identity-keyed cache path and detects a prior cache.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + cache root.
+    :param monkeypatch: Fixture used to pin the cache root and inject encoders.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "default-cache.lance"
+    write_minimal_lance_shard(uri, spec)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache-root"))
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
+        lambda device=None: _fake_m2l,
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device=None: _fake_clap,
+    )
+    derived = _default_resume_cache(
+        str(uri), lance.dataset(str(uri)).version, DEFAULT_LANCE_BATCH_SIZE,
+        "laion/clap-htsat-unfused",
+    )
+    derived.parent.mkdir(parents=True, exist_ok=True)
+    derived.touch()
+
+    with capture_logs() as logs:
+        result = CliRunner().invoke(main, [str(uri), "--no-build-index"])
+
+    assert result.exit_code == 0, result.output
+    configured = next(e for e in logs if e["event"] == "resume_cache_configured")
+    assert configured["path"] == str(derived)
+    assert configured["resuming"] is True
+    assert not derived.exists()
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
+
+
+@pytest.mark.slow
+def test_main_no_resume_cache_disables_caching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--no-resume-cache`` runs without deriving or writing any cache file.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + cache root.
+    :param monkeypatch: Fixture used to pin the cache root and inject encoders.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "no-cache.lance"
+    write_minimal_lance_shard(uri, spec)
+    cache_root = tmp_path / "cache-root"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root))
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
+        lambda device=None: _fake_m2l,
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device=None: _fake_clap,
+    )
+
+    with capture_logs() as logs:
+        result = CliRunner().invoke(main, [str(uri), "--no-resume-cache", "--no-build-index"])
+
+    assert result.exit_code == 0, result.output
+    configured = next(e for e in logs if e["event"] == "resume_cache_configured")
+    assert configured["path"] is None
+    assert not cache_root.exists()
+    assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
 @pytest.mark.slow

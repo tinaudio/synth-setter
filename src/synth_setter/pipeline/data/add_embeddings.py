@@ -25,6 +25,7 @@ CLI: ``python -m synth_setter.pipeline.data.add_embeddings DATASET.lance``.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import time
@@ -361,6 +362,26 @@ def _configure_lance_logging(*, debug: bool) -> None:
         os.environ.setdefault("LANCE_LOG", DEFAULT_LANCE_LOG)
 
 
+def _default_resume_cache(
+    uri: str, dataset_version: int, batch_size: int, clap_checkpoint: str
+) -> Path:
+    """Derive the identity-keyed default resume-cache path for one augmentation run.
+
+    Any identity component change yields a new key, so a cache from a different
+    dataset version, batch size, or encoder can never be resumed by mistake.
+
+    :param uri: Dataset URI as given on the CLI.
+    :param dataset_version: Committed Lance version being augmented.
+    :param batch_size: Rows per UDF call.
+    :param clap_checkpoint: HuggingFace CLAP model id.
+    :returns: Cache path under ``XDG_CACHE_HOME`` (default ``~/.cache``).
+    """
+    identity = f"{uri}\n{dataset_version}\n{batch_size}\n{clap_checkpoint}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return cache_home / "synth-setter" / "add-embeddings" / f"{digest}.resume-cache"
+
+
 def _resolve_torch_device(device: str | None) -> str:
     """Resolve an explicit device or select the fastest available backend.
 
@@ -512,8 +533,14 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     default=None,
     help=(
         "Cache per-batch encoder outputs here; rerunning with the same file "
-        "resumes an interrupted run. Deleted on success."
+        "resumes an interrupted run. Deleted on success. Defaults to an "
+        "identity-keyed path under the user cache dir."
     ),
+)
+@click.option(
+    "--no-resume-cache",
+    is_flag=True,
+    help="Disable resume caching entirely (no default path is derived).",
 )
 @click.option(
     "--build-index/--no-build-index",
@@ -547,6 +574,7 @@ def main(
     device: str | None,
     batch_size: int,
     resume_cache: Path | None,
+    no_resume_cache: bool,
     build_index: bool,
     num_partitions: int | None,
     num_sub_vectors: int,
@@ -565,8 +593,10 @@ def main(
     :param clap_checkpoint: HuggingFace CLAP model id.
     :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
     :param batch_size: Rows per UDF call.
-    :param resume_cache: Optional per-batch output cache enabling resume of an
-        interrupted run; deleted after a successful commit.
+    :param resume_cache: Per-batch output cache enabling resume of an interrupted
+        run; deleted after a successful commit. ``None`` derives an
+        identity-keyed default path.
+    :param no_resume_cache: Disable resume caching entirely.
     :param build_index: Build an IVF_PQ index on the clap column after writing it.
     :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
     :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
@@ -587,6 +617,19 @@ def main(
     if existing:
         logger.error("embeddings_already_present", uri=lance_uri, columns=sorted(existing))
         sys.exit(1)
+    if no_resume_cache:
+        resume_cache = None
+    elif resume_cache is None:
+        resume_cache = _default_resume_cache(
+            lance_uri, dataset.version, batch_size, clap_checkpoint
+        )
+    if resume_cache is not None:
+        resume_cache.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "resume_cache_configured",
+        path=None if resume_cache is None else str(resume_cache),
+        resuming=resume_cache is not None and resume_cache.exists(),
+    )
     logger.info(
         "adding_embeddings",
         uri=lance_uri,
