@@ -79,6 +79,18 @@
       },
       {
         "matcher": "Bash",
+        "description": "Pr-title-guard: blocks `gh pr create` / `gh pr edit` whose inline --title/-t has an off-vocabulary conventional-commit type (.gitlint) or a release-triggering type (feat/fix/perf/revert per pyproject semantic-release tags) without an explicit RELEASE_INTENT=1 prefix. shlex-tokenizes so quoted prose mentioning the recipe does not trip it; fails closed on unparsable gated commands. PR_TITLE_GUARD: block default / warn / off. Tracked in #2291.",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh*)",
+            "timeout": 10,
+            "command": "bash agent/hooks/pr-title-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
         "description": "Git-commit-trailer-check: blocks `git commit` (and `git -c X=Y commit`, `git --git-dir=.git commit`, other git-level option forms) that carry --no-verify / -n, a Co-Authored-By trailer, or an agent-attribution footer (e.g. 'Generated with Claude ...'). Tokenizes with shlex so chained `&& / || / ; / |` commands are not mis-scoped.",
         "hooks": [
           {

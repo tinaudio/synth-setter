@@ -110,6 +110,14 @@ Pure docs edits are exempt; no other exemptions.
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:`
   for unreleased code (no version bump).
+- **`feat:` / `fix:` / `perf:` / `revert:` are release-reserved.** They cut a
+  semantic-release version bump on merge (PR title = squash-merge subject), so
+  use them only when a release is deliberate — typically one `feat:` config/gate
+  PR after a chain of `internal-feat:` logic PRs. Enforcement: a `PreToolUse`
+  hook (`agent/hooks/pr-title-guard.sh`, `PR_TITLE_GUARD`: `block` default /
+  `warn` / `off`) gates `gh pr create` / `gh pr edit` titles, and a commit-msg
+  hook (`release-type-guard` in `.pre-commit-config.yaml`) gates commit
+  subjects. Deliberate release: prefix the command with `RELEASE_INTENT=1`.
 - Scope is skill-bound — see `/github-taxonomy`.
 - **Never `--no-verify` / `-n`.** Pre-commit and gitlint must run. Hooks
   work inside worktrees.
