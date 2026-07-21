@@ -12,6 +12,9 @@ import click
 import torch
 
 _COMPILED_KEY_PART = "_orig_mod"
+# Prefix torch uses for every strict load_state_dict failure; scopes the hint to
+# load errors so unrelated runtime errors mentioning _orig_mod pass through.
+_STRICT_LOAD_ERROR_MARKER = "Error(s) in loading state_dict"
 
 
 def _canonical_key(key: str) -> str:
@@ -44,13 +47,14 @@ def strip_compile_wrapper_keys(state_dict: dict[str, object]) -> dict[str, objec
     return stripped
 
 
-def migrate_checkpoint(input_path: Path, output_path: Path) -> int:
+def migrate_checkpoint(input_path: Path, output_path: Path) -> int:  # noqa: DOC503 — FileExistsError comes from open("xb"); bare re-raise after cleanup
     """Write a copy of a checkpoint with its state dict in the uncompiled layout.
 
     :param input_path: Legacy checkpoint containing ``_orig_mod`` keys.
-    :param output_path: Destination for the migrated checkpoint.
+    :param output_path: Destination for the migrated checkpoint; must not exist.
     :returns: Number of rewritten keys.
     :raises ValueError: If no key carries a wrapper part, or stripping collides.
+    :raises FileExistsError: If the destination already exists.
     """
     checkpoint = torch.load(input_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["state_dict"]
@@ -58,7 +62,14 @@ def migrate_checkpoint(input_path: Path, output_path: Path) -> int:
     if not wrapped:
         raise ValueError(f"no {_COMPILED_KEY_PART!r} keys in {input_path}; nothing to migrate")
     checkpoint["state_dict"] = strip_compile_wrapper_keys(state_dict)
-    torch.save(checkpoint, output_path)
+    # "x" reserves the destination atomically, closing the check-then-save race.
+    output_file = output_path.open("xb")
+    try:
+        with output_file:
+            torch.save(checkpoint, output_file)
+    except BaseException:
+        output_path.unlink(missing_ok=True)
+        raise
     return len(wrapped)
 
 
@@ -75,7 +86,12 @@ def checkpoint_migration_hint(ckpt_path: object) -> Iterator[None]:
     try:
         yield
     except RuntimeError as err:
-        if ckpt_path is None or _COMPILED_KEY_PART not in str(err):
+        message = str(err)
+        if (
+            ckpt_path is None
+            or _STRICT_LOAD_ERROR_MARKER not in message
+            or _COMPILED_KEY_PART not in message
+        ):
             raise
         raise RuntimeError(
             f"Checkpoint {ckpt_path} was written by a torch.compile run before "
@@ -95,10 +111,10 @@ def main(input_path: Path, output_path: Path) -> None:
     :param output_path: Destination for the migrated checkpoint; must not exist.
     :raises click.ClickException: If the output exists or the checkpoint cannot migrate.
     """
-    if output_path.exists():
-        raise click.ClickException(f"refusing to overwrite existing {output_path}")
     try:
         count = migrate_checkpoint(input_path, output_path)
+    except FileExistsError as err:
+        raise click.ClickException(f"refusing to overwrite existing {output_path}") from err
     except ValueError as err:
         raise click.ClickException(str(err)) from err
     click.echo(f"Migrated {count} wrapped keys: {input_path} -> {output_path}")

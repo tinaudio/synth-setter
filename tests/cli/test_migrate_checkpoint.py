@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
+import pytest
 import torch
 from click.testing import CliRunner
 
-from synth_setter.cli.migrate_checkpoint import main
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint, main
 
 
 def _legacy_checkpoint(path: Path) -> torch.nn.Linear:
@@ -92,3 +93,26 @@ def test_migrate_colliding_canonical_keys_aborts(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "collide" in result.output
     assert not output_path.exists()
+
+
+def test_migration_hint_augments_strict_load_error_with_command() -> None:
+    """A strict state-dict failure on wrapper keys gains the migration command.
+
+    :raises RuntimeError: Re-raised by the hint; asserted via ``pytest.raises``.
+    """
+    with pytest.raises(RuntimeError, match="synth-setter-migrate-checkpoint"):
+        with checkpoint_migration_hint("model.ckpt"):
+            raise RuntimeError(
+                "Error(s) in loading state_dict for Module:\n"
+                '\tUnexpected key(s) in state_dict: "net._orig_mod.weight".'
+            )
+
+
+def test_migration_hint_leaves_unrelated_orig_mod_errors_untouched() -> None:
+    """A non-load RuntimeError that merely mentions the wrapper propagates as-is.
+
+    :raises RuntimeError: Propagated unchanged; asserted via ``pytest.raises``.
+    """
+    with pytest.raises(RuntimeError, match="^compiled _orig_mod graph break$"):
+        with checkpoint_migration_hint("model.ckpt"):
+            raise RuntimeError("compiled _orig_mod graph break")
