@@ -14,7 +14,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
 ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
@@ -49,26 +49,6 @@ class SkypilotClientSettings(BaseSettings):
 
     api_server_endpoint: str | None = None
     service_account_token: SecretStr | None = None
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Rank the launcher's configured env_file above ambient process env.
-
-        :param settings_cls: Settings class being constructed.
-        :param init_settings: Explicit constructor arguments.
-        :param env_settings: Process-environment source.
-        :param dotenv_settings: Configured ``env_file`` source.
-        :param file_secret_settings: Unused secrets-directory source.
-        :returns: Sources ordered by descending priority.
-        """
-        return (init_settings, dotenv_settings, env_settings)
 
     @field_validator("api_server_endpoint")
     @classmethod
@@ -129,9 +109,9 @@ class SkypilotClientSettings(BaseSettings):
 def skypilot_client_settings_from_sources(
     env_file: Path | None = None, *, api_server_endpoint: str | None = None
 ) -> SkypilotClientSettings:
-    """Load SkyPilot client auth from config, dotenv, then process environment.
+    """Load SkyPilot client auth from config, process env, then dotenv.
 
-    :param env_file: Optional dotenv file to inspect before process environment.
+    :param env_file: Optional dotenv file consulted after process environment.
     :param api_server_endpoint: Optional launch-config endpoint override.
     :returns: Validated SkyPilot client settings.
     """

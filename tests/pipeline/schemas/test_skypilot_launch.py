@@ -88,12 +88,12 @@ class TestSkypilotClientSettings:
     def test_env_file_loads_endpoint_and_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A dotenv file overrides stale process auth as one validated pair.
+        """A dotenv file supplies auth as one validated pair when nothing is exported.
 
         :param tmp_path: Isolates the dotenv source from developer files.
-        :param monkeypatch: Supplies stale process auth and restores it after the test.
+        :param monkeypatch: Clears ambient process auth for the test.
         """
-        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
         monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text(
@@ -106,6 +106,22 @@ class TestSkypilotClientSettings:
         assert settings.api_server_endpoint == "https://sky.example.com"
         assert settings.service_account_token is not None
         assert settings.service_account_token.get_secret_value() == "sky_test-token"
+
+    def test_process_env_overrides_env_file_endpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exported endpoint takes precedence over the dotenv value.
+
+        :param tmp_path: Isolates the dotenv source from developer files.
+        :param monkeypatch: Supplies the exported override.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://exported.example.com")
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://dotenv.example.com\n")
+
+        settings = skypilot_client_settings_from_sources(env_file)
+
+        assert settings.api_server_endpoint == "https://exported.example.com"
 
     def test_config_endpoint_combines_with_env_file_token(self, tmp_path: Path) -> None:
         """An explicit endpoint can pair with a dotenv service token.

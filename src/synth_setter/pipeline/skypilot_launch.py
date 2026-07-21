@@ -305,10 +305,10 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
         resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
     for key in ("WANDB_API_KEY", "WORKER_GIT_REF"):
-        # First non-blank wins, .env over process env; a blank candidate is
-        # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
-        # value can't mask a real process-env fallback.
-        for candidate in (file_env.get(key), os.environ.get(key)):
+        # First non-blank wins, process env over .env (an export is a deliberate
+        # override); a blank candidate is skipped (not preferred-then-dropped),
+        # so a quoted-whitespace value can't mask the fallback source.
+        for candidate in (os.environ.get(key), file_env.get(key)):
             cleaned = candidate.strip() if candidate else ""
             if cleaned:
                 resolved[key] = cleaned
