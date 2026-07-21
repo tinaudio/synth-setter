@@ -1,0 +1,15 @@
+# Run flow matching after hydrating pod-local disk from the dataset network volume.
+
+compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  test -f /workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z/.synth-setter-stage-complete &&
+  exec synth-setter-train
+  experiment=surge/flow_simple_440k
+  datamodule.download_dataset_root_uri=file:///workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z
+  training.upload_checkpoints_during_training=true
+  hydra.run.dir=/home/build/synth-setter/train-run

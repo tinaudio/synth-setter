@@ -348,6 +348,25 @@ class TestLanceMapDataModuleSetup:
 
         assert (destination / "stats.npz").read_bytes() == b"stats"
 
+    def test_prepare_data_hydrates_dataset_root_from_file_uri(self, tmp_path: Path) -> None:
+        """A mounted directory hydrates pod-local storage without R2 credentials.
+
+        :param tmp_path: Parent of the mounted source and local destination.
+        """
+        source = tmp_path / "network-volume"
+        source.mkdir()
+        (source / "stats.npz").write_bytes(b"stats")
+        destination = tmp_path / "local-ssd"
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source.as_uri(),
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.prepare_data()
+
+        assert (destination / "stats.npz").read_bytes() == b"stats"
+
     def test_prepare_data_without_uri_leaves_local_root_unchanged(self, tmp_path: Path) -> None:
         """The conservative default performs no implicit remote download.
 

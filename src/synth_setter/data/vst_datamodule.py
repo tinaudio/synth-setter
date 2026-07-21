@@ -193,7 +193,7 @@ class VSTDataModule(LightningDataModule):
         """Store configuration shared by concrete VST datamodules.
 
         :param dataset_root: Local directory holding per-split datasets.
-        :param download_dataset_root_uri: R2 URI used to hydrate ``dataset_root``.
+        :param download_dataset_root_uri: R2 or file URI used to hydrate ``dataset_root``.
         :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
         :param batch_size: Samples per model batch.
         :param ot: Whether training batches use optimal-transport matching.
@@ -224,10 +224,11 @@ class VSTDataModule(LightningDataModule):
         self.param_spec_name = param_spec_name
 
     def prepare_data(self) -> None:
-        """Hydrate ``dataset_root`` from R2 when configured."""
+        """Hydrate ``dataset_root`` from R2 or a mounted directory when configured."""
         if not self.download_dataset_root_uri:
             return
-        r2_io.ensure_r2_env_loaded()
+        if r2_io.is_r2_uri(self.download_dataset_root_uri):
+            r2_io.ensure_r2_env_loaded()
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
 

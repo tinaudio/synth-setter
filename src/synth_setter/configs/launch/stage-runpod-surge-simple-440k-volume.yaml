@@ -1,0 +1,13 @@
+# Seed the persistent RunPod volume from the finalized R2 dataset.
+
+compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-template.yaml
+worker_image_tag: dev-snapshot
+env_file: .env
+job_name: stage-surge-simple-440k
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec bash scripts/stage_runpod_network_volume.sh
+  r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/
+  /workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z

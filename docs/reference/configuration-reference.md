@@ -284,11 +284,11 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                  | Reference                                                 |
-| -------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §6.1                                 |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | `nsynth.yaml` / `fsd.yaml`                                |
+| Input                                  | Type           | What's Needed                                                                                                                        | Reference                                                 |
+| -------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                               | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` or absolute `file://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                        | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 
@@ -304,15 +304,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.5 Cloud Infrastructure
 
-| Input                               | Type               | What's Needed                                                                                                                                          | Reference                                             |
-| ----------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| RunPod config                       | SkyPilot Task YAML | Landed for the data pipeline smoke at `src/synth_setter/configs/compute/runpod-template.yaml`; training launcher still uses the legacy RunPod-API path | data-pipeline.md §14, training-pipeline.md Appendix D |
-| Vast.ai config                      | SkyPilot Task YAML | Planned — `src/synth_setter/configs/compute/vast-template.yaml` not yet authored                                                                       | new provider                                          |
-| `src/synth_setter/configs/compute/` | directory          | SkyPilot Task templates for the data pipeline launcher (RunPod landed; Vast.ai planned)                                                                | —                                                     |
-| `make train`                        | Makefile target    | Training shorthand with EXPERIMENT arg                                                                                                                 | training-pipeline.md §2                               |
-| `make docker-train`                 | Makefile target    | Docker training shorthand                                                                                                                              | training-pipeline.md §2                               |
-| `make runpod-train`                 | Makefile target    | RunPod launcher shorthand                                                                                                                              | training-pipeline.md §2                               |
-| `make resume`                       | Makefile target    | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                      | training-pipeline.md §2                               |
+| Input                               | Type               | What's Needed                                                                                                                                                                               | Reference                                                                                     |
+| ----------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| RunPod config                       | SkyPilot Task YAML | Smoke, training, and persistent network-volume templates live under `src/synth_setter/configs/compute/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
+| Vast.ai config                      | SkyPilot Task YAML | Planned — `src/synth_setter/configs/compute/vast-template.yaml` not yet authored                                                                                                            | new provider                                                                                  |
+| `src/synth_setter/configs/compute/` | directory          | SkyPilot Task templates for the data pipeline launcher (RunPod landed; Vast.ai planned)                                                                                                     | —                                                                                             |
+| `make train`                        | Makefile target    | Training shorthand with EXPERIMENT arg                                                                                                                                                      | training-pipeline.md §2                                                                       |
+| `make docker-train`                 | Makefile target    | Docker training shorthand                                                                                                                                                                   | training-pipeline.md §2                                                                       |
+| `make runpod-train`                 | Makefile target    | RunPod launcher shorthand                                                                                                                                                                   | training-pipeline.md §2                                                                       |
+| `make resume`                       | Makefile target    | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                           | training-pipeline.md §2                                                                       |
 
 ### 5.6 Other
 

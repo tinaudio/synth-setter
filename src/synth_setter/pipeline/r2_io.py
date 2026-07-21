@@ -21,6 +21,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 from synth_setter.pipeline.schemas.object_storage import (
     STORAGE_REQUIRED_ENV_KEYS,
     StorageConfig,
@@ -423,20 +424,26 @@ def from_s3_uri(s3_uri: str) -> str:
     return R2_URI_SCHEME + s3_uri[len("s3://") :]
 
 
-def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:
-    """Copy every object under an R2 prefix into a local directory, never clobbering.
+def download_dir_no_overwrite(source_uri: str, dest_path: Path) -> None:
+    """Copy an R2 or mounted-file directory into local storage without clobbering.
 
     Unlike :func:`download_to_path` (single object → file), this is a directory
     copy. ``--immutable`` hard-fails if a destination file already exists with a
-    different size/mtime/checksum (rather than silently overwriting or skipping),
-    so re-running against a populated dataset root surfaces drift instead of
-    masking it. Reliability flags mirror the upload helpers so a transient blip
-    retries instead of failing the eval outright.
+    different size/mtime/checksum, so a restart surfaces drift instead of
+    masking it. A ``file://`` source supports hydrating pod-local SSD from a
+    mounted network volume through the same datamodule contract as R2.
 
-    :param r2_uri: ``r2://`` directory prefix; every object beneath it is copied.
+    :param source_uri: ``r2://`` prefix or absolute ``file://`` directory URI.
     :param dest_path: Local destination directory, created by rclone if absent.
+    :raises ValueError: If ``source_uri`` uses neither supported scheme.
     """
-    args = _rclone_argv("copy", "--immutable", _to_rclone_path(r2_uri), str(dest_path))
+    if is_r2_uri(source_uri):
+        source_path = _to_rclone_path(source_uri)
+    elif is_file_uri(source_uri):
+        source_path = str(file_uri_to_path(source_uri))
+    else:
+        raise ValueError(f"dataset source must use r2:// or file://, got {source_uri!r}")
+    args = _rclone_argv("copy", "--immutable", source_path, str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
