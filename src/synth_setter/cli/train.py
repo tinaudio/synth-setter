@@ -16,6 +16,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import ProbeRenderSettings, run_audio_probe
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
@@ -500,12 +501,13 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("train"):
         log.info("Starting training!")
         try:
-            trainer.fit(
-                model=model,
-                datamodule=datamodule,
-                ckpt_path=cfg.get("ckpt_path"),
-                weights_only=False,
-            )
+            with checkpoint_migration_hint(cfg.get("ckpt_path")):
+                trainer.fit(
+                    model=model,
+                    datamodule=datamodule,
+                    ckpt_path=cfg.get("ckpt_path"),
+                    weights_only=False,
+                )
         except SystemExit:
             if trainer.received_sigterm:
                 raise SystemExit(_SHELL_SIGNAL_EXIT_OFFSET + signal.SIGTERM) from None

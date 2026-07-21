@@ -597,6 +597,8 @@ hands Lightning a resolved local path transparently.
 
 **Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
 
+**Legacy compiled checkpoints:** checkpoints written by `compile: true` runs before in-place compilation (#2241) carry `_orig_mod` key parts and fail strict loading. `evaluate()` wraps every `trainer.{test,validate,predict}` call in `checkpoint_migration_hint`, re-raising such failures with the fix: `synth-setter-migrate-checkpoint <ckpt> <output>` rewrites the state dict to the uncompiled layout (#2259).
+
 ### 7.3 Makefile as CLI Interface
 
 **Decision:** All eval operations are `make` targets — consistent with the existing `make test-fast`, `make format` pattern.

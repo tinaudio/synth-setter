@@ -291,6 +291,8 @@ docs:
     sources:
       - pattern: "src/synth_setter/cli/eval.py"
         covers: "Evaluation entry point, checkpoint loading, Hydra config composition"
+      - pattern: "src/synth_setter/cli/migrate_checkpoint.py"
+        covers: "synth-setter-migrate-checkpoint console script (strips legacy _orig_mod key parts; refuses overwrites, aborts on collisions/no-op) and checkpoint_migration_hint wrapping train/eval Trainer calls"
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
@@ -409,6 +411,8 @@ docs:
         covers: "Lance pipeline stress/integration coverage — shard claims, resume, partitioning, dataset lineage, spec/R2 IO, torchsynth-backed stress suite"
       - pattern: "tests/test_eval.py"
         covers: "Train→eval round-trip reference implementation"
+      - pattern: "tests/cli/**"
+        covers: "CLI-entrypoint unit tests (e.g. checkpoint migration)"
       - pattern: "tests/helpers/lance_fixtures.py"
         covers: "Shared write_lance_shard writer backing the Lance datamodule fixtures and the lance_torch dataloader test datasets (tests/helpers/lance_torch_datasets.py)"
       - pattern: "tests/helpers/run_if.py"
