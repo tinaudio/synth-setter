@@ -361,6 +361,44 @@ def test_add_embeddings_stalled_write_emits_heartbeat(
     assert heartbeat_seen.is_set()
 
 
+def test_add_embeddings_failed_write_stops_heartbeat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing native write leaves no heartbeat thread running.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Pytest fixture for replacing the native write.
+    """
+    uri = str(tmp_path / "failed-heartbeat.lance")
+    _audio_dataset(uri, 1)
+
+    def fail_write(
+        _dataset: lance.LanceDataset,
+        _udf: Any,
+        *,
+        read_columns: list[str],
+        batch_size: int,
+    ) -> None:
+        del read_columns, batch_size
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", fail_write)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        add_embeddings(
+            lance.dataset(uri),
+            _fake_m2l,
+            _fake_clap,
+            _SAMPLE_RATE,
+            build_index=False,
+        )
+
+    assert not any(
+        thread.name == "add-embeddings-heartbeat" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
 def test_add_embeddings_debug_logs_every_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -738,8 +776,8 @@ def test_open_r2_dataset_reports_environment_overridden_retry_policy(
         lambda: {"endpoint": "https://r2.example"},
     )
     monkeypatch.setattr(lance, "dataset", capture_dataset)
-    monkeypatch.setenv("OBJECT_STORE_CLIENT_MAX_RETRIES", "5")
-    monkeypatch.setenv("OBJECT_STORE_CLIENT_RETRY_TIMEOUT", "90")
+    monkeypatch.setenv("CLIENT_MAX_RETRIES", "5")
+    monkeypatch.setenv("CLIENT_RETRY_TIMEOUT", "90")
 
     with capture_logs() as logs:
         _open_lance_dataset("r2://bucket/dataset.lance")
@@ -749,7 +787,11 @@ def test_open_r2_dataset_reports_environment_overridden_retry_policy(
     assert retry_policy["retry_timeout_seconds"] == "90"
     assert captured == {
         "uri": "s3://bucket/dataset.lance",
-        "storage_options": {"endpoint": "https://r2.example"},
+        "storage_options": {
+            "endpoint": "https://r2.example",
+            "client_max_retries": "5",
+            "client_retry_timeout": "90",
+        },
     }
 
 

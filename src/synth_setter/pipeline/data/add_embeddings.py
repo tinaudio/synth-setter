@@ -255,7 +255,11 @@ def add_embeddings(
         while not heartbeat_stop.wait(EMBEDDING_HEARTBEAT_SECONDS):
             logger.info("embedding_heartbeat", **heartbeat_status)
 
-    heartbeat_thread = threading.Thread(target=log_heartbeats, daemon=True)
+    heartbeat_thread = threading.Thread(
+        target=log_heartbeats,
+        name="add-embeddings-heartbeat",
+        daemon=True,
+    )
     progress_interval = max(batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS)
     next_progress_row = progress_interval
     rows_processed = 0
@@ -475,16 +479,28 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
         uri = r2_io.to_s3_uri(uri)
     if uri.startswith("s3://"):
         r2_io.ensure_r2_env_loaded()
-        storage_options = r2_io.r2_storage_options()
-        logger.info(
-            "object_store_retry_policy",
-            max_retries=os.environ.get(
+        max_retries = os.environ.get(
+            "CLIENT_MAX_RETRIES",
+            os.environ.get(
                 "OBJECT_STORE_CLIENT_MAX_RETRIES", DEFAULT_OBJECT_STORE_MAX_RETRIES
             ),
-            retry_timeout_seconds=os.environ.get(
+        )
+        retry_timeout_seconds = os.environ.get(
+            "CLIENT_RETRY_TIMEOUT",
+            os.environ.get(
                 "OBJECT_STORE_CLIENT_RETRY_TIMEOUT",
                 DEFAULT_OBJECT_STORE_RETRY_TIMEOUT_SECONDS,
             ),
+        )
+        storage_options = {
+            **r2_io.r2_storage_options(),
+            "client_max_retries": max_retries,
+            "client_retry_timeout": retry_timeout_seconds,
+        }
+        logger.info(
+            "object_store_retry_policy",
+            max_retries=max_retries,
+            retry_timeout_seconds=retry_timeout_seconds,
         )
         return lance.dataset(uri, storage_options=storage_options)
     return lance.dataset(uri)
