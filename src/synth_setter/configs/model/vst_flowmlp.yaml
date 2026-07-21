@@ -4,6 +4,7 @@ defaults:
 
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
 
+conditioning: mel
 warmup_steps: 0
 scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR

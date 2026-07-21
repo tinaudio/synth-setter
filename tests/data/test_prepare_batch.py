@@ -397,7 +397,15 @@ def test_prepare_batch_modality_slots_match_read_flags(
         ot=False,
         generator=torch.Generator().manual_seed(0),
     )
-    assert set(out.keys()) == {"mel_spec", "m2l", "params", "noise", "audio"}
+    assert set(out.keys()) == {
+        "mel_spec",
+        "m2l",
+        "conditioning",
+        "params",
+        "noise",
+        "audio",
+    }
+    assert out["conditioning"] is None
     assert (out["mel_spec"] is not None) == read_mel
     assert (out["m2l"] is not None) == read_m2l
     assert (out["audio"] is not None) == read_audio

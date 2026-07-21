@@ -19,6 +19,7 @@ import pytest
 import torch
 from lightning import LightningModule, Trainer
 
+from synth_setter.conditioning import EmbeddingConditioningSpec
 from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchCollate
 from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -702,18 +703,25 @@ class TestLanceMapDataModuleFlows:
         assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
-    def test_m2l_conditioning_swaps_mel_for_music2latent(self, dataset_root: Path) -> None:
-        """``conditioning="m2l"`` projects ``music2latent`` and drops ``mel_spec``.
+    def test_embedding_spec_routes_music2latent_to_conditioning(
+        self, dataset_root: Path
+    ) -> None:
+        """A spec projects ``music2latent`` to the generic key and drops mel.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
+        spec = EmbeddingConditioningSpec(
+            column="music2latent", input_shape=(6, 7)
+        )
         with _set_up_map_module(
-            dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
+            dataset_root=dataset_root, batch_size=2, ot=False, conditioning=spec
         ) as module:
             batch = next(iter(module.val_dataloader()))
         assert batch["mel_spec"] is None
+        assert batch["m2l"] is None
         np.testing.assert_array_equal(
-            _unwrap(batch["m2l"]).numpy(), make_shard_columns(6, seed=2)["music2latent"][:2]
+            _unwrap(batch["conditioning"]).numpy(),
+            make_shard_columns(6, seed=2)["music2latent"][:2],
         )
 
     def test_mel_normalized_with_saved_stats(self, tmp_path: Path) -> None:

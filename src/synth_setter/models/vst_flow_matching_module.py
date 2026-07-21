@@ -8,7 +8,7 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from synth_setter.conditioning import ConditioningMode
+from synth_setter.conditioning import Conditioning, resolve_embedding_conditioning
 from synth_setter.metrics import BestSwapParamMSE
 
 
@@ -54,7 +54,7 @@ class VSTFlowMatchingModule(LightningModule):
         # Keyword-only: a stale positional caller would silently train at a bogus width.
         *,
         num_params: int,
-        conditioning: ConditioningMode = "mel",
+        conditioning: Conditioning = "mel",
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
@@ -66,13 +66,13 @@ class VSTFlowMatchingModule(LightningModule):
     ):
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
 
-        :param encoder: Conditioning encoder over ``mel_spec`` / ``m2l``.
+        :param encoder: Encoder over legacy mel or a fixed-shape embedding.
         :param vector_field: Network predicting the flow velocity field.
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
-        :param conditioning: Which batch key conditions the field (``"mel"`` or ``"m2l"``).
+        :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
@@ -88,6 +88,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         self.encoder = encoder
         self.vector_field = vector_field
+        self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -132,12 +133,9 @@ class VSTFlowMatchingModule(LightningModule):
         return target
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        if self.hparams.conditioning == "mel":
+        if self._embedding_conditioning is None:
             return batch["mel_spec"]
-        elif self.hparams.conditioning == "m2l":
-            return batch["m2l"]
-        else:
-            raise ValueError(f"Unknown conditioning {self.hparams.conditioning}")
+        return batch["conditioning"]
 
     def _train_step(self, batch: dict[str, torch.Tensor]):
         conditioning = self._get_conditioning_from_batch(batch)
