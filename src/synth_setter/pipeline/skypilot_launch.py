@@ -299,16 +299,22 @@ def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
     :return: Base64 of newline-joined unique key lines; ``""`` when none exist.
     """
     lines: list[str] = []
+    missing: list[str] = []
     for name in ("id_ed25519.pub", "authorized_keys"):
         path = ssh_dir / name
         if not path.is_file():
+            missing.append(name)
             continue
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
                 lines.append(line)
+    if missing:
+        click.echo(f"operator SSH keys: {', '.join(missing)} not found under {ssh_dir}")
     if not lines:
+        click.echo("no operator SSH keys collected; pods will not trust this machine")
         return ""
+    click.echo(f"forwarding {len(lines)} operator SSH key(s) into pod authorized_keys")
     joined = "\n".join(lines) + "\n"
     return base64.b64encode(joined.encode("utf-8")).decode("ascii")
 

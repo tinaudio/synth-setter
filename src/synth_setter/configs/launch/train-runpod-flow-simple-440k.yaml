@@ -5,7 +5,7 @@
 # operational flags.
 
 compute_template: src/synth_setter/configs/compute/runpod-training-template.yaml
-worker_image_tag: dev-snapshot
+worker_image_tag: devcontainer-tools
 env_file: .env
 # Detach after SkyPilot accepts the launch so GitHub Actions does not wait for training.
 tail: false

@@ -1,7 +1,7 @@
 # Run flow matching after hydrating pod-local disk from the dataset network volume.
 
 compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-template.yaml
-worker_image_tag: dev-snapshot
+worker_image_tag: devcontainer-tools
 env_file: .env
 network_volume: ss-datasets-us-ca-2
 tail: false

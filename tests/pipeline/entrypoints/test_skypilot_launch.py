@@ -214,12 +214,32 @@ class TestOperatorSshPubkeys:
             "ssh-rsa AAAAkey2 box-b",
         ]
 
-    def test_missing_files_yield_empty_string(self, tmp_path: Path) -> None:
-        """No key material means no env injection, not an error.
+    def test_missing_files_yield_empty_string_and_say_so(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No key material means no env injection — announced, never silent.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
         """
         assert _operator_ssh_pubkeys_b64(tmp_path / "absent-ssh-dir") == ""
+        out = capsys.readouterr().out
+        assert "id_ed25519.pub" in out and "authorized_keys" in out
+        assert "no operator SSH keys" in out
+
+    def test_forwarding_reports_key_count(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Successful collection reports how many keys pods will trust.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        assert _operator_ssh_pubkeys_b64(ssh_dir) != ""
+        assert "forwarding 1 operator SSH key(s)" in capsys.readouterr().out
 
     def test_dispatch_forwards_keys_env_to_worker(
         self,

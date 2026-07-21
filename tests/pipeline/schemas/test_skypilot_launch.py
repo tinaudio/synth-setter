@@ -31,9 +31,9 @@ class TestDefaults:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1
 
-    def test_default_worker_image_tag_is_dev_snapshot(self) -> None:
-        """Worker image tag defaults to the dev-snapshot rolling tag."""
-        assert SkypilotLaunchConfig().worker_image_tag == "dev-snapshot"
+    def test_default_worker_image_tag_is_devcontainer_tools(self) -> None:
+        """Worker image tag defaults to the tooling image so pods are debuggable."""
+        assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
 
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""

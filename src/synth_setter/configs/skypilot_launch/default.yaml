@@ -6,7 +6,7 @@ compute_template: null
 env_file: .env
 job_name: null
 num_workers: 1
-worker_image_tag: dev-snapshot
+worker_image_tag: devcontainer-tools
 tail: false
 api_server: null
 local: false

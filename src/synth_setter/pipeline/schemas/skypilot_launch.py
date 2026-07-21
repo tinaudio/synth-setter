@@ -208,7 +208,7 @@ class SkypilotLaunchConfig(BaseModel):
     env_file: str | None = None
     job_name: str | None = None
     num_workers: int = 1
-    worker_image_tag: str = "dev-snapshot"
+    worker_image_tag: str = "devcontainer-tools"
     tail: bool = False
     api_server: str | None = None
     local: bool = False
