@@ -1122,12 +1122,14 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **add-captions**   | audio shards | shards + text column | GPU     |
 | **render-presets** | preset bank  | audio shards         | CPU     |
 
-`add-embeddings` is now implemented as the `synth-setter-add-embeddings` CLI: it
-augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
+`add-embeddings` is now implemented as the `synth-setter-add-embeddings` Hydra
+endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
+`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
+a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
 `nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
 latent column, both derived from the audio column. An optional
-`--resume-cache` caches per-batch encoder outputs so an interrupted run can
+`resume_cache=<path>` caches per-batch encoder outputs so an interrupted run can
 resume without re-encoding already-processed rows (see `add_embeddings.py`).
 
 `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.

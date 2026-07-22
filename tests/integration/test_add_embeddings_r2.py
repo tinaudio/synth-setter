@@ -239,7 +239,7 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
     :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
     """
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
-        [_ADD_EMBEDDINGS_CMD, remote_lance_dataset_uri],
+        [_ADD_EMBEDDINGS_CMD, f"lance_uri={remote_lance_dataset_uri}"],
         check=False,
         capture_output=True,
         text=True,
@@ -297,10 +297,10 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
 def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     remote_indexed_lance_dataset_uri: str,
 ) -> None:
-    """``synth-setter-add-embeddings --build-index`` trains an IVF_PQ index on a real R2 dataset.
+    """``synth-setter-add-embeddings build_index=true`` trains an IVF_PQ index on a real R2 dataset.
 
     Renders + uploads a ``MIN_ROWS_FOR_INDEX``-row shard via the VST renderer,
-    runs the real ``add_embeddings`` CLI with ``--build-index`` and tuning sized
+    runs the real ``add_embeddings`` CLI with ``build_index=true`` and tuning sized
     for the row count (so PQ training succeeds rather than skips), then reopens
     the remote dataset and asserts the IVF_PQ index exists on ``clap`` and an ANN
     ``nearest=`` query returns a stored row's own vector as the top hit.
@@ -315,12 +315,10 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
-            remote_indexed_lance_dataset_uri,
-            "--build-index",
-            "--num-partitions",
-            "4",
-            "--num-sub-vectors",
-            "16",
+            f"lance_uri={remote_indexed_lance_dataset_uri}",
+            "build_index=true",
+            "num_partitions=4",
+            "num_sub_vectors=16",
         ],
         check=False,
         capture_output=True,

@@ -15,7 +15,6 @@ import numpy as np
 import pyarrow as pa
 import pytest
 import torch
-from click.testing import CliRunner
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -30,12 +29,10 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_SAMPLE_RATE,
     SameEncodeFn,
     add_same_embeddings,
-    main,
     same_encoder_input,
     same_num_latent_frames,
     same_record_batch,
 )
-from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
 # Fixture audio: 16 samples @ 44.1 kHz pad to one two-hop block -> 2 latent frames.
@@ -329,50 +326,6 @@ def test_add_same_embeddings_rejects_dataset_without_audio_column(tmp_path: Path
         add_same_embeddings(lance.dataset(str(uri)), {SAME_S_FIELD: _fake_same(0.0)}, 44100)
 
 
-def test_main_same_mode_appends_selected_columns_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``--same`` runs the SAME-only writer with the metadata sample rate.
-
-    :param tmp_path: Per-test dataset root.
-    :param monkeypatch: Fixture injecting a fake SAME encoder loader.
-    """
-    spec = build_lance_smoke_spec()
-    uri = tmp_path / "shard.lance"
-    write_minimal_lance_shard(uri, spec)
-    seen_checkpoints: list[str] = []
-
-    def fake_loader(checkpoint: str, device: str | None = None) -> SameEncodeFn:
-        seen_checkpoints.append(checkpoint)
-        return _fake_same(0.5)
-
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder", fake_loader
-    )
-
-    result = CliRunner().invoke(
-        main, [str(uri), "--same", "s", "--same-s-checkpoint", "/models/same-s"]
-    )
-
-    assert result.exit_code == 0, result.output
-    assert seen_checkpoints == ["/models/same-s"]
-    names = set(lance.dataset(str(uri)).schema.names)
-    assert SAME_S_FIELD in names
-    assert SAME_L_FIELD not in names
-    # SAME mode must not require or write the m2l/clap columns.
-    assert "m2l" not in names
-    assert "clap" not in names
-
-
-def test_main_documents_same_options() -> None:
-    """The CLI documents its SAME mode and per-variant checkpoint flags."""
-    result = CliRunner().invoke(main, ["--help"])
-
-    assert result.exit_code == 0, result.output
-    for flag in ("--same", "--same-s-checkpoint", "--same-l-checkpoint"):
-        assert flag in result.output
-
-
 def test_same_profile_shape_feeds_embedpool_encoder() -> None:
     """A (256, 44) SAME latent pools through EmbeddingPool at profile settings."""
     from synth_setter.models.components.embed_pool import EmbeddingPool
@@ -450,54 +403,6 @@ def test_same_num_latent_frames_rejects_non_positive_inputs() -> None:
         same_num_latent_frames(0, SAME_SAMPLE_RATE)
     with pytest.raises(ValueError, match="positive"):
         same_num_latent_frames(SAME_SAMPLE_RATE, 0)
-
-
-def test_main_same_mode_existing_column_exits_1(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Re-running --same against an already-augmented dataset exits 1 cleanly.
-
-    :param tmp_path: Per-test dataset root.
-    :param monkeypatch: Fixture injecting a fake SAME encoder loader.
-    """
-    spec = build_lance_smoke_spec()
-    uri = tmp_path / "shard.lance"
-    write_minimal_lance_shard(uri, spec)
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
-        lambda checkpoint, device=None: _fake_same(0.5),
-    )
-    assert CliRunner().invoke(main, [str(uri), "--same", "s"]).exit_code == 0
-
-    result = CliRunner().invoke(main, [str(uri), "--same", "s"])
-
-    assert result.exit_code == 1
-    assert result.exception is None or isinstance(result.exception, SystemExit)
-
-
-def test_main_same_mode_loader_failure_exits_1(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failing SAME encoder load exits 1 with a logged cause, not a traceback.
-
-    :param tmp_path: Per-test dataset root.
-    :param monkeypatch: Fixture injecting a loader that raises.
-    """
-    spec = build_lance_smoke_spec()
-    uri = tmp_path / "shard.lance"
-    write_minimal_lance_shard(uri, spec)
-
-    def boom(checkpoint: str, device: str | None = None) -> SameEncodeFn:
-        raise RuntimeError("weights unavailable")
-
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder", boom
-    )
-
-    result = CliRunner().invoke(main, [str(uri), "--same", "l"])
-
-    assert result.exit_code == 1
-    assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 def test_add_same_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(

@@ -1,0 +1,36 @@
+# @package _global_
+defaults:
+  - paths: default
+  - hydra: default
+  - _self_
+
+# Dataset to augment with m2l + clap columns (local path, `r2://`, or `s3://`);
+# validated into AddEmbeddingsConfig and opened by the endpoint.
+lance_uri: ???
+
+# HuggingFace CLAP model id whose audio tower sets the `clap` column width.
+clap_checkpoint: laion/clap-htsat-unfused
+# Torch device for both encoders; null auto-selects cuda, MPS, then cpu.
+device: null
+# Rows per Lance UDF call (ignored for legacy v1 datasets).
+batch_size: 128
+# Build an IVF_PQ vector index on the clap column after it lands.
+build_index: true
+# IVF partition count; null uses round(sqrt(rows)).
+num_partitions: null
+# PQ sub-vector count; must divide the clap dim.
+num_sub_vectors: 16
+# Vector-index distance metric.
+metric: cosine
+# Per-batch UDF-output cache enabling resume of an interrupted run; deleted on success.
+resume_cache: null
+# Log every batch with stage timings and enable native Lance debug telemetry.
+debug: false
+
+# hydra/default interpolates ${task_name}; run.dir is overridden below since
+# its group default also references ${run_name}, absent here.
+task_name: add_embeddings
+
+hydra:
+  run:
+    dir: ${paths.log_dir}/add_embeddings/${now:%Y-%m-%d_%H-%M-%S}

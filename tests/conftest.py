@@ -1009,6 +1009,114 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     )
 
 
+def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
+    """Add real ``m2l`` + ``clap`` columns to a rendered smoke dataset's splits.
+
+    Composes the shipped ``add_embeddings.yaml`` pinned at ``train.lance`` and runs
+    the real endpoint (real music2latent + CLAP encoders — no mocks), then clones
+    the augmented ``train.lance`` over the identical ``val``/``test`` clones so the
+    encoders load once. Backs the real clap/m2l conditioning e2e tests; requires
+    network (HuggingFace CLAP download on first run).
+
+    :param dataset_root: Dir holding ``{train,val,test}.lance`` from
+        :func:`surge_xt_smoke_datasets`; each split is augmented in place.
+    :returns: ``dataset_root`` for call-site chaining.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="add_embeddings",
+            overrides=[f"lance_uri={train_uri}", "build_index=false", "device=cpu"],
+        )
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    GlobalHydra.instance().clear()
+    add_embeddings(config)
+
+    # Identical val/test clones are intentional: a plumbing smoke, not a
+    # generalization check.
+    for split in ("val", "test"):
+        dest = dataset_root / f"{split}.lance"
+        shutil.rmtree(dest)
+        shutil.copytree(train_uri, dest)
+    return dataset_root
+
+
+def build_surge_xt_embedding_train_cfg(
+    output_dir: Path,
+    dataset_root: Path,
+    *,
+    param_spec_name: str,
+    conditioning: str,
+) -> DictConfig:
+    """Compose a one-step CPU flow-training cfg wired to an embedding-conditioning profile.
+
+    Composes ``experiment=surge/flow_simple`` with ``conditioning=<profile>`` over
+    the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
+    dataset augmented with the profile's Lance column. Lives here (not inline in
+    ``tests/test_train.py``) because that module is barred from importing Hydra
+    config-initializers (see ``tests/_meta/test_entrypoint_e2e_only.py``).
+
+    :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; the checkpoint
+        callback writes ``last.ckpt`` beneath it.
+    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
+        model width and per-parameter callback labels.
+    :param conditioning: Conditioning profile group (``"clap"`` / ``"m2l"``).
+    :returns: Resolved one-step embedding-conditioning train DictConfig.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_simple",
+                f"conditioning={conditioning}",
+                "trainer=cpu",
+                "datamodule=surge_lance",
+                "callbacks=[default_vst,eval_vst]",
+            ],
+        )
+        with open_dict(cfg):
+            cfg.seed = 1234
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(output_dir)
+            cfg.paths.log_dir = str(output_dir)
+
+            cfg.trainer.accelerator = "cpu"
+            cfg.trainer.precision = "32-true"
+            cfg.trainer.devices = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.min_steps = 1
+            # Flow validation runs expensive ODE sampling; the train-loss e2e skips
+            # it. The eval e2e drives validation through evaluate() instead.
+            cfg.trainer.limit_val_batches = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.trainer.enable_model_summary = False
+            cfg.trainer.deterministic = True
+
+            cfg.datamodule.fake = False
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+            cfg.datamodule.param_spec_name = param_spec_name
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.datamodule.ot = False
+            cfg.datamodule.use_saved_mean_and_variance = True
+
+            cfg.model.compile = False
+            cfg.model.scheduler = None
+            cfg.logger = None
+            cfg.test = False
+            cfg.callbacks.model_checkpoint.save_last = True
+            if cfg.get("callbacks") is not None and "lr_monitor" in cfg.callbacks:
+                cfg.callbacks.lr_monitor = None
+    return cfg
+
+
 @pytest.fixture(scope="function")
 def fake_surge_smoke_datasets(
     tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin

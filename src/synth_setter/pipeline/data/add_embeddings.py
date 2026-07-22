@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Append ``m2l`` + CLAP audio-embedding columns to a finalized Lance dataset.
 
-The functional core (:func:`embeddings_record_batch`, :func:`add_embeddings`)
+The functional core (:func:`embeddings_record_batch`, :func:`_write_embeddings`)
 maps a Lance dataset's ``audio`` column to two columns:
 
 - ``clap`` — a ``FixedSizeList<float32, CLAP_EMBEDDING_DIM>`` LAION-CLAP audio
@@ -12,12 +12,10 @@ maps a Lance dataset's ``audio`` column to two columns:
   un-indexed; this requires a constant ``(channels, latent-dim, time)`` across
   the dataset.
 
-A separate SAME mode (``--same s`` / ``--same l``) appends ``same_s`` /
-``same_l`` — ``fixed_shape_tensor<float32, (256, T)>`` Stability AI SAME latent
-sequences, un-indexed like ``m2l`` — so an already-augmented dataset can be
-extended without touching its m2l/clap columns.
+SAME writer functions (``add_same_embeddings`` etc.) live in this module; the
+endpoint wires only m2l/clap.
 
-All embedders are injected callables, so the core runs without a checkpoint;
+The functional core (``_write_embeddings``) takes injected encoder callables,
 :func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` /
 :func:`load_same_audio_encoder` build the real encoders behind lazy
 ``music2latent`` / ``transformers`` / ``stable_audio_tools`` imports
@@ -29,7 +27,7 @@ This is a sanctioned post-finalize augmenter: it commits a new Lance version of
 an existing dataset rather than writing fresh ``data/`` shards, so it does not
 cross the worker/finalize write boundary.
 
-CLI: ``python -m synth_setter.pipeline.data.add_embeddings DATASET.lance``.
+CLI (Hydra endpoint): ``synth-setter-add-embeddings lance_uri=DATASET.lance``.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias
 
-import click
+import hydra
 import numpy as np
 import pyarrow as pa
 import structlog
@@ -56,14 +54,22 @@ from synth_setter.data.vst.shapes import (
     SAME_S_FIELD,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.workspace import operator_workspace
 
 # lance (and lance_shard, which imports it) is imported lazily everywhere below:
 # native Lance logging locks in LANCE_LOG at first import, so _configure_lance_logging
 # must run first. Hoisting any of these imports silently breaks --debug telemetry.
 if TYPE_CHECKING:
     import lance
+    from omegaconf import DictConfig
+
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
 logger = structlog.get_logger(__name__)
+
+# Publish PROJECT_ROOT at import so ``${oc.env:PROJECT_ROOT}`` in the paths group
+# resolves when ``@hydra.main`` composes (mirrors finalize_dataset/generate_dataset).
+operator_workspace()
 
 DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 # CLAP's feature extractor rejects any other input rate.
@@ -228,7 +234,7 @@ def build_clap_index(
     return True
 
 
-def add_embeddings(
+def _write_embeddings(
     dataset: lance.LanceDataset,
     m2l_encode: M2LEncodeFn,
     clap_encode: ClapEncodeFn,
@@ -244,6 +250,10 @@ def add_embeddings(
     metric: str = DEFAULT_INDEX_METRIC,
 ) -> None:
     """Append ``m2l`` + ``clap`` columns to ``dataset`` and (optionally) index ``clap``.
+
+    The injectable-encoder write seam: encoders are passed in so write-mechanics
+    unit tests run without a checkpoint. The public :func:`add_embeddings` loads
+    the real encoders and delegates here.
 
     Commits a new dataset version; existing columns are untouched and only
     ``audio`` is read per batch. When ``build_index`` and the dataset has enough
@@ -375,6 +385,52 @@ def add_embeddings(
         build_clap_index(
             dataset, num_partitions=num_partitions, num_sub_vectors=num_sub_vectors, metric=metric
         )
+
+
+def add_embeddings(config: AddEmbeddingsConfig) -> None:
+    """Load the real m2l+clap encoders and append their columns to ``config.lance_uri``.
+
+    Config-driven public endpoint: opens the dataset, reads its audio sample
+    rate from the shard metadata, builds the checkpoint-backed encoders, and
+    delegates the write to :func:`_write_embeddings`.
+
+    :param config: Validated run knobs (dataset URI, encoder/device, index tuning).
+    :raises ValueError: If the dataset already carries an ``m2l``/``clap`` column
+        (checked before the encoder downloads); ``_write_embeddings`` re-raises
+        for missing ``audio`` or an empty dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+
+    dataset = _open_lance_dataset(config.lance_uri)
+    sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    # Fail before the multi-hundred-MB encoder downloads if the columns already
+    # exist; _write_embeddings re-checks for its direct (injected-encoder) callers.
+    existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
+    if existing:
+        raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
+    logger.info(
+        "adding_embeddings",
+        uri=config.lance_uri,
+        sample_rate=sample_rate,
+        rows=dataset.count_rows(),
+        batch_size=config.batch_size,
+    )
+    m2l_encode = load_m2l_audio_encoder(config.device)
+    clap_encode = load_clap_audio_encoder(config.clap_checkpoint, config.device)
+    _write_embeddings(
+        dataset,
+        m2l_encode,
+        clap_encode,
+        sample_rate,
+        batch_size=config.batch_size,
+        log_every_batch=config.debug,
+        resume_cache=config.resume_cache,
+        build_index=config.build_index,
+        num_partitions=config.num_partitions,
+        num_sub_vectors=config.num_sub_vectors,
+        metric=config.metric,
+    )
+    logger.info("added_embeddings", uri=config.lance_uri, columns=[M2L_FIELD, CLAP_FIELD])
 
 
 def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
@@ -814,180 +870,33 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
-@click.command()
-@click.argument("lance_uri", type=str)
-@click.option(
-    "--debug",
-    is_flag=True,
-    help="Log every batch with stage timings and enable native Lance debug telemetry.",
+@hydra.main(
+    version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
-@click.option(
-    "--clap-checkpoint",
-    default=DEFAULT_CLAP_CHECKPOINT,
-    show_default=True,
-    help="HuggingFace CLAP model id.",
-)
-@click.option(
-    "--device",
-    default=None,
-    help="Torch device for both encoders (defaults to cuda, MPS, then cpu).",
-)
-@click.option(
-    "--batch-size",
-    type=click.IntRange(min=1),
-    default=DEFAULT_LANCE_BATCH_SIZE,
-    show_default=True,
-    help="Rows per UDF call (ignored for v1 datasets).",
-)
-@click.option(
-    "--resume-cache",
-    type=click.Path(dir_okay=False, writable=True, path_type=Path),
-    default=None,
-    help=(
-        "Cache per-batch encoder outputs here; rerunning with the same file "
-        "resumes an interrupted run. Deleted on success."
-    ),
-)
-@click.option(
-    "--build-index/--no-build-index",
-    default=True,
-    show_default=True,
-    help="Build an IVF_PQ vector index on the clap column.",
-)
-@click.option(
-    "--num-partitions",
-    type=int,
-    default=None,
-    help="IVF partition count; defaults to round(sqrt(rows)).",
-)
-@click.option(
-    "--num-sub-vectors",
-    type=int,
-    default=DEFAULT_NUM_SUB_VECTORS,
-    show_default=True,
-    help="PQ sub-vector count (must divide the clap dim).",
-)
-@click.option(
-    "--metric",
-    default=DEFAULT_INDEX_METRIC,
-    show_default=True,
-    help="Vector-index distance metric.",
-)
-@click.option(
-    "--same",
-    "same_variants",
-    type=click.Choice(["s", "l"]),
-    multiple=True,
-    help="Append only the selected SAME latent column(s) instead of m2l+clap.",
-)
-@click.option(
-    "--same-s-checkpoint",
-    default=DEFAULT_SAME_S_CHECKPOINT,
-    show_default=True,
-    help="SAME-S weights: local dir, r2:// mirror, or HuggingFace repo id.",
-)
-@click.option(
-    "--same-l-checkpoint",
-    default=DEFAULT_SAME_L_CHECKPOINT,
-    show_default=True,
-    help="SAME-L weights: local dir, r2:// mirror, or HuggingFace repo id.",
-)
-def main(
-    lance_uri: str,
-    debug: bool,
-    clap_checkpoint: str,
-    device: str | None,
-    batch_size: int,
-    resume_cache: Path | None,
-    build_index: bool,
-    num_partitions: int | None,
-    num_sub_vectors: int,
-    metric: str,
-    same_variants: tuple[str, ...],
-    same_s_checkpoint: str,
-    same_l_checkpoint: str,
-) -> None:
-    """Add ``m2l`` + ``clap`` embedding columns to the Lance dataset at LANCE_URI.
+def main(cfg: DictConfig) -> None:
+    """Hydra endpoint: add ``m2l`` + ``clap`` columns to the composed ``lance_uri`` dataset.
 
-    LANCE_URI is a dataset from generate_dataset or finalize_dataset (local path,
-    ``r2://``, or ``s3://``); its audio sample rate is read from the shard
-    metadata in the schema. The ``clap`` column is a vector-searchable
-    fixed-size list; with ``--build-index`` it also gets an IVF_PQ index.
+    ``lance_uri`` is a dataset from generate_dataset or finalize_dataset (local
+    path, ``r2://``, or ``s3://``); its audio sample rate is read from the shard
+    metadata. The ``clap`` column is a vector-searchable fixed-size list; with
+    ``build_index=true`` it also gets an IVF_PQ index.
 
-    :param lance_uri: Dataset directory to augment in place.
-    :param debug: Log every batch with stage timings and enable native Lance
-        debug telemetry.
-    :param clap_checkpoint: HuggingFace CLAP model id.
-    :param device: Torch device for both encoders; ``None`` selects cuda, MPS, then cpu.
-    :param batch_size: Rows per UDF call.
-    :param resume_cache: Optional per-batch output cache enabling resume of an
-        interrupted run; deleted after a successful commit.
-    :param build_index: Build an IVF_PQ index on the clap column after writing it.
-    :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
-    :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
-    :param metric: Vector-index distance metric.
-    :param same_variants: SAME variants to append; non-empty switches to
-        SAME-only mode (so an m2l/clap-augmented dataset can be extended).
-    :param same_s_checkpoint: SAME-S weight source.
-    :param same_l_checkpoint: SAME-L weight source.
+    The SAME helpers (``add_same_embeddings`` / ``load_same_audio_encoder``) stay
+    in-module but are not wired to this endpoint.
+
+    :param cfg: Hydra-composed cfg validated into :class:`AddEmbeddingsConfig`.
     """
-    _configure_lance_logging(debug=debug)
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    _configure_lance_logging(debug=config.debug)
     logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
-        from synth_setter.pipeline.data.lance_shard import read_shard_metadata
-
-        dataset = _open_lance_dataset(lance_uri)
-        sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
-    # RuntimeError covers missing R2 creds / rclone from the cloud-URI path.
-    except (OSError, ValueError, RuntimeError) as exc:
-        logger.error("open_dataset_failed", uri=lance_uri, error=str(exc))
-        sys.exit(1)
-    if same_variants:
-        checkpoints = {SAME_S_FIELD: same_s_checkpoint, SAME_L_FIELD: same_l_checkpoint}
-        selected = {f"same_{variant}" for variant in same_variants}
-        _run_same_mode(
-            dataset,
-            uri=lance_uri,
-            checkpoints={field: checkpoints[field] for field in sorted(selected)},
-            sample_rate=sample_rate,
-            device=device,
-            batch_size=batch_size,
-            resume_cache=resume_cache,
-        )
-        return
-    existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
-    if existing:
-        logger.error("embeddings_already_present", uri=lance_uri, columns=sorted(existing))
-        sys.exit(1)
-    logger.info(
-        "adding_embeddings",
-        uri=lance_uri,
-        sample_rate=sample_rate,
-        rows=dataset.count_rows(),
-        batch_size=batch_size,
-    )
-    try:
-        m2l_encode = load_m2l_audio_encoder(device)
-        clap_encode = load_clap_audio_encoder(clap_checkpoint, device)
-        add_embeddings(
-            dataset,
-            m2l_encode,
-            clap_encode,
-            sample_rate,
-            batch_size=batch_size,
-            log_every_batch=debug,
-            resume_cache=resume_cache,
-            build_index=build_index,
-            num_partitions=num_partitions,
-            num_sub_vectors=num_sub_vectors,
-            metric=metric,
-        )
-    # Encoder load (missing dep) or the add/index step (validation, Lance, CUDA)
-    # should exit cleanly with a logged cause, not a raw CLI traceback.
+        add_embeddings(config)
+    # Log the cause and exit non-zero rather than surfacing a raw traceback.
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        logger.error("add_embeddings_failed", uri=lance_uri, error=str(exc))
+        logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
         sys.exit(1)
-    logger.info("added_embeddings", uri=lance_uri, columns=[M2L_FIELD, CLAP_FIELD])
 
 
 if __name__ == "__main__":
