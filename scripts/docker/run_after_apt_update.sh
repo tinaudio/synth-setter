@@ -3,5 +3,5 @@
 
 set -euo pipefail
 
-apt-get update
+apt-get update --error-on=any
 "$@"

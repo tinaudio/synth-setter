@@ -295,7 +295,7 @@ def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> 
     )
 
     assert result.returncode != 0
-    assert calls.read_text().splitlines() == ["update"]
+    assert calls.read_text().splitlines() == ["update --error-on=any"]
     assert not install_marker.exists()
 
 
@@ -351,6 +351,13 @@ def test_base_stage_resolves_apt_packages_from_azure_mirror(target: str) -> None
     :param target: Independent Dockerfile stage whose Ubuntu mirror is rewritten.
     """
     result = _run_clean_docker_build(target, "linux/amd64", 300)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.slow
+def test_runtime_dependency_stage_runs_apt_refresh_wrapper() -> None:
+    """A clean runtime dependency build executes the guarded apt transaction."""
+    result = _run_clean_docker_build("builder-install-synth-setter-deps", "linux/amd64", 1800)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

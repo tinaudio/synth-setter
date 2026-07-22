@@ -74,6 +74,7 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
@@ -230,6 +231,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
