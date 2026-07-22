@@ -569,6 +569,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       curl \
       emacs-nox \
       fd-find \
+      mosh \
       ripgrep \
       tmux \
       xz-utils \

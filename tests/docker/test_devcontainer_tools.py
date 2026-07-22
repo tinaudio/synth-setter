@@ -106,3 +106,13 @@ def test_doom_emacs_available() -> None:
 def test_infisical_cli_installed_with_pinned_version() -> None:
     """Validate the image runs the pinned Infisical CLI version."""
     assert _run_text("infisical", "--version") == "infisical version 0.38.0"
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_mosh_available() -> None:
+    """Validate the image includes the Mosh remote terminal client."""
+    assert _run_text("mosh", "--version").startswith("mosh ")
