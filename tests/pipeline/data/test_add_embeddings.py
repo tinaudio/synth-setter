@@ -106,6 +106,17 @@ def _distinct_clap(mono: np.ndarray, sample_rate: int) -> np.ndarray:
     return output
 
 
+def _temporal_m2l(audio: np.ndarray) -> np.ndarray:
+    """Encode audio as m2l latents whose time-axis mean is observable.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :returns: Deterministic ``(B, 16, 3)`` latents.
+    """
+    vectors = np.ascontiguousarray(audio.reshape(len(audio), -1)[:, :16], dtype=np.float32)
+    offsets = np.arange(_M2L_TIME, dtype=np.float32)
+    return vectors[:, :, None] + offsets[None, None, :]
+
+
 def _fake_same(fill: float) -> Callable[[np.ndarray], np.ndarray]:
     """Build a deterministic SAME encoder.
 
@@ -252,8 +263,16 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
     assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l"}
-    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec()
-    assert EMBEDDING_REGISTRY["m2l"].index is None
+    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
+    assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
+        pool="mean", vector_column=f"{M2L_FIELD}_vec"
+    )
+    assert EMBEDDING_REGISTRY["same_s"].index == IndexSpec(
+        pool="mean", vector_column=f"{SAME_S_FIELD}_vec"
+    )
+    assert EMBEDDING_REGISTRY["same_l"].index == IndexSpec(
+        pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
+    )
     assert EMBEDDING_REGISTRY["same_s"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["same_l"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
@@ -491,6 +510,7 @@ def test_write_columns_for_single_registry_spec_round_trips_column(
     assert {AUDIO_FIELD, PARAM_ARRAY_FIELD, spec.column} <= set(dataset.schema.names)
     column = dataset.to_table(columns=[spec.column]).combine_chunks().column(spec.column).chunk(0)
     if name == "clap":
+        assert f"{CLAP_FIELD}_vec" not in dataset.schema.names
         values = np.asarray(column.to_pylist(), dtype=np.float32)
         expected = _fake_clap(_downmix_to_mono(audio), _SAMPLE_RATE)
     else:
@@ -498,6 +518,66 @@ def test_write_columns_for_single_registry_spec_round_trips_column(
         encoder = _encoder_for(name)
         expected = encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
     np.testing.assert_allclose(values, expected)
+
+
+def test_write_columns_with_mean_pool_writes_float32_companion_from_sequence(
+    tmp_path: Path,
+) -> None:
+    """A pooled spec stores its sequence and finite time-axis mean together.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "mean-pooled.lance"
+    audio = _audio_dataset(uri, rows=4)
+    base = _fake_spec("m2l")
+
+    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
+        del checkpoint, device
+        return _temporal_m2l
+
+    _write_columns(
+        lance.dataset(str(uri)),
+        [replace(base, load_encoder=load)],
+        _SAMPLE_RATE,
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=("m2l",), build_index=False
+        ),
+    )
+
+    dataset = lance.dataset(str(uri))
+    vector_column = f"{M2L_FIELD}_vec"
+    vector_type = dataset.schema.field(vector_column).type
+    assert vector_type == pa.list_(pa.float32(), 16)
+    vectors = np.asarray(
+        dataset.to_table(columns=[vector_column]).column(vector_column).to_pylist(),
+        dtype=np.float32,
+    )
+    assert vectors.shape == (4, 16)
+    assert np.isfinite(vectors).all()
+    np.testing.assert_allclose(vectors, _temporal_m2l(audio).mean(axis=-1))
+
+
+def test_write_columns_with_attention_pool_raises_not_implemented(tmp_path: Path) -> None:
+    """An attention policy fails explicitly until an implementation is selected.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "attention.lance"
+    _audio_dataset(uri, rows=2)
+    spec = replace(
+        _fake_spec("m2l"),
+        index=IndexSpec(pool="attention", vector_column=f"{M2L_FIELD}_vec"),
+    )
+
+    with pytest.raises(NotImplementedError, match="attention pooling is not implemented"):
+        _write_columns(
+            lance.dataset(str(uri)),
+            [spec],
+            _SAMPLE_RATE,
+            AddEmbeddingsConfig(
+                lance_uri=str(uri), embeddings=("m2l",), build_index=False
+            ),
+        )
 
 
 def test_write_columns_for_co_resident_specs_shares_audio_object(tmp_path: Path) -> None:
@@ -526,7 +606,11 @@ def test_write_columns_for_co_resident_specs_shares_audio_object(tmp_path: Path)
     )
 
     assert seen["clap"] == seen["m2l"]
-    assert lance.dataset(str(uri)).schema.names[-2:] == [CLAP_FIELD, M2L_FIELD]
+    assert lance.dataset(str(uri)).schema.names[-3:] == [
+        CLAP_FIELD,
+        M2L_FIELD,
+        f"{M2L_FIELD}_vec",
+    ]
 
 
 def test_write_columns_with_empty_spec_group_raises(tmp_path: Path) -> None:
@@ -574,10 +658,46 @@ def test_write_columns_with_existing_target_raises_before_encoder_load(tmp_path:
     loads: list[str] = []
 
     with pytest.raises(
-        ValueError, match=r"dataset already has embedding column\(s\): \['same_s'\]"
+        ValueError,
+        match=r"dataset already has embedding column\(s\): \['same_s', 'same_s_vec'\]",
     ):
         _write_columns(
             lance.dataset(str(uri)), [_fake_spec("same_s", loads)], _SAMPLE_RATE, config
+        )
+
+    assert loads == []
+
+
+def test_write_columns_with_existing_companion_raises_before_encoder_load(
+    tmp_path: Path,
+) -> None:
+    """An existing pooled-vector target fails before checkpoint loading.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "existing-vector.lance"
+    rows = 2
+    rng = np.random.default_rng(7)
+    write_lance_shard(
+        uri,
+        {
+            AUDIO_FIELD: rng.random((rows, 2, _FIXTURE_SAMPLES)).astype(np.float16),
+            PARAM_ARRAY_FIELD: rng.random((rows, 3)).astype(np.float32),
+            f"{M2L_FIELD}_vec": np.zeros((rows, 8), dtype=np.float32),
+        },
+    )
+    loads: list[str] = []
+
+    with pytest.raises(
+        ValueError, match=rf"dataset already has embedding column\(s\): \['{M2L_FIELD}_vec'\]"
+    ):
+        _write_columns(
+            lance.dataset(str(uri)),
+            [_fake_spec("m2l", loads)],
+            _SAMPLE_RATE,
+            AddEmbeddingsConfig(
+                lance_uri=str(uri), embeddings=("m2l",), build_index=False
+            ),
         )
 
     assert loads == []
@@ -922,7 +1042,15 @@ def test_add_embeddings_with_all_specs_commits_grouped_and_loads_same_sequential
     assert events == ["load:clap", "load:m2l", "load:same_s", "load:same_l"]
     schema_names = lance.dataset(str(uri)).schema.names
     assert set(schema_names) >= {CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD}
-    assert schema_names[-4:] == [CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD]
+    assert schema_names[-7:] == [
+        CLAP_FIELD,
+        M2L_FIELD,
+        f"{M2L_FIELD}_vec",
+        SAME_S_FIELD,
+        f"{SAME_S_FIELD}_vec",
+        SAME_L_FIELD,
+        f"{SAME_L_FIELD}_vec",
+    ]
 
 
 def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
@@ -973,10 +1101,10 @@ def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
     assert {SAME_S_FIELD, SAME_L_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
-def test_add_embeddings_with_non_clap_selection_builds_no_index(
+def test_add_embeddings_with_index_disabled_writes_companions_without_building(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only specs declaring an index trigger index construction.
+    """Disabling index builds retains pooled vectors while skipping every index.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing fake specs and an index spy.
@@ -991,20 +1119,27 @@ def test_add_embeddings_with_non_clap_selection_builds_no_index(
         lambda dataset, column, *, index, config: calls.append(column),
     )
 
-    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected))
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=selected, build_index=False
+        )
+    )
 
     assert calls == []
+    dataset = lance.dataset(str(uri))
+    assert {f"{M2L_FIELD}_vec", f"{SAME_S_FIELD}_vec"} <= set(dataset.schema.names)
+    assert dataset.list_indices() == []
 
 
-def test_add_embeddings_with_clap_selection_builds_only_clap_index(
+def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLAP is the sole registry entry whose index policy is applied.
+    """Each index policy targets its vector column rather than a raw sequence.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing fake specs and an index spy.
     """
-    uri = tmp_path / "clap-index.lance"
+    uri = tmp_path / "declared-indices.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     selected = ("same_l", "clap", "m2l")
     _install_fake_specs(monkeypatch, selected)
@@ -1034,7 +1169,23 @@ def test_add_embeddings_with_clap_selection_builds_only_clap_index(
         )
     )
 
-    assert calls == [(CLAP_FIELD, IndexSpec(), 4, 8, "l2")]
+    assert calls == [
+        (
+            f"{SAME_L_FIELD}_vec",
+            IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
+            4,
+            8,
+            "l2",
+        ),
+        (CLAP_FIELD, IndexSpec(pool="none"), 4, 8, "l2"),
+        (
+            f"{M2L_FIELD}_vec",
+            IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
+            4,
+            8,
+            "l2",
+        ),
+    ]
 
 
 def test_add_embeddings_existing_mixed_target_guards_all_loads(
@@ -1131,6 +1282,60 @@ def test_build_index_with_enough_rows_creates_searchable_ivf_pq(tmp_path: Path) 
         }
     )
     assert hits.num_rows == 5
+
+
+@pytest.mark.slow
+def test_m2l_exact_then_ann_search_with_stored_vector_returns_queried_row(
+    tmp_path: Path,
+) -> None:
+    """The m2l companion serves exact and indexed self-nearest queries.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "m2l-search.lance"
+    _audio_dataset(uri, rows=300)
+    base = _fake_spec("m2l")
+
+    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
+        del checkpoint, device
+        return _temporal_m2l
+
+    spec = replace(base, load_encoder=load)
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("m2l",),
+        build_index=False,
+        num_partitions=4,
+        num_sub_vectors=4,
+        metric="l2",
+    )
+    _write_columns(lance.dataset(str(uri)), [spec], _SAMPLE_RATE, config)
+    dataset = lance.dataset(str(uri))
+    vector_column = f"{M2L_FIELD}_vec"
+    stored = dataset.to_table(columns=[vector_column, PARAM_ARRAY_FIELD])
+    target_row = 137
+    query = np.asarray(stored.column(vector_column)[target_row].as_py(), dtype=np.float32)
+    expected_params = stored.column(PARAM_ARRAY_FIELD)[target_row].as_py()
+
+    exact_hits = dataset.to_table(
+        nearest={"column": vector_column, "q": query, "k": 1},
+        columns=[PARAM_ARRAY_FIELD],
+    )
+    assert exact_hits.column(PARAM_ARRAY_FIELD)[0].as_py() == expected_params
+    np.testing.assert_allclose(exact_hits.column("_distance")[0].as_py(), 0.0, atol=1e-5)
+
+    built = build_index(dataset, vector_column, index=cast(IndexSpec, spec.index), config=config)
+
+    dataset = lance.dataset(str(uri))
+    indices = cast("list[dict[str, Any]]", dataset.list_indices())
+    assert built is True
+    assert [entry["fields"] for entry in indices] == [[vector_column]]
+    assert all(entry["fields"] != [M2L_FIELD] for entry in indices)
+    ann_hits = dataset.to_table(
+        nearest={"column": vector_column, "q": query, "k": 1},
+        columns=[PARAM_ARRAY_FIELD],
+    )
+    assert ann_hits.column(PARAM_ARRAY_FIELD)[0].as_py() == expected_params
 
 
 @pytest.mark.slow

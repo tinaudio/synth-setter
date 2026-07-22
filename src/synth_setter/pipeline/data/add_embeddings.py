@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import hydra
 import numpy as np
@@ -86,10 +86,20 @@ class IndexSpec:
     .. attribute :: num_sub_vectors
 
         PQ sub-vector count.
+
+    .. attribute :: pool
+
+        Pooling applied before indexing, or ``none`` for an existing vector.
+
+    .. attribute :: vector_column
+
+        Companion vector column, or ``None`` to index the embedding column.
     """
 
     metric: str = DEFAULT_INDEX_METRIC
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
+    pool: Literal["none", "mean", "attention"] = "none"
+    vector_column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,7 +128,7 @@ class EmbeddingSpec:
 
     .. attribute :: index
 
-        Vector-index policy, or ``None`` for sequence embeddings.
+        Vector-index policy, or ``None`` when indexing is disabled for the embedding.
 
     .. attribute :: load_encoder
 
@@ -148,14 +158,14 @@ def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
     return audio.mean(axis=1, dtype=np.float32)
 
 
-def _clap_fixed_size_list(clap: np.ndarray, dim: int) -> pa.FixedSizeListArray:
+def _fixed_size_list(vectors: np.ndarray, dim: int) -> pa.FixedSizeListArray:
     """Pack ``(B, dim)`` vectors as a Lance-indexable Arrow array.
 
-    :param clap: Float-compatible CLAP vectors.
+    :param vectors: Float-compatible vectors.
     :param dim: Fixed vector width.
     :returns: Fixed-size-list float32 array.
     """
-    flat = pa.array(np.ascontiguousarray(clap, dtype=np.float32).reshape(-1), pa.float32())
+    flat = pa.array(np.ascontiguousarray(vectors, dtype=np.float32).reshape(-1), pa.float32())
     return pa.FixedSizeListArray.from_arrays(flat, dim)
 
 
@@ -211,7 +221,7 @@ def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -
         raise ValueError(
             f"{CLAP_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
-    return _clap_fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
+    return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
 
 
 def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
@@ -339,7 +349,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
         requires_extra=None,
         co_resident=True,
-        index=IndexSpec(),
+        index=IndexSpec(pool="none"),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
     ),
@@ -349,7 +359,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         default_checkpoint=DEFAULT_M2L_CHECKPOINT,
         requires_extra=None,
         co_resident=True,
-        index=None,
+        index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
     ),
@@ -359,7 +369,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         default_checkpoint=DEFAULT_SAME_S_CHECKPOINT,
         requires_extra="same",
         co_resident=False,
-        index=None,
+        index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_s_column,
     ),
@@ -369,11 +379,22 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         default_checkpoint=DEFAULT_SAME_L_CHECKPOINT,
         requires_extra="same",
         co_resident=False,
-        index=None,
+        index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
     ),
 }
+
+
+def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
+    """Return every dataset column emitted by one embedding policy.
+
+    :param spec: Embedding write and index policy.
+    :returns: Sequence column followed by its optional vector companion.
+    """
+    if spec.index is None or spec.index.vector_column is None:
+        return (spec.column,)
+    return spec.column, spec.index.vector_column
 
 
 def _guard_existing_columns(
@@ -385,7 +406,8 @@ def _guard_existing_columns(
     :param specs: Selected embedding policies.
     :raises ValueError: Any selected target column already exists.
     """
-    existing = {spec.column for spec in specs} & set(dataset.schema.names)
+    target_columns = {column for spec in specs for column in _output_columns(spec)}
+    existing = target_columns & set(dataset.schema.names)
     if existing:
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
 
@@ -479,6 +501,30 @@ def _load_encoders(
     return encoders
 
 
+def _pooled_vector_column(
+    array: pa.Array, index: IndexSpec
+) -> tuple[str, pa.FixedSizeListArray] | None:
+    """Build a companion vector from an encoded sequence when requested.
+
+    :param array: Encoded Arrow embedding column.
+    :param index: Pooling and target-column policy.
+    :returns: Companion name and mean-pooled vectors, or ``None`` for an existing vector.
+    :raises NotImplementedError: Attention pooling is selected.
+    :raises ValueError: Mean pooling lacks a companion name or receives a non-sequence.
+    """
+    if index.pool == "none":
+        return None
+    if index.pool == "attention":
+        raise NotImplementedError("attention pooling is not implemented")
+    if index.vector_column is None:
+        raise ValueError("mean pooling requires a companion vector_column")
+    values = array.to_numpy_ndarray()
+    if values.ndim != 3:
+        raise ValueError(f"mean pooling requires (B, D, T) embeddings, got {values.shape}")
+    pooled = values.mean(axis=-1, dtype=np.float32)
+    return index.vector_column, _fixed_size_list(pooled, pooled.shape[1])
+
+
 def _encode_columns(
     audio: np.ndarray,
     sample_rate: int,
@@ -498,7 +544,13 @@ def _encode_columns(
     columns: dict[str, pa.Array] = {}
     for spec, encoder in zip(specs, encoders, strict=True):
         started_at = time.monotonic()
-        columns[spec.column] = spec.encode_column(audio, sample_rate, encoder)
+        encoded = spec.encode_column(audio, sample_rate, encoder)
+        columns[spec.column] = encoded
+        if spec.index is not None:
+            pooled = _pooled_vector_column(encoded, spec.index)
+            if pooled is not None:
+                vector_column, vectors = pooled
+                columns[vector_column] = vectors
         if stage_ms is not None:
             stage_ms[spec.name] = (time.monotonic() - started_at) * 1000
     return pa.record_batch(columns)
@@ -526,12 +578,13 @@ def _write_columns(
     total_rows = _validate_write_source(dataset, config.batch_size)
     encoders = _load_encoders(specs, config)
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
 
-    logger.info("inferring_embedding_schema", columns=[spec.column for spec in specs])
+    logger.info("inferring_embedding_schema", columns=output_columns)
     sample = next(dataset.to_batches(columns=[AUDIO_FIELD], limit=1))
     sample_audio = sample.column(AUDIO_FIELD).to_numpy_ndarray()
     sample_output = _encode_columns(sample_audio, sample_rate, specs, encoders)
-    logger.info("inferred_embedding_schema", columns=[spec.column for spec in specs])
+    logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
         config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
@@ -577,7 +630,7 @@ def _write_columns(
 
     logger.info(
         "embedding_write_started",
-        columns=[spec.column for spec in specs],
+        columns=output_columns,
         total_rows=total_rows,
         batch_size=config.batch_size,
         source_version=dataset.version,
@@ -586,7 +639,7 @@ def _write_columns(
     _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",
-        columns=[spec.column for spec in specs],
+        columns=output_columns,
         total_rows=total_rows,
         committed_version=dataset.version,
     )
@@ -664,11 +717,12 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
     _require_extras(specs)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,
-        columns=[spec.column for spec in specs],
+        columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
         batch_size=config.batch_size,
@@ -683,8 +737,9 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     if config.build_index:
         for spec in specs:
             if spec.index is not None:
-                build_index(dataset, spec.column, index=spec.index, config=config)
-    logger.info("added_embeddings", uri=config.lance_uri, columns=[spec.column for spec in specs])
+                vector_column = spec.index.vector_column or spec.column
+                build_index(dataset, vector_column, index=spec.index, config=config)
+    logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
 
 def _configure_lance_logging(*, debug: bool) -> None:
