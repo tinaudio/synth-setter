@@ -286,8 +286,11 @@ def test_eval_config_conditioning_profile_composes(profile: str) -> None:
         ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
     )
 
-    assert cfg.model.conditioning.column == profile
-    assert cfg.datamodule.conditioning.column == profile
+    # The profile wires one shared column onto both sides; its name need not equal
+    # the profile name (e.g. the ``m2l`` profile selects the ``music2latent`` column).
+    column = cfg.model.conditioning.column
+    assert column
+    assert cfg.datamodule.conditioning.column == column
 
 
 def test_eval_config_conditioning_unset_composes() -> None:
