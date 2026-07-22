@@ -114,5 +114,5 @@ def test_infisical_cli_installed_with_pinned_version() -> None:
     reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
 )
 def test_mosh_available() -> None:
-    """Validate the image includes the Mosh remote terminal client."""
+    """Report the installed Mosh release from the client entry point."""
     assert _run_text("mosh", "--version").startswith("mosh ")
