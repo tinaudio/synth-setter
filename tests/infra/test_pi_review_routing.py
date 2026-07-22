@@ -54,57 +54,54 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     }
 
 
-def test_build_review_plan_allocates_fixed_smart_and_mechanical_model_tiers() -> None:
+def test_build_review_plan_allocates_fixed_smart_model_tier() -> None:
     """Reserve Sol and K3 for semantic checklists regardless of diff risk."""
-    plan = build_review_plan(
-        ["correctness-review", "comment-hygiene"],
+    codex_pass, free_pool_pass = build_review_plan(
+        ["correctness-review"],
         changed_lines=120,
         risk_reasons=(),
         available_models=parse_available_models(AVAILABLE_MODELS),
     )
 
-    assert [
-        (item.skill, item.model_tier, item.pass_name, item.thinking, item.candidates)
-        for item in plan
-    ] == [
+    assert (codex_pass.model_tier, codex_pass.candidates) == (
+        "smart",
         (
-            "correctness-review",
-            "smart",
-            "codex",
-            "high",
-            (
-                "openai-codex/gpt-5.6-sol",
-                "openai-codex/gpt-5.6-terra",
-            ),
+            "openai-codex/gpt-5.6-sol",
+            "openai-codex/gpt-5.6-terra",
         ),
-        (
-            "correctness-review",
-            "smart",
-            "free-pool",
-            "high",
-            SMART_FREE_POOL_MODELS,
-        ),
-        (
-            "comment-hygiene",
-            "mechanical",
-            "codex",
-            "low",
-            ("openai-codex/gpt-5.6-terra",),
-        ),
-        (
-            "comment-hygiene",
-            "mechanical",
-            "free-pool",
-            "low",
-            OPENROUTER_FREE_MODELS,
-        ),
-    ]
-    assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].fallback_candidates == (
+    )
+    assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
+        "smart",
+        SMART_FREE_POOL_MODELS,
+    )
+    assert free_pool_pass.fallback_candidates == (
         "openai-codex/gpt-5.6-terra",
         "openai-codex/gpt-5.6-sol",
     )
-    assert plan[3].fallback_candidates == ("openai-codex/gpt-5.6-terra",)
+    assert codex_pass.thinking == free_pool_pass.thinking == "high"
+    assert codex_pass.max_turns == free_pool_pass.max_turns == 12
+
+
+def test_build_review_plan_allocates_fixed_mechanical_model_tier() -> None:
+    """Keep mechanical checklists on Terra and free OpenRouter models."""
+    codex_pass, free_pool_pass = build_review_plan(
+        ["comment-hygiene"],
+        changed_lines=120,
+        risk_reasons=(),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert (codex_pass.model_tier, codex_pass.candidates) == (
+        "mechanical",
+        ("openai-codex/gpt-5.6-terra",),
+    )
+    assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
+        "mechanical",
+        OPENROUTER_FREE_MODELS,
+    )
+    assert free_pool_pass.fallback_candidates == ("openai-codex/gpt-5.6-terra",)
+    assert codex_pass.thinking == free_pool_pass.thinking == "low"
+    assert codex_pass.max_turns == free_pool_pass.max_turns == 12
 
 
 @pytest.mark.parametrize(

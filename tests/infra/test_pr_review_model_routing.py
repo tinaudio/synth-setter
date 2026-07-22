@@ -222,7 +222,8 @@ def test_review_fanout_promotes_deep_checklists() -> None:
     """Keep high thinking pinned for correctness-sensitive checklists."""
     routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
 
-    assert 'DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
+    assert 'REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
+    assert "HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS" in routing
     assert 'return "high", "deep checklist"' in routing
 
 

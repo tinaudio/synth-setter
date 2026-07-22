@@ -27,8 +27,9 @@ from pydantic import BaseModel, Field, model_validator
 _REPORT_KEYS = frozenset({"findings", "skill", "target", "what_looks_good"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
-MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
+REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})
+HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS
+BOUNDED_THINKING_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
 SMART_MODEL_SKILLS = frozenset(
     {
         "correctness-review",
@@ -79,7 +80,7 @@ PINNED_REVIEW_MODELS = frozenset(
     )
 )
 
-ModelTier = Literal["smart", "mechanical"]
+type ModelTier = Literal["smart", "mechanical"]
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -744,7 +745,7 @@ def build_worker_prompt(
     skill_instruction = (
         f"Invoke the tinaudio-synth-setter-skills:{skill} skill via the Skill tool."
     )
-    if skill in DEEP_SKILLS:
+    if skill in REPO_LOCAL_SKILLS:
         skill_instruction = (
             f"Invoke the repo-local {skill} skill by reading agent/skills/{skill}/SKILL.md."
         )
@@ -959,10 +960,10 @@ def _thinking_for(
     :param risk_reasons: Named risk signals detected in the diff.
     :returns: Selected thinking level and its allocation rationale.
     """
-    if skill in DEEP_SKILLS:
+    if skill in HIGH_THINKING_SKILLS:
         return "high", "deep checklist"
 
-    if skill in MECHANICAL_SKILLS:
+    if skill in BOUNDED_THINKING_SKILLS:
         if changed_lines < _MECHANICAL_LOW_LINE_LIMIT:
             return "low", f"mechanical checklist on diff under {_MECHANICAL_LOW_LINE_LIMIT} lines"
         return "medium", f"mechanical checklist on diff of {_MECHANICAL_LOW_LINE_LIMIT}+ lines"
