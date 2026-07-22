@@ -4,9 +4,9 @@ The endpoint (``add_embeddings.main``) composes its shipped YAML and validates
 it into :class:`AddEmbeddingsConfig`; a break in the ``defaults`` / ``paths`` /
 ``hydra`` composition would pass every unit test and only fail in production.
 These bare-compose tests pin the knobs the endpoint reads and prove
-``from_hydra_cfg`` validates the composed cfg, plus one live ``main()`` run of
-the Hydra shell (success + failure→exit-1) with the real encoders swapped for
-fakes.
+``from_hydra_cfg`` validates the composed cfg, plus live ``main()`` runs of the
+Hydra shell (m2l+clap success + failure→exit-1, and the SAME dispatch) with the
+real encoders swapped for fakes.
 """
 
 from __future__ import annotations
@@ -21,11 +21,23 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    CLAP_FIELD,
+    M2L_FIELD,
+    SAME_L_FIELD,
+    SAME_S_FIELD,
+)
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    SameEncodeFn,
     main,
+    same_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
@@ -205,3 +217,95 @@ def test_add_embeddings_config_rejects_unknown_metric() -> None:
     """``metric`` is constrained to the metrics Lance's IVF_PQ accepts."""
     with pytest.raises(ValueError):
         AddEmbeddingsConfig(lance_uri=_LANCE_URI, metric="banana")
+
+
+def test_add_embeddings_config_surfaces_same_field_defaults() -> None:
+    """The composed cfg ships an empty ``same_variants`` and the R2-mirror checkpoints."""
+    cfg = _compose_add_embeddings()
+    try:
+        assert list(cfg.same_variants) == []
+        assert cfg.same_s_checkpoint == DEFAULT_SAME_S_CHECKPOINT
+        assert cfg.same_l_checkpoint == DEFAULT_SAME_L_CHECKPOINT
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_add_embeddings_config_from_hydra_cfg_coerces_same_variants_to_tuple() -> None:
+    """A Hydra ``same_variants=[s,l]`` override validates into an ordered ``tuple``."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="add_embeddings",
+            return_hydra_config=True,
+            overrides=[f"lance_uri={_LANCE_URI}", "same_variants=[s,l]"],
+        )
+    try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+    assert config.same_variants == ("s", "l")
+
+
+@pytest.mark.parametrize("bad", [["x"], ["s", "x"]])
+def test_add_embeddings_config_rejects_unknown_same_variant(bad: list[str]) -> None:
+    """``same_variants`` tokens are constrained to the ``s``/``l`` SAME choices.
+
+    :param bad: A variant list carrying an unknown token.
+    """
+    with pytest.raises(ValueError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, same_variants=bad)  # type: ignore[arg-type]
+
+
+def test_add_embeddings_config_rejects_duplicate_same_variant() -> None:
+    """A repeated variant is rejected: each SAME column is written at most once."""
+    with pytest.raises(ValueError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, same_variants=["s", "s"])  # type: ignore[arg-type]
+
+
+def _fake_same(fill: float) -> SameEncodeFn:
+    """Build a SAME encoder stub emitting a constant ``(B, 256, T)`` latent.
+
+    :param fill: Constant latent value, distinguishing variants in round-trips.
+    :returns: Encoder mapping prepared ``(B, 2, T)`` audio to a constant latent.
+    """
+
+    def encode(stereo: np.ndarray) -> np.ndarray:
+        frames = same_num_latent_frames(stereo.shape[2], SAME_SAMPLE_RATE)
+        return np.full((stereo.shape[0], SAME_EMBEDDING_DIM, frames), fill, dtype=np.float32)
+
+    return encode
+
+
+@pytest.mark.slow
+def test_add_embeddings_main_writes_same_columns_through_hydra_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live SAME-mode ``main()`` run dispatches on ``same_variants`` and writes both columns.
+
+    :param tmp_path: Scratch dir for the shard and the Hydra run dir.
+    :param monkeypatch: Swaps the real SAME encoder loader for a fake and pins argv.
+    """
+    uri = tmp_path / "same_shell.lance"
+    _write_audio_shard(uri)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
+        lambda checkpoint, device=None: _fake_same(float(len(checkpoint))),
+    )
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-add-embeddings",
+            f"lance_uri={uri}",
+            "same_variants=[s,l]",
+            f"paths.log_dir={tmp_path}",
+            f"hydra.run.dir={tmp_path / 'run'}",
+        ],
+    )
+
+    main()
+
+    names = set(lance.dataset(str(uri)).schema.names)
+    assert {SAME_S_FIELD, SAME_L_FIELD} <= names
+    # The SAME path must not also write the m2l+clap columns.
+    assert not ({M2L_FIELD, CLAP_FIELD} & names)

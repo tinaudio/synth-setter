@@ -13,7 +13,7 @@ maps a Lance dataset's ``audio`` column to two columns:
   the dataset.
 
 SAME writer functions (``add_same_embeddings`` etc.) live in this module; the
-endpoint wires only m2l/clap.
+endpoint runs the m2l+clap path or the SAME path per ``config.same_variants``.
 
 The functional core (``_write_embeddings``) takes injected encoder callables,
 :func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` /
@@ -388,21 +388,25 @@ def _write_embeddings(
 
 
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
-    """Load the real m2l+clap encoders and append their columns to ``config.lance_uri``.
+    """Append embedding columns to ``config.lance_uri``: SAME latents or m2l+clap.
 
     Config-driven public endpoint: opens the dataset, reads its audio sample
-    rate from the shard metadata, builds the checkpoint-backed encoders, and
-    delegates the write to :func:`_write_embeddings`.
+    rate from the shard metadata, then dispatches on ``config.same_variants`` — a
+    non-empty tuple runs the SAME path (:func:`_add_same_embeddings`), otherwise
+    the m2l+clap path builds those encoders and delegates to :func:`_write_embeddings`.
 
     :param config: Validated run knobs (dataset URI, encoder/device, index tuning).
-    :raises ValueError: If the dataset already carries an ``m2l``/``clap`` column
-        (checked before the encoder downloads); ``_write_embeddings`` re-raises
-        for missing ``audio`` or an empty dataset.
+    :raises ValueError: If the dataset already carries a target column (checked
+        before the encoder downloads); the write helpers re-raise for missing
+        ``audio`` or an empty dataset.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    if config.same_variants:
+        _add_same_embeddings(config, dataset, sample_rate)
+        return
     # Fail before the multi-hundred-MB encoder downloads if the columns already
     # exist; _write_embeddings re-checks for its direct (injected-encoder) callers.
     existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
@@ -801,53 +805,66 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     return encode
 
 
-def _run_same_mode(
-    dataset: lance.LanceDataset,
-    *,
-    uri: str,
-    checkpoints: Mapping[str, str],
-    sample_rate: int,
-    device: str | None,
-    batch_size: int,
-    resume_cache: Path | None,
-) -> None:
-    """Drive the SAME-only CLI mode: load encoders, append columns, exit on failure.
+def _same_checkpoints(config: AddEmbeddingsConfig) -> dict[str, str]:
+    """Map each requested SAME variant to its ``(column, checkpoint)`` source.
 
-    :param dataset: Open Lance dataset to augment.
-    :param uri: Dataset URI, for logging only.
-    :param checkpoints: Target column name to checkpoint source.
-    :param sample_rate: Dataset audio sample rate in Hz.
-    :param device: Torch device for the encoders; ``None`` auto-selects.
-    :param batch_size: Rows per UDF call.
-    :param resume_cache: Optional per-batch output cache enabling resume of an
-        interrupted run; deleted after a successful commit.
+    :param config: Validated run knobs carrying ``same_variants`` and the
+        per-variant checkpoints.
+    :returns: Column name (``same_s``/``same_l``) to checkpoint source, ordered
+        as ``config.same_variants`` lists the variants.
     """
+    sources = {
+        "s": (SAME_S_FIELD, config.same_s_checkpoint),
+        "l": (SAME_L_FIELD, config.same_l_checkpoint),
+    }
+    return dict(sources[variant] for variant in config.same_variants)
+
+
+def _add_same_embeddings(
+    config: AddEmbeddingsConfig,
+    dataset: lance.LanceDataset,
+    sample_rate: int,
+) -> None:
+    """Load the SAME encoders named by ``config.same_variants`` and append their columns.
+
+    The SAME analogue of the m2l+clap body of :func:`add_embeddings`: builds one
+    checkpoint-backed encoder per requested variant and delegates the write to
+    :func:`add_same_embeddings`. SAME latents are sequences, so no index is built.
+
+    :param config: Validated run knobs; ``same_variants`` selects the columns and
+        ``same_s_checkpoint`` / ``same_l_checkpoint`` their weights.
+    :param dataset: Open Lance dataset carrying an ``audio`` column.
+    :param sample_rate: Dataset audio sample rate in Hz.
+    :raises ValueError: A requested SAME column already exists (checked before the
+        encoder downloads); ``add_same_embeddings`` re-raises for missing ``audio``
+        or an empty dataset.
+    """
+    checkpoints = _same_checkpoints(config)
+    # Fail before the multi-GB SAME weights download if a target column exists;
+    # add_same_embeddings re-checks for its direct (injected-encoder) callers.
     existing = set(checkpoints) & set(dataset.schema.names)
     if existing:
-        logger.error("embeddings_already_present", uri=uri, columns=sorted(existing))
-        sys.exit(1)
+        raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
     logger.info(
         "adding_same_embeddings",
-        uri=uri,
+        uri=config.lance_uri,
         columns=sorted(checkpoints),
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
-        batch_size=batch_size,
+        batch_size=config.batch_size,
     )
-    try:
-        encoders = {
-            field: load_same_audio_encoder(checkpoint, device)
-            for field, checkpoint in checkpoints.items()
-        }
-        add_same_embeddings(
-            dataset, encoders, sample_rate, batch_size=batch_size, resume_cache=resume_cache
-        )
-    # Encoder load (missing dep / weights) or the add step (validation, Lance,
-    # CUDA) should exit cleanly with a logged cause, not a raw CLI traceback.
-    except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        logger.error("add_embeddings_failed", uri=uri, error=str(exc))
-        sys.exit(1)
-    logger.info("added_embeddings", uri=uri, columns=sorted(checkpoints))
+    encoders = {
+        field: load_same_audio_encoder(checkpoint, config.device)
+        for field, checkpoint in checkpoints.items()
+    }
+    add_same_embeddings(
+        dataset,
+        encoders,
+        sample_rate,
+        batch_size=config.batch_size,
+        resume_cache=config.resume_cache,
+    )
+    logger.info("added_embeddings", uri=config.lance_uri, columns=sorted(checkpoints))
 
 
 def _open_lance_dataset(uri: str) -> lance.LanceDataset:
@@ -874,15 +891,13 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
 def main(cfg: DictConfig) -> None:
-    """Hydra endpoint: add ``m2l`` + ``clap`` columns to the composed ``lance_uri`` dataset.
+    """Hydra endpoint: add embedding columns to the composed ``lance_uri`` dataset.
 
     ``lance_uri`` is a dataset from generate_dataset or finalize_dataset (local
     path, ``r2://``, or ``s3://``); its audio sample rate is read from the shard
-    metadata. The ``clap`` column is a vector-searchable fixed-size list; with
-    ``build_index=true`` it also gets an IVF_PQ index.
-
-    The SAME helpers (``add_same_embeddings`` / ``load_same_audio_encoder``) stay
-    in-module but are not wired to this endpoint.
+    metadata. With ``same_variants`` set the SAME latent columns are written;
+    otherwise ``m2l`` + a vector-searchable ``clap`` column land (the latter also
+    gets an IVF_PQ index when ``build_index=true``).
 
     :param cfg: Hydra-composed cfg validated into :class:`AddEmbeddingsConfig`.
     """

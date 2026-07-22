@@ -1,9 +1,9 @@
-"""Strict config for the ``add_embeddings`` m2l+clap augmenter endpoint.
+"""Strict config for the ``add_embeddings`` m2l+clap / SAME augmenter endpoint.
 
 The Hydra ``add_embeddings.yaml`` composes a dict; the entrypoint builds this
 model from it via :meth:`AddEmbeddingsConfig.from_hydra_cfg` (mirroring
-``DatasetSpec.from_hydra_cfg``) so the CLI is a thin Hydra→pydantic shell. The
-model carries m2l/clap knobs only; SAME knobs are absent.
+``DatasetSpec.from_hydra_cfg``) so the CLI is a thin Hydra→pydantic shell. A
+non-empty ``same_variants`` runs the SAME path; otherwise the m2l+clap path runs.
 
 Example::
 
@@ -25,7 +25,12 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     DEFAULT_NUM_SUB_VECTORS,
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
 )
+
+# The SAME variant tokens the endpoint accepts, each mapping to a Lance column.
+SAME_VARIANT_CHOICES: frozenset[str] = frozenset({"s", "l"})
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -84,6 +89,19 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: debug
 
         Log every batch with stage timings and enable native Lance debug telemetry.
+
+    .. attribute :: same_variants
+
+        SAME variants to write (``"s"``/``"l"``); a non-empty tuple runs the SAME
+        path instead of m2l+clap. Order sets the column-write order.
+
+    .. attribute :: same_s_checkpoint
+
+        SAME-S checkpoint (local dir, ``r2://`` mirror, or HuggingFace repo id).
+
+    .. attribute :: same_l_checkpoint
+
+        SAME-L checkpoint (local dir, ``r2://`` mirror, or HuggingFace repo id).
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -118,6 +136,44 @@ class AddEmbeddingsConfig(BaseModel):
     debug: bool = Field(
         default=False, description="Log every batch and enable native Lance debug telemetry."
     )
+    same_variants: tuple[str, ...] = Field(
+        default=(),
+        description='SAME variants ("s"/"l"); non-empty runs the SAME path instead of m2l+clap.',
+    )
+    same_s_checkpoint: str = Field(
+        default=DEFAULT_SAME_S_CHECKPOINT,
+        description="SAME-S checkpoint (local dir, ``r2://`` mirror, or HF repo id).",
+    )
+    same_l_checkpoint: str = Field(
+        default=DEFAULT_SAME_L_CHECKPOINT,
+        description="SAME-L checkpoint (local dir, ``r2://`` mirror, or HF repo id).",
+    )
+
+    @field_validator("same_variants", mode="before")
+    @classmethod
+    def _coerce_and_check_same_variants(cls, value: object) -> object:
+        """Coerce a Hydra list to a tuple and reject unknown or duplicate variants.
+
+        A Hydra ``same_variants=[s,l]`` override reaches the model as a ``list``,
+        which strict mode rejects for a ``tuple`` field; coerce it and validate
+        membership before the strict schema runs so a bad token fails at config
+        time, not after the multi-GB SAME weights download.
+
+        :param value: Raw ``same_variants`` value from the composed cfg.
+        :returns: A ``tuple`` of variant tokens for a list/tuple input, else ``value``.
+        :raises ValueError: A token is not ``"s"``/``"l"`` or appears more than once.
+        """
+        if not isinstance(value, (list, tuple)):
+            return value
+        variants = tuple(value)
+        unknown = [v for v in variants if v not in SAME_VARIANT_CHOICES]
+        if unknown:
+            raise ValueError(
+                f"same_variants {unknown} must each be one of {sorted(SAME_VARIANT_CHOICES)}"
+            )
+        if len(set(variants)) != len(variants):
+            raise ValueError(f"same_variants {list(variants)} has duplicate entries")
+        return variants
 
     @field_validator("resume_cache", mode="before")
     @classmethod

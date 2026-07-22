@@ -27,6 +27,12 @@ resume_cache: null
 # Log every batch with stage timings and enable native Lance debug telemetry.
 debug: false
 
+# SAME variants to write ("s" and/or "l"); empty runs the m2l + clap path.
+same_variants: []
+# SAME-S / SAME-L checkpoints: R2 mirror prefix, local dir, or HF repo id.
+same_s_checkpoint: r2://intermediate-data/models/same-s
+same_l_checkpoint: r2://intermediate-data/models/same-l
+
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings
