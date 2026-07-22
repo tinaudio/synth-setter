@@ -1029,7 +1029,12 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="add_embeddings",
-            overrides=[f"lance_uri={train_uri}", "build_index=false", "device=cpu"],
+            overrides=[
+                f"lance_uri={train_uri}",
+                "embeddings=[clap,m2l]",
+                "build_index=false",
+                "device=cpu",
+            ],
         )
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
     GlobalHydra.instance().clear()
@@ -1326,14 +1331,12 @@ def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Pat
     from synth_setter.pipeline.data.add_embeddings import add_embeddings
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
-    variant = conditioning.removeprefix("same_")
     train_uri = dataset_root / "train.lance"
     add_embeddings(
         AddEmbeddingsConfig(
             lance_uri=str(train_uri),
-            same_variants=(variant,),
-            same_s_checkpoint=_SAME_E2E_HF_CHECKPOINTS["same_s"],
-            same_l_checkpoint=_SAME_E2E_HF_CHECKPOINTS["same_l"],
+            embeddings=(conditioning,),
+            checkpoints={conditioning: _SAME_E2E_HF_CHECKPOINTS[conditioning]},
             device="cpu",
         )
     )
