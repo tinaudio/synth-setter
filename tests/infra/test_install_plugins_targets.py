@@ -318,6 +318,7 @@ def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> 
         env=env,
         text=True,
         capture_output=True,
+        timeout=_TIMEOUT_S,
         check=False,
     )
 
@@ -340,6 +341,7 @@ def test_runtime_apt_update_success_runs_package_install(tmp_path: Path) -> None
         env=env,
         text=True,
         capture_output=True,
+        timeout=_TIMEOUT_S,
         check=False,
     )
 
@@ -350,9 +352,13 @@ def test_runtime_apt_update_success_runs_package_install(tmp_path: Path) -> None
 
 def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
     """Independent base-image stages switch to the Azure-local Ubuntu mirror before apt update."""
+    mirror_rewrite = (
+        "sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' "
+        "/etc/apt/sources.list"
+    )
     for stage_name in ("builder-base", "vst3-synths-fetch"):
         stage = _dockerfile_stage_text(stage_name)
-        replace_index = stage.index("http://azure.archive.ubuntu.com")
+        replace_index = stage.index(mirror_rewrite)
         update_index = stage.index("apt-get update --error-on=any")
         assert replace_index < update_index
 

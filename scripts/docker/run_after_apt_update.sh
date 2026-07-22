@@ -1,5 +1,5 @@
 #!/bin/bash
-# Refresh package indexes before running an apt-dependent command.
+# Prevent commands from running after a failed or partial apt index refresh.
 
 set -euo pipefail
 
