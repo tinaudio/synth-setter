@@ -27,9 +27,8 @@ resume_cache: null
 # Log every batch with stage timings and enable native Lance debug telemetry.
 debug: false
 
-# Surfaces ${task_name} so hydra/default.yaml's run.dir + job_logging
-# interpolations resolve; run.dir is also overridden below because the group
-# default references ${run_name}, which this cfg does not surface.
+# hydra/default interpolates ${task_name}; run.dir is overridden below since
+# its group default also references ${run_name}, absent here.
 task_name: add_embeddings
 
 hydra:

@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
+from omegaconf import DictConfig
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
@@ -55,7 +56,7 @@ def _fake_clap(mono: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.repeat(mono.mean(axis=1, keepdims=True), CLAP_EMBEDDING_DIM, axis=1)
 
 
-def _compose_add_embeddings():
+def _compose_add_embeddings() -> DictConfig:
     """Compose ``add_embeddings.yaml`` with the required ``lance_uri``.
 
     :returns: The composed cfg; the caller must clear ``GlobalHydra``.

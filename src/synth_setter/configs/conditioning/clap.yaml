@@ -1,7 +1,7 @@
 # @package _global_
 
-# CLAP conditioning: the `clap` Lance column written by the add_embeddings
-# endpoint (a 512-d LAION-CLAP audio embedding), projected by vector_projection.
+# CLAP conditioning on the `clap` Lance column. A pooled global vector (not a
+# sequence), so vector_projection projects it rather than the pooling embedpool.
 defaults:
   - override /model/encoder: vector_projection
 

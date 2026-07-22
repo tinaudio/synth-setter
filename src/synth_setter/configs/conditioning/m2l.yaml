@@ -1,10 +1,8 @@
 # @package _global_
 
-# m2l conditioning: the `m2l` Lance column written by the add_embeddings
-# endpoint, pooled by the embedpool encoder. 128 = 2 channels x 64 music2latent
-# latent dim; 42 latent frames = 4 s render @ 44.1 kHz. Column name is `m2l`
-# (the add_embeddings output + 440k column) — fixes #2312, where the legacy
-# `conditioning=m2l` string read the mismatched `music2latent` column.
+# music2latent conditioning on the `m2l` Lance column that the add_embeddings
+# endpoint writes — distinct from the `music2latent` column the bare
+# `conditioning=m2l` legacy string still maps to. Pooled by embedpool.
 defaults:
   - override /model/encoder: embedpool
 

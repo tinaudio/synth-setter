@@ -4,6 +4,12 @@ The Hydra ``add_embeddings.yaml`` composes a dict; the entrypoint builds this
 model from it via :meth:`AddEmbeddingsConfig.from_hydra_cfg` (mirroring
 ``DatasetSpec.from_hydra_cfg``) so the CLI is a thin Hydra→pydantic shell. SAME
 knobs are intentionally absent — SAME dispatch is a stacked follow-up (#2319).
+
+Example::
+
+    cfg = compose(config_name="add_embeddings", overrides=["lance_uri=train.lance"])
+    config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    add_embeddings(config)
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from synth_setter.pipeline.data.add_embeddings import (
+    CLAP_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
@@ -121,6 +128,24 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: ``Path`` for a string input, else ``value`` unchanged.
         """
         return Path(value) if isinstance(value, str) else value
+
+    @field_validator("num_sub_vectors")
+    @classmethod
+    def _num_sub_vectors_divides_clap_dim(cls, value: int) -> int:
+        """Reject a PQ sub-vector count that cannot evenly split the clap vector.
+
+        Lance's IVF_PQ build requires ``clap_dim % num_sub_vectors == 0``; check
+        it at config time so a bad value fails before the render+encode, not after.
+
+        :param value: Configured PQ sub-vector count.
+        :returns: ``value`` unchanged when it divides the clap dimensionality.
+        :raises ValueError: If ``value`` does not divide ``CLAP_EMBEDDING_DIM``.
+        """
+        if CLAP_EMBEDDING_DIM % value != 0:
+            raise ValueError(
+                f"num_sub_vectors ({value}) must divide the clap dim ({CLAP_EMBEDDING_DIM})"
+            )
+        return value
 
     @classmethod
     def from_hydra_cfg(cls, cfg: DictConfig) -> AddEmbeddingsConfig:

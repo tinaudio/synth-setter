@@ -394,15 +394,22 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
 
     Config-driven public endpoint: opens the dataset, reads its audio sample
     rate from the shard metadata, builds the checkpoint-backed encoders, and
-    delegates the write to :func:`_write_embeddings` (which raises on a dataset
-    that already carries an ``m2l``/``clap`` column, lacks ``audio``, or is empty).
+    delegates the write to :func:`_write_embeddings`.
 
     :param config: Validated run knobs (dataset URI, encoder/device, index tuning).
+    :raises ValueError: If the dataset already carries an ``m2l``/``clap`` column
+        (checked before the encoder downloads); ``_write_embeddings`` re-raises
+        for missing ``audio`` or an empty dataset.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    # Fail before the multi-hundred-MB encoder downloads if the columns already
+    # exist; _write_embeddings re-checks for its direct (injected-encoder) callers.
+    existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
+    if existing:
+        raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,
@@ -876,8 +883,8 @@ def main(cfg: DictConfig) -> None:
     metadata. The ``clap`` column is a vector-searchable fixed-size list; with
     ``build_index=true`` it also gets an IVF_PQ index.
 
-    SAME CLI dispatch is temporarily removed pending the SAME PR (#2319):
-    ``add_same_embeddings`` / ``load_same_audio_encoder`` stay in-module, unwired.
+    The SAME helpers (``add_same_embeddings`` / ``load_same_audio_encoder``) stay
+    in-module but are not wired to this endpoint.
 
     :param cfg: Hydra-composed cfg validated into :class:`AddEmbeddingsConfig`.
     """
@@ -888,9 +895,7 @@ def main(cfg: DictConfig) -> None:
     logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
         add_embeddings(config)
-    # Dataset open (missing R2 creds → RuntimeError), encoder load (missing dep →
-    # ImportError), or the add/index step (validation, Lance, CUDA) should exit
-    # cleanly with a logged cause, not a raw traceback.
+    # Log the cause and exit non-zero rather than surfacing a raw traceback.
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
         sys.exit(1)
