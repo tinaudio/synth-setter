@@ -222,6 +222,21 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
+def test_runtime_image_requires_fresh_apt_indexes() -> None:
+    """The runtime package install stops when its apt index refresh fails."""
+    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
+    assert re.search(r"apt-get update\s*&&\s*\\?\s*apt-get install", stage)
+
+
+def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
+    """Independent base-image stages use the Azure-local Ubuntu mirror in CI."""
+    for stage_name in ("builder-base", "vst3-synths-fetch"):
+        stage = _dockerfile_stage_text(stage_name)
+        replace_index = stage.index("http://azure.archive.ubuntu.com")
+        update_index = stage.index("apt-get update")
+        assert replace_index < update_index
+
+
 def test_runtime_image_validates_surge_with_standalone_loader() -> None:
     """The pre-install Surge check does not import the unavailable project package."""
     stage = _dockerfile_stage_text("builder-install-synth-setter-deps")

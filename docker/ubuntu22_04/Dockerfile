@@ -76,6 +76,7 @@ RUN case "${BUILD_MODE}" in \
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
   software-properties-common \
   gcc-12 \
@@ -231,6 +232,7 @@ SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
@@ -409,7 +411,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --device=/dev/fuse --cap-add=SYS_ADMIN.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update; \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
       xvfb \
       xauth \
