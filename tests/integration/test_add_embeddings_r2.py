@@ -4,8 +4,8 @@ Drives the two production CLIs back to back: the real VST renderer
 (``generate_vst_dataset.py``) writes a tiny Lance shard that is uploaded to a
 unique R2 prefix, then ``synth-setter-add-embeddings`` runs the real
 music2latent + LAION-CLAP encoders against that remote URI. The augmented
-dataset is reopened from R2 and its ``m2l`` / ``clap`` columns, indexability,
-and ``nearest=`` query path are asserted. The prefix is purged on teardown
+dataset is reopened from R2 and its ``m2l`` / ``m2l_vec`` / ``clap`` columns,
+indexability, and ``nearest=`` query path are asserted. The prefix is purged on teardown
 regardless of pass/fail.
 
 Auto-skips when the VST plugin is absent (``requires_vst``) or R2 credentials
@@ -231,7 +231,8 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
     real ``add_embeddings`` CLI (real music2latent + LAION-CLAP encoders) against
     that ``r2://`` URI. The augmented dataset is reopened from R2 and asserted to
     carry a ``FixedSizeList<float32, 512>`` ``clap`` column, a
-    ``fixed_shape_tensor<float32, ...>`` ``m2l`` column, finite values, one row
+    ``fixed_shape_tensor<float32, ...>`` ``m2l`` column, its mean-pooled
+    ``FixedSizeList<float32, D>`` ``m2l_vec`` companion, finite values, one row
     per audio row, preserved source columns, and a working exact ``nearest=``
     query (the 4-row shard is below the IVF_PQ training floor, so no index is
     expected).
@@ -255,7 +256,10 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
     assert {AUDIO_FIELD, PARAM_ARRAY_FIELD} <= names, (
         f"source columns dropped: schema is {sorted(names)}"
     )
-    assert {M2L_FIELD, CLAP_FIELD} <= names, f"embedding columns absent: schema is {sorted(names)}"
+    m2l_vector_field = f"{M2L_FIELD}_vec"
+    assert {M2L_FIELD, m2l_vector_field, CLAP_FIELD} <= names, (
+        f"embedding columns absent: schema is {sorted(names)}"
+    )
 
     rows = dataset.count_rows()
     assert rows == _SAMPLES_PER_SHARD, f"row count changed to {rows}"
@@ -273,17 +277,29 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
     )
     assert m2l_type.value_type == pa.float32(), f"m2l value type is {m2l_type.value_type}"
 
-    table = dataset.to_table(columns=[CLAP_FIELD, M2L_FIELD])
+    m2l_vector_type = dataset.schema.field(m2l_vector_field).type
+    assert pa.types.is_fixed_size_list(m2l_vector_type), (
+        f"m2l companion is {m2l_vector_type}, not a fixed-size list"
+    )
+    assert m2l_vector_type.value_type == pa.float32(), (
+        f"m2l companion value type is {m2l_vector_type.value_type}"
+    )
+
+    table = dataset.to_table(columns=[CLAP_FIELD, M2L_FIELD, m2l_vector_field])
     clap = np.stack(table.column(CLAP_FIELD).to_numpy(zero_copy_only=False))
     assert clap.shape == (rows, CLAP_EMBEDDING_DIM), f"clap materialized as {clap.shape}"
     assert np.isfinite(clap).all(), "clap embeddings contain non-finite values"
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     assert len(m2l) == rows, f"m2l has {len(m2l)} rows, expected {rows}"
     assert np.isfinite(m2l).all(), "m2l embeddings contain non-finite values"
+    m2l_vectors = np.stack(table.column(m2l_vector_field).to_numpy(zero_copy_only=False))
+    assert m2l_vectors.shape == (rows, m2l.shape[1]), (
+        f"m2l companion materialized as {m2l_vectors.shape}"
+    )
+    assert np.isfinite(m2l_vectors).all(), "m2l companion contains non-finite values"
+    np.testing.assert_allclose(m2l_vectors, m2l.mean(axis=-1), rtol=1e-5, atol=1e-6)
 
-    # 4 rows is below the IVF_PQ training floor, so the CLI skips the index and
-    # exact (brute-force) nearest must still resolve. clap is the only column the
-    # CLI ever indexes, so an empty index list pins the skip directly.
+    # Below the training floor, every index skips while exact nearest still resolves.
     assert rows < MIN_ROWS_FOR_INDEX
     assert dataset.list_indices() == [], (
         f"unexpected index for a {rows}-row dataset: {dataset.list_indices()}"
@@ -302,8 +318,9 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     Renders + uploads a ``MIN_ROWS_FOR_INDEX``-row shard via the VST renderer,
     runs the real ``add_embeddings`` CLI with ``build_index=true`` and tuning sized
     for the row count (so PQ training succeeds rather than skips), then reopens
-    the remote dataset and asserts the IVF_PQ index exists on ``clap`` and an ANN
-    ``nearest=`` query returns a stored row's own vector as the top hit.
+    the remote dataset and asserts IVF_PQ indexes exist on ``clap`` and
+    ``m2l_vec``; a CLAP ANN ``nearest=`` query returns a stored row's own vector
+    as the top hit.
 
     :param remote_indexed_lance_dataset_uri: Fixture-provided ``r2://`` URI of a
         dataset with enough rows to train the index.
@@ -336,8 +353,9 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
 
     indices = cast("list[dict[str, Any]]", dataset.list_indices())
     assert indices, f"no index built for a {rows}-row dataset"
-    assert [idx["fields"] for idx in indices] == [[CLAP_FIELD]], (
-        f"expected a single clap index, got {indices}"
+    expected_index_fields = {(CLAP_FIELD,), (f"{M2L_FIELD}_vec",)}
+    assert {tuple(idx["fields"]) for idx in indices} == expected_index_fields, (
+        f"expected clap and m2l companion indexes, got {indices}"
     )
 
     clap_table = dataset.to_table(columns=[CLAP_FIELD])
