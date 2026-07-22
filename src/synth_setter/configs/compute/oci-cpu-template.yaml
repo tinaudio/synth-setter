@@ -64,8 +64,7 @@ setup: |
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
 # for the Xvfb/dbus stack — minimal-cap follow-up: #776. No bind-mount:
-# image is source of truth; the substituted ${WORKER_CMD} runs
-# sync_worker_checkout.sh inside the container for the PR-CI bake-lag bypass.
+# the substituted ${WORKER_CMD} syncs the container to launcher-pinned source.
 run: |
   set -euo pipefail
   : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher; refusing to docker run an unset image}"

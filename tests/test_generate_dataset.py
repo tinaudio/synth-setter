@@ -36,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -874,6 +874,7 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
         MagicMock(return_value=None),
     )
 
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
     fake_sky = MagicMock()
 
     def assert_env_file_endpoint_is_active(*_args: object, **_kwargs: object) -> str:
@@ -1012,6 +1013,7 @@ def _patch_remote_dispatch_boundaries(
     )
     monkeypatch.setattr(generate_dataset_cli.r2_io, "ensure_r2_env_loaded", lambda _env_file: None)
     monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", lambda **_kwargs: None)
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
     monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
     fake_sky = MagicMock()
     monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
@@ -1053,6 +1055,52 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
         cast("Callable[[], None]", generate_dataset_cli.main)()
 
     fake_sky.jobs.launch.assert_not_called()
+
+
+def test_main_remote_dispatch_defaults_worker_ref_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generate-dataset entrypoint pins worker source before submission.
+
+    :param tmp_path: Scratch directory for the compute template.
+    :param monkeypatch: Redirects storage, git preflight, and SkyPilot boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
+    expected_ref = "a" * 40
+
+    def resolve_default(worker_env: Mapping[str, str]) -> str:
+        assert "WORKER_GIT_REF" not in worker_env
+        return expected_ref
+
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", resolve_default)
+    monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 100.0)
+    fake_task = MagicMock()
+    fake_task.resources = []
+    fake_sky.Task.from_yaml_config.return_value = fake_task
+    fake_sky.jobs.launch.return_value = "launch-request"
+    fake_sky.stream_and_get.return_value = ([1], MagicMock())
+    compute_template = tmp_path / "compute.yaml"
+    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={compute_template}",
+        ],
+    )
+
+    cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    worker_env = fake_task.update_envs.call_args.args[0]
+    assert worker_env["WORKER_GIT_REF"] == expected_ref
+    fake_sky.jobs.launch.assert_called_once()
 
 
 def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_executes(

@@ -36,8 +36,7 @@ resources:
   # disk_size omitted: kind/k8s backend rejects the field — see PR #876.
 
 # Placeholders. Real values are injected by the launcher via update_envs.
-# WORKER_GIT_REF is forwarded so sync_worker_checkout.sh can fetch the PR
-# head over the image-baked checkout when set.
+# Pin worker source so image-baked code cannot drift from the launch config.
 envs:
   RCLONE_CONFIG_R2_TYPE: ""
   RCLONE_CONFIG_R2_PROVIDER: ""
