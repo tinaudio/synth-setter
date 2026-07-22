@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Append ``m2l`` + CLAP audio-embedding columns to a finalized Lance dataset.
 
-The functional core (:func:`embeddings_record_batch`, :func:`add_embeddings`)
+The functional core (:func:`embeddings_record_batch`, :func:`_write_embeddings`)
 maps a Lance dataset's ``audio`` column to two columns:
 
 - ``clap`` — a ``FixedSizeList<float32, CLAP_EMBEDDING_DIM>`` LAION-CLAP audio
@@ -12,12 +12,11 @@ maps a Lance dataset's ``audio`` column to two columns:
   un-indexed; this requires a constant ``(channels, latent-dim, time)`` across
   the dataset.
 
-A separate SAME mode (``--same s`` / ``--same l``) appends ``same_s`` /
-``same_l`` — ``fixed_shape_tensor<float32, (256, T)>`` Stability AI SAME latent
-sequences, un-indexed like ``m2l`` — so an already-augmented dataset can be
-extended without touching its m2l/clap columns.
+The SAME writer functions (``add_same_embeddings`` etc.) remain in this module
+but are not wired into the CLI yet; the Hydra endpoint carries only m2l/clap
+config until the SAME extension (#2319).
 
-All embedders are injected callables, so the core runs without a checkpoint;
+The functional core (``_write_embeddings``) takes injected encoder callables,
 :func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` /
 :func:`load_same_audio_encoder` build the real encoders behind lazy
 ``music2latent`` / ``transformers`` / ``stable_audio_tools`` imports
@@ -56,6 +55,7 @@ from synth_setter.data.vst.shapes import (
     SAME_S_FIELD,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.workspace import operator_workspace
 
 # lance (and lance_shard, which imports it) is imported lazily everywhere below:
 # native Lance logging locks in LANCE_LOG at first import, so _configure_lance_logging
@@ -67,6 +67,11 @@ if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
 logger = structlog.get_logger(__name__)
+
+# Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
+# ``configs/paths/default.yaml`` interpolates when ``@hydra.main`` composes the
+# endpoint under any install layout (mirrors finalize_dataset / generate_dataset).
+operator_workspace()
 
 DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 # CLAP's feature extractor rejects any other input rate.
