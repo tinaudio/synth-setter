@@ -65,6 +65,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 <important if="you are committing">
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:` for unreleased code (no version bump). Scope is skill-bound — see `/github-taxonomy`.
+- **`feat:` / `fix:` / `perf:` / `revert:` are release-reserved** — they cut a semantic-release version bump on merge. Use `internal-feat:` / `internal-fix:` for logic PRs; only a deliberate release PR carries a release type, with the command prefixed `RELEASE_INTENT=1` (enforced by `agent/hooks/pr-title-guard.sh` on `gh pr create|edit` and the `release-type-guard` commit-msg hook).
 - Run `make format` first; pre-commit (ruff, ruff-format, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
