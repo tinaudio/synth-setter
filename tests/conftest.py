@@ -1035,6 +1035,9 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     GlobalHydra.instance().clear()
     add_embeddings(config)
 
+    # Clone the augmented train split into val/test: this is a plumbing smoke
+    # (does conditioning=<profile> train+eval run end-to-end), not a
+    # generalization check, so identical splits are intentional and cheap.
     for split in ("val", "test"):
         dest = dataset_root / f"{split}.lance"
         shutil.rmtree(dest)

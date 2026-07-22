@@ -102,10 +102,11 @@ class AddEmbeddingsConfig(BaseModel):
         default=True, description="Build an IVF_PQ index on the clap column."
     )
     num_partitions: int | None = Field(
-        default=None, description="IVF partition count; ``None`` uses ``round(sqrt(rows))``."
+        default=None, ge=1, description="IVF partition count; ``None`` uses ``round(sqrt(rows))``."
     )
     num_sub_vectors: int = Field(
         default=DEFAULT_NUM_SUB_VECTORS,
+        ge=1,
         description="PQ sub-vector count; must divide the clap dim.",
     )
     metric: str = Field(default=DEFAULT_INDEX_METRIC, description="Vector-index distance metric.")

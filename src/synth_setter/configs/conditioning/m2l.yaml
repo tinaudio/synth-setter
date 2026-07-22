@@ -1,8 +1,7 @@
 # @package _global_
 
-# music2latent conditioning on the `m2l` Lance column that the add_embeddings
-# endpoint writes — distinct from the `music2latent` column the bare
-# `conditioning=m2l` legacy string still maps to. Pooled by embedpool.
+# music2latent conditioning on the `m2l` column add_embeddings writes — not the
+# `music2latent` column the bare `conditioning=m2l` legacy string maps to.
 defaults:
   - override /model/encoder: embedpool
 

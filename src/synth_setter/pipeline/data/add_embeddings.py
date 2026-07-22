@@ -68,9 +68,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-# Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
-# ``configs/paths/default.yaml`` interpolates when ``@hydra.main`` composes the
-# endpoint under any install layout (mirrors finalize_dataset / generate_dataset).
+# Publish PROJECT_ROOT at import so ``${oc.env:PROJECT_ROOT}`` in the paths group
+# resolves when ``@hydra.main`` composes (mirrors finalize_dataset/generate_dataset).
 operator_workspace()
 
 DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
