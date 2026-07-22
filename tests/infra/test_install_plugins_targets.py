@@ -27,6 +27,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker" / "ubuntu22_04" / "Dockerfile"
+APT_REFRESH_SCRIPT = PROJECT_ROOT / "scripts" / "docker" / "run_after_apt_update.sh"
 
 pytestmark = pytest.mark.infra
 
@@ -135,6 +136,53 @@ def _run_make(
     )
 
 
+def _run_clean_docker_build(
+    target: str, platform_name: str, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Build one Dockerfile target without reusing cached layers.
+
+    :param target: Dockerfile stage to build.
+    :param platform_name: BuildKit platform such as ``linux/amd64``.
+    :param timeout: Maximum build duration in seconds.
+    :returns: Completed build process with captured output.
+    """
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker binary not available")
+    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [docker, "info"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if info.returncode != 0:
+        pytest.skip("Docker daemon unavailable")
+    return subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [
+            docker,
+            "buildx",
+            "build",
+            "--no-cache",
+            "--platform",
+            platform_name,
+            "--target",
+            target,
+            "--build-arg",
+            "BUILD_MODE=prebuilt",
+            "-f",
+            str(DOCKERFILE),
+            ".",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
 def _zip_containing(inner_dir: str) -> bytes:
     """Build an in-memory .zip whose payload lives under ``inner_dir``.
 
@@ -222,10 +270,33 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
-def test_runtime_image_requires_fresh_apt_indexes() -> None:
-    """The runtime package install stops when its apt index refresh fails."""
-    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
-    assert re.search(r"apt-get update\s*&&\s*\\?\s*apt-get install", stage)
+def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> None:
+    """The runtime package transaction stops before install when index refresh fails.
+
+    :param tmp_path: Scratch directory containing the fake apt boundary and call log.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "apt-calls"
+    install_marker = tmp_path / "install-ran"
+    apt_get = fake_bin / "apt-get"
+    apt_get.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "${APT_CALLS}"\n[[ "${1}" != update ]]\n'
+    )
+    apt_get.chmod(0o755)
+
+    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
+        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "APT_CALLS": str(calls), "PATH": f"{fake_bin}:{os.defpath}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert calls.read_text().splitlines() == ["update"]
+    assert not install_marker.exists()
 
 
 def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
@@ -273,85 +344,20 @@ def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
 
 
 @pytest.mark.slow
-def test_builder_base_resolves_apt_packages_from_azure_mirror() -> None:
-    """A clean BuildKit run installs the shared build packages from the CI-local mirror."""
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("docker binary not available")
-    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [docker, "info"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if info.returncode != 0:
-        pytest.skip("Docker daemon unavailable for builder-base package resolution")
-    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [
-            docker,
-            "buildx",
-            "build",
-            "--no-cache",
-            "--platform",
-            "linux/amd64",
-            "--target",
-            "builder-base",
-            "--build-arg",
-            "BUILD_MODE=prebuilt",
-            "-f",
-            str(DOCKERFILE),
-            ".",
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=300,
-        check=False,
-    )
+@pytest.mark.parametrize("target", ("builder-base", "vst3-synths-fetch"))
+def test_base_stage_resolves_apt_packages_from_azure_mirror(target: str) -> None:
+    """A clean BuildKit run completes each independent base-stage package installation.
+
+    :param target: Independent Dockerfile stage whose Ubuntu mirror is rewritten.
+    """
+    result = _run_clean_docker_build(target, "linux/amd64", 300)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.slow
 def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
     """BuildKit can execute the arm64 KR-106 stage without source-build deps."""
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("docker binary not available")
-    assert docker is not None
-    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [docker, "info"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if info.returncode != 0:
-        pytest.skip(
-            "Docker daemon unavailable for: docker buildx build --platform linux/arm64 "
-            "--target builder-build-ultramaster-kr106 -f docker/ubuntu22_04/Dockerfile ."
-        )
-    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [
-            docker,
-            "buildx",
-            "build",
-            "--platform",
-            "linux/arm64",
-            "--target",
-            "builder-build-ultramaster-kr106",
-            "-f",
-            str(DOCKERFILE),
-            ".",
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=900,
-        check=False,
-    )
+    result = _run_clean_docker_build("builder-build-ultramaster-kr106", "linux/arm64", 900)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
