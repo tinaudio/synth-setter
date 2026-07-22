@@ -12,9 +12,8 @@ maps a Lance dataset's ``audio`` column to two columns:
   un-indexed; this requires a constant ``(channels, latent-dim, time)`` across
   the dataset.
 
-The SAME writer functions (``add_same_embeddings`` etc.) remain in this module
-but are not wired into the CLI yet; the Hydra endpoint carries only m2l/clap
-config until the SAME extension (#2319).
+SAME writer functions (``add_same_embeddings`` etc.) live in this module; the
+endpoint wires only m2l/clap.
 
 The functional core (``_write_embeddings``) takes injected encoder callables,
 :func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` /

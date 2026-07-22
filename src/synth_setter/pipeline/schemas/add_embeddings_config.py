@@ -2,8 +2,8 @@
 
 The Hydra ``add_embeddings.yaml`` composes a dict; the entrypoint builds this
 model from it via :meth:`AddEmbeddingsConfig.from_hydra_cfg` (mirroring
-``DatasetSpec.from_hydra_cfg``) so the CLI is a thin Hydra→pydantic shell. SAME
-knobs are intentionally absent — SAME dispatch is a stacked follow-up (#2319).
+``DatasetSpec.from_hydra_cfg``) so the CLI is a thin Hydra→pydantic shell. The
+model carries m2l/clap knobs only; SAME knobs are absent.
 
 Example::
 
@@ -109,7 +109,9 @@ class AddEmbeddingsConfig(BaseModel):
         ge=1,
         description="PQ sub-vector count; must divide the clap dim.",
     )
-    metric: str = Field(default=DEFAULT_INDEX_METRIC, description="Vector-index distance metric.")
+    metric: str = Field(
+        default=DEFAULT_INDEX_METRIC, description="IVF_PQ distance metric Lance accepts."
+    )
     resume_cache: Path | None = Field(
         default=None, description="Per-batch UDF-output cache enabling resume; deleted on success."
     )
@@ -129,6 +131,20 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: ``Path`` for a string input, else ``value`` unchanged.
         """
         return Path(value) if isinstance(value, str) else value
+
+    @field_validator("metric")
+    @classmethod
+    def _metric_is_supported(cls, value: str) -> str:
+        """Reject a distance metric Lance's IVF_PQ build would not accept.
+
+        :param value: Configured distance metric.
+        :returns: ``value`` unchanged when supported.
+        :raises ValueError: If ``value`` is not one of ``cosine``/``l2``/``dot``.
+        """
+        allowed = {"cosine", "l2", "dot"}
+        if value not in allowed:
+            raise ValueError(f"metric {value!r} must be one of {sorted(allowed)}")
+        return value
 
     @field_validator("num_sub_vectors")
     @classmethod

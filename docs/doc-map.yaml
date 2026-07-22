@@ -140,7 +140,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Post-finalize CLAP + music2latent Lance column augmentation via the `add_embeddings(config)` endpoint over its injectable `_write_embeddings` seam."
+        covers: "Post-finalize CLAP + music2latent Lance column augmentation via the `add_embeddings(config)` endpoint."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
         covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus the clap/index knobs."
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"

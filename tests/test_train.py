@@ -1872,7 +1872,7 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_EMBEDDING_CONDITIONING_PROFILES = ["m2l", "clap"]
+_EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
 
 
 @pytest.mark.requires_vst
@@ -1899,7 +1899,9 @@ def test_train_embedding_conditioning_real_e2e(
     :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
     """
     dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
-    cfg = build_surge_xt_embedding_train_cfg(tmp_path, param_spec_name, dataset_root, conditioning)
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
+    )
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)

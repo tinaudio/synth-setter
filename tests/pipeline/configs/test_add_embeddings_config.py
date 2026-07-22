@@ -173,3 +173,35 @@ def test_add_embeddings_main_exits_1_when_open_fails(
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 1
+
+
+def test_add_embeddings_config_coerces_resume_cache_string_to_path() -> None:
+    """A Hydra string ``resume_cache`` override is coerced to ``Path`` under strict."""
+    config = AddEmbeddingsConfig(lance_uri=_LANCE_URI, resume_cache="cache/embed.cache")  # type: ignore[arg-type]
+    assert config.resume_cache == Path("cache/embed.cache")
+
+
+@pytest.mark.parametrize("bad", [0, -1, 15])
+def test_add_embeddings_config_rejects_bad_num_sub_vectors(bad: int) -> None:
+    """``num_sub_vectors`` must be positive and divide the clap dim.
+
+    :param bad: A non-positive or non-dividing sub-vector count.
+    """
+    with pytest.raises(ValueError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, num_sub_vectors=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_add_embeddings_config_rejects_nonpositive_num_partitions(bad: int) -> None:
+    """``num_partitions`` must be positive when set.
+
+    :param bad: A non-positive partition count.
+    """
+    with pytest.raises(ValueError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, num_partitions=bad)
+
+
+def test_add_embeddings_config_rejects_unknown_metric() -> None:
+    """``metric`` is constrained to the metrics Lance's IVF_PQ accepts."""
+    with pytest.raises(ValueError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, metric="banana")

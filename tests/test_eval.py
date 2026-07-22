@@ -1344,7 +1344,7 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     assert datamodule.num_workers == 4
 
 
-_EMBEDDING_CONDITIONING_PROFILES = ["m2l", "clap"]
+_EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
 
 
 @pytest.mark.requires_vst
@@ -1372,7 +1372,7 @@ def test_train_eval_embedding_conditioning_real_e2e(
     """
     dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
     cfg_train = build_surge_xt_embedding_train_cfg(
-        tmp_path, param_spec_name, dataset_root, conditioning
+        tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
     )
 
     HydraConfig().set_config(cfg_train)

@@ -1035,9 +1035,8 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     GlobalHydra.instance().clear()
     add_embeddings(config)
 
-    # Clone the augmented train split into val/test: this is a plumbing smoke
-    # (does conditioning=<profile> train+eval run end-to-end), not a
-    # generalization check, so identical splits are intentional and cheap.
+    # Identical val/test clones are intentional: a plumbing smoke, not a
+    # generalization check.
     for split in ("val", "test"):
         dest = dataset_root / f"{split}.lance"
         shutil.rmtree(dest)
@@ -1047,8 +1046,9 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
 
 def build_surge_xt_embedding_train_cfg(
     output_dir: Path,
-    param_spec_name: str,
     dataset_root: Path,
+    *,
+    param_spec_name: str,
     conditioning: str,
 ) -> DictConfig:
     """Compose a one-step CPU flow-training cfg wired to an embedding-conditioning profile.
@@ -1061,9 +1061,9 @@ def build_surge_xt_embedding_train_cfg(
 
     :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; the checkpoint
         callback writes ``last.ckpt`` beneath it.
+    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         model width and per-parameter callback labels.
-    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
     :param conditioning: Conditioning profile group (``"clap"`` / ``"m2l"``).
     :returns: Resolved one-step embedding-conditioning train DictConfig.
     """
