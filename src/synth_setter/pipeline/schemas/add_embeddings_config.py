@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_CLAP_CHECKPOINT,
@@ -108,6 +108,19 @@ class AddEmbeddingsConfig(BaseModel):
     debug: bool = Field(
         default=False, description="Log every batch and enable native Lance debug telemetry."
     )
+
+    @field_validator("resume_cache", mode="before")
+    @classmethod
+    def _coerce_resume_cache(cls, value: object) -> object:
+        """Accept a Hydra string override for the ``Path`` field under ``strict``.
+
+        A Hydra override (``resume_cache=/tmp/x``) reaches the model as ``str``,
+        which strict mode would reject; coerce it to ``Path`` before validation.
+
+        :param value: Raw ``resume_cache`` value from the composed cfg.
+        :returns: ``Path`` for a string input, else ``value`` unchanged.
+        """
+        return Path(value) if isinstance(value, str) else value
 
     @classmethod
     def from_hydra_cfg(cls, cfg: DictConfig) -> AddEmbeddingsConfig:
