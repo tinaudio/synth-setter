@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
@@ -164,20 +164,19 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(f"metric {value!r} must be one of {sorted(allowed)}")
         return value
 
-    @field_validator("num_sub_vectors")
-    @classmethod
-    def _num_sub_vectors_divides_clap_dim(cls, value: int) -> int:
-        """Reject PQ splits that do not divide the indexed CLAP width.
+    @model_validator(mode="after")
+    def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:
+        """Reject incompatible PQ splits only when CLAP is selected.
 
-        :param value: PQ sub-vector count.
-        :returns: Compatible count unchanged.
-        :raises ValueError: The count cannot evenly split CLAP vectors.
+        :returns: Validated config unchanged.
+        :raises ValueError: The count cannot evenly split selected CLAP vectors.
         """
-        if CLAP_EMBEDDING_DIM % value != 0:
+        if "clap" in self.embeddings and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0:
             raise ValueError(
-                f"num_sub_vectors ({value}) must divide the clap dim ({CLAP_EMBEDDING_DIM})"
+                f"num_sub_vectors ({self.num_sub_vectors}) must divide the clap dim "
+                f"({CLAP_EMBEDDING_DIM})"
             )
-        return value
+        return self
 
     @classmethod
     def from_hydra_cfg(cls, cfg: DictConfig) -> AddEmbeddingsConfig:

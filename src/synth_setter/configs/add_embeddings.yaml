@@ -12,15 +12,15 @@ lance_uri: ???
 embeddings: [clap, m2l]
 # Per-embedding checkpoint overrides keyed by registry name; defaults come from the registry.
 checkpoints: {}
-# Torch device for both encoders; null auto-selects cuda, MPS, then cpu.
+# Torch device for the selected encoders; null auto-selects cuda, MPS, then cpu.
 device: null
 # Rows per Lance UDF call (ignored for legacy v1 datasets).
 batch_size: 128
-# Build an IVF_PQ vector index on the clap column after it lands.
+# Build IVF_PQ indexes on clap and the selected embeddings' pooled companion columns.
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).
 num_partitions: null
-# PQ sub-vector count; must divide the clap dim.
+# PQ sub-vector count; must divide each indexed column's vector width.
 num_sub_vectors: 16
 # Vector-index distance metric.
 metric: cosine

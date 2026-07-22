@@ -1126,14 +1126,17 @@ Additional stages could follow the same contract (§5) without modifying existin
 endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 `configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
 a finalized Lance dataset in place with a `clap` (LAION-CLAP)
-`FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
-`nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
-latent column, both derived from the audio column. `same_s`/`same_l` SAME
-latent columns are also selectable via `embeddings=` (multi-GB encoders, each
-loaded and written in its own sequential pass); the selectable set is
-`EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`. An optional
-`resume_cache=<path>` caches per-batch encoder outputs so an interrupted run can
-resume without re-encoding already-processed rows (see `add_embeddings.py`).
+`FixedSizeList<float32, 512>` vector column and sequence embeddings (`m2l`,
+`same_s`, and `same_l`) stored as fixed-shape tensors, all derived from the audio
+column and selectable via `embeddings=` (the selectable set is
+`EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
+are each loaded and written in their own sequential pass). Each sequence
+embedding also writes a mean-pooled `FixedSizeList<float32, D>` companion
+(`m2l_vec`, `same_s_vec`, or `same_l_vec`); when `build_index=true`, IVF_PQ
+indexes `clap` and the selected companion columns for `nearest=` search. An
+optional `resume_cache=<path>` caches per-batch encoder outputs so an
+interrupted run can resume without re-encoding already-processed rows (see
+`add_embeddings.py`).
 
 `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
 
