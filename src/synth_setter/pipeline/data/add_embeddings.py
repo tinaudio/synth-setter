@@ -542,6 +542,7 @@ def add_same_embeddings(
     *,
     batch_size: int = DEFAULT_LANCE_BATCH_SIZE,
     resume_cache: Path | None = None,
+    log_every_batch: bool = False,
 ) -> None:
     """Append fixed-shape SAME latent columns to ``dataset``.
 
@@ -558,6 +559,8 @@ def add_same_embeddings(
     :param resume_cache: Lance-managed resume cache of per-batch UDF outputs; a
         rerun with the same file, dataset version, and ``batch_size`` skips
         already encoded batches. Deleted after a successful commit.
+    :param log_every_batch: Emit an ``embedding_progress`` line for every UDF
+        batch instead of only at row intervals (the ``debug`` knob's per-batch half).
     :raises ValueError: ``encoders`` is empty, a target column already exists,
         the ``audio`` column is absent, the dataset is empty, or
         ``batch_size < 1``.
@@ -597,7 +600,8 @@ def add_same_embeddings(
         audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
         output = same_record_batch(audio, encoders, sample_rate, num_frames=num_frames)
         rows_processed += batch.num_rows
-        if rows_processed >= next_progress_row or rows_processed == total_rows:
+        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+        if log_every_batch or interval_due:
             elapsed_seconds = time.monotonic() - started_at
             logger.info(
                 "embedding_progress",
@@ -607,11 +611,23 @@ def add_same_embeddings(
                 rows_per_second=round(rows_processed / max(elapsed_seconds, 1e-9), 1),
                 batch_size=batch_size,
             )
+        if interval_due:
             next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
         return output
 
+    logger.info(
+        "same_embedding_write_started",
+        total_rows=total_rows,
+        batch_size=batch_size,
+        source_version=dataset.version,
+    )
     dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
     _delete_resume_cache(resume_cache)
+    logger.info(
+        "wrote_same_embeddings",
+        total_rows=total_rows,
+        committed_version=dataset.version,
+    )
 
 
 def _configure_lance_logging(*, debug: bool) -> None:
@@ -863,6 +879,7 @@ def _add_same_embeddings(
         sample_rate,
         batch_size=config.batch_size,
         resume_cache=config.resume_cache,
+        log_every_batch=config.debug,
     )
     logger.info("added_embeddings", uri=config.lance_uri, columns=sorted(checkpoints))
 

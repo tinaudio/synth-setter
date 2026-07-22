@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+from structlog.testing import capture_logs
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -67,6 +69,48 @@ def _audio_dataset(uri: Path, rows: int, *, channels: int = 2) -> np.ndarray:
     params = rng.random((rows, 3)).astype(np.float32)
     write_lance_shard(uri, {AUDIO_FIELD: audio, PARAM_ARRAY_FIELD: params})
     return audio
+
+
+def _run_udf_in_process(
+    dataset: lance.LanceDataset, udf: Any, *, read_columns: list[str], batch_size: int
+) -> None:
+    """Run a Lance batch UDF synchronously for deterministic log assertions.
+
+    :param dataset: Local test dataset supplying batches.
+    :param udf: Lance batch UDF under test.
+    :param read_columns: Columns supplied to the UDF.
+    :param batch_size: Maximum rows per UDF invocation.
+    """
+    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+        udf(batch)
+
+
+def test_add_same_embeddings_log_every_batch_reports_each_batch_and_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``log_every_batch`` emits one progress entry per batch, bracketed by version logs.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Runs Lance's UDF in-process so ``capture_logs`` sees it.
+    """
+    uri = str(tmp_path / "same-debug.lance")
+    _audio_dataset(Path(uri), rows=5)
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
+    with capture_logs() as logs:
+        add_same_embeddings(
+            lance.dataset(uri),
+            {SAME_S_FIELD: _fake_same(0.5)},
+            SAME_SAMPLE_RATE,
+            batch_size=2,
+            log_every_batch=True,
+        )
+
+    progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
+    assert [entry["rows_processed"] for entry in progress] == [2, 4, 5]
+    events = [entry["event"] for entry in logs]
+    assert events.index("same_embedding_write_started") < events.index("embedding_progress")
+    assert events.index("embedding_progress") < events.index("wrote_same_embeddings")
 
 
 def test_same_latent_frames_standard_render_is_44() -> None:
