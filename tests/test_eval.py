@@ -40,7 +40,12 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests.conftest import REAL_VST_VARIANTS, assert_log_per_param_mse_wired
+from tests.conftest import (
+    REAL_VST_VARIANTS,
+    assert_log_per_param_mse_wired,
+    augment_lance_splits_with_embeddings,
+    build_surge_xt_embedding_train_cfg,
+)
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
@@ -1337,3 +1342,77 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     finally:
         GlobalHydra.instance().clear()
     assert datamodule.num_workers == 4
+
+
+_EMBEDDING_CONDITIONING_PROFILES = ["m2l", "clap"]
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.parametrize("conditioning", _EMBEDDING_CONDITIONING_PROFILES)
+def test_train_eval_embedding_conditioning_real_e2e(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+    conditioning: str,
+) -> None:
+    """Train the flow model then validate its checkpoint over a real clap/m2l dataset.
+
+    Renders a Surge XT dataset, appends the profile's embedding column via the real
+    ``add_embeddings`` endpoint (real music2latent + CLAP encoders — no mocks),
+    trains ``experiment=surge/flow_simple`` one step under ``conditioning=<profile>``
+    to a checkpoint, then drives ``evaluate(mode=validate)`` and asserts a finite
+    ``val/param_mse`` (the flow model logs param MSE, not ``val/loss``).
+
+    :param tmp_path: The temporary output/log path shared by train and eval.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
+    :param param_spec_name: Param spec driving model width and callback labels.
+    :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
+    """
+    dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
+    cfg_train = build_surge_xt_embedding_train_cfg(
+        tmp_path, param_spec_name, dataset_root, conditioning
+    )
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    assert "last.ckpt" in os.listdir(tmp_path / "checkpoints")
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg_eval = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_simple",
+                f"conditioning={conditioning}",
+                "trainer=cpu",
+                "datamodule=surge_lance",
+                "mode=validate",
+                "model.compile=false",
+                "model.validation_sample_steps=1",
+            ],
+        )
+    with open_dict(cfg_eval):
+        cfg_eval.paths.root_dir = str(operator_workspace())
+        cfg_eval.paths.output_dir = str(tmp_path)
+        cfg_eval.paths.log_dir = str(tmp_path)
+        cfg_eval.datamodule.fake = False
+        cfg_eval.datamodule.dataset_root = str(dataset_root)
+        cfg_eval.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg_eval.datamodule.param_spec_name = param_spec_name
+        cfg_eval.datamodule.batch_size = 1
+        cfg_eval.datamodule.num_workers = 0
+        cfg_eval.datamodule.use_saved_mean_and_variance = True
+        cfg_eval.trainer.limit_val_batches = 1.0
+        cfg_eval.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
+        cfg_eval.logger = None
+
+    HydraConfig().set_config(cfg_eval)
+    try:
+        val_metric_dict, _ = evaluate(cfg_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert math.isfinite(val_metric_dict["val/param_mse"].item())
