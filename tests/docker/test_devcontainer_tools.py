@@ -93,7 +93,7 @@ def test_doom_emacs_available() -> None:
 
     assert doom_version.endswith("2.2.0")
     assert _run_as_dev_text("doom", "version", "--short") == "2.2.0"
-    assert _run_as_dev_text("fd", "--version").startswith("fdfind ")
+    assert _run_as_dev_text("fd", "--version").startswith("fd ")
     assert _run_as_dev_text("rg", "--version").startswith("ripgrep ")
     assert Path("/home/dev/.config/doom/init.el").is_file()
 
