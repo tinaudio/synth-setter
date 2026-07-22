@@ -86,7 +86,7 @@ def test_doom_emacs_available() -> None:
         "emacs",
         "--batch",
         "--load",
-        "/home/dev/.config/emacs/init.el",
+        "/home/dev/.config/emacs/early-init.el",
         "--eval",
         "(princ doom-version)",
     )
