@@ -1128,7 +1128,10 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
 `nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
-latent column, both derived from the audio column. An optional
+latent column, both derived from the audio column. `same_s`/`same_l` SAME
+latent columns are also selectable via `embeddings=` (multi-GB encoders, each
+loaded and written in its own sequential pass); the selectable set is
+`EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`. An optional
 `resume_cache=<path>` caches per-batch encoder outputs so an interrupted run can
 resume without re-encoding already-processed rows (see `add_embeddings.py`).
 
