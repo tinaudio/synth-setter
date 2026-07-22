@@ -198,46 +198,64 @@ class PrepareBatchCollate:
 
 
 class _FragmentSampledIterable(torch.utils.data.IterableDataset[ModelBatch]):
-    """Lance-native fragment-sequential batch stream with per-epoch reshuffle.
-
-    Rows are read fragment-sequentially; shuffling is fragment-order-granular
-    (rows within a fragment keep stored order). Single-process, single-rank
-    (``rank=0, world_size=1``) — v1 does not support DDP.
-    """
+    """Fragment-sequential batches sharded across spawned loader workers."""
 
     def __init__(
         self,
-        dataset: LanceDataset,
+        dataset_uri: str | Path,
         *,
+        batch_size: int,
+        columns: Sequence[str],
+        batch_readahead: int,
         seed: int,
         collate: Callable[[object], ModelBatch],
     ) -> None:
-        """Wrap a Lance iterable dataset with epoch bookkeeping and collation.
+        """Store the scanner inputs needed to open Lance inside each worker.
 
-        :param dataset: Lance-native iterable dataset yielding column-tensor dicts.
-        :param seed: Base seed for the per-epoch fragment-order shuffle.
+        :param dataset_uri: Lance training split opened by each process.
+        :param batch_size: Rows requested from each scanner batch.
+        :param columns: Stored columns projected by the scanner.
+        :param batch_readahead: Scanner batches read ahead inside Lance.
+        :param seed: Base seed for per-epoch fragment-order shuffling.
         :param collate: Model-batch transformation applied to each yielded batch.
         """
-        self._dataset = dataset
+        self._dataset_uri = str(dataset_uri)
+        self._batch_size = batch_size
+        self._columns = list(columns)
+        self._batch_readahead = batch_readahead
         self._seed = seed
         self._collate = collate
         self._epoch = 0
 
     def __iter__(self) -> Iterator[ModelBatch]:
-        """Stream one epoch of model batches in a fresh fragment order.
+        """Stream one worker's fragment partition for the current epoch.
 
-        :yields: Model-ready collated batches following this epoch's freshly randomized order.
-        :ytype: ModelBatch
+        :yields ModelBatch: Model-ready batches from a disjoint fragment subset.
         """
-        # set_epoch follows the upstream sampler contract, but lance 7.0.0's
-        # fragment shuffle reads only the seed — so the epoch is folded into it.
+        worker_info = torch.utils.data.get_worker_info()
+        rank = worker_info.id if worker_info is not None else 0
+        world_size = worker_info.num_workers if worker_info is not None else 1
+        worker_epoch_seed = (
+            worker_info.seed - worker_info.id if worker_info is not None else 0
+        )
+        # Lance 7.0.0 ignores set_epoch for fragment shuffling, so the seed carries it.
         sampler = ShardedFragmentSampler(
-            rank=0, world_size=1, randomize=True, seed=self._seed + self._epoch
+            rank=rank,
+            world_size=world_size,
+            randomize=True,
+            seed=self._seed + worker_epoch_seed + self._epoch,
         )
         sampler.set_epoch(self._epoch)
-        self._dataset.sampler = sampler
         self._epoch += 1
-        for batch in self._dataset:
+        dataset = LanceDataset(
+            self._dataset_uri,
+            self._batch_size,
+            columns=self._columns,
+            batch_readahead=self._batch_readahead,
+            to_tensor_fn=batch_to_shaped_tensors,
+            sampler=sampler,
+        )
+        for batch in dataset:
             yield self._collate(batch)
 
 
@@ -458,7 +476,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
         :param use_fragment_sampler: Whether train reads fragment-sequentially
-            through Lance's native iterable path (#2251); v1 is single-rank only.
+            through Lance's native iterable path; distributed ranks are unsupported.
         :param batch_readahead: Lance scanner read-ahead batches on the
             fragment-sampler path.
         :raises ValueError: If ``use_fragment_sampler`` is combined with
@@ -683,24 +701,30 @@ class LanceVSTDataModule(VSTDataModule):
         return self._dataloader("train", shuffle=True, drop_last=True)
 
     def _fragment_sampled_train_dataloader(self) -> DataLoader:
-        """Build the Lance-native fragment-sequential training loader.
+        """Build a spawn-safe loader over worker-sharded fragment scans.
 
-        :returns: In-process DataLoader over pre-batched Lance reads; batches form inside Lance's
-            scanner threads, so no spawn workers are used.
+        :returns: Pre-batched fragment-sequential training loader.
         """
-        columns = ["param_array", self._conditioning_column()]
-        dataset = LanceDataset(
-            str(self.dataset_root / f"train{self.shard_suffix}"),
-            self.batch_size,
-            columns=columns,
-            batch_readahead=self.batch_readahead,
-            to_tensor_fn=batch_to_shaped_tensors,
-        )
         stream = _FragmentSampledIterable(
-            dataset, seed=draw_generator_seed(), collate=self._splits["train"].collate
+            self.dataset_root / f"train{self.shard_suffix}",
+            batch_size=self.batch_size,
+            columns=["param_array", self._conditioning_column()],
+            batch_readahead=self.batch_readahead,
+            seed=draw_generator_seed(),
+            collate=self._splits["train"].collate,
         )
+        if self.num_workers == 0:
+            return DataLoader(
+                stream, batch_size=None, num_workers=0, pin_memory=self.pin_memory
+            )
         return DataLoader(
-            stream, batch_size=None, num_workers=0, pin_memory=self.pin_memory
+            stream,
+            batch_size=None,
+            num_workers=self.num_workers,
+            multiprocessing_context=torch.multiprocessing.get_context("spawn"),
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def val_dataloader(self) -> DataLoader:

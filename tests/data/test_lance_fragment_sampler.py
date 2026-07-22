@@ -140,6 +140,27 @@ class TestFragmentSamplerTrainPath:
         assert epoch.shape == (_TRAIN_ROWS, NUM_PARAMS)
         np.testing.assert_allclose(_sorted_rows(epoch), _sorted_rows(source), rtol=1e-6)
 
+    def test_fragment_sampler_workers_partition_fragments_without_duplicate_rows(
+        self, fragmented_root: Path
+    ) -> None:
+        """Spawn workers divide fragment reads while preserving full epoch coverage.
+
+        :param fragmented_root: Fixture root with a multi-fragment train split.
+        """
+        source = make_shard_columns(_TRAIN_ROWS, seed=1)["param_array"] * 2 - 1
+        with _set_up_module(
+            dataset_root=fragmented_root,
+            num_workers=2,
+            ot=True,
+            prefetch_factor=3,
+        ) as module:
+            loader = module.train_dataloader()
+            assert loader.num_workers == 2
+            assert loader.prefetch_factor == 3
+            epoch = _params_epoch(loader)
+        assert epoch.shape == (_TRAIN_ROWS, NUM_PARAMS)
+        np.testing.assert_allclose(_sorted_rows(epoch), _sorted_rows(source), rtol=1e-6)
+
     def test_fragment_sampler_on_batch_matches_map_path_contract(
         self, tmp_path: Path
     ) -> None:
@@ -201,6 +222,26 @@ class TestFragmentSamplerEpochShuffle:
         :param fragmented_root: Fixture root with a multi-fragment train split.
         """
         first, second = self._two_epochs(fragmented_root)
+        assert not np.array_equal(first, second)
+        np.testing.assert_allclose(_sorted_rows(first), _sorted_rows(second), rtol=1e-6)
+
+    @pytest.mark.parametrize("persistent_workers", [False, True])
+    def test_fragment_sampler_workers_reshuffle_next_epoch(
+        self, fragmented_root: Path, *, persistent_workers: bool
+    ) -> None:
+        """Worker lifecycles receive a new shared fragment order each epoch.
+
+        :param fragmented_root: Fixture root with a multi-fragment train split.
+        :param persistent_workers: Whether workers survive between epoch iterators.
+        """
+        with _set_up_module(
+            dataset_root=fragmented_root,
+            num_workers=2,
+            persistent_workers=persistent_workers,
+        ) as module:
+            loader = module.train_dataloader()
+            first = _params_epoch(loader)
+            second = _params_epoch(loader)
         assert not np.array_equal(first, second)
         np.testing.assert_allclose(_sorted_rows(first), _sorted_rows(second), rtol=1e-6)
 

@@ -92,6 +92,17 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
 
 
+def test_runpod_jp_training_uses_profiled_fragment_worker_count() -> None:
+    """The B200 recipe keeps the worker count selected by live profiling."""
+    launch_config = load_launch_config(
+        _LAUNCH_DIR / "train-runpod-flow-simple-440k-volume-jp.yaml"
+    )
+
+    assert launch_config.cmd is not None
+    assert "datamodule.use_fragment_sampler=true" in launch_config.cmd
+    assert "datamodule.num_workers=4" in launch_config.cmd
+
+
 def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None:
     """The network-volume launch copies its mounted dataset to pod-local storage."""
     launch_config = load_launch_config(_LAUNCH_DIR / "train-runpod-flow-simple-440k-volume.yaml")
