@@ -136,15 +136,10 @@ def _run_make(
     )
 
 
-def _run_clean_docker_build(
-    target: str, platform_name: str, timeout: int
-) -> subprocess.CompletedProcess[str]:
-    """Build one Dockerfile target without reusing cached layers.
+def _docker_executable_or_skip() -> str:
+    """Return the Docker executable when its daemon is reachable.
 
-    :param target: Dockerfile stage to build.
-    :param platform_name: BuildKit platform such as ``linux/amd64``.
-    :param timeout: Maximum build duration in seconds.
-    :returns: Completed build process with captured output.
+    :returns: Absolute Docker executable path.
     """
     docker = shutil.which("docker")
     if docker is None:
@@ -159,6 +154,20 @@ def _run_clean_docker_build(
     )
     if info.returncode != 0:
         pytest.skip("Docker daemon unavailable")
+    return docker
+
+
+def _run_clean_docker_build(
+    target: str, platform_name: str, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Build one Dockerfile target without reusing cached layers.
+
+    :param target: Dockerfile stage to build.
+    :param platform_name: BuildKit platform such as ``linux/amd64``.
+    :param timeout: Maximum build duration in seconds.
+    :returns: Completed build process with captured output.
+    """
+    docker = _docker_executable_or_skip()
     return subprocess.run(  # noqa: S603 — fixed argv, no shell
         [
             docker,
@@ -344,7 +353,7 @@ def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
     for stage_name in ("builder-base", "vst3-synths-fetch"):
         stage = _dockerfile_stage_text(stage_name)
         replace_index = stage.index("http://azure.archive.ubuntu.com")
-        update_index = stage.index("apt-get update")
+        update_index = stage.index("apt-get update --error-on=any")
         assert replace_index < update_index
 
 

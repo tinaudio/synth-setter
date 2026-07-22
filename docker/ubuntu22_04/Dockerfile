@@ -78,7 +78,7 @@ RUN case "${BUILD_MODE}" in \
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
   software-properties-common \
   gcc-12 \
   g++-12 \
@@ -235,7 +235,7 @@ ARG TARGETARCH
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
     wget
