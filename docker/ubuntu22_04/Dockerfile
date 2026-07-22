@@ -654,7 +654,7 @@ USER $USERNAME
 
 # Appended, not prepended: root-default devcontainer sessions must not resolve
 # these dev-writable dirs ahead of system binaries.
-ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
+ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin:/home/${USERNAME}/.config/emacs/bin"
 
 # wandb's default staging dir (~/.local/share/wandb) isn't writable at runtime in
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
@@ -668,7 +668,7 @@ RUN export HOME="/home/${USERNAME}" \
  && git -C "$HOME/.config/emacs" remote add origin https://github.com/doomemacs/doomemacs.git \
  && git -C "$HOME/.config/emacs" fetch --depth 1 origin "$DOOM_EMACS_GIT_SHA" \
  && git -C "$HOME/.config/emacs" checkout --detach "$DOOM_EMACS_GIT_SHA" \
- && ln -s "$HOME/.config/emacs/bin/doom" "$HOME/.local/bin/doom" \
+ && git -C "$HOME/.config/emacs" submodule update --init --recursive \
  && doom install --force --no-env --no-hooks \
  && test "$(doom version --short)" = "2.2.0"
 
