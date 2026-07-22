@@ -354,6 +354,21 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Param-spec selection key added in #1602; absent in v0.0.0 — selects the spec,
     # doesn't size the model (d_out/num_params are pinned separately).
     "datamodule.param_spec_name",
+    # Conditioning-modality routing added in #2279; absent in v0.0.0. Resolves to
+    # the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
+    "datamodule.conditioning",
+    # Per-worker prefetch depth added in #2235; absent in v0.0.0 — resolves to
+    # null (delegates to PyTorch), dataloader resource sizing, not a model knob.
+    "datamodule.prefetch_factor",
+    # Opt-in fragment-sequential train reads added in #2253; absent in v0.0.0 —
+    # resolves to false, read-ordering only, not a model knob.
+    "datamodule.use_fragment_sampler",
+    # Lance scanner read-ahead added in #2253; absent in v0.0.0 — resolves to 8,
+    # data-loading resource on the (off-by-default) fragment-sampler path.
+    "datamodule.batch_readahead",
+    # Model-side conditioning routing added in #2279; absent in v0.0.0. Resolves
+    # to the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
+    "model.conditioning",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
     "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
     # Training contains checkpoint/probe observability only; re-narrow this path if a
