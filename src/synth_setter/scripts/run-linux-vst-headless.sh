@@ -114,14 +114,14 @@ normalize_positive_decimal() {
   printf '%s\n' "$value"
 }
 
-# Start Xvfb and wait until it accepts connections.
+# Start Xvfb and confirm the display it published via -displayfd.
 # Globals:
 #   DISPLAY_FILE, DISPLAY, TMP_DIR, XVFB_PID, XVFB_READY_PROBES,
 #   XVFB_STARTUP_PROBES.
 # Outputs:
 #   Startup diagnostics to stderr.
 # Returns:
-#   0 when Xvfb accepts connections; 1 on startup failure.
+#   0 once Xvfb has published a display; 1 only when Xvfb fails to start or dies.
 start_xvfb_attempt() {
   : > "$DISPLAY_FILE"
   # -displayfd 3 writes the chosen display number to file descriptor 3;
@@ -148,15 +148,29 @@ start_xvfb_attempt() {
   DISPLAY=":$(cat "$DISPLAY_FILE")"
   export DISPLAY
 
+  # -displayfd publishes the display number only once the X server is listening
+  # and ready to accept connections, so DISPLAY is already usable here. xdpyinfo
+  # (from x11-utils) is a best-effort early confirmation: the bare CI runner
+  # ships no x11-utils, and concurrent bootstraps can transiently refuse the
+  # probe, so a missing or unconfirmed probe must not fail a display that
+  # -displayfd already declared ready (#2320). A dead server is still caught.
+  if ! command -v xdpyinfo >/dev/null 2>&1; then
+    return 0
+  fi
   local probe
   for ((probe = 0; probe < XVFB_READY_PROBES; probe += 1)); do
     if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
       return 0
     fi
+    if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+      echo "Xvfb died before $DISPLAY became ready" >&2
+      return 1
+    fi
     sleep 0.1
   done
-  echo "Xvfb did not become ready on $DISPLAY" >&2
-  return 1
+  echo "[wrapper] xdpyinfo did not confirm $DISPLAY within" \
+    "${XVFB_READY_PROBES} probes; trusting -displayfd readiness" >&2
+  return 0
 }
 
 # Reap a failed Xvfb so retries do not stack servers.

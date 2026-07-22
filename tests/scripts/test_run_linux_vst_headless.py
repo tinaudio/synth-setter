@@ -345,17 +345,24 @@ def test_bootstrap_real_x_stack_accepts_client_connection() -> None:
     assert "name of display:" in result.stdout
 
 
-def test_bootstrap_readiness_timeout_retries_and_reaps_stale_xvfb(
+def test_bootstrap_xdpyinfo_never_confirms_trusts_displayfd_and_runs_command(
     stub_env: dict[str, str],
 ) -> None:
-    """A readiness timeout retries and kills the stale first-attempt Xvfb.
+    """An unusable xdpyinfo probe does not fail a server -displayfd declared ready.
+
+    Reproduces the bare-runner failure: Xvfb starts and writes its display via
+    ``-displayfd`` (server listening), but ``xdpyinfo`` never confirms — because
+    ``x11-utils`` is absent or the probe is refused under contention. The wrapper
+    trusts the ``-displayfd`` readiness signal and runs the command on the first
+    attempt rather than exhausting the retry budget and failing (#2320).
 
     :param stub_env: Wrapper environment with stub X binaries on PATH.
     """
-    stub_env["XDPYINFO_STUB_MIN_XVFB_CALLS"] = "2"
+    # A threshold no bootstrap attempt can reach keeps xdpyinfo failing forever.
+    stub_env["XDPYINFO_STUB_MIN_XVFB_CALLS"] = "99"
     stub_env["XVFB_READY_PROBES"] = "3"
     result = _run_wrapper(stub_env)
     assert result.returncode == 0, result.stderr
     assert "ran-ok DISPLAY=:99" in result.stdout
-    assert _xvfb_calls(stub_env) == 2
+    assert _xvfb_calls(stub_env) == 1
     _assert_stub_xvfb_pids_dead(stub_env)
