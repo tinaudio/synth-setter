@@ -360,9 +360,6 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Per-worker prefetch depth added in #2235; absent in v0.0.0 — resolves to
     # null (delegates to PyTorch), dataloader resource sizing, not a model knob.
     "datamodule.prefetch_factor",
-    # Opt-in fragment-sequential train reads added in #2253; absent in v0.0.0 —
-    # resolves to false, read-ordering only, not a model knob.
-    "datamodule.use_fragment_sampler",
     # Lance scanner read-ahead added in #2253; absent in v0.0.0 — resolves to 8,
     # data-loading resource on the (off-by-default) fragment-sampler path.
     "datamodule.batch_readahead",
@@ -447,10 +444,24 @@ def _rename_data_group_to_datamodule(cfg: dict) -> dict:
     return result
 
 
+def _strip_disabled_fragment_sampler(cfg: dict) -> dict:
+    """Remove the disabled sampler default that reproduces the legacy map loader.
+
+    :param cfg: Resolved config from either comparison side.
+    :returns: Copy with an explicit ``false`` removed while preserving any other value.
+    """
+    result = copy.deepcopy(cfg)
+    datamodule = result.get("datamodule")
+    if isinstance(datamodule, dict) and datamodule.get("use_fragment_sampler") is False:
+        datamodule.pop("use_fragment_sampler")
+    return result
+
+
 def _normalize_for_compare(cfg: dict) -> dict:
     """Apply both strip passes used by the equality/inequality assertions."""
     renamed = _rename_data_group_to_datamodule(cfg)
-    stripped = _strip_dotted_keys(renamed, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
+    normalized_defaults = _strip_disabled_fragment_sampler(renamed)
+    stripped = _strip_dotted_keys(normalized_defaults, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
 
 
@@ -467,6 +478,28 @@ def test_normalize_for_compare_accepts_persistent_workers_resource_drift() -> No
     current = {"datamodule": {"persistent_workers": True}, "model": {"hidden_size": 512}}
 
     assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_disabled_fragment_sampler_default() -> None:
+    """Explicit false remains equivalent to v0.0.0's absent sampler key."""
+    baseline = {"datamodule": {}, "model": {"hidden_size": 512}}
+    current = {
+        "datamodule": {"use_fragment_sampler": False},
+        "model": {"hidden_size": 512},
+    }
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_rejects_fragment_sampler_enablement() -> None:
+    """Enabling fragment sampling must remain visible against the legacy map-loader config."""
+    baseline = {"datamodule": {}, "model": {"hidden_size": 512}}
+    current = {
+        "datamodule": {"use_fragment_sampler": True},
+        "model": {"hidden_size": 512},
+    }
+
+    assert _normalize_for_compare(baseline) != _normalize_for_compare(current)
 
 
 def test_normalize_for_compare_accepts_wandb_resume_observability_drift() -> None:
