@@ -229,7 +229,7 @@ def test_runtime_image_requires_fresh_apt_indexes() -> None:
 
 
 def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
-    """Independent base-image stages use the Azure-local Ubuntu mirror in CI."""
+    """Independent base-image stages switch to the Azure-local Ubuntu mirror before apt update."""
     for stage_name in ("builder-base", "vst3-synths-fetch"):
         stage = _dockerfile_stage_text(stage_name)
         replace_index = stage.index("http://azure.archive.ubuntu.com")
@@ -270,6 +270,47 @@ def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
     assert skip_idx != -1, stage
     assert apt_idx != -1, stage
     assert skip_idx < apt_idx
+
+
+@pytest.mark.slow
+def test_builder_base_resolves_apt_packages_from_azure_mirror() -> None:
+    """A clean BuildKit run installs the shared build packages from the CI-local mirror."""
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker binary not available")
+    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [docker, "info"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if info.returncode != 0:
+        pytest.skip("Docker daemon unavailable for builder-base package resolution")
+    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [
+            docker,
+            "buildx",
+            "build",
+            "--no-cache",
+            "--platform",
+            "linux/amd64",
+            "--target",
+            "builder-base",
+            "--build-arg",
+            "BUILD_MODE=prebuilt",
+            "-f",
+            str(DOCKERFILE),
+            ".",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.slow
