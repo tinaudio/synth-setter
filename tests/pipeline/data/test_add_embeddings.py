@@ -725,7 +725,6 @@ def test_default_resume_cache_changes_with_each_identity_component(
     assert len(variants) == 4
 
 
-@pytest.mark.slow
 def test_main_derives_resume_cache_by_default_and_reports_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -764,7 +763,6 @@ def test_main_derives_resume_cache_by_default_and_reports_resume(
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
-@pytest.mark.slow
 def test_main_no_resume_cache_disables_caching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
