@@ -183,6 +183,31 @@ def _run_clean_docker_build(
     )
 
 
+def _fake_apt_environment(tmp_path: Path, update_exit_code: int) -> tuple[dict[str, str], Path]:
+    """Create a PATH-prefixed fake apt-get and return its environment and call log.
+
+    :param tmp_path: Scratch directory containing the fake executable and log.
+    :param update_exit_code: Exit code returned for ``apt-get update``.
+    :returns: Subprocess environment and path recording apt-get arguments.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "apt-calls"
+    apt_get = fake_bin / "apt-get"
+    apt_get.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "${APT_CALLS}"\n'
+        'if [[ "${1}" == update ]]; then exit "${APT_UPDATE_EXIT}"; fi\n'
+    )
+    apt_get.chmod(0o755)
+    env = {
+        **os.environ,
+        "APT_CALLS": str(calls),
+        "APT_UPDATE_EXIT": str(update_exit_code),
+        "PATH": f"{fake_bin}:{os.defpath}",
+    }
+    return env, calls
+
+
 def _zip_containing(inner_dir: str) -> bytes:
     """Build an in-memory .zip whose payload lives under ``inner_dir``.
 
@@ -275,28 +300,43 @@ def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> 
 
     :param tmp_path: Scratch directory containing the fake apt boundary and call log.
     """
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    calls = tmp_path / "apt-calls"
+    env, calls = _fake_apt_environment(tmp_path, update_exit_code=42)
     install_marker = tmp_path / "install-ran"
-    apt_get = fake_bin / "apt-get"
-    apt_get.write_text(
-        '#!/bin/bash\nprintf "%s\\n" "$*" >> "${APT_CALLS}"\n[[ "${1}" != update ]]\n'
-    )
-    apt_get.chmod(0o755)
 
     result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
         ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
         cwd=PROJECT_ROOT,
-        env={**os.environ, "APT_CALLS": str(calls), "PATH": f"{fake_bin}:{os.defpath}"},
+        env=env,
         text=True,
         capture_output=True,
         check=False,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 42
     assert calls.read_text().splitlines() == ["update --error-on=any"]
     assert not install_marker.exists()
+
+
+def test_runtime_apt_update_success_runs_package_install(tmp_path: Path) -> None:
+    """The runtime package transaction runs install after index refresh succeeds.
+
+    :param tmp_path: Scratch directory containing the fake apt boundary and marker.
+    """
+    env, calls = _fake_apt_environment(tmp_path, update_exit_code=0)
+    install_marker = tmp_path / "install-ran"
+
+    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
+        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text().splitlines() == ["update --error-on=any"]
+    assert install_marker.exists()
 
 
 def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
