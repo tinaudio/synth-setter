@@ -389,6 +389,17 @@ def test_add_embeddings_config_with_invalid_index_setting_raises(
         AddEmbeddingsConfig.model_validate({"lance_uri": _LANCE_URI, field: bad}, strict=True)
 
 
+def test_add_embeddings_config_with_m2l_only_allows_non_clap_subvector_count() -> None:
+    """Runtime-width companions defer PQ divisibility checks to index construction."""
+    config = AddEmbeddingsConfig(
+        lance_uri=_LANCE_URI,
+        embeddings=("m2l",),
+        num_sub_vectors=15,
+    )
+
+    assert config.num_sub_vectors == 15
+
+
 @pytest.mark.parametrize("name", ["clap", "m2l", "same_s", "same_l"])
 def test_embedding_spec_encode_column_for_valid_encoder_builds_arrow_array(name: str) -> None:
     """Every registry encoder closure preserves its exact shape and values.
