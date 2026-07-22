@@ -1,0 +1,18 @@
+# @package _global_
+
+# CLAP conditioning: the `clap` Lance column written by the add_embeddings
+# endpoint (a 512-d LAION-CLAP audio embedding), projected by vector_projection.
+defaults:
+  - override /model/encoder: vector_projection
+
+model:
+  conditioning:
+    column: clap
+    input_shape: [512]
+  encoder:
+    input_dim: 512
+
+datamodule:
+  conditioning:
+    column: clap
+    input_shape: [512]
