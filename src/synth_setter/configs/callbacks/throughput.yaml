@@ -1,7 +1,7 @@
 # Loader-benchmark callback group (#2320): Lightning's built-in throughput +
 # GPU device stats only. Deliberately omits checkpointing / plotting / per-param
 # MSE so a short max_steps sweep measures pure train-step throughput with no
-# side I/O. ThroughputMonitor logs train/samples_per_sec (the sweep metric);
+# side I/O. ThroughputMonitor logs train/device/samples_per_sec (the sweep metric);
 # DeviceStatsMonitor logs GPU utilisation for the "duty" read.
 throughput:
   _target_: lightning.pytorch.callbacks.ThroughputMonitor

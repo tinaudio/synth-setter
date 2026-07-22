@@ -27,7 +27,7 @@ name: loader_throughput_fragment
 method: grid
 metric:
   goal: maximize
-  name: train/samples_per_sec
+  name: train/device/samples_per_sec
 parameters:
   datamodule.batch_size:
     values:

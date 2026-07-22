@@ -25,7 +25,7 @@ name: loader_throughput_mapstyle
 method: grid
 metric:
   goal: maximize
-  name: train/samples_per_sec
+  name: train/device/samples_per_sec
 parameters:
   datamodule.num_workers:
     values:

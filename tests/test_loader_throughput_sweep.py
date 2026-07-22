@@ -44,7 +44,7 @@ def test_throughput_callback_group_builds_the_two_builtin_monitors() -> None:
 def _assert_common_sweep_shape(cfg: dict, expected_fragment: str) -> None:
     assert cfg["program"] == "src/synth_setter/cli/train.py"
     assert cfg["method"] == "grid"
-    assert cfg["metric"] == {"goal": "maximize", "name": "train/samples_per_sec"}
+    assert cfg["metric"] == {"goal": "maximize", "name": "train/device/samples_per_sec"}
     cmd = cfg["command"]
     assert cmd[:2] == ["python", "src/synth_setter/cli/train.py"]
     assert "${args_no_hyphens}" in cmd
