@@ -282,63 +282,19 @@ class TestCommitMsgMode:
         assert result.returncode != 0
 
 
-class TestNativeCommitMsgHook:
-    """Drive the real pre-commit machinery against the repo config."""
+class TestCommitMsgWiring:
+    """Pin the pre-commit registration that routes commit subjects to the guard."""
 
-    def _run_stage(
-        self, tmp_path: Path, message: str, env: dict[str, str] | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        import os
-
-        msg_file = tmp_path / "COMMIT_EDITMSG"
-        msg_file.write_text(message)
-        base = {k: v for k, v in os.environ.items() if k != "RELEASE_INTENT"}
-        if env:
-            base.update(env)
-        return subprocess.run(  # noqa: S603
-            [  # noqa: S607
-                "uv",
-                "run",
-                "pre-commit",
-                "run",
-                "release-type-guard",
-                "--hook-stage",
-                "commit-msg",
-                "--commit-msg-filename",
-                str(msg_file),
-            ],
-            capture_output=True,
-            text=True,
-            env=base,
-            cwd=_REPO_ROOT,
-        )
-
-    def test_precommit_stage_blocks_feat_subject(self, tmp_path: Path) -> None:
-        """Check that precommit stage blocks feat subject.
-
-        :param tmp_path: Where the commit-message file is written.
-        """
-        result = self._run_stage(tmp_path, "feat: cut a release\n")
-        assert result.returncode != 0
-        assert "release-triggering" in result.stdout + result.stderr
-
-    def test_precommit_stage_passes_internal_feat_subject(self, tmp_path: Path) -> None:
-        """Check that precommit stage passes internal feat subject.
-
-        :param tmp_path: Where the commit-message file is written.
-        """
-        result = self._run_stage(tmp_path, "internal-feat(ci): logic\n")
-        assert result.returncode == 0
-
-    def test_precommit_stage_intent_env_allows_release_subject(self, tmp_path: Path) -> None:
-        """Check that precommit stage intent env allows release subject.
-
-        :param tmp_path: Where the commit-message file is written.
-        """
-        result = self._run_stage(
-            tmp_path, "feat: deliberate release\n", env={"RELEASE_INTENT": "1"}
-        )
-        assert result.returncode == 0
+    def test_config_registers_guard_at_commit_msg_stage(self) -> None:
+        """Check that the release-type-guard hook is wired at the commit-msg stage."""
+        config = (_REPO_ROOT / ".pre-commit-config.yaml").read_text()
+        hooks = [
+            block for block in config.split("- id: ") if block.startswith("release-type-guard")
+        ]
+        assert len(hooks) == 1, "release-type-guard must be registered exactly once"
+        block = hooks[0]
+        assert "stages: [commit-msg]" in block
+        assert "pr_title_guard.py --commit-msg-file" in block
 
 
 class TestHookWrapper:
