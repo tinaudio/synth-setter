@@ -29,45 +29,57 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})
 MECHANICAL_SKILLS = frozenset({"comment-hygiene", "python-style", "shell-style"})
-SUPPORTED_SKILLS = frozenset(
+SMART_MODEL_SKILLS = frozenset(
     {
-        "code-health",
-        "comment-hygiene",
         "correctness-review",
-        "gha-workflow-validator",
         "lance-review",
         "ml-data-pipeline",
         "ml-test",
+        "synth-setter-project-standards",
+    }
+)
+MECHANICAL_MODEL_SKILLS = frozenset(
+    {
+        "code-health",
+        "comment-hygiene",
+        "gha-workflow-validator",
         "python-style",
         "shell-style",
-        "synth-setter-project-standards",
         "tdd-implementation",
         "tdd-refactor",
     }
 )
+SUPPORTED_SKILLS = SMART_MODEL_SKILLS | MECHANICAL_MODEL_SKILLS
 PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
-_FREE_POOL_SETUP = "authenticate with `/login kimi-coding` or `/login openrouter`"
+_SMART_FREE_POOL_SETUP = "authenticate with `/login kimi-coding` or `/login openrouter`"
+_MECHANICAL_FREE_POOL_SETUP = "authenticate with `/login openrouter`"
 
-_DEEP_CODEX_CANDIDATES = (
+_SMART_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
 )
-_STANDARD_CODEX_CANDIDATES = (
-    "openai-codex/gpt-5.6-terra",
-    "openai-codex/gpt-5.6-sol",
-)
-# Keep this ordered pool pinned so audit provenance records each provider and exact model.
-_FREE_POOL_CANDIDATES = (
-    "kimi-coding/k3",
+_MECHANICAL_CODEX_CANDIDATES = ("openai-codex/gpt-5.6-terra",)
+_OPENROUTER_FREE_CANDIDATES = (
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/tencent/hy3:free",
 )
-PINNED_REVIEW_MODELS = frozenset(
-    (*_DEEP_CODEX_CANDIDATES, *_STANDARD_CODEX_CANDIDATES, *_FREE_POOL_CANDIDATES)
+_SMART_FREE_POOL_CANDIDATES = ("kimi-coding/k3", *_OPENROUTER_FREE_CANDIDATES)
+_MECHANICAL_FREE_POOL_CANDIDATES = _OPENROUTER_FREE_CANDIDATES
+_ALL_FREE_POOL_CANDIDATES = frozenset(
+    (*_SMART_FREE_POOL_CANDIDATES, *_MECHANICAL_FREE_POOL_CANDIDATES)
 )
+PINNED_REVIEW_MODELS = frozenset(
+    (
+        *_SMART_CODEX_CANDIDATES,
+        *_MECHANICAL_CODEX_CANDIDATES,
+        *_ALL_FREE_POOL_CANDIDATES,
+    )
+)
+
+ModelTier = Literal["smart", "mechanical"]
 
 
 class _TranscriptContentBlock(BaseModel, strict=True, extra="ignore"):
@@ -347,6 +359,11 @@ class ReviewPass:
 
         Authoritative checklist name.
 
+    .. attribute :: model_tier
+        :type: Literal["smart", "mechanical"]
+
+        Fixed model-cost tier assigned to the checklist.
+
     .. attribute :: pass_name
         :type: str
 
@@ -385,6 +402,7 @@ class ReviewPass:
     """
 
     skill: str
+    model_tier: ModelTier
     pass_name: str
     candidates: tuple[str, ...]
     unavailable: tuple[str, ...]
@@ -644,7 +662,7 @@ def provenance_for_model(model: str) -> str:
     provider = model.split("/", 1)[0]
     if provider == "openai-codex":
         return "codex"
-    if model in _FREE_POOL_CANDIDATES:
+    if model in _ALL_FREE_POOL_CANDIDATES:
         return provider
     raise ValueError(f"Unsupported Pi review model: {model}")
 
@@ -786,22 +804,17 @@ def _available_and_unavailable(
     return available, unavailable
 
 
-def _codex_candidates_for_skill(
+def _configured_candidates_for_skill(
     skill: str,
-    available_models: AbstractSet[str],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return available and unavailable Codex candidates for one checklist.
+) -> tuple[ModelTier, tuple[str, ...], tuple[str, ...]]:
+    """Return the fixed tier and candidate pools for one checklist.
 
     :param skill: Authoritative checklist name.
-    :param available_models: Canonical selectors returned by Pi's model registry.
-    :returns: Available and unavailable Codex selectors in policy order.
-    :raises ValueError: If no configured Codex candidate is available.
+    :returns: Model tier, Codex candidates, and independent free-pool candidates.
     """
-    configured = _DEEP_CODEX_CANDIDATES if skill in DEEP_SKILLS else _STANDARD_CODEX_CANDIDATES
-    candidates, unavailable = _available_and_unavailable(configured, available_models)
-    if not candidates:
-        raise ValueError(f"No available models remain for {skill}/codex")
-    return candidates, unavailable
+    if skill in SMART_MODEL_SKILLS:
+        return "smart", _SMART_CODEX_CANDIDATES, _SMART_FREE_POOL_CANDIDATES
+    return "mechanical", _MECHANICAL_CODEX_CANDIDATES, _MECHANICAL_FREE_POOL_CANDIDATES
 
 
 def _review_passes_for_skill(
@@ -810,8 +823,6 @@ def _review_passes_for_skill(
     changed_lines: int,
     risk_reasons: Sequence[str],
     available_models: AbstractSet[str],
-    free_pool_candidates: tuple[str, ...],
-    free_pool_unavailable: tuple[str, ...],
 ) -> tuple[ReviewPass, ReviewPass]:
     """Build the paired Codex and free-pool passes for one checklist.
 
@@ -819,17 +830,23 @@ def _review_passes_for_skill(
     :param changed_lines: Total added and deleted lines in the diff.
     :param risk_reasons: Named risk signals detected in the diff.
     :param available_models: Canonical selectors returned by Pi's model registry.
-    :param free_pool_candidates: Registered free-pool selectors in policy order.
-    :param free_pool_unavailable: Unregistered free-pool selectors in policy order.
     :returns: Paired Codex and free-pool passes.
+    :raises ValueError: If the checklist's fixed Codex model is unavailable.
     """
     thinking, reason = _thinking_for(
         skill,
         changed_lines=changed_lines,
         risk_reasons=risk_reasons,
     )
-    codex_candidates, codex_unavailable = _codex_candidates_for_skill(
-        skill,
+    model_tier, configured_codex, configured_free_pool = _configured_candidates_for_skill(skill)
+    codex_candidates, codex_unavailable = _available_and_unavailable(
+        configured_codex,
+        available_models,
+    )
+    if not codex_candidates:
+        raise ValueError(f"No available models remain for {skill}/codex")
+    free_pool_candidates, free_pool_unavailable = _available_and_unavailable(
+        configured_free_pool,
         available_models,
     )
     # Bind pass names to locals; a string literal on ``pass_name=`` trips ruff S106.
@@ -838,6 +855,7 @@ def _review_passes_for_skill(
     return (
         ReviewPass(
             skill=skill,
+            model_tier=model_tier,
             pass_name=codex_label,
             candidates=codex_candidates,
             unavailable=codex_unavailable,
@@ -848,6 +866,7 @@ def _review_passes_for_skill(
         ),
         ReviewPass(
             skill=skill,
+            model_tier=model_tier,
             pass_name=free_pool_label,
             candidates=free_pool_candidates,
             unavailable=free_pool_unavailable,
@@ -884,13 +903,7 @@ def build_review_plan(
     if unknown:
         raise ValueError(f"Unknown review skill(s): {', '.join(unknown)}")
     _require_codex(available_models)
-    _require_free_pool(available_models)
-    # The free pool is a single fixed tuple, so its availability split is invariant
-    # across skills; only the Codex candidates vary with each skill's depth.
-    free_pool_candidates, free_pool_unavailable = _available_and_unavailable(
-        _FREE_POOL_CANDIDATES,
-        available_models,
-    )
+    _require_free_pool(skills, available_models)
     return [
         review_pass
         for skill in skills
@@ -899,8 +912,6 @@ def build_review_plan(
             changed_lines=changed_lines,
             risk_reasons=risk_reasons,
             available_models=available_models,
-            free_pool_candidates=free_pool_candidates,
-            free_pool_unavailable=free_pool_unavailable,
         )
     ]
 
@@ -915,15 +926,23 @@ def _require_codex(available_models: AbstractSet[str]) -> None:
         raise ValueError(f"No openai-codex models available; {_CODEX_SETUP}; credentials required")
 
 
-def _require_free_pool(available_models: AbstractSet[str]) -> None:
-    """Require at least one registered free-pool model before planning the second pass.
+def _require_free_pool(
+    skills: Sequence[str],
+    available_models: AbstractSet[str],
+) -> None:
+    """Require a registered free-pool model in every selected checklist tier.
 
+    :param skills: Selected authoritative review checklists.
     :param available_models: Canonical selectors returned by Pi's model registry.
-    :raises ValueError: If no free-pool candidate is registered.
+    :raises ValueError: If a checklist's fixed free-pool tier has no registered model.
     """
-    if not any(model in available_models for model in _FREE_POOL_CANDIDATES):
+    for skill in skills:
+        model_tier, _, configured_free_pool = _configured_candidates_for_skill(skill)
+        if any(model in available_models for model in configured_free_pool):
+            continue
+        setup = _SMART_FREE_POOL_SETUP if model_tier == "smart" else _MECHANICAL_FREE_POOL_SETUP
         raise ValueError(
-            f"No free-pool models available; {_FREE_POOL_SETUP}; credentials required"
+            f"No free-pool models available for {skill}; {setup}; credentials required"
         )
 
 

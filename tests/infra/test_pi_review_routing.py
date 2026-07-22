@@ -35,13 +35,11 @@ openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
 openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
 """
 
-# Fixed ordered second-pass pool. Its first model is a non-OpenRouter provider,
-# so routing and provenance must not assume every non-Codex candidate is OpenRouter.
-FREE_POOL_MODELS = (
-    "kimi-coding/k3",
+OPENROUTER_FREE_MODELS = (
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/tencent/hy3:free",
 )
+SMART_FREE_POOL_MODELS = ("kimi-coding/k3", *OPENROUTER_FREE_MODELS)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -56,8 +54,8 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     }
 
 
-def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
-    """Allocate two providers per skill with risk-sensitive thinking."""
+def test_build_review_plan_allocates_fixed_smart_and_mechanical_model_tiers() -> None:
+    """Reserve Sol and K3 for semantic checklists regardless of diff risk."""
     plan = build_review_plan(
         ["correctness-review", "comment-hygiene"],
         changed_lines=120,
@@ -65,23 +63,81 @@ def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
         available_models=parse_available_models(AVAILABLE_MODELS),
     )
 
-    assert [(item.skill, item.pass_name, item.thinking) for item in plan] == [
-        ("correctness-review", "codex", "high"),
-        ("correctness-review", "free-pool", "high"),
-        ("comment-hygiene", "codex", "low"),
-        ("comment-hygiene", "free-pool", "low"),
+    assert [
+        (item.skill, item.model_tier, item.pass_name, item.thinking, item.candidates)
+        for item in plan
+    ] == [
+        (
+            "correctness-review",
+            "smart",
+            "codex",
+            "high",
+            (
+                "openai-codex/gpt-5.6-sol",
+                "openai-codex/gpt-5.6-terra",
+            ),
+        ),
+        (
+            "correctness-review",
+            "smart",
+            "free-pool",
+            "high",
+            SMART_FREE_POOL_MODELS,
+        ),
+        (
+            "comment-hygiene",
+            "mechanical",
+            "codex",
+            "low",
+            ("openai-codex/gpt-5.6-terra",),
+        ),
+        (
+            "comment-hygiene",
+            "mechanical",
+            "free-pool",
+            "low",
+            OPENROUTER_FREE_MODELS,
+        ),
     ]
     assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].candidates == FREE_POOL_MODELS
-    assert plan[3].candidates == FREE_POOL_MODELS
-    assert all(
-        model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
+    assert plan[1].fallback_candidates == (
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
     )
-    assert all(
-        model.startswith("openai-codex/")
-        for item in plan[1::2]
-        for model in item.fallback_candidates
+    assert plan[3].fallback_candidates == ("openai-codex/gpt-5.6-terra",)
+
+
+@pytest.mark.parametrize(
+    ("skill", "expected_tier"),
+    [
+        ("code-health", "mechanical"),
+        ("comment-hygiene", "mechanical"),
+        ("correctness-review", "smart"),
+        ("gha-workflow-validator", "mechanical"),
+        ("lance-review", "smart"),
+        ("ml-data-pipeline", "smart"),
+        ("ml-test", "smart"),
+        ("python-style", "mechanical"),
+        ("shell-style", "mechanical"),
+        ("synth-setter-project-standards", "smart"),
+        ("tdd-implementation", "mechanical"),
+        ("tdd-refactor", "mechanical"),
+    ],
+)
+def test_build_review_plan_uses_fixed_tier_for_every_skill(skill: str, expected_tier: str) -> None:
+    """Keep every supported checklist in its explicitly approved model tier.
+
+    :param skill: Checklist being routed.
+    :param expected_tier: Fixed smart or mechanical model tier.
+    """
+    plan = build_review_plan(
+        [skill],
+        changed_lines=50,
+        risk_reasons=("concurrency",),
+        available_models=parse_available_models(AVAILABLE_MODELS),
     )
+
+    assert [item.model_tier for item in plan] == [expected_tier, expected_tier]
 
 
 def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> None:
@@ -97,8 +153,8 @@ def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> No
     assert all(item.reason == "mechanical checklist on diff of 200+ lines" for item in plan)
 
 
-def test_build_review_plan_promotes_risky_standard_passes() -> None:
-    """Promote standard passes when the diff carries a named risk."""
+def test_build_review_plan_risky_mechanical_skill_keeps_lower_model_tier() -> None:
+    """Raise thinking without promoting a fixed mechanical route to Sol or K3."""
     plan = build_review_plan(
         ["code-health"],
         changed_lines=40,
@@ -108,6 +164,9 @@ def test_build_review_plan_promotes_risky_standard_passes() -> None:
 
     assert [item.thinking for item in plan] == ["high", "high"]
     assert [item.reason for item in plan] == ["risk: concurrency", "risk: concurrency"]
+    assert [item.model_tier for item in plan] == ["mechanical", "mechanical"]
+    assert plan[0].candidates == ("openai-codex/gpt-5.6-terra",)
+    assert plan[1].candidates == OPENROUTER_FREE_MODELS
 
 
 @pytest.mark.parametrize(
@@ -138,30 +197,44 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
-def test_build_review_plan_uses_remaining_codex_candidate_as_free_pool_fallback() -> None:
-    """Preserve paired fallback behavior when one Codex model is unavailable."""
+def test_build_review_plan_smart_codex_pass_falls_back_to_terra() -> None:
+    """Retain Terra as the bounded availability fallback for smart reviews."""
     available = parse_available_models(AVAILABLE_MODELS)
-    available.remove("openai-codex/gpt-5.6-terra")
+    available.remove("openai-codex/gpt-5.6-sol")
 
     codex_pass, free_pool_pass = build_review_plan(
-        ["code-health"],
+        ["correctness-review"],
         changed_lines=300,
         risk_reasons=(),
         available_models=available,
     )
 
-    assert codex_pass.candidates == ("openai-codex/gpt-5.6-sol",)
+    assert codex_pass.candidates == ("openai-codex/gpt-5.6-terra",)
     assert free_pool_pass.fallback_candidates == codex_pass.candidates
 
 
-def test_build_review_plan_skips_unavailable_free_pool_candidates() -> None:
-    """Drop retired free-pool models while preserving the fixed attempt order."""
+def test_build_review_plan_mechanical_codex_pass_does_not_fall_back_to_sol() -> None:
+    """Fail closed instead of spending Sol on a mechanical checklist."""
+    available = parse_available_models(AVAILABLE_MODELS)
+    available.remove("openai-codex/gpt-5.6-terra")
+
+    with pytest.raises(ValueError, match=r"code-health/codex"):
+        build_review_plan(
+            ["code-health"],
+            changed_lines=300,
+            risk_reasons=(),
+            available_models=available,
+        )
+
+
+def test_build_review_plan_smart_pool_skips_unavailable_k3() -> None:
+    """Fall back from unavailable K3 to the pinned OpenRouter models."""
     available = parse_available_models(AVAILABLE_MODELS)
     available.remove("kimi-coding/k3")
     available.remove("openrouter/tencent/hy3:free")
 
     plan = build_review_plan(
-        ["code-health"],
+        ["correctness-review"],
         changed_lines=300,
         risk_reasons=(),
         available_models=available,
@@ -200,6 +273,26 @@ def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
             risk_reasons=(),
             available_models=available,
         )
+
+
+def test_build_review_plan_mechanical_pool_requires_openrouter() -> None:
+    """Do not substitute K3 when a mechanical checklist lacks free OpenRouter models."""
+    available = {
+        model
+        for model in parse_available_models(AVAILABLE_MODELS)
+        if not model.startswith("openrouter/")
+    }
+
+    with pytest.raises(ValueError, match=r"free-pool.*code-health") as error:
+        build_review_plan(
+            ["code-health"],
+            changed_lines=300,
+            risk_reasons=(),
+            available_models=available,
+        )
+
+    assert "/login openrouter" in str(error.value)
+    assert "kimi-coding" not in str(error.value)
 
 
 def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
@@ -882,4 +975,5 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"] == list(FREE_POOL_MODELS)
+    assert payload[1]["candidates"] == list(OPENROUTER_FREE_MODELS)
+    assert payload[1]["model_tier"] == "mechanical"
