@@ -6,7 +6,7 @@
 # (#2196); the cmd carries only experiment selection and operational flags.
 
 compute_template: src/synth_setter/configs/compute/runpod-template.yaml
-worker_image_tag: dev-snapshot
+worker_image_tag: devcontainer-tools
 env_file: .env
 # tail=true keeps the dispatcher attached so the Actions job reflects the
 # worker run end-to-end.

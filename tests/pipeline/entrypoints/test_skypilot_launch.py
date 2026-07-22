@@ -11,6 +11,7 @@ per-rank fan-out, the uuid-stem job-name fallback, and the checked-in ``configs/
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shlex
@@ -47,7 +48,9 @@ from synth_setter.pipeline.skypilot_launch import (
     _detect_provider_from_doc,
     _ensure_ci_sky_config,
     _fetch_runpod_balance,
+    _inject_network_volume,
     _load_compute_template_with_cmd,
+    _operator_ssh_pubkeys_b64,
     _override_image_id,
     dispatch_via_skypilot,
     load_launch_config,
@@ -188,6 +191,148 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
     _succeeded_run(fake)
     return fake
+
+
+class TestOperatorSshPubkeys:
+    """``_operator_ssh_pubkeys_b64`` forwards the operator's public keys to pods."""
+
+    def test_reads_identity_and_authorized_keys_deduped(self, tmp_path: Path) -> None:
+        """Both key files merge, junk lines drop, duplicates collapse.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        (ssh_dir / "authorized_keys").write_text(
+            "ssh-ed25519 AAAAkey1 box-a\n# a comment line\nssh-rsa AAAAkey2 box-b\n\n"
+        )
+        encoded = _operator_ssh_pubkeys_b64(ssh_dir)
+        decoded = base64.b64decode(encoded).decode()
+        assert decoded.splitlines() == [
+            "ssh-ed25519 AAAAkey1 box-a",
+            "ssh-rsa AAAAkey2 box-b",
+        ]
+
+    def test_missing_files_yield_empty_string_and_say_so(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No key material means no env injection — announced, never silent.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        assert _operator_ssh_pubkeys_b64(tmp_path / "absent-ssh-dir") == ""
+        out = capsys.readouterr().out
+        assert "id_ed25519.pub" in out and "authorized_keys" in out
+        assert "no operator SSH keys" in out
+
+    def test_forwarding_reports_key_count(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Successful collection reports how many keys pods will trust.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        assert _operator_ssh_pubkeys_b64(ssh_dir) != ""
+        assert "forwarding 1 operator SSH key(s)" in capsys.readouterr().out
+
+    def test_unresolvable_home_fails_open_without_blocking_dispatch(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A machine with no resolvable home still launches — keys just aren't forwarded.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for env/attribute patching.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+
+        def _raise() -> Path:
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr("synth_setter.pipeline.skypilot_launch._operator_ssh_dir", _raise)
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+        )
+        dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_called_once()
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert "OPERATOR_SSH_PUBKEYS_B64" not in injected
+        assert "operator SSH key forwarding skipped" in capsys.readouterr().out
+
+    def test_unreadable_key_file_fails_open(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An unreadable key file degrades to no-keys instead of raising.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        locked = ssh_dir / "authorized_keys"
+        locked.write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        locked.chmod(0o000)
+        try:
+            assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
+        finally:
+            locked.chmod(0o600)
+        assert "operator SSH key forwarding skipped" in capsys.readouterr().out
+
+    def test_binary_junk_in_key_file_salvages_valid_lines(self, tmp_path: Path) -> None:
+        """Non-UTF-8 bytes in a key file drop out; intact key lines still forward.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "authorized_keys").write_bytes(
+            b"\x80\x81binary-junk\xff\nssh-ed25519 AAAAkey1 box-a\n"
+        )
+        encoded = _operator_ssh_pubkeys_b64(ssh_dir)
+        assert base64.b64decode(encoded).decode() == "ssh-ed25519 AAAAkey1 box-a\n"
+
+    def test_dispatch_forwards_keys_env_to_worker(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The submitted rank env carries the operator keys, base64-encoded.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for env/attribute patching.
+        """
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch._operator_ssh_dir", lambda: ssh_dir
+        )
+        template = _write_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+        )
+        dispatch_via_skypilot(sky_cfg)
+        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        assert base64.b64decode(injected["OPERATOR_SSH_PUBKEYS_B64"]).decode() == (
+            "ssh-ed25519 AAAAkey1 box-a\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1092,6 +1237,19 @@ def _write_runpod_yaml(
     return path
 
 
+def _write_sentinel_volume_runpod_yaml(tmp_path: Path) -> Path:
+    """Write a RunPod template that mounts the ``${NETWORK_VOLUME}`` sentinel.
+
+    :param tmp_path: Directory under which ``compute.yaml`` is written.
+    :return: Path to the written ``compute.yaml``.
+    """
+    template = _write_runpod_yaml(tmp_path)
+    template.write_text(
+        template.read_text() + 'volumes:\n  /workspace/network-volume: "${NETWORK_VOLUME}"\n'
+    )
+    return template
+
+
 class TestLoadComputeTemplateWithCmd:
     """``_load_compute_template_with_cmd`` injects cmd as run and rejects pre-existing runs."""
 
@@ -1162,6 +1320,45 @@ class TestLoadComputeTemplateWithCmd:
         path.write_text("- not\n- a\n- mapping\n")
         with pytest.raises(ValueError, match="must be a mapping"):
             _load_compute_template_with_cmd(path, "x")
+
+
+class TestInjectNetworkVolume:
+    """``_inject_network_volume`` substitutes ${NETWORK_VOLUME} in the volumes: mapping."""
+
+    def test_sentinel_with_value_substitutes_volume_name(self) -> None:
+        """A ${NETWORK_VOLUME} volumes: value becomes the configured volume name."""
+        doc: dict[str, object] = {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
+        }
+        result = _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
+        assert result["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
+
+    def test_sentinel_without_value_raises(self) -> None:
+        """A template needing a volume fails loudly when network_volume is unset."""
+        doc: dict[str, object] = {
+            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
+        }
+        with pytest.raises(ValueError, match="network_volume"):
+            _inject_network_volume(doc, None, source=Path("template.yaml"))
+
+    def test_value_without_sentinel_raises(self) -> None:
+        """A configured volume name with nowhere to land is a config error, not a no-op."""
+        doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
+        with pytest.raises(ValueError, match=r"\$\{NETWORK_VOLUME\}"):
+            _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
+
+    def test_no_sentinel_no_value_leaves_doc_unchanged(self) -> None:
+        """Templates without volume needs pass through untouched."""
+        doc: dict[str, object] = {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/data": "some-static-volume"},
+        }
+        result = _inject_network_volume(doc, None, source=Path("template.yaml"))
+        assert result == {
+            "resources": {"cloud": "runpod"},
+            "volumes": {"/data": "some-static-volume"},
+        }
 
 
 class TestDetectProviderFromDoc:
@@ -1294,6 +1491,22 @@ class TestDispatchViaSkypilot:
         template = _write_runpod_yaml(tmp_path, include_run=True)
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
         with pytest.raises(ValueError, match="has a non-empty `run:` block"):
+            dispatch_via_skypilot(sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_sentinel_template_without_network_volume_raises_before_launch(
+        self,
+        tmp_path: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A volume-mounting template with no configured volume name never reaches SkyPilot.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
+        with pytest.raises(ValueError, match="does not set network_volume"):
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
@@ -2080,6 +2293,90 @@ class TestSkypilotLaunchCli:
         injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
         assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
         assert injected["EXPERIMENT"] == "surge/flow_simple"
+
+    def test_network_volume_option_overrides_config_volume(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """--network-volume redirects the mounted volume without editing the launch config.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+            network_volume="ss-datasets-us-ca-2",
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--network-volume", "ss-datasets-ap-jp-1", str(cfg_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-ap-jp-1"}
+
+    def test_config_network_volume_reaches_submitted_task(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Without a CLI override, the launch config's volume name lands in the task.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        """
+        template = _write_sentinel_volume_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+            network_volume="ss-datasets-us-ca-2",
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code == 0, result.output
+        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
+
+    def test_network_volume_without_sentinel_exits_with_clean_error(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+    ) -> None:
+        """A volume/template mismatch surfaces as a CLI error message, not a traceback.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        """
+        template = _write_runpod_yaml(tmp_path)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute_template=str(template),
+            cmd="echo hello",
+            env_file=str(env_file),
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--network-volume", "ss-datasets-us-ca-2", str(cfg_path)],
+        )
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "no ${NETWORK_VOLUME}" in result.output
 
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.

@@ -320,28 +320,71 @@ class TestLanceMapDataModuleSetup:
         assert "loader" not in inspect.signature(LanceVSTDataModule).parameters
 
     def test_prepare_data_hydrates_dataset_root_from_r2(
-        self,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The shared prepare hook materializes configured R2 data locally.
+        """The shared prepare hook preflights R2 before materializing data.
 
-        :param fake_r2_remote: Real rclone remote backed by local storage.
         :param tmp_path: Parent of the initially absent destination.
-        :param monkeypatch: Supplies canonical settings for the local rclone backend.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
         """
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
-        remote = fake_r2_remote / "intermediate-data" / "dataset"
-        remote.mkdir(parents=True)
-        (remote / "stats.npz").write_bytes(b"stats")
+        source_uri = "r2://intermediate-data/dataset"
         destination = tmp_path / "downloaded"
+        preflighted = False
+
+        def ensure_r2_env_loaded() -> None:
+            nonlocal preflighted
+            preflighted = True
+
+        def hydrate(actual_source_uri: str, dest_path: Path) -> None:
+            assert preflighted
+            assert actual_source_uri == source_uri
+            assert dest_path == destination
+            dest_path.mkdir()
+            (dest_path / "stats.npz").write_bytes(b"stats")
+
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.ensure_r2_env_loaded",
+            ensure_r2_env_loaded,
+        )
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            hydrate,
+        )
         module = LanceVSTDataModule(
             dataset_root=destination,
-            download_dataset_root_uri="r2://intermediate-data/dataset",
+            download_dataset_root_uri=source_uri,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.prepare_data()
+
+        assert (destination / "stats.npz").read_bytes() == b"stats"
+
+    def test_prepare_data_hydrates_dataset_root_from_file_uri(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mounted directory dispatches hydration without R2 credentials.
+
+        :param tmp_path: Parent of the mounted source and local destination.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        source = tmp_path / "network-volume"
+        source.mkdir()
+        destination = tmp_path / "local-ssd"
+
+        def hydrate(source_uri: str, dest_path: Path) -> None:
+            assert source_uri == source.as_uri()
+            assert dest_path == destination
+            dest_path.mkdir()
+            (dest_path / "stats.npz").write_bytes(b"stats")
+
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            hydrate,
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source.as_uri(),
             param_spec_name=ParamSpecName("surge_xt"),
         )
 

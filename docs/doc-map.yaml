@@ -629,6 +629,21 @@ docs:
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
+  # ── RunPod dataset network volume ───────────────────────────────
+  - doc: docs/operations/runpod-network-volume.md
+    description: Persistent RunPod dataset cache operations
+    sources:
+      - pattern: "scripts/stage_runpod_network_volume.sh"
+        covers: "Restartable checksum copy from R2 and post-copy completion marker"
+      - pattern: "src/synth_setter/configs/volumes/runpod-datasets-*.yaml"
+        covers: "Per-data-center 750 GB RunPod network-volume definitions (US-CA-2, AP-JP-1)"
+      - pattern: "src/synth_setter/configs/compute/*network-volume*"
+        covers: "Explicit /workspace/network-volume mount"
+      - pattern: "src/synth_setter/configs/launch/*-volume.yaml"
+        covers: "Dataset staging and volume-backed training launches"
+      - pattern: "src/synth_setter/configs/launch/stage-runpod-*-volume.yaml"
+        covers: "Dataset-specific staging launch commands"
+
   # ── Credential rotation guide ────────────────────────────────────
   - doc: docs/operations/credential-rotation-guide.md
     description: Credential inventory + rotation/verification procedures

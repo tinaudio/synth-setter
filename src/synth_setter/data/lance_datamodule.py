@@ -443,7 +443,7 @@ class LanceVSTDataModule(VSTDataModule):
         """Store map-style Lance loader configuration.
 
         :param dataset_root: Local directory holding per-split Lance datasets.
-        :param download_dataset_root_uri: R2 URI used to hydrate ``dataset_root``.
+        :param download_dataset_root_uri: R2 or file URI used to hydrate ``dataset_root``.
         :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
         :param batch_size: Samples per model batch.
         :param ot: Whether training batches use optimal-transport matching.

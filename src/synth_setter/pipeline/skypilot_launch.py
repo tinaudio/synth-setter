@@ -49,6 +49,7 @@ SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
 
 from __future__ import annotations
 
+import base64
 import functools
 import os
 import re
@@ -276,6 +277,53 @@ def load_worker_env(path: Path) -> dict[str, str]:
     `None`); coerce to a plain `dict[str, str]` for `task.update_envs(...)` and skip None entries.
     """
     return {k: v for k, v in dotenv_values(path).items() if v is not None}
+
+
+def _operator_ssh_dir() -> Path:
+    """Return the launching operator's ``~/.ssh`` directory.
+
+    :return: The resolved ``~/.ssh`` path (existence not required).
+    """
+    return Path.home() / ".ssh"
+
+
+def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
+    """Collect the operator's public keys as a base64 blob for pod authorized_keys.
+
+    Reads ``id_ed25519.pub`` and ``authorized_keys`` under ``ssh_dir`` so the
+    launching machine — and every machine already trusted to reach it — can SSH
+    into the pods it launches (#2297). Base64 keeps the multiline material safe
+    through SkyPilot's env serialization.
+
+    :param ssh_dir: Directory holding the operator's SSH files.
+    :return: Base64 of newline-joined unique key lines; ``""`` when none exist.
+    """
+    lines: list[str] = []
+    missing: list[str] = []
+    try:
+        for name in ("id_ed25519.pub", "authorized_keys"):
+            path = ssh_dir / name
+            if not path.is_file():
+                missing.append(name)
+                continue
+            # errors="replace" salvages intact key lines from a partially
+            # corrupted file; mangled lines can't pass the prefix filter.
+            for raw in path.read_bytes().decode("utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
+                    lines.append(line)
+    except OSError as exc:
+        # Fail open: key forwarding is a convenience and must never block a launch.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        return ""
+    if missing:
+        click.echo(f"operator SSH keys: {', '.join(missing)} not found under {ssh_dir}")
+    if not lines:
+        click.echo("no operator SSH keys collected; pods will not trust this machine")
+        return ""
+    click.echo(f"forwarding {len(lines)} operator SSH key(s) into pod authorized_keys")
+    joined = "\n".join(lines) + "\n"
+    return base64.b64encode(joined.encode("utf-8")).decode("ascii")
 
 
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
@@ -540,6 +588,47 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:
 
 
 _WORKER_CMD_SENTINEL = "${WORKER_CMD}"
+_NETWORK_VOLUME_SENTINEL = "${NETWORK_VOLUME}"
+
+
+def _inject_network_volume(
+    task_doc: dict[str, object], network_volume: str | None, *, source: Path
+) -> dict[str, object]:
+    """Substitute ``${NETWORK_VOLUME}`` in the template's ``volumes:`` values.
+
+    Sentinel and config must agree: a template that mounts the sentinel
+    requires ``network_volume``, and a configured name with no sentinel to
+    land in is a config error — never a silent no-op against the wrong volume.
+
+    :param task_doc: Parsed compute YAML dict, mutated in place.
+    :param network_volume: SkyPilot volume name to mount, or ``None``.
+    :param source: Template path, named in error messages only.
+    :return: ``task_doc`` with sentinel values substituted.
+    :raises ValueError: the sentinel is present without ``network_volume``,
+        or ``network_volume`` is set but the template has no sentinel.
+    """
+    volumes = task_doc.get("volumes")
+    sentinel_keys = (
+        [k for k, v in volumes.items() if v == _NETWORK_VOLUME_SENTINEL]
+        if isinstance(volumes, dict)
+        else []
+    )
+    if sentinel_keys and network_volume is None:
+        raise ValueError(
+            f"compute template {source} mounts {_NETWORK_VOLUME_SENTINEL} but the "
+            "launch config does not set network_volume; set it to the SkyPilot "
+            "volume name for the target data center."
+        )
+    if network_volume is not None and not sentinel_keys:
+        raise ValueError(
+            f"launch config sets network_volume={network_volume!r} but compute "
+            f"template {source} has no {_NETWORK_VOLUME_SENTINEL} in its `volumes:` "
+            "mapping to substitute."
+        )
+    if isinstance(volumes, dict):
+        for key in sentinel_keys:
+            volumes[key] = network_volume
+    return task_doc
 
 
 def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:
@@ -695,6 +784,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     template_path = Path(sky_cfg.compute_template).expanduser().resolve()
     task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+    task_doc = _inject_network_volume(task_doc, sky_cfg.network_volume, source=template_path)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -730,6 +820,16 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "Expected access key id, secret access key, and endpoint URL."
         )
     worker_env.update(sky_cfg.extra_envs)
+
+    try:
+        operator_keys = _operator_ssh_pubkeys_b64(_operator_ssh_dir())
+    except (RuntimeError, OSError) as exc:
+        # Path.home() raises RuntimeError on hosts with no resolvable home
+        # (headless CI containers); a launch must survive that.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        operator_keys = ""
+    if operator_keys:
+        worker_env.setdefault("OPERATOR_SSH_PUBKEYS_B64", operator_keys)
 
     client_settings: SkypilotClientSettings | None = None
     if not sky_cfg.local:
@@ -831,8 +931,18 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     metavar="KEY VALUE",
     help="Worker environment entry; repeat to set multiple values.",
 )
+@click.option(
+    "--network-volume",
+    default=None,
+    metavar="NAME",
+    help="SkyPilot volume name overriding the config's network_volume.",
+)
 @click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
+def main(
+    launch_config: Path,
+    extra_env: tuple[tuple[str, str], ...],
+    network_volume: str | None,
+) -> None:
     """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
 
     Relative paths inside the config (``compute_template``, ``env_file``) are
@@ -840,6 +950,8 @@ def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
 
     :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
     :param extra_env: Worker environment entries that override config ``extra_envs``.
+    :param network_volume: Volume-name override; retargets the launch to another
+        data center's volume without editing the config.
     :raises click.ClickException: The config or worker environment fails validation.
     """
     try:
@@ -848,11 +960,15 @@ def main(launch_config: Path, extra_env: tuple[tuple[str, str], ...]) -> None:
             {
                 **sky_cfg.model_dump(),
                 "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
+                **({"network_volume": network_volume} if network_volume is not None else {}),
             }
         )
     except (ValueError, yaml.YAMLError) as exc:
         raise click.ClickException(str(exc)) from exc
-    dispatch_via_skypilot(sky_cfg)
+    try:
+        dispatch_via_skypilot(sky_cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 if __name__ == "__main__":

@@ -467,13 +467,45 @@ class TestDownloadDirNoOverwrite:
         assert (dest / "train.lance").read_text() == "train"
         assert (dest / "stats.npz").read_text() == "stats"
 
-    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
-        """A local-path source is rejected — caller must branch on is_r2_uri.
+    def test_lands_file_uri_tree_under_dest_dir(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Every file under a local URI is copied into ``dest_path``.
+
+        :param fake_r2_remote: Fixture that requires and configures the rclone binary.
+        :param tmp_path: Pytest tmp dir holding the source and destination trees.
+        """
+        source = tmp_path / "network volume"
+        source.mkdir()
+        (source / "train.lance").write_text("train")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite(source.as_uri(), dest)
+
+        assert (dest / "train.lance").read_text() == "train"
+
+    def test_file_uri_command_uses_decoded_local_path(self, tmp_path: Path) -> None:
+        """The file-URI branch reaches rclone without requiring an installed binary.
+
+        :param tmp_path: Pytest tmp dir used to form source and destination paths.
+        """
+        source = tmp_path / "network volume"
+        destination = tmp_path / "root"
+
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.download_dir_no_overwrite(source.as_uri(), destination)
+
+        args = mock_call.call_args[0][0]
+        assert str(source) in args
+        assert str(destination) in args
+
+    def test_rejects_unsupported_source_uri(self, tmp_path: Path) -> None:
+        """A source outside the R2 and local-file contracts is rejected.
 
         :param tmp_path: Pytest tmp dir used to build a local destination path.
         """
-        with pytest.raises(ValueError, match="not an r2:// URI"):
-            r2_io.download_dir_no_overwrite("local-dir", tmp_path / "root")
+        with pytest.raises(ValueError, match="r2:// or file://"):
+            r2_io.download_dir_no_overwrite("https://example.com/dataset", tmp_path / "root")
 
     def test_command_carries_immutable_and_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone verb + ``--immutable`` + reliability-flag set.
