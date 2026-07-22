@@ -24,3 +24,6 @@ download_dataset_row_limit: null
 # Identity flows from the root synth group (#2565); selecting a VST datamodule
 # without `synth=<name>` fails loudly at first resolution.
 param_spec_name: ${synth.param_spec_name}
+# Opt-in: sorts the spec's registered permutation-symmetric blocks (e.g.
+# surge_simple's oscillators) so point-regression targets are identifiable.
+canonicalize_symmetric_blocks: false

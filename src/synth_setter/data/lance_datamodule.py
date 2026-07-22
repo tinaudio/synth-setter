@@ -35,6 +35,10 @@ from synth_setter.data.lance_torch import (
     batch_to_shaped_tensors,
     map_dataloader_over,
 )
+from synth_setter.data.vst.param_canonicalization import (
+    CanonicalBlocks,
+    resolve_canonical_blocks,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
@@ -218,6 +222,7 @@ class PrepareBatchCollate:
         sketch_column: str | None = None,
         sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
+        canonical_blocks: CanonicalBlocks | None = None,
     ) -> None:
         """Configure model-batch transformation semantics.
 
@@ -232,6 +237,8 @@ class PrepareBatchCollate:
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
             or ``None`` to pass activations through unbinned.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
+        :param canonical_blocks: Symmetric block layout used to canonicalize parameters,
+            or ``None`` to preserve stored order.
         """
         self.mean = mean
         self.std = std
@@ -242,6 +249,7 @@ class PrepareBatchCollate:
         self.sketch_column = sketch_column
         self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
+        self.canonical_blocks = canonical_blocks
         self._rank = (
             torch.distributed.get_rank()
             if torch.distributed.is_available() and torch.distributed.is_initialized()
@@ -310,6 +318,7 @@ class PrepareBatchCollate:
             ot=self.ot,
             generator=self._live_generator(),
             sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
+            canonical_blocks=self.canonical_blocks,
         )
 
 
@@ -516,6 +525,7 @@ class LanceVSTDataModule(VSTDataModule):
         sketch: SketchControls = None,
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
+        canonicalize_symmetric_blocks: bool = False,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
         download_dataset_txids: dict[str, str] | None = None,
@@ -538,6 +548,8 @@ class LanceVSTDataModule(VSTDataModule):
             every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
+        :param canonicalize_symmetric_blocks: Whether every split canonicalizes the
+            selected spec's registered symmetric blocks.
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
@@ -564,6 +576,7 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
         )
         self.val_num_workers = val_num_workers
+        self.canonicalize_symmetric_blocks = canonicalize_symmetric_blocks
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
@@ -608,6 +621,7 @@ class LanceVSTDataModule(VSTDataModule):
         ot: bool,
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
+        canonical_blocks: CanonicalBlocks | None,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
@@ -615,6 +629,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param ot: Whether to match batch noise to parameters.
         :param read_audio: Whether to project prediction audio.
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
+        :param canonical_blocks: Symmetric block layout used to canonicalize parameters,
+            or ``None`` to preserve stored order.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
@@ -641,6 +657,7 @@ class LanceVSTDataModule(VSTDataModule):
                 preserve_legacy_m2l=(
                     isinstance(self.conditioning, str) and self.conditioning == "m2l"
                 ),
+                canonical_blocks=canonical_blocks,
             ),
         )
 
@@ -680,6 +697,11 @@ class LanceVSTDataModule(VSTDataModule):
                     and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
+        canonical_blocks = (
+            resolve_canonical_blocks(self.param_spec_name)
+            if self.canonicalize_symmetric_blocks
+            else None
+        )
         shard_paths = {
             "train": train_shard,
             "val": self.dataset_root / f"val{self.shard_suffix}",
@@ -692,6 +714,7 @@ class LanceVSTDataModule(VSTDataModule):
                 ot=self.ot if name == "train" else False,
                 read_audio=name == "predict",
                 stats=predict_stats if name == "predict" else split_stats,
+                canonical_blocks=canonical_blocks,
             )
             for name in split_names
         }

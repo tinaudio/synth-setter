@@ -1,0 +1,129 @@
+"""Canonicalize permutation-symmetric parameter blocks in encoded param rows.
+
+Some specs contain interchangeable module blocks (e.g. ``surge_simple``'s three
+oscillators) whose permutation leaves the rendered audio unchanged, which makes
+point regression on raw rows ill-posed (#1886). Sorting the blocks into a
+deterministic order picks one orbit representative so targets become
+identifiable. Applied per batch by :func:`~synth_setter.data.vst_datamodule.prepare_batch`.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sized
+from dataclasses import dataclass
+from typing import cast
+
+import numpy as np
+
+from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
+
+# Registered symmetric block groups: prefixes naming the interchangeable
+# blocks, plus the within-block param suffix to sort by. surge_simple's LFO
+# blocks are deliberately absent — they are routed differently and are not
+# render-invariant under permutation (measured on #1886).
+SYMMETRIC_BLOCK_REGISTRY: dict[ParamSpecName, tuple[tuple[str, ...], str]] = {
+    ParamSpecName("surge_simple"): (("a_osc_1_", "a_osc_2_", "a_osc_3_"), "volume"),
+}
+
+
+@dataclass(frozen=True)
+class CanonicalBlocks:
+    """Encoded-dim layout of one symmetric block group.
+
+    .. attribute :: indices
+
+        Per-block encoded-dim index tuples, congruent across blocks: position
+        ``j`` refers to the same param suffix in every block.
+
+    .. attribute :: key_offset
+
+        Within-block position of the sort key; blocks are ordered by
+        descending value at this offset.
+    """
+
+    indices: tuple[tuple[int, ...], ...]
+    key_offset: int
+
+
+def block_indices_by_prefix(
+    spec: ParamSpec, prefixes: tuple[str, ...], key_suffix: str
+) -> CanonicalBlocks:
+    """Derive aligned encoded-dim blocks for ``prefixes`` from ``spec``.
+
+    :param spec: Param spec whose synth params are scanned in encoding order.
+    :param prefixes: One name prefix per interchangeable block.
+    :param key_suffix: Suffix of the within-block param to sort blocks by.
+    :returns: Suffix-aligned block indices and the sort-key offset.
+    :raises ValueError: If a prefix matches no params, the per-prefix suffix
+        sequences differ, or ``key_suffix`` is not among them.
+    """
+    offsets: dict[str, int] = {}
+    widths: dict[str, int] = {}
+    pointer = 0
+    for param in spec.synth_params:
+        # Parameter subclasses all define __len__ (encoded width); the base
+        # class carries no Sized annotation, so go through cast for pyright.
+        width = len(cast(Sized, param))
+        offsets[param.name] = pointer
+        widths[param.name] = width
+        pointer += width
+
+    suffix_orders = []
+    for prefix in prefixes:
+        matched = [n for n in offsets if n.startswith(prefix)]
+        if not matched:
+            raise ValueError(f"prefix {prefix!r} matches no synth params in the spec")
+        wide = [n for n in matched if widths[n] != 1]
+        if wide:
+            raise ValueError(f"non-scalar params cannot form canonical blocks: {wide}")
+        suffix_orders.append([n.removeprefix(prefix) for n in matched])
+    first = suffix_orders[0]
+    if any(order != first for order in suffix_orders[1:]):
+        raise ValueError(f"blocks {prefixes!r} have mismatched param suffix sequences")
+    if key_suffix not in first:
+        raise ValueError(f"key_suffix {key_suffix!r} is not a param suffix of {prefixes[0]!r}")
+
+    indices = tuple(
+        tuple(offsets[prefix + suffix] for suffix in first) for prefix in prefixes
+    )
+    return CanonicalBlocks(indices=indices, key_offset=first.index(key_suffix))
+
+
+def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarray:
+    """Reorder each row's symmetric blocks by descending sort-key value.
+
+    Stable: rows whose blocks are already in descending key order (including
+    ties) come back unchanged. Dims outside ``blocks`` are untouched.
+
+    :param params: ``(batch, num_params)`` encoded rows; not mutated.
+    :param blocks: Block layout to sort within each row.
+    :returns: New array with each row's blocks in canonical order.
+    """
+    out = params.copy()
+    block_index_matrix = np.array(blocks.indices)
+    keys = params[:, block_index_matrix[:, blocks.key_offset]]
+    # kind="stable" keeps the original block order on ties; negation gives
+    # the descending order np.argsort cannot express stably on its own.
+    order = np.argsort(-keys, axis=1, kind="stable")
+    gathered = params[:, block_index_matrix]
+    sorted_blocks = np.take_along_axis(gathered, order[:, :, None], axis=1)
+    out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(len(params), -1)
+    return out
+
+
+def resolve_canonical_blocks(param_spec_name: ParamSpecName) -> CanonicalBlocks:
+    """Resolve the registered symmetric block layout for one spec.
+
+    :param param_spec_name: Registry key naming the spec.
+    :returns: The spec's canonical block layout.
+    :raises KeyError: If the spec has no registered symmetric blocks.
+    """
+    if param_spec_name not in SYMMETRIC_BLOCK_REGISTRY:
+        raise KeyError(
+            f"no symmetric blocks registered for param spec {param_spec_name!r}; "
+            f"known: {sorted(SYMMETRIC_BLOCK_REGISTRY)}"
+        )
+    prefixes, key_suffix = SYMMETRIC_BLOCK_REGISTRY[param_spec_name]
+    return block_indices_by_prefix(resolve_param_spec(param_spec_name), prefixes, key_suffix)

@@ -21,6 +21,7 @@ from synth_setter.conditioning import (
     resolve_sketch_controls,
 )
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.param_canonicalization import CanonicalBlocks, canonicalize_blocks
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
@@ -107,6 +108,7 @@ def prepare_batch(
     ot: bool,
     generator: torch.Generator,
     sketch_pitch_zero_threshold: float | None = None,
+    canonical_blocks: CanonicalBlocks | None = None,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
 
@@ -118,6 +120,8 @@ def prepare_batch(
     :param generator: RNG for the noise draw.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
+    :param canonical_blocks: Symmetric block layout used to canonicalize parameters,
+        or ``None`` to preserve stored order.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
         modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
         as ``music2latent`` is under ``m2l``.
@@ -170,6 +174,8 @@ def prepare_batch(
         sketch = None
 
     param_array = raw["param_array"]
+    if canonical_blocks is not None:
+        param_array = canonicalize_blocks(param_array, canonical_blocks)
     if rescale_params:
         param_array = param_array * 2 - 1
     params = torch.from_numpy(param_array).to(dtype=torch.float32)
