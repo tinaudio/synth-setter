@@ -26,6 +26,18 @@ def _run_text(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _run_as_dev_text(*args: str) -> str:
+    """Run command argv with the dev user's home and return normalized stdout.
+
+    :param *args: Command executed as ``dev`` in either published image variant.
+    :returns: Normalized stdout value used for image-contract assertions.
+    """
+    command = ("env", "HOME=/home/dev", *args)
+    if _run_text("whoami") == "root":
+        command = ("runuser", "-u", "dev", "--", *command)
+    return _run_text(*command)
+
+
 @pytest.mark.docker_smoke
 @pytest.mark.skipif(
     not _RUN_DEVCONTAINER_SMOKE,
@@ -61,6 +73,29 @@ def test_codex_sandbox_prerequisites_available() -> None:
         str(user_codex),
         "--version",
     )
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_doom_emacs_available() -> None:
+    """Validate the dev user's initialized Doom installation and dependencies."""
+    doom_version = _run_as_dev_text(
+        "emacs",
+        "--batch",
+        "--load",
+        "/home/dev/.config/emacs/early-init.el",
+        "--eval",
+        "(princ doom-version)",
+    )
+
+    assert doom_version.endswith("2.2.0")
+    assert _run_as_dev_text("doom", "version", "--short") == "2.2.0"
+    assert _run_as_dev_text("fd", "--version").startswith("fdfind ")
+    assert _run_as_dev_text("rg", "--version").startswith("ripgrep ")
+    assert Path("/home/dev/.config/doom/init.el").is_file()
 
 
 @pytest.mark.docker_smoke
