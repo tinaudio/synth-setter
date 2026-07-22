@@ -1292,9 +1292,7 @@ def cfg_surge_fake_train(
     GlobalHydra.instance().clear()
 
 
-# SAME live-e2e checkpoints: the public HF repos (no R2 credentials — the sibling
-# test_same_encoder_e2e.py loads SAME-S the same way) so the lane runs on a fresh
-# clone. The endpoint reads only the checkpoint matching its ``same_variants``.
+# Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
 _SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
     "same_s": "stabilityai/SAME-S",
     "same_l": "stabilityai/SAME-L",

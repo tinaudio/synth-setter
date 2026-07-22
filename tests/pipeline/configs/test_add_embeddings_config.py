@@ -275,6 +275,15 @@ def _fake_same(fill: float) -> SameEncodeFn:
     return encode
 
 
+def _same_fill_for(checkpoint: str) -> float:
+    """Map a SAME checkpoint to a distinct stub fill so a mis-routed column is caught.
+
+    :param checkpoint: The per-variant checkpoint the endpoint passed the loader.
+    :returns: ``0.25`` for the SAME-S checkpoint, ``0.75`` otherwise (SAME-L).
+    """
+    return 0.25 if checkpoint == DEFAULT_SAME_S_CHECKPOINT else 0.75
+
+
 @pytest.mark.slow
 def test_add_embeddings_main_writes_same_columns_through_hydra_shell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -288,7 +297,7 @@ def test_add_embeddings_main_writes_same_columns_through_hydra_shell(
     _write_audio_shard(uri)
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
-        lambda checkpoint, device=None: _fake_same(float(len(checkpoint))),
+        lambda checkpoint, device=None: _fake_same(_same_fill_for(checkpoint)),
     )
     monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
     monkeypatch.setattr(
@@ -309,3 +318,63 @@ def test_add_embeddings_main_writes_same_columns_through_hydra_shell(
     assert {SAME_S_FIELD, SAME_L_FIELD} <= names
     # The SAME path must not also write the m2l+clap columns.
     assert not ({M2L_FIELD, CLAP_FIELD} & names)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("variant", "present", "absent", "checkpoint"),
+    [
+        ("s", SAME_S_FIELD, SAME_L_FIELD, DEFAULT_SAME_S_CHECKPOINT),
+        ("l", SAME_L_FIELD, SAME_S_FIELD, DEFAULT_SAME_L_CHECKPOINT),
+    ],
+)
+def test_add_embeddings_main_single_same_variant_writes_only_that_column(
+    variant: str,
+    present: str,
+    absent: str,
+    checkpoint: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single ``same_variants`` entry writes only its column, loaded from its checkpoint.
+
+    Guards the per-variant dispatch: a regression that ignored ``same_variants`` and
+    always wrote both SAME columns (or loaded the wrong checkpoint) would fail here.
+    The stub fill is keyed on the checkpoint, so the written column also proves the
+    matching checkpoint fed the matching column.
+
+    :param variant: The single SAME variant token requested (``"s"``/``"l"``).
+    :param present: The column that must land.
+    :param absent: The sibling SAME column that must not land.
+    :param checkpoint: The checkpoint the requested variant resolves to.
+    :param tmp_path: Scratch dir for the shard and the Hydra run dir.
+    :param monkeypatch: Swaps the real SAME encoder loader for a fake and pins argv.
+    """
+    uri = tmp_path / "same_single.lance"
+    _write_audio_shard(uri)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
+        lambda checkpoint, device=None: _fake_same(_same_fill_for(checkpoint)),
+    )
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-add-embeddings",
+            f"lance_uri={uri}",
+            f"same_variants=[{variant}]",
+            f"paths.log_dir={tmp_path}",
+            f"hydra.run.dir={tmp_path / 'run'}",
+        ],
+    )
+
+    main()
+
+    dataset = lance.dataset(str(uri))
+    names = set(dataset.schema.names)
+    assert present in names
+    assert absent not in names
+    assert not ({M2L_FIELD, CLAP_FIELD} & names)
+    values = dataset.to_table(columns=[present]).combine_chunks().column(present).chunk(0)
+    assert float(values.to_numpy_ndarray().flat[0]) == _same_fill_for(checkpoint)
