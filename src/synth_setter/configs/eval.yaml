@@ -13,6 +13,9 @@ defaults:
   # `render` before `experiment` (matching train.yaml/dataset.yaml): Hydra only
   # lets an experiment override groups declared ahead of it.
   - render: null
+  # embedding-conditioning profiles pairing a stored Lance column with its
+  # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
+  - conditioning: null
   - experiment: null
 
 task_name: "eval"

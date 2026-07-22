@@ -263,6 +263,41 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     assert cfg.model.vector_field.conditioning_dim == 512
 
 
+def _conditioning_profile_names() -> list[str]:
+    """Enumerate the ``conditioning/`` Hydra group options from the config dir.
+
+    :returns: Sorted profile names (yaml stems) currently shipped in the group.
+    """
+    return sorted(
+        entry.name.removesuffix(".yaml")
+        for entry in (configs_dir() / "conditioning").iterdir()
+        if entry.name.endswith(".yaml")
+    )
+
+
+@pytest.mark.parametrize("profile", _conditioning_profile_names())
+def test_eval_config_conditioning_profile_composes(profile: str) -> None:
+    """Regression guard for #2304: eval.yaml accepts every ``conditioning=`` profile.
+
+    :param profile: Conditioning profile under test.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
+    )
+
+    assert cfg.model.conditioning.column == profile
+    assert cfg.datamodule.conditioning.column == profile
+
+
+def test_eval_config_conditioning_unset_composes() -> None:
+    """eval.yaml still composes when the ``conditioning`` group is left at null."""
+    cfg = _compose("eval.yaml", ["experiment=surge/flow_simple", "trainer=cpu"])
+
+    assert cfg.datamodule
+    assert cfg.model
+
+
 @pytest.mark.parametrize(
     "model_name",
     ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],
