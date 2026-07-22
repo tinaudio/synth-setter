@@ -843,9 +843,11 @@ def _add_same_embeddings(
 ) -> None:
     """Load the SAME encoders named by ``config.same_variants`` and append their columns.
 
-    The SAME analogue of the m2l+clap body of :func:`add_embeddings`: builds one
-    checkpoint-backed encoder per requested variant and delegates the write to
-    :func:`add_same_embeddings`. SAME latents are sequences, so no index is built.
+    The SAME analogue of the m2l+clap body of :func:`add_embeddings`. Each variant
+    is loaded, written, and released before the next, so the two multi-GB SAME
+    models are never resident together (both at once OOMs a modest GPU). Every
+    variant is a separate :func:`add_same_embeddings` commit; SAME latents are
+    sequences, so no index is built.
 
     :param config: Validated run knobs; ``same_variants`` selects the columns and
         ``same_s_checkpoint`` / ``same_l_checkpoint`` their weights.
@@ -869,19 +871,37 @@ def _add_same_embeddings(
         rows=dataset.count_rows(),
         batch_size=config.batch_size,
     )
-    encoders = {
-        field: load_same_audio_encoder(checkpoint, config.device)
-        for field, checkpoint in checkpoints.items()
-    }
-    add_same_embeddings(
-        dataset,
-        encoders,
-        sample_rate,
-        batch_size=config.batch_size,
-        resume_cache=config.resume_cache,
-        log_every_batch=config.debug,
-    )
+    for field, checkpoint in checkpoints.items():
+        encoder = load_same_audio_encoder(checkpoint, config.device)
+        add_same_embeddings(
+            dataset,
+            {field: encoder},
+            sample_rate,
+            batch_size=config.batch_size,
+            resume_cache=_variant_resume_cache(config.resume_cache, field, len(checkpoints)),
+            log_every_batch=config.debug,
+        )
+        # Drop the model before the next variant loads so both are never resident.
+        del encoder
     logger.info("added_embeddings", uri=config.lance_uri, columns=sorted(checkpoints))
+
+
+def _variant_resume_cache(resume_cache: Path | None, field: str, num_variants: int) -> Path | None:
+    """Per-variant resume-cache path, since each variant is its own UDF commit.
+
+    A shared cache across variants would replay one column's batches into the
+    next (different output schema); suffix the path per column when more than one
+    variant runs. A single-variant run keeps the caller's path unchanged.
+
+    :param resume_cache: Caller's resume cache, or ``None`` for cacheless runs.
+    :param field: The SAME column being written this pass.
+    :param num_variants: Count of variants in the run.
+    :returns: ``resume_cache`` unchanged for a single variant or ``None``, else a
+        per-``field`` sibling path.
+    """
+    if resume_cache is None or num_variants == 1:
+        return resume_cache
+    return resume_cache.with_name(f"{resume_cache.name}.{field}")
 
 
 def _open_lance_dataset(uri: str) -> lance.LanceDataset:

@@ -8,8 +8,8 @@ fixed-shape Lance column contract are what these tests pin.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import lance
 import numpy as np
@@ -72,7 +72,11 @@ def _audio_dataset(uri: Path, rows: int, *, channels: int = 2) -> np.ndarray:
 
 
 def _run_udf_in_process(
-    dataset: lance.LanceDataset, udf: Any, *, read_columns: list[str], batch_size: int
+    dataset: lance.LanceDataset,
+    udf: Callable[[pa.RecordBatch], pa.RecordBatch],
+    *,
+    read_columns: list[str],
+    batch_size: int,
 ) -> None:
     """Run a Lance batch UDF synchronously for deterministic log assertions.
 
