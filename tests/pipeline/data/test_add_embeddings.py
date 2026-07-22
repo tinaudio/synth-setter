@@ -19,7 +19,6 @@ import numpy as np
 import pyarrow as pa
 import pytest
 import torch
-from click.testing import CliRunner
 from structlog.testing import capture_logs
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, PARAM_ARRAY_FIELD
@@ -30,13 +29,14 @@ from synth_setter.pipeline.data.add_embeddings import (
     M2LEncodeFn,
     _configure_lance_logging,
     _downmix_to_mono,
+    _write_embeddings,
     add_embeddings,
     build_clap_index,
     embeddings_record_batch,
     load_clap_audio_encoder,
     load_m2l_audio_encoder,
-    main,
 )
+from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 
@@ -257,7 +257,7 @@ def test_add_embeddings_writes_searchable_columns_and_keeps_params(tmp_path: Pat
     uri = str(tmp_path / "smoke.lance")
     audio = _audio_dataset(uri, 6, with_params=True)
 
-    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
     table = lance.dataset(uri).to_table()
     assert set(table.column_names) == {AUDIO_FIELD, PARAM_ARRAY_FIELD, M2L_FIELD, CLAP_FIELD}
@@ -290,7 +290,7 @@ def test_add_embeddings_default_bounds_batches_and_logs_progress(
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             recording_m2l,
             _fake_clap,
@@ -326,7 +326,7 @@ def test_add_embeddings_progress_reports_per_stage_timings(
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             _fake_m2l,
             _fake_clap,
@@ -353,7 +353,7 @@ def test_add_embeddings_log_every_batch_reports_each_batch(
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             _fake_m2l,
             _fake_clap,
@@ -388,7 +388,7 @@ def test_add_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(
 
     # Lance surfaces UDF exceptions wrapped as OSError("Invalid user input: ...").
     with pytest.raises(OSError, match="simulated crash"):
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             crash_on_third_batch,
             _fake_clap,
@@ -402,7 +402,7 @@ def test_add_embeddings_resume_cache_resumes_interrupted_run_without_reencoding(
         second_run_rows.append(len(batch_audio))
         return _fake_m2l(batch_audio)
 
-    add_embeddings(
+    _write_embeddings(
         lance.dataset(uri),
         recording_m2l,
         _fake_clap,
@@ -439,7 +439,7 @@ def test_add_embeddings_resume_cache_cleanup_failure_does_not_fail_run(
 
     monkeypatch.setattr(Path, "unlink", deny_unlink)
     with capture_logs() as logs:
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             _fake_m2l,
             _fake_clap,
@@ -461,7 +461,7 @@ def test_add_embeddings_rejects_non_positive_batch_size(tmp_path: Path) -> None:
     _audio_dataset(uri, 1)
 
     with pytest.raises(ValueError, match="batch_size must be >= 1"):
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri),
             _fake_m2l,
             _fake_clap,
@@ -483,7 +483,7 @@ def test_add_embeddings_rejects_empty_dataset(tmp_path: Path) -> None:
     lance.write_dataset(pa.table({AUDIO_FIELD: audio}), uri)
 
     with pytest.raises(ValueError, match="no rows"):
-        add_embeddings(
+        _write_embeddings(
             lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False
         )
 
@@ -493,7 +493,7 @@ def test_add_embeddings_builds_ivf_pq_index_on_clap(tmp_path: Path) -> None:
     uri = str(tmp_path / "indexed.lance")
     _audio_dataset(uri, 300)
 
-    add_embeddings(
+    _write_embeddings(
         lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=True, num_partitions=4
     )
 
@@ -521,7 +521,7 @@ def test_clap_exact_search_returns_queried_row_as_top_hit(tmp_path: Path) -> Non
 
     # _distinct_clap gives every row a unique vector, so the exact nearest of a
     # stored vector is unambiguously its own row.
-    add_embeddings(lance.dataset(uri), _fake_m2l, _distinct_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _distinct_clap, _SAMPLE_RATE, build_index=False)
 
     dataset = lance.dataset(uri)
     stored = dataset.to_table(columns=[CLAP_FIELD, PARAM_ARRAY_FIELD])
@@ -542,7 +542,7 @@ def test_clap_exact_search_returns_queried_row_as_top_hit(tmp_path: Path) -> Non
 def test_build_clap_index_skips_when_too_few_rows(tmp_path: Path) -> None:
     uri = str(tmp_path / "tiny.lance")
     _audio_dataset(uri, 8)
-    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
     built = build_clap_index(lance.dataset(uri))
 
@@ -561,7 +561,7 @@ def test_add_embeddings_rejects_dataset_without_audio_column(tmp_path: Path) -> 
     write_lance_shard(Path(uri), {PARAM_ARRAY_FIELD: rng.random((4, 3)).astype(np.float32)})
 
     with pytest.raises(ValueError, match="no 'audio' column"):
-        add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+        _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
 
 @pytest.mark.slow
@@ -572,7 +572,7 @@ def test_build_clap_index_rejects_num_sub_vectors_not_dividing_dim(tmp_path: Pat
     """
     uri = str(tmp_path / "indivisible.lance")
     _audio_dataset(uri, 8)
-    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
     # 7 does not divide 512; reject before any index/training work begins.
     with pytest.raises(ValueError, match="does not divide clap dim"):
@@ -588,7 +588,7 @@ def test_build_clap_index_rejects_non_positive_index_params(tmp_path: Path) -> N
     """
     uri = str(tmp_path / "badparams.lance")
     _audio_dataset(uri, 8)
-    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
     with pytest.raises(ValueError, match="num_sub_vectors must be >= 1"):
         build_clap_index(lance.dataset(uri), num_sub_vectors=0)
@@ -602,10 +602,10 @@ def test_build_clap_index_rejects_non_positive_index_params(tmp_path: Path) -> N
 def test_add_embeddings_rejects_rerun_when_columns_already_exist(tmp_path: Path) -> None:
     uri = str(tmp_path / "twice.lance")
     _audio_dataset(uri, 6)
-    add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+    _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
     with pytest.raises(ValueError, match="already has embedding column"):
-        add_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
+        _write_embeddings(lance.dataset(uri), _fake_m2l, _fake_clap, _SAMPLE_RATE, build_index=False)
 
 
 @pytest.mark.parametrize(
@@ -700,20 +700,14 @@ def test_load_clap_audio_encoder_defaults_to_mps_when_available(
     assert selected_devices == ["mps"]
 
 
-@pytest.mark.slow
-def test_main_resume_cache_option_completes_and_cleans_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The CLI ``--resume-cache`` run writes both columns and removes the cache.
+def _inject_fake_loaders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace both checkpoint-backed encoder loaders with the fakes.
 
-    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
-    :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
+    Keeps the config-driven endpoint tests off the network — the real m2l/CLAP checkpoints need
+    downloads + a GPU (covered by the real-VST e2e suite).
+
+    :param monkeypatch: Fixture used to swap the module-level loaders.
     """
-    spec = build_lance_smoke_spec()
-    uri = tmp_path / "resume-cli.lance"
-    write_minimal_lance_shard(uri, spec)
-    resume_cache = tmp_path / "resume-cli.cache"
-
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
         lambda device=None: _fake_m2l,
@@ -723,21 +717,35 @@ def test_main_resume_cache_option_completes_and_cleans_up(
         lambda checkpoint, device=None: _fake_clap,
     )
 
-    result = CliRunner().invoke(
-        main,
-        [str(uri), "--resume-cache", str(resume_cache), "--no-build-index"],
+
+@pytest.mark.slow
+def test_add_embeddings_endpoint_resume_cache_completes_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``resume_cache`` endpoint run writes both columns and removes the cache.
+
+    :param tmp_path: Pytest-provided scratch directory for dataset + resume cache.
+    :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
+    """
+    spec = build_lance_smoke_spec()
+    uri = tmp_path / "resume-endpoint.lance"
+    write_minimal_lance_shard(uri, spec)
+    resume_cache = tmp_path / "resume-endpoint.cache"
+    _inject_fake_loaders(monkeypatch)
+
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), build_index=False, resume_cache=resume_cache)
     )
 
-    assert result.exit_code == 0, result.output
     assert not resume_cache.exists()
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
 @pytest.mark.slow
-def test_main_threads_device_and_debug_options_to_embedding_run(
+def test_add_embeddings_endpoint_threads_device_and_debug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLI device and debug overrides control encoders and batch telemetry.
+    """The endpoint threads ``device`` to both loaders and ``debug`` to per-batch logging.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
     :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
@@ -762,26 +770,28 @@ def test_main_threads_device_and_debug_options_to_embedding_run(
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder", load_clap
     )
-    # Guard: --debug mutates LANCE_LOG in-process; monkeypatch restores it.
-    monkeypatch.setenv("LANCE_LOG", "warn")
 
     with capture_logs() as logs:
-        result = CliRunner().invoke(
-            main,
-            [str(uri), "--debug", "--device", "mps", "--no-build-index"],
+        add_embeddings(
+            AddEmbeddingsConfig(
+                lance_uri=str(uri), device="mps", build_index=False, debug=True
+            )
         )
 
-    assert result.exit_code == 0, result.output
-    assert os.environ["LANCE_LOG"] == "debug"
     assert any(entry["event"] == "embedding_progress" for entry in logs)
     assert selected_devices == [("m2l", "mps"), ("clap", "mps")]
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
 @pytest.mark.slow
-def test_main_adds_embeddings_using_sample_rate_from_metadata(
+def test_add_embeddings_endpoint_uses_sample_rate_from_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The endpoint reads the audio sample rate from shard metadata and threads it to CLAP.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Fixture used to replace checkpoint-backed encoders.
+    """
     spec = build_lance_smoke_spec()
     uri = tmp_path / "shard.lance"
     write_minimal_lance_shard(uri, spec)
@@ -792,7 +802,6 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
         seen_sample_rate.append(sample_rate)
         return _fake_clap(mono, sample_rate)
 
-    # Loaders injected: the real encoders need checkpoints + a GPU (see the notebook).
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
         lambda device=None: _fake_m2l,
@@ -802,9 +811,8 @@ def test_main_adds_embeddings_using_sample_rate_from_metadata(
         lambda checkpoint, device=None: clap_recording_sr,
     )
 
-    result = CliRunner().invoke(main, [str(uri), "--no-build-index"])
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), build_index=False))
 
-    assert result.exit_code == 0, result.output
     assert seen_sample_rate
     assert all(sr == int(spec.render.sample_rate) for sr in seen_sample_rate)
     assert {M2L_FIELD, CLAP_FIELD} <= set(lance.dataset(str(uri)).schema.names)
@@ -855,23 +863,11 @@ def test_configure_lance_logging_debug_enables_native_debug(
     assert os.environ["LANCE_LOG"] == "debug"
 
 
-def test_main_exposes_batch_and_index_tuning_options() -> None:
-    """The CLI documents its bounded batch default and IVF_PQ tuning flags."""
-    result = CliRunner().invoke(main, ["--help"])
-
-    assert result.exit_code == 0, result.output
-    assert "--batch-size" in result.output
-    assert "--debug" in result.output
-    assert "128" in result.output
-    for flag in ("--num-partitions", "--num-sub-vectors", "--metric"):
-        assert flag in result.output
-
-
 @pytest.mark.slow
-def test_main_threads_index_tuning_options_into_build(
+def test_add_embeddings_endpoint_threads_index_tuning_into_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The CLI's index-tuning flags reach ``build_clap_index`` unchanged.
+    """The config's index-tuning knobs reach ``build_clap_index`` unchanged.
 
     :param tmp_path: Pytest-provided scratch directory for the dataset.
     :param monkeypatch: Fixture used to inject fake encoders + a spy index builder.
@@ -894,42 +890,44 @@ def test_main_threads_index_tuning_options_into_build(
         )
         return False
 
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
-        lambda device=None: _fake_m2l,
-    )
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
-        lambda checkpoint, device=None: _fake_clap,
-    )
+    _inject_fake_loaders(monkeypatch)
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.build_clap_index", spy_build_clap_index
     )
 
-    result = CliRunner().invoke(
-        main,
-        [str(uri), "--num-partitions", "4", "--num-sub-vectors", "8", "--metric", "l2"],
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), num_partitions=4, num_sub_vectors=8, metric="l2"
+        )
     )
 
-    assert result.exit_code == 0, result.output
     assert captured == {"num_partitions": 4, "num_sub_vectors": 8, "metric": "l2"}
 
 
-def test_main_exits_1_when_open_fails_with_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A cloud-creds RuntimeError from the open path must exit 1 cleanly, not traceback.
+def test_add_embeddings_endpoint_propagates_open_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cloud-creds ``RuntimeError`` from the open path propagates (``main`` maps it to exit 1).
+
+    :param monkeypatch: Fixture used to break the dataset-open path.
+    """
+
     def boom(uri: str) -> object:
         raise RuntimeError("missing R2 credentials")
 
     monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings._open_lance_dataset", boom)
 
-    result = CliRunner().invoke(main, ["s3://bucket/missing.lance"])
-
-    assert result.exit_code == 1
-    assert result.exception is None or isinstance(result.exception, SystemExit)
+    with pytest.raises(RuntimeError, match="missing R2 credentials"):
+        add_embeddings(AddEmbeddingsConfig(lance_uri="s3://bucket/missing.lance"))
 
 
 @pytest.mark.slow
-def test_main_exits_1_when_add_step_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_add_embeddings_endpoint_propagates_loader_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure loading an encoder propagates and leaves the dataset unaugmented.
+
+    :param tmp_path: Pytest-provided scratch directory for the dataset.
+    :param monkeypatch: Fixture used to break the m2l loader.
+    """
     spec = build_lance_smoke_spec()
     uri = tmp_path / "shard.lance"
     write_minimal_lance_shard(uri, spec)
@@ -938,11 +936,8 @@ def test_main_exits_1_when_add_step_fails(tmp_path: Path, monkeypatch: pytest.Mo
         del device
         raise RuntimeError("encoder load blew up")
 
-    # Dataset opens fine; a failure in the encode/add step must still exit 1 cleanly.
     monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder", boom)
 
-    result = CliRunner().invoke(main, [str(uri)])
-
-    assert result.exit_code == 1
-    assert result.exception is None or isinstance(result.exception, SystemExit)
+    with pytest.raises(RuntimeError, match="encoder load blew up"):
+        add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri)))
     assert {M2L_FIELD, CLAP_FIELD}.isdisjoint(lance.dataset(str(uri)).schema.names)
