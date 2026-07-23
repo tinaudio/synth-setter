@@ -225,18 +225,13 @@ def build_sky_task(
     volumes = resolve_volumes(compute, network_volume)
     setup = "".join(load_compute_script(script) for script in compute.setup_scripts)
 
-    if compute.image_delivery == "docker-in-run" or worker_image is None:
-        image_ids: list[str | None] = [
-            None if compute.image_delivery == "docker-in-run" else entry.image_id
-            for entry in compute.resources
-        ]
-    else:
-        image_ids = [f"docker:{worker_image}"] * len(compute.resources)
+    def image_id_for(entry: ComputeResources) -> str | None:
+        if compute.image_delivery == "docker-in-run":
+            return None
+        return f"docker:{worker_image}" if worker_image is not None else entry.image_id
 
     resources_list = [
-        res
-        for entry, image_id in zip(compute.resources, image_ids, strict=True)
-        for res in _sky_resources(entry, image_id)
+        res for entry in compute.resources for res in _sky_resources(entry, image_id_for(entry))
     ]
 
     task = sky.Task(
