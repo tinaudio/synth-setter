@@ -19,18 +19,26 @@ from pydantic import BaseModel, Field, model_validator
 if __package__:
     from agent._shared.pi_review_routing import (
         PINNED_REVIEW_MODELS,
+        ReviewWorktree,
         WorkerFinding,
         WorkerReport,
+        cleanup_review_worktree_if_present,
         extract_report,
+        load_review_worktree,
         parse_worker_report,
+        review_worktree_sidecar,
     )
 else:
     from pi_review_routing import (
         PINNED_REVIEW_MODELS,
+        ReviewWorktree,
         WorkerFinding,
         WorkerReport,
+        cleanup_review_worktree_if_present,
         extract_report,
+        load_review_worktree,
         parse_worker_report,
+        review_worktree_sidecar,
     )
 
 _AFTERCARE_MODEL = "gpt-5.6-terra"
@@ -172,6 +180,10 @@ class AftercareManifest(BaseModel, strict=True, extra="forbid"):
     .. attribute :: foreground_fingerprints
 
         Stable identities of findings already delivered.
+
+    .. attribute :: review_worktree
+
+        Validated disposable checkout owned by foreground or aftercare cleanup.
     """
 
     version: Literal[1]
@@ -183,6 +195,18 @@ class AftercareManifest(BaseModel, strict=True, extra="forbid"):
     target: str = Field(min_length=1)
     deferred_passes: tuple[DeferredPass, ...] = Field(min_length=1)
     foreground_fingerprints: tuple[str, ...]
+    review_worktree: ReviewWorktree | None = None
+
+    @model_validator(mode="after")
+    def _require_reviewed_worktree_head(self) -> AftercareManifest:
+        """Reject a disposable checkout pinned to a different review head.
+
+        :returns: Validated aftercare handoff.
+        :raises ValueError: If checkout and manifest HEADs differ.
+        """
+        if self.review_worktree is not None and self.review_worktree.head_sha != self.head_sha:
+            raise ValueError("Aftercare review worktree HEAD does not match the reviewed head")
+        return self
 
 
 class AftercareAttempt(BaseModel, strict=True, extra="forbid"):
@@ -380,6 +404,28 @@ def load_manifest(path: Path) -> AftercareManifest:
     if not resolved.is_relative_to(review_dir):
         raise ValueError("Aftercare manifest must be under .agent-reviews")
     return AftercareManifest.model_validate_json(resolved.read_text())
+
+
+def _manifest_review_worktree(
+    manifest_path: Path,
+    manifest: AftercareManifest,
+) -> ReviewWorktree | None:
+    """Match strict manifest metadata to the prepared Git worktree sidecar.
+
+    :param manifest_path: Foreground manifest path.
+    :param manifest: Strict aftercare handoff.
+    :returns: Validated disposable checkout, or ``None`` for a legacy handoff.
+    :raises ValueError: If prepared ownership is absent or inconsistent.
+    """
+    has_sidecar = review_worktree_sidecar(manifest_path).exists()
+    if manifest.review_worktree is None:
+        if has_sidecar:
+            raise ValueError("Aftercare manifest omits prepared review worktree metadata")
+        return None
+    prepared = load_review_worktree(manifest_path)
+    if prepared != manifest.review_worktree:
+        raise ValueError("Aftercare manifest review worktree metadata differs from its sidecar")
+    return prepared
 
 
 def build_command(manifest_path: Path, adopted_passes: tuple[DeferredPass, ...] = ()) -> list[str]:
@@ -801,10 +847,12 @@ def supervise_aftercare(manifest_path: Path) -> int:
     """
     paths = _supervisor_paths(manifest_path)
     manifest: AftercareManifest | None = None
+    review_worktree: ReviewWorktree | None = None
     attempts: tuple[AftercareAttempt, ...] = ()
     result: AftercareResult | None = None
     try:
         manifest = load_manifest(manifest_path)
+        review_worktree = _manifest_review_worktree(manifest_path, manifest)
         ownership = _plan_ownership(manifest)
         attempts = ownership.attempts
         result = _prelaunch_result(manifest, ownership)
@@ -838,6 +886,21 @@ def supervise_aftercare(manifest_path: Path) -> int:
                 exit_code=None,
                 log_tail=_bounded_log_tail(paths.log),
             )
+        try:
+            cleanup_review_worktree_if_present(manifest_path, review_worktree)
+        except (OSError, RuntimeError, ValueError) as error:
+            cleanup_diagnostic = AftercareDiagnostic(
+                category="supervisor-error",
+                message=f"Review worktree cleanup failed: {error}",
+            )
+            result = AftercareResult.model_validate(
+                result.model_copy(
+                    update={
+                        "status": "failed",
+                        "diagnostics": (*result.diagnostics, cleanup_diagnostic),
+                    }
+                ).model_dump()
+            )
         _atomic_write_result(paths.canonical_result, result)
         paths.runtime_result.unlink(missing_ok=True)
         paths.runtime_manifest.unlink(missing_ok=True)
@@ -850,7 +913,8 @@ def launch_aftercare(manifest_path: Path) -> int:
     :param manifest_path: Absolute path to a valid aftercare manifest.
     :returns: Detached supervisor process identifier.
     """
-    load_manifest(manifest_path)
+    manifest = load_manifest(manifest_path)
+    _manifest_review_worktree(manifest_path, manifest)
     environment = os.environ.copy()
     log_path = _sidecar_path(manifest_path, ".aftercare.log")
     with log_path.open("ab") as log_file:

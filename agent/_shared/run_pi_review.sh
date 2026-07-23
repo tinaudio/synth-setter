@@ -6,6 +6,26 @@ readonly PI_REVIEW_MODEL="gpt-5.6-terra"
 readonly PI_REVIEW_PROVIDER="openai-codex"
 readonly PI_REVIEW_THINKING="medium"
 
+PI_REVIEW_CLEANUP_MANIFEST=""
+PI_REVIEW_CLEANUP_PYTHON=""
+PI_REVIEW_AFTERCARE_LAUNCHED=0
+
+cleanup_foreground_review_worktree() {
+  if (( PI_REVIEW_AFTERCARE_LAUNCHED == 1 )); then
+    return 0
+  fi
+  if [[ -z "${PI_REVIEW_CLEANUP_MANIFEST}" || -z "${PI_REVIEW_CLEANUP_PYTHON}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${PI_REVIEW_CLEANUP_MANIFEST}.review-worktree.json" ]]; then
+    return 0
+  fi
+  "${PI_REVIEW_CLEANUP_PYTHON}" agent/_shared/pi_review_routing.py \
+    cleanup-review-worktree --manifest "${PI_REVIEW_CLEANUP_MANIFEST}"
+}
+
+trap cleanup_foreground_review_worktree EXIT
+
 usage() {
   echo \
     "usage: $0 <repo-review-full|repo-review-full-no-comments> [--target N]" \
@@ -86,6 +106,8 @@ return only the specified foreground deliverable."
   local review_python
   review_python="$(resolve_review_python)"
   export PI_REVIEW_PYTHON="${review_python}"
+  PI_REVIEW_CLEANUP_MANIFEST="${aftercare_manifest}"
+  PI_REVIEW_CLEANUP_PYTHON="${review_python}"
   local final_output
   if ! final_output="$(
     pi \
@@ -109,6 +131,7 @@ return only the specified foreground deliverable."
       "${review_python}" agent/_shared/run_pi_review_aftercare.py \
         "${PI_REVIEW_AFTERCARE_MANIFEST}"
     )"; then
+      PI_REVIEW_AFTERCARE_LAUNCHED=1
       echo \
         "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
         >&2

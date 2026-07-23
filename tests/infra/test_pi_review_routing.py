@@ -893,6 +893,7 @@ def test_build_worker_prompt_missing_checklist_raises_actionable_error(
             base_sha="a" * 40,
             head_sha="b" * 40,
             changed_paths=("agent/_shared/pi_review_routing.py",),
+            review_worktree=(tmp_path / "review-worktree").resolve(),
         )
 
 
@@ -918,6 +919,9 @@ def test_build_worker_prompt_contains_absolute_checklist_without_skill_tool_lang
         base_sha="a" * 40,
         head_sha="b" * 40,
         changed_paths=("agent/_shared/pi_review_routing.py", "tests/infra/test.py"),
+        review_worktree=(
+            Path(__file__).resolve().parents[2] / ".agent-reviews/test.assignments/review-worktree"
+        ),
     )
 
     assert f"Read the checklist at `{checklist.resolve()}` and execute it." in prompt

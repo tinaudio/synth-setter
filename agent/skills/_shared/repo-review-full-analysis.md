@@ -159,15 +159,28 @@ with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
 helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
 orchestrator and then ask it to nest workers.
 
-Generate one complete assignment file per selected skill before the launch. Use
-the deterministic absolute directory derived from the known handoff path; never
-put a glob in a worker prompt and never repair assignment paths with
-`steer_subagent` after launch:
+Before any worker launch, create exactly one disposable detached worktree pinned
+to the reviewed head. The helper confines it to the deterministic assignment
+directory, records strict cleanup metadata, and fails closed if the manifest,
+repository, commit, or destination is unsafe:
 
 ```bash
 assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
-mkdir -p "$assignment_dir"
+review_worktree_json="$(
+  "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py \
+    prepare-review-worktree --manifest "$PI_REVIEW_AFTERCARE_MANIFEST" \
+    --head-sha <head>
+)"
+```
+
+Store `review_worktree_json` unchanged as the manifest's `review_worktree`
+object. Generate one
+complete assignment file per selected skill before launch. You must never put a glob in a worker prompt.
+Also, never repair assignment paths with `steer_subagent` after launch:
+
+```bash
 "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
+  --manifest "$PI_REVIEW_AFTERCARE_MANIFEST" \
   --skill <skill> --target <target> --repo <owner/name> \
   --base-sha <base> --head-sha <head> \
   --changed-path <path> [--changed-path <path> ...] \
@@ -178,10 +191,13 @@ Assignment generation validates the exact checklist file and embeds its absolute
 path. Repo-local checklists resolve from
 `<cwd>/agent/skills/<skill>/SKILL.md`; plugin-backed checklists resolve from
 `$PI_REVIEW_SKILLS_ROOT/<skill>/SKILL.md`, defaulting to
-`~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal assignment-generation
-error; never launch a worker without the validated path.
+`~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal
+assignment-generation error; never launch a worker without the validated path.
 
-Both model passes share that immutable file. Their `Agent` prompt is only:
+The generated assignment opens with the absolute `review-worktree` path as its
+only worker cwd and requires every Git and pytest command to run there. The
+reviewed source checkout is never a worker cwd. Both model passes share that
+immutable file. Their `Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
 JSON schema in every tool call. Launch all independent passes in one message and
@@ -235,13 +251,16 @@ Before returning, write the strict manifest at
 skill/pass/model rows, and fingerprints for every foreground finding.
 The launcher validates it and starts detached aftercare. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
-`base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
+`base_sha` and `head_sha`, `target`, the strict `review_worktree` object returned
+by `prepare-review-worktree`, non-empty `deferred_passes` rows
 (`skill`, `pass_name`, `origin`, exact `model`, effective foreground
 `verification_model`, `thinking`, `agent_id`, and `output_path`), and
 `foreground_fingerprints`. Use `origin: primary` for independent provider
 coverage and `origin: codex-fallback` only after the free pool exhausted.
 Aftercare may post only **late Codex-verified findings** against the unchanged PR
-head, following `agent/skills/_shared/repo-review-aftercare.md`. Local-branch
+head, following `agent/skills/_shared/repo-review-aftercare.md`. Its supervisor
+removes the validated disposable worktree in `finally`. When no aftercare
+manifest launches, the foreground launcher removes it after delivery. Local-branch
 reviews cannot create aftercare manifests because they lack a stable remote
 PR/head delivery boundary.
 

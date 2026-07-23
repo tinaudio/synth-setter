@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
@@ -234,6 +235,331 @@ class _HostEvent(BaseModel, strict=True, extra="ignore"):
     error_message: str | None = Field(default=None, alias="errorMessage")
 
 
+class ReviewWorktree(BaseModel, strict=True, extra="forbid"):
+    """Validated ownership metadata for one disposable review checkout.
+
+    .. attribute :: manifest_path
+        :type: str
+
+        Absolute foreground aftercare manifest path.
+
+    .. attribute :: assignment_dir
+        :type: str
+
+        Deterministic directory containing assignments and the checkout.
+
+    .. attribute :: path
+        :type: str
+
+        Absolute disposable checkout path.
+
+    .. attribute :: git_common_dir
+        :type: str
+
+        Absolute Git common directory that registered the checkout.
+
+    .. attribute :: head_sha
+        :type: str
+
+        Commit pinned when the detached checkout was created.
+    """
+
+    manifest_path: str
+    assignment_dir: str
+    path: str
+    git_common_dir: str
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+    @model_validator(mode="after")
+    def _require_deterministic_absolute_paths(self) -> ReviewWorktree:
+        """Reject metadata that could identify a user-owned worktree.
+
+        :returns: Validated disposable-worktree metadata.
+        :raises ValueError: If any path is relative, non-canonical, or outside the assignment.
+        """
+        paths = {
+            "manifest_path": Path(self.manifest_path),
+            "assignment_dir": Path(self.assignment_dir),
+            "path": Path(self.path),
+            "git_common_dir": Path(self.git_common_dir),
+        }
+        if any(not path.is_absolute() or path.resolve() != path for path in paths.values()):
+            raise ValueError("Review worktree paths must be canonical and absolute")
+        manifest = paths["manifest_path"]
+        if manifest.suffix != ".json" or manifest.parent.name != ".agent-reviews":
+            raise ValueError("Review worktree manifest must be under .agent-reviews")
+        expected_assignment = _assignment_dir(manifest)
+        if paths["assignment_dir"] != expected_assignment:
+            raise ValueError("Review worktree assignment directory is not deterministic")
+        if paths["path"] != expected_assignment / "review-worktree":
+            raise ValueError("Review worktree path is outside its assignment directory")
+        return self
+
+
+def _assignment_dir(manifest_path: Path) -> Path:
+    """Derive the deterministic assignment directory from a foreground manifest.
+
+    :param manifest_path: Absolute foreground manifest path.
+    :returns: Sibling assignment directory ending in ``.assignments``.
+    """
+    stem = manifest_path.with_suffix("")
+    return stem.with_name(f"{stem.name}.assignments")
+
+
+def review_worktree_sidecar(manifest_path: Path) -> Path:
+    """Return the supervisor-independent worktree metadata sidecar.
+
+    :param manifest_path: Absolute foreground manifest path.
+    :returns: Metadata path retained until foreground or aftercare cleanup.
+    """
+    return Path(f"{manifest_path}.review-worktree.json")
+
+
+def _run_git(arguments: Sequence[str]) -> str:
+    """Run one bounded local Git command.
+
+    :param arguments: Git argument vector including the executable name.
+    :returns: Stripped standard output.
+    :raises RuntimeError: If Git rejects the operation.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            arguments,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        stderr = getattr(error, "stderr", "") or ""
+        raise RuntimeError(f"Git worktree operation failed: {stderr.strip()}") from error
+    return result.stdout.strip()
+
+
+def _repository_root(manifest_path: Path) -> Path:
+    """Validate and return the source repository owning a review manifest.
+
+    :param manifest_path: Candidate foreground manifest path.
+    :returns: Canonical source checkout root.
+    :raises ValueError: If the manifest is outside the source checkout review directory.
+    """
+    if not manifest_path.is_absolute() or manifest_path.resolve() != manifest_path:
+        raise ValueError("Review manifest path must be canonical and absolute")
+    if manifest_path.suffix != ".json" or manifest_path.parent.name != ".agent-reviews":
+        raise ValueError("Review manifest must be directly under .agent-reviews")
+    repository = manifest_path.parent.parent
+    top_level = Path(_run_git(("git", "-C", str(repository), "rev-parse", "--show-toplevel")))
+    if top_level.resolve() != repository:
+        raise ValueError("Review manifest does not belong to a repository root")
+    return repository
+
+
+def _git_common_dir(checkout: Path) -> Path:
+    """Return the canonical Git common directory for one checkout.
+
+    :param checkout: Repository or linked-worktree root.
+    :returns: Canonical common Git directory.
+    """
+    return Path(
+        _run_git(
+            (
+                "git",
+                "-C",
+                str(checkout),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        )
+    ).resolve()
+
+
+def _write_worktree_sidecar(path: Path, metadata: ReviewWorktree) -> None:
+    """Atomically persist validated disposable-worktree ownership.
+
+    :param path: Metadata sidecar path.
+    :param metadata: Strict ownership payload.
+    """
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(f"{metadata.model_dump_json(indent=2)}\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _registered_worktrees(git_common_dir: Path) -> set[Path]:
+    """Return canonical worktree paths registered in one Git common directory.
+
+    :param git_common_dir: Validated common Git directory.
+    :returns: Registered worktree roots.
+    """
+    output = _run_git(("git", f"--git-dir={git_common_dir}", "worktree", "list", "--porcelain"))
+    return {
+        Path(line.removeprefix("worktree ")).resolve()
+        for line in output.splitlines()
+        if line.startswith("worktree ")
+    }
+
+
+def _validate_review_worktree_registration(metadata: ReviewWorktree) -> Path:
+    """Verify persisted metadata against its source repository and checkout.
+
+    :param metadata: Strict disposable-worktree ownership.
+    :returns: Validated disposable checkout path.
+    :raises ValueError: If the sidecar, registration, or repository does not match.
+    """
+    manifest_path = Path(metadata.manifest_path)
+    repository = _repository_root(manifest_path)
+    sidecar = review_worktree_sidecar(manifest_path)
+    if not sidecar.is_file():
+        raise ValueError("Review worktree ownership sidecar is missing")
+    persisted = ReviewWorktree.model_validate_json(sidecar.read_text())
+    if persisted != metadata:
+        raise ValueError("Review worktree metadata does not match its ownership sidecar")
+
+    common_dir = _git_common_dir(repository)
+    if common_dir != Path(metadata.git_common_dir):
+        raise ValueError("Review worktree belongs to a different Git common directory")
+
+    worktree = Path(metadata.path)
+    if worktree not in _registered_worktrees(common_dir):
+        raise ValueError("Review worktree is not registered by its recorded repository")
+    if not worktree.is_dir():
+        raise ValueError("Registered review worktree directory is missing")
+    actual_common_dir = _git_common_dir(worktree)
+    if actual_common_dir != common_dir:
+        raise ValueError("Review worktree checkout does not match its Git registration")
+    return worktree
+
+
+def prepare_review_worktree(manifest_path: Path, head_sha: str) -> ReviewWorktree:
+    """Create one detached checkout for all workers in a review run.
+
+    :param manifest_path: Absolute foreground aftercare manifest path.
+    :param head_sha: Full reviewed commit SHA.
+    :returns: Strict ownership metadata for prompts and cleanup.
+    :raises OSError: If metadata cannot be persisted.
+    :raises ValueError: If paths or the reviewed commit are unsafe.
+    :raises RuntimeError: If Git cannot create or validate the checkout.
+    """
+    if not _SHA_RE.fullmatch(head_sha):
+        raise ValueError("Review worktree requires a full lowercase commit SHA")
+    repository = _repository_root(manifest_path)
+    assignment_dir = _assignment_dir(manifest_path)
+    worktree = assignment_dir / "review-worktree"
+    sidecar = review_worktree_sidecar(manifest_path)
+    if sidecar.exists() or worktree.exists():
+        raise ValueError("Review worktree already exists for this manifest")
+
+    _run_git(("git", "-C", str(repository), "cat-file", "-e", f"{head_sha}^{{commit}}"))
+    common_dir = _git_common_dir(repository)
+    assignment_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _run_git(
+            (
+                "git",
+                "-C",
+                str(repository),
+                "worktree",
+                "add",
+                "--detach",
+                str(worktree),
+                head_sha,
+            )
+        )
+        metadata = ReviewWorktree(
+            manifest_path=str(manifest_path),
+            assignment_dir=str(assignment_dir),
+            path=str(worktree),
+            git_common_dir=str(common_dir),
+            head_sha=head_sha,
+        )
+        _write_worktree_sidecar(sidecar, metadata)
+        load_review_worktree(manifest_path)
+    except (OSError, RuntimeError, ValueError):
+        if worktree in _registered_worktrees(common_dir):
+            _run_git(
+                ("git", f"--git-dir={common_dir}", "worktree", "remove", "--force", str(worktree))
+            )
+        sidecar.unlink(missing_ok=True)
+        raise
+    return metadata
+
+
+def load_review_worktree(manifest_path: Path) -> ReviewWorktree:
+    """Load worktree metadata and enforce the reviewed HEAD for worker prompts.
+
+    :param manifest_path: Foreground manifest path or supervisor runtime manifest.
+    :returns: Strict registered disposable-worktree metadata.
+    :raises ValueError: If metadata is missing, inconsistent, unsafe, or no longer pinned.
+    """
+    sidecar = review_worktree_sidecar(manifest_path)
+    if sidecar.is_file():
+        metadata = ReviewWorktree.model_validate_json(sidecar.read_text())
+    elif manifest_path.is_file():
+        payload = _strict_json_loads(manifest_path.read_text())
+        if not isinstance(payload, dict) or "review_worktree" not in payload:
+            raise ValueError("Manifest does not contain review worktree metadata")
+        metadata = ReviewWorktree.model_validate(payload["review_worktree"])
+    else:
+        raise ValueError("Review worktree metadata is missing")
+    worktree = _validate_review_worktree_registration(metadata)
+    actual_head = _run_git(("git", "-C", str(worktree), "rev-parse", "HEAD"))
+    if actual_head != metadata.head_sha:
+        raise ValueError("Review worktree HEAD drifted from the reviewed commit")
+    return metadata
+
+
+def cleanup_review_worktree(
+    manifest_path: Path,
+    metadata: ReviewWorktree | None = None,
+) -> None:
+    """Remove only the disposable checkout proven by its ownership sidecar.
+
+    :param manifest_path: Foreground manifest path.
+    :param metadata: Strict manifest metadata, when already validated.
+    :raises ValueError: If ownership cannot be proven.
+    """
+    sidecar = review_worktree_sidecar(manifest_path)
+    if not sidecar.exists():
+        raise ValueError("Review worktree ownership sidecar is missing")
+    persisted = ReviewWorktree.model_validate_json(sidecar.read_text())
+    if metadata is not None and metadata != persisted:
+        raise ValueError("Manifest and sidecar review worktree metadata differ")
+    worktree = _validate_review_worktree_registration(persisted)
+
+    common_dir = Path(persisted.git_common_dir)
+    _run_git(
+        (
+            "git",
+            f"--git-dir={common_dir}",
+            "worktree",
+            "remove",
+            "--force",
+            str(worktree),
+        )
+    )
+    _run_git(("git", f"--git-dir={common_dir}", "worktree", "prune"))
+    sidecar.unlink()
+
+
+def cleanup_review_worktree_if_present(
+    manifest_path: Path,
+    metadata: ReviewWorktree | None = None,
+) -> bool:
+    """Remove a disposable checkout when its ownership sidecar still exists.
+
+    :param manifest_path: Foreground manifest path.
+    :param metadata: Strict manifest metadata, when already validated.
+    :returns: Whether cleanup found and removed a registered checkout.
+    """
+    if not review_worktree_sidecar(manifest_path).exists():
+        return False
+    cleanup_review_worktree(manifest_path, metadata)
+    return True
+
+
 class WorkerFinding(BaseModel, strict=True, extra="forbid"):
     """One structured finding returned by a review worker.
 
@@ -415,10 +741,11 @@ class ReviewPass:
     max_turns: int
 
 
-def resolve_checklist_path(skill: str) -> Path:
+def resolve_checklist_path(skill: str, *, repository_root: Path | None = None) -> Path:
     """Resolve and validate the authoritative checklist for an assignment.
 
     :param skill: Supported review checklist name.
+    :param repository_root: Checkout containing repo-local checklists; defaults to the cwd.
     :returns: Absolute path to the checklist's existing ``SKILL.md`` file.
     :raises ValueError: If the skill is unsupported or its exact checklist file is missing.
     """
@@ -426,8 +753,9 @@ def resolve_checklist_path(skill: str) -> Path:
         raise ValueError(f"Unknown review skill: {skill}")
 
     if skill in REPO_LOCAL_SKILLS:
-        checklist_path = Path.cwd() / "agent" / "skills" / skill / "SKILL.md"
-        remediation = "Run assignment generation from the repository root."
+        checklist_root = repository_root or Path.cwd()
+        checklist_path = checklist_root / "agent" / "skills" / skill / "SKILL.md"
+        remediation = "Run assignment generation from a checkout containing the repo skill."
     else:
         skills_root = Path(os.environ.get(_SKILLS_ROOT_ENV, "~/.agents/skills")).expanduser()
         checklist_path = skills_root / skill / "SKILL.md"
@@ -748,6 +1076,7 @@ def build_worker_prompt(
     base_sha: str,
     head_sha: str,
     changed_paths: Sequence[str],
+    review_worktree: Path,
 ) -> str:
     """Build one deterministic, bounded assignment shared by both model passes.
 
@@ -757,11 +1086,14 @@ def build_worker_prompt(
     :param base_sha: Full base commit SHA.
     :param head_sha: Full reviewed commit SHA.
     :param changed_paths: Repository-relative paths in the reviewed diff.
+    :param review_worktree: Validated disposable checkout pinned to ``head_sha``.
     :returns: Complete worker prompt stored outside the host model response.
     :raises ValueError: If assignment identity, SHAs, or paths are invalid.
     """
     if skill not in SUPPORTED_SKILLS:
         raise ValueError(f"Unknown review skill: {skill}")
+    if not review_worktree.is_absolute() or review_worktree.resolve() != review_worktree:
+        raise ValueError("Worker assignment requires a canonical absolute review worktree")
     if not target.strip() or not repo.strip() or not changed_paths:
         raise ValueError("Worker assignment identity and changed paths must be non-empty")
     if not _SHA_RE.fullmatch(base_sha) or not _SHA_RE.fullmatch(head_sha):
@@ -770,9 +1102,12 @@ def build_worker_prompt(
         path = Path(changed_path)
         if path.is_absolute() or path.as_posix() != changed_path or ".." in path.parts:
             raise ValueError("Worker assignment paths must be canonical and repository-relative")
-    checklist_path = resolve_checklist_path(skill)
+    checklist_path = resolve_checklist_path(skill, repository_root=review_worktree)
     paths = "\n".join(f"- {path}" for path in changed_paths)
-    return f"""Review assignment
+    return f"""Work only inside {review_worktree}.
+Worker cwd: {review_worktree}
+Every git and pytest command must run with cwd {review_worktree}.
+Review assignment
 Target: {target}
 Repository: {repo}
 Base SHA: {base_sha}
@@ -1029,6 +1364,7 @@ def _build_parser() -> argparse.ArgumentParser:
     worker_prompt = subparsers.add_parser(
         "worker-prompt", help="write a deterministic review-worker assignment"
     )
+    worker_prompt.add_argument("--manifest", type=Path, required=True)
     worker_prompt.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
     worker_prompt.add_argument("--target", required=True)
     worker_prompt.add_argument("--repo", required=True)
@@ -1036,6 +1372,15 @@ def _build_parser() -> argparse.ArgumentParser:
     worker_prompt.add_argument("--head-sha", required=True)
     worker_prompt.add_argument("--changed-path", action="append", required=True)
     worker_prompt.add_argument("--output", type=Path, required=True)
+    prepare_worktree = subparsers.add_parser(
+        "prepare-review-worktree", help="create the detached review-worker checkout"
+    )
+    prepare_worktree.add_argument("--manifest", type=Path, required=True)
+    prepare_worktree.add_argument("--head-sha", required=True)
+    cleanup_worktree = subparsers.add_parser(
+        "cleanup-review-worktree", help="remove a validated disposable review checkout"
+    )
+    cleanup_worktree.add_argument("--manifest", type=Path, required=True)
     stats = subparsers.add_parser(
         "transcript-stats", help="print Tintin runtime-budget statistics as JSON"
     )
@@ -1088,6 +1433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     :param argv: Optional command arguments for tests or embedding.
     :returns: Process exit status.
     :raises AssertionError: If argument parsing returns an unknown command.
+    :raises ValueError: If worktree or assignment paths violate the isolation contract.
     """
     args = _build_parser().parse_args(argv)
     if args.command == "plan":
@@ -1112,6 +1458,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     if args.command == "worker-prompt":
+        metadata = load_review_worktree(args.manifest.resolve())
+        if args.head_sha != metadata.head_sha:
+            raise ValueError("Worker assignment HEAD differs from the disposable checkout")
+        expected_output = Path(metadata.assignment_dir) / f"{args.skill}.txt"
+        if args.output.resolve() != expected_output:
+            raise ValueError("Worker assignment output must use the deterministic assignment path")
         args.output.write_text(
             build_worker_prompt(
                 skill=args.skill,
@@ -1120,8 +1472,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_sha=args.base_sha,
                 head_sha=args.head_sha,
                 changed_paths=args.changed_path,
+                review_worktree=Path(metadata.path),
             )
         )
+        return 0
+    if args.command == "prepare-review-worktree":
+        metadata = prepare_review_worktree(args.manifest.resolve(), args.head_sha)
+        sys.stdout.write(f"{metadata.model_dump_json()}\n")
+        return 0
+    if args.command == "cleanup-review-worktree":
+        cleanup_review_worktree(args.manifest.resolve())
         return 0
     if args.command == "transcript-stats":
         sys.stdout.write(f"{json.dumps(asdict(transcript_stats(args.transcript)), indent=2)}\n")

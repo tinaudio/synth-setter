@@ -21,10 +21,13 @@ not present in the runtime manifest.
 3. For each adopted row named in the launch prompt, extract and validate its
    existing `output_path`, use that report, and do not launch its pass again.
    For every other `deferred_passes` row, generate the assignment with
-   `pi_review_routing.py worker-prompt`, launch one `pr-review-worker` using the
-   row's exact pinned model and thinking, and validate its output with
-   `extract-report` and `validate-report`. Exactly one model call owns a pass;
-   never launch a second owner for the same row.
+   `pi_review_routing.py worker-prompt --manifest <runtime-manifest>` at the
+   `review_worktree.assignment_dir` path. The helper validates the persisted
+   ownership metadata and pins the absolute `review-worktree` as the worker's
+   only cwd. Launch one `pr-review-worker` using the row's exact pinned model
+   and thinking, and validate its output with `extract-report` and
+   `validate-report`. Exactly one model call owns a pass; never launch a second
+   owner for the same row.
 
 4. If strict validation fails after envelope extraction, generate the
    diagnostic with `pi_review_routing.py repair-prompt` and resume the same
@@ -92,5 +95,8 @@ not present in the runtime manifest.
    string; the supervisor replaces both with observed process evidence.
 
 Do not modify the foreground manifest, source checkout, or unrelated GitHub
-metadata. The supervisor always persists child stdout and stderr in the bounded
-`<foreground-manifest>.aftercare.log`; no aftercare output is discarded.
+metadata. Every worker Git and pytest command runs in the manifest's disposable
+`review-worktree`; the supervisor removes that checkout with forced Git
+worktree cleanup and pruning in `finally`. The supervisor always persists child
+stdout and stderr in the bounded `<foreground-manifest>.aftercare.log`; no
+aftercare output is discarded.
