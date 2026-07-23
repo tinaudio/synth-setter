@@ -4,6 +4,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 from loguru import logger
+from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
@@ -227,9 +228,19 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
 
     Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
     automatically — adding or removing a field on ``RenderConfig`` extends or
-    shrinks the CLI surface without a parallel update here. Adds ``data_file``
-    as the sole positional arg (the destination shard path; its ``.lance``
-    suffix selects the Lance writer via ``OutputFormat.from_extension``).
+    shrinks the CLI surface without a parallel update here.
+
+    .. attribute :: model_config
+
+        Strict pydantic-settings CLI behavior.
+
+    .. attribute :: data_file
+
+        Destination Lance dataset path.
+
+    .. attribute :: shard_id
+
+        Optional launcher-supplied shard identity for row provenance.
     """
 
     model_config = SettingsConfigDict(
@@ -241,6 +252,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
+    shard_id: int | None = Field(default=None, ge=0)
 
 
 def main() -> None:
@@ -255,7 +267,7 @@ def main() -> None:
     from synth_setter.data.vst.writers import make_lance_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "shard_id"}))
     ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
@@ -264,7 +276,7 @@ def main() -> None:
 
     metrics_path = render_metrics_path(args.data_file)
     metrics_path.unlink(missing_ok=True)
-    metrics = make_lance_dataset(args.data_file, render_cfg)
+    metrics = make_lance_dataset(args.data_file, render_cfg, shard_id=args.shard_id)
     metrics_path.write_text(metrics.model_dump_json())
 
 

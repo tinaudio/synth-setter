@@ -252,6 +252,7 @@ def make_lance_dataset(
     lance_dir: Path | str,
     render_cfg: RenderConfig,
     *,
+    shard_id: int | None = None,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[NoteParams] | None = None,
 ) -> RenderRejectionMetrics:
@@ -267,6 +268,7 @@ def make_lance_dataset(
 
     :param lance_dir: Destination ``.lance`` dataset directory.
     :param render_cfg: Per-shard renderer config from the dataset spec.
+    :param shard_id: Logical shard number stored in row debug documents; ``None`` for ad hoc renders.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard``. Under
         ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
@@ -284,6 +286,7 @@ def make_lance_dataset(
         lance_fragment,
         lance_schema,
         record_batch_from_arrays,
+        seed_debug_array,
     )
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
@@ -302,9 +305,36 @@ def make_lance_dataset(
 
     try:
         fragments: list[lance.fragment.FragmentMetadata] = []
+        shard_parameter_attempt: int | None = None
+        fixed_synth = fixed_synth_params_list is not None
+        fixed_note = fixed_note_params_list is not None
+        parameter_source = (
+            "fixed" if fixed_synth and fixed_note else "mixed" if fixed_synth or fixed_note else "sampled"
+        )
 
-        def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-            record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+        def _flush(batch: list[VSTDataSample], batch_start: int) -> None:
+            nonlocal shard_parameter_attempt
+            sample_indices = [
+                render_cfg.sample_offset + batch_start + row for row in range(len(batch))
+            ]
+            sampled_shard_parameters = (
+                render_cfg.param_sample_cadence == "shard" and parameter_source != "fixed"
+            )
+            if sampled_shard_parameters and shard_parameter_attempt is None:
+                shard_parameter_attempt = batch[0].attempt
+            parameter_sample_idx = render_cfg.sample_offset if sampled_shard_parameters else None
+            debug = seed_debug_array(
+                render_cfg.base_seed,
+                sample_indices,
+                [sample.attempt for sample in batch],
+                shard_id=shard_id,
+                parameter_sample_idx=parameter_sample_idx,
+                parameter_attempt=shard_parameter_attempt,
+                parameter_source=parameter_source,
+            )
+            record_batch = record_batch_from_arrays(
+                _sample_batch_arrays(batch), schema, debug=debug
+            )
             fragments.append(lance_fragment(staging_path, schema, record_batch))
 
         # Commit only after a clean render: orphaned fragment data files from a failed

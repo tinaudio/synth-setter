@@ -30,8 +30,8 @@ def test_cli_args_class_inherits_every_render_config_field() -> None:
     assert render_fields <= cli_fields
 
 
-def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
-    """Beyond ``RenderConfig`` fields, the CLI's only extra is ``data_file``.
+def test_cli_args_class_adds_only_launcher_fields_beyond_render_config() -> None:
+    """Beyond ``RenderConfig`` fields, the CLI adds destination and shard identity.
 
     Guards against accidental CLI bloat — adding a flag here should be a deliberate decision, not
     silent drift.
@@ -40,7 +40,7 @@ def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
     render_fields = set(RenderConfig.model_fields.keys())
 
     extra = cli_fields - render_fields
-    assert extra == {"data_file"}
+    assert extra == {"data_file", "shard_id"}
 
 
 def _smoke_spec() -> DatasetSpec:
@@ -83,10 +83,11 @@ def test_build_generate_args_roundtrips_through_cli_parser(tmp_path: Path) -> No
     args = build_generate_args(spec, spec.shards[0], tmp_path)
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
-    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file"}))
+    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file", "shard_id"}))
 
     # build_generate_args overrides base_seed with the shard's seed (#884), so the
     # round-tripped config matches spec.render with that one field substituted.
     expected = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
     assert reconstructed == expected
     assert parsed.data_file == str(tmp_path / "shard-000000.lance")
+    assert parsed.shard_id == spec.shards[0].shard_id

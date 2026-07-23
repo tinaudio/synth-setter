@@ -123,6 +123,8 @@ def _cli_argv(data_file: str) -> list[str]:
     return [
         "generate_vst_dataset",
         data_file,
+        "--shard_id",
+        "7",
         "--plugin_path",
         "plugins/Surge XT.vst3",
         "--plugin_state_path",
@@ -166,8 +168,9 @@ def test_main_dispatches_lance_suffix_to_make_lance_dataset(tmp_path: Path) -> N
 
     mock_lance.assert_called_once()
     # First positional arg is the data_file path.
-    lance_args, _lance_kwargs = mock_lance.call_args
+    lance_args, lance_kwargs = mock_lance.call_args
     assert lance_args[0] == str(data_file)
+    assert lance_kwargs["shard_id"] == 7
     assert RenderRejectionMetrics.model_validate_json(
         render_metrics_path(data_file).read_text()
     ) == RenderRejectionMetrics(clipped=2, silent=3)

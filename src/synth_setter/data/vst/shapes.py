@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import RenderConfig
 
 AUDIO_FIELD: str = "audio"
+DEBUG_FIELD: str = "debug"
 MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)

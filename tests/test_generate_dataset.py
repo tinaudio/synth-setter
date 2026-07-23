@@ -444,7 +444,9 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
             field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
             for field, shape in shapes.items()
         }
-        write_lance_dataset(output_file, schema, [record_batch_from_arrays(arrays, schema)])
+        write_lance_dataset(
+            output_file, schema, [record_batch_from_arrays(arrays, schema, debug=None)]
+        )
         render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
 
     with patch(
