@@ -633,11 +633,11 @@ def _failed_result(
     :returns: Strict failed result.
     """
     failed_attempts = list(attempts)
-    attempted_keys = {(row.skill, row.pass_name, row.status) for row in failed_attempts}
+    attempted_passes = {(row.skill, row.pass_name) for row in failed_attempts}
     if manifest is not None:
         for deferred in manifest.deferred_passes:
-            has_terminal_failure = (deferred.skill, deferred.pass_name, "failed") in attempted_keys
-            if not has_terminal_failure:
+            pass_key = (deferred.skill, deferred.pass_name)
+            if pass_key not in attempted_passes:
                 failed_attempts.append(_attempt(deferred, "failed", diagnostics[0].message))
     return AftercareResult(
         status="failed",

@@ -428,6 +428,47 @@ def test_supervisor_adopted_findings_reach_child_with_no_relaunch_instruction(
     assert statuses == ["adopted-foreground-result", "success"]
 
 
+def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_path: Path) -> None:
+    """Keep adopted passes successful when another foreground owner blocks aftercare.
+
+    :param tmp_path: Temporary review root.
+    """
+    report = {
+        "skill": "correctness-review",
+        "target": "PR #2174",
+        "findings": [],
+        "what_looks_good": ["The foreground report validates."],
+    }
+    foreground_output = tmp_path / "completed.jsonl"
+    foreground_output.write_text(
+        json.dumps({"message": {"role": "assistant", "content": json.dumps(report)}}) + "\n"
+    )
+    manifest = _manifest(tmp_path, output_path=foreground_output)
+    payload = json.loads(manifest.read_text())
+    payload["deferred_passes"].append(
+        {
+            "skill": "code-health",
+            "pass_name": "free-pool",
+            "origin": "primary",
+            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "verification_model": "openai-codex/gpt-5.6-terra",
+            "thinking": "medium",
+            "agent_id": "agent-still-running",
+            "output_path": str(tmp_path / "unfinished.jsonl"),
+        }
+    )
+    manifest.write_text(json.dumps(payload))
+
+    completed = _run_supervisor(manifest, _environment(tmp_path, mode="missing"))
+
+    assert completed == 1
+    attempts = [(row.skill, row.status) for row in _read_result(manifest).attempts]
+    assert attempts == [
+        ("correctness-review", "adopted-foreground-result"),
+        ("code-health", "failed"),
+    ]
+
+
 def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) -> None:
     """Refuse a duplicate launch when foreground termination is not guaranteed.
 
