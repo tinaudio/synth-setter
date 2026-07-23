@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from synth_setter.pipeline.schemas.compute import ComputeConfig
+
 ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
 ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
 
@@ -149,9 +151,10 @@ class SkypilotLaunchConfig(BaseModel):
 
         Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
 
-    .. attribute :: compute_template
+    .. attribute :: compute
 
-        Path to the SkyPilot compute-template YAML.
+        Validated compute option from the ``skypilot_launch/compute`` Hydra
+        group; ``None`` runs in-process instead of dispatching.
 
     .. attribute :: cmd
 
@@ -187,8 +190,8 @@ class SkypilotLaunchConfig(BaseModel):
 
     .. attribute :: network_volume
 
-        SkyPilot volume name substituted into the compute template's
-        ``${NETWORK_VOLUME}`` sentinel; the volume's data center decides
+        SkyPilot volume name mounted at the compute option's
+        ``mount_network_volume`` path; the volume's data center decides
         where the task runs.
 
     .. attribute :: extra_envs
@@ -203,7 +206,7 @@ class SkypilotLaunchConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    compute_template: str | None = None
+    compute: ComputeConfig | None = None
     cmd: str | None = None
     env_file: str | None = None
     job_name: str | None = None

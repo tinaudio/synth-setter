@@ -1,6 +1,6 @@
 # Seed the persistent RunPod volume from the finalized R2 dataset.
 
-compute_template: src/synth_setter/configs/compute/runpod-network-volume-staging-template.yaml
+compute: runpod/network-volume/staging
 worker_image_tag: devcontainer-tools
 env_file: .env
 network_volume: ss-datasets-us-ca-2

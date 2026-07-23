@@ -2,7 +2,7 @@
 # hydrating from the JP dataset volume and reading train batches through the
 # Lance fragment sampler (#2253).
 
-compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-hclass-template.yaml
+compute: runpod/network-volume/training-hclass
 worker_image_tag: devcontainer-tools
 env_file: .env
 network_volume: ss-datasets-ap-jp-1

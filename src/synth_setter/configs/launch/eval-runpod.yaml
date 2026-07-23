@@ -11,7 +11,7 @@
 # mirrors train-runpod.yaml (WORKER_GIT_REF checkout sync + launcher-injected
 # IMAGE_TAG).
 
-compute_template: src/synth_setter/configs/compute/runpod-template.yaml
+compute: runpod/smoke
 worker_image_tag: devcontainer-tools
 env_file: .env
 # tail=false detaches after submission; follow with `sky jobs logs --name <job>`.

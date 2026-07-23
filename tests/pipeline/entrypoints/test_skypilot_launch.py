@@ -19,11 +19,10 @@ from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import MagicMock
 
 import click
 import pytest
-import sky
 import yaml
 from click.testing import CliRunner
 from hydra import compose, initialize_config_module
@@ -34,6 +33,7 @@ from pydantic import ValidationError
 import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.compute import ComputeConfig, ComputeResources
 from synth_setter.pipeline.schemas.object_storage import RCLONE_ENV_KEYS
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
@@ -45,13 +45,9 @@ from synth_setter.pipeline.skypilot_launch import (
     _SKYPILOT_API_SERVER_ENV,
     _WORKER_ENV_KEYS,
     _check_runpod_balance,
-    _detect_provider_from_doc,
     _ensure_ci_sky_config,
     _fetch_runpod_balance,
-    _inject_network_volume,
-    _load_compute_template_with_cmd,
     _operator_ssh_pubkeys_b64,
-    _override_image_id,
     dispatch_via_skypilot,
     load_launch_config,
     load_worker_env,
@@ -262,13 +258,12 @@ class TestOperatorSshPubkeys:
             raise RuntimeError("Could not determine home directory.")
 
         monkeypatch.setattr("synth_setter.pipeline.skypilot_launch._operator_ssh_dir", _raise)
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+            compute=_runpod_compute(), cmd="echo hello", env_file=str(env_file)
         )
         dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_called_once()
-        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        injected = mock_sky.jobs.launch.call_args.args[0].envs
         assert "OPERATOR_SSH_PUBKEYS_B64" not in injected
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
@@ -324,12 +319,11 @@ class TestOperatorSshPubkeys:
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch._operator_ssh_dir", lambda: ssh_dir
         )
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template), cmd="echo hello", env_file=str(env_file)
+            compute=_runpod_compute(), cmd="echo hello", env_file=str(env_file)
         )
         dispatch_via_skypilot(sky_cfg)
-        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        injected = mock_sky.jobs.launch.call_args.args[0].envs
         assert base64.b64decode(injected["OPERATOR_SSH_PUBKEYS_B64"]).decode() == (
             "ssh-ed25519 AAAAkey1 box-a\n"
         )
@@ -626,126 +620,6 @@ class TestEnsureCiSkyConfig:
         assert (tmp_path / ".sky" / "config.yaml").is_file()
 
 
-class TestLocalTemplatePodConfig:
-    """``configs/compute/local-template.yaml`` carries the task-scoped pod_config override.
-
-    The override must live on the user worker task — a global write would block the SkyPilot jobs
-    controller from pulling its own image (#1255).
-    """
-
-    def test_image_pull_policy_never_is_scoped_to_task(self) -> None:
-        """Top-level ``config:`` is task-scoped — SkyPilot merges it into the worker pod only."""
-        template_path = Path(str(configs_dir() / "compute" / "local-template.yaml"))
-        doc = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-        containers = doc["config"]["kubernetes"]["pod_config"]["spec"]["containers"]
-        assert containers == [{"imagePullPolicy": "Never"}]
-
-
-# ---------------------------------------------------------------------------
-# _override_image_id — per-backend image_id mutation
-# ---------------------------------------------------------------------------
-
-
-class TestOverrideImageId:
-    """Per-backend ``image_id`` mutation in ``_override_image_id``.
-
-    Direct unit tests on the helper, independent of the CLI path. RunPod (and any non-OCI cloud)
-    accepts ``image_id: docker:<image>``; OCI's backend rejects it and runs the worker via a
-    sub-docker invocation in the YAML's ``run:`` block, so OCI Resources must be left untouched.
-    """
-
-    @staticmethod
-    def _make_resource(cloud: object) -> Any:
-        """Autospec ``sky.Resources`` with a ``.cloud`` attr and a ``.copy()`` recording image_id.
-
-        ``create_autospec`` binds the mock surface to the real SDK class, so a renamed or
-        removed attribute fails the test instead of silently passing a stale hand-listed spec.
-
-        :param cloud: Cloud object assigned to ``.cloud`` (a real OCI instance or a sentinel).
-        """
-        res = create_autospec(sky.Resources, instance=True)
-        res.cloud = cloud
-
-        def _copy(**kwargs: Any) -> Any:
-            new = create_autospec(sky.Resources, instance=True)
-            new.cloud = cloud
-            new.image_id = kwargs.get("image_id")
-            return new
-
-        res.copy.side_effect = _copy
-        return res
-
-    @staticmethod
-    def _make_task(resources: list[Any]) -> Any:
-        """Autospec ``sky.Task`` carrying ``resources`` (as a list, so ``type(...)`` is ``list``).
-
-        :param resources: Resources entries assigned to ``task.resources``.
-        """
-        task = create_autospec(sky.Task, instance=True)
-        task.resources = list(resources)
-        return task
-
-    def test_non_oci_resource_gets_image_id_overridden(self) -> None:
-        """Non-OCI Resources entry gets ``image_id`` set to ``docker:<worker_image>``."""
-        runpod_cloud = MagicMock(name="RunPodCloud")
-        res = self._make_resource(runpod_cloud)
-        task = self._make_task([res])
-
-        _override_image_id(task, "tinaudio/synth-setter:test-tag")
-
-        res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
-        task.set_resources.assert_called_once()
-        new_resources = list(task.set_resources.call_args.args[0])
-        assert len(new_resources) == 1
-        assert new_resources[0].image_id == "docker:tinaudio/synth-setter:test-tag"
-
-    def test_multiple_non_oci_resources_all_get_image_id_overridden(self) -> None:
-        """Verify every entry in a multi-Resources alt-set is mutated, not just the first."""
-        runpod_cloud = MagicMock(name="RunPodCloud")
-        resources = [self._make_resource(runpod_cloud) for _ in range(3)]
-        task = self._make_task(resources)
-
-        _override_image_id(task, "tinaudio/synth-setter:test-tag")
-
-        for res in resources:
-            res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
-        new_resources = list(task.set_resources.call_args.args[0])
-        assert len(new_resources) == 3
-        assert all(r.image_id == "docker:tinaudio/synth-setter:test-tag" for r in new_resources)
-
-    def test_oci_resource_left_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify an OCI Resources entry passes through unchanged without ``copy(image_id=...)``.
-
-        The helper always rebuilds ``task.resources`` from the original entries, so it may
-        call ``set_resources``; what matters behaviorally is that the OCI entry is never
-        copied with a new image_id and is preserved verbatim in the rebuilt list.
-
-        :param monkeypatch: Pytest fixture for env/attribute mocking.
-        """
-        import sky.clouds
-
-        class FakeOCI:
-            pass
-
-        monkeypatch.setattr(sky.clouds, "OCI", FakeOCI, raising=False)
-
-        oci_res = self._make_resource(FakeOCI())
-        task = self._make_task([oci_res])
-
-        _override_image_id(task, "tinaudio/synth-setter:test-tag")
-
-        oci_res.copy.assert_not_called()
-        if task.set_resources.called:
-            new_resources = list(task.set_resources.call_args.args[0])
-            assert len(new_resources) == 1
-            assert new_resources[0] is oci_res
-
-
-# ---------------------------------------------------------------------------
-# _run_cred_bootstrap — invokes the script; honors SKYPILOT_API_SERVER_ENDPOINT
-# ---------------------------------------------------------------------------
-
-
 class TestRunCredBootstrap:
     """Behavioral contracts for the launcher's wrapping of the cred-bootstrap script."""
 
@@ -969,9 +843,8 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="low-balance",
@@ -998,9 +871,8 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="local-api-server",
@@ -1036,9 +908,8 @@ class TestRunpodBalancePreflight:
         # setenv records the pre-test (absent) state, so the endpoint dispatch
         # writes into os.environ is removed again on teardown.
         monkeypatch.setenv(_SKYPILOT_API_SERVER_ENV, "https://placeholder.invalid")
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="remote-api-server",
@@ -1069,17 +940,14 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
-        template = tmp_path / "compute.yaml"
-        template.write_text(
-            "resources:\n"
-            "  any_of:\n"
-            "  - cloud: oci\n"
-            "  - cloud: runpod\n"
-            "envs:\n"
-            "  RCLONE_CONFIG_R2_TYPE: ''\n"
+        compute = _runpod_compute(
+            resources=(
+                ComputeResources(cloud="vast", accelerators={"RTX3090": 1}),
+                ComputeResources(cloud="runpod", accelerators={"RTX3070": 1}),
+            ),
         )
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=compute,
             cmd="echo",
             env_file=str(env_file),
             job_name="mixed-any-of",
@@ -1106,10 +974,9 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
-        template = _write_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/smoke",
             cmd="echo",
             env_file=str(env_file),
         )
@@ -1158,9 +1025,8 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 100.0,
         )
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="healthy-balance",
@@ -1204,209 +1070,26 @@ class TestSecretWorkerEnvKeys:
 # ---------------------------------------------------------------------------
 
 
-def _write_runpod_yaml(
-    tmp_path: Path,
-    *,
-    include_run: bool = False,
-    run_body: str | None = None,
-) -> Path:
-    """Write a minimal RunPod-shaped compute template.
+def _runpod_compute(**overrides: object) -> ComputeConfig:
+    """Build a minimal RunPod-shaped compute option for dispatch tests.
 
-    ``include_run=True`` adds a default ``run:`` block (``echo existing``).
-    ``run_body`` overrides the run body — pass a multiline string with
-    ``${WORKER_CMD}`` to exercise the sentinel-substitution path.
-
-    :param tmp_path: Directory under which ``compute.yaml`` is written.
-    :param include_run: When ``True``, add a default ``run:`` block.
-    :param run_body: Override the run body verbatim (multiline allowed).
-    :return: Path to the written ``compute.yaml``.
+    :param **overrides: Field overrides applied on top of the defaults.
+    :return: Validated compute option.
     """
-    yaml_text = (
-        "resources:\n"
-        "  cloud: runpod\n"
-        "  accelerators: {RTX3070: 1}\n"
-        "envs:\n"
-        "  RCLONE_CONFIG_R2_TYPE: ''\n"
-    )
-    if include_run or run_body is not None:
-        body = run_body if run_body is not None else "echo existing"
-        indented = "\n".join(f"  {line}" for line in body.splitlines())
-        yaml_text += f"run: |\n{indented}\n"
-    path = tmp_path / "compute.yaml"
-    path.write_text(yaml_text)
-    return path
+    kwargs: dict[str, object] = {
+        "name": "test-runpod",
+        "resources": (ComputeResources(cloud="runpod", accelerators={"RTX3070": 1}),),
+    }
+    kwargs.update(overrides)
+    return ComputeConfig(**kwargs)  # type: ignore[arg-type]
 
 
-def _write_sentinel_volume_runpod_yaml(tmp_path: Path) -> Path:
-    """Write a RunPod template that mounts the ``${NETWORK_VOLUME}`` sentinel.
+def _volume_runpod_compute() -> ComputeConfig:
+    """Build a RunPod compute option that mounts the network volume.
 
-    :param tmp_path: Directory under which ``compute.yaml`` is written.
-    :return: Path to the written ``compute.yaml``.
+    :return: Validated compute option with ``mount_network_volume`` set.
     """
-    template = _write_runpod_yaml(tmp_path)
-    template.write_text(
-        template.read_text() + 'volumes:\n  /workspace/network-volume: "${NETWORK_VOLUME}"\n'
-    )
-    return template
-
-
-class TestLoadComputeTemplateWithCmd:
-    """``_load_compute_template_with_cmd`` injects cmd as run and rejects pre-existing runs."""
-
-    def test_cmd_is_injected_when_yaml_has_no_run(self, tmp_path: Path) -> None:
-        """Without a pre-existing run: block, the loaded doc's run: equals cmd.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        template = _write_runpod_yaml(tmp_path, include_run=False)
-        doc = _load_compute_template_with_cmd(template, "echo hello")
-        assert doc["run"] == "echo hello"
-
-    def test_existing_run_block_without_sentinel_raises(self, tmp_path: Path) -> None:
-        """A pre-existing run: with no sentinel + non-empty cmd is a conflict, not a silent override.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        template = _write_runpod_yaml(tmp_path, include_run=True)
-        with pytest.raises(ValueError, match="has a non-empty `run:` block"):
-            _load_compute_template_with_cmd(template, "echo hello")
-
-    def test_sentinel_in_run_block_substitutes_cmd(self, tmp_path: Path) -> None:
-        """A template with ${WORKER_CMD} in run: substitutes cmd; scaffolding survives.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        template = _write_runpod_yaml(
-            tmp_path,
-            run_body='sudo docker run --rm "$WORKER_IMAGE" bash -c "${WORKER_CMD}"',
-        )
-        doc = _load_compute_template_with_cmd(template, "echo hello && exec foo")
-        assert isinstance(doc["run"], str)
-        assert "${WORKER_CMD}" not in doc["run"]
-        assert "echo hello && exec foo" in doc["run"]
-        assert doc["run"].startswith("sudo docker run --rm")
-        assert doc["run"].rstrip().endswith('"echo hello && exec foo"')
-
-    def test_non_string_run_block_raises(self, tmp_path: Path) -> None:
-        """A non-string run: (e.g. a list) is a malformed template, raise before substitute.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        path = tmp_path / "bad_run.yaml"
-        path.write_text("resources:\n  cloud: runpod\nrun:\n  - echo\n  - bad\n")
-        with pytest.raises(ValueError, match="`run:` must be a string"):
-            _load_compute_template_with_cmd(path, "x")
-
-    def test_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:
-        """Mistyped path surfaces a FileNotFoundError, not a confusing parse error downstream.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        with pytest.raises(FileNotFoundError):
-            _load_compute_template_with_cmd(tmp_path / "missing.yaml", "x")
-
-    def test_non_mapping_top_level_raises(self, tmp_path: Path) -> None:
-        """A YAML whose top level is a list, not a mapping, is rejected at load time.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        path = tmp_path / "bad.yaml"
-        path.write_text("- not\n- a\n- mapping\n")
-        with pytest.raises(ValueError, match="must be a mapping"):
-            _load_compute_template_with_cmd(path, "x")
-
-
-class TestInjectNetworkVolume:
-    """``_inject_network_volume`` substitutes ${NETWORK_VOLUME} in the volumes: mapping."""
-
-    def test_sentinel_with_value_substitutes_volume_name(self) -> None:
-        """A ${NETWORK_VOLUME} volumes: value becomes the configured volume name."""
-        doc: dict[str, object] = {
-            "resources": {"cloud": "runpod"},
-            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
-        }
-        result = _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
-        assert result["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
-
-    def test_sentinel_without_value_raises(self) -> None:
-        """A template needing a volume fails loudly when network_volume is unset."""
-        doc: dict[str, object] = {
-            "volumes": {"/workspace/network-volume": "${NETWORK_VOLUME}"},
-        }
-        with pytest.raises(ValueError, match="network_volume"):
-            _inject_network_volume(doc, None, source=Path("template.yaml"))
-
-    def test_value_without_sentinel_raises(self) -> None:
-        """A configured volume name with nowhere to land is a config error, not a no-op."""
-        doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
-        with pytest.raises(ValueError, match=r"\$\{NETWORK_VOLUME\}"):
-            _inject_network_volume(doc, "ss-datasets-us-ca-2", source=Path("template.yaml"))
-
-    def test_no_sentinel_no_value_leaves_doc_unchanged(self) -> None:
-        """Templates without volume needs pass through untouched."""
-        doc: dict[str, object] = {
-            "resources": {"cloud": "runpod"},
-            "volumes": {"/data": "some-static-volume"},
-        }
-        result = _inject_network_volume(doc, None, source=Path("template.yaml"))
-        assert result == {
-            "resources": {"cloud": "runpod"},
-            "volumes": {"/data": "some-static-volume"},
-        }
-
-
-class TestDetectProviderFromDoc:
-    """``_detect_provider_from_doc`` maps a parsed compute YAML to a cred-bootstrap provider."""
-
-    @pytest.mark.parametrize(
-        "doc, expected_provider",
-        [
-            ({"resources": {"cloud": "runpod"}}, "runpod"),
-            ({"resources": {"any_of": [{"cloud": "oci"}]}}, "oci"),
-            ({"resources": {"cloud": "kubernetes"}}, "local"),
-            ({"resources": {"cloud": "k8s"}}, "local"),
-            ({"resources": {"cloud": "RunPod"}}, "runpod"),
-            ({"resources": {"cloud": "vast"}}, "vast"),
-        ],
-        ids=[
-            "flat-runpod",
-            "any-of-oci",
-            "kubernetes-as-local",
-            "k8s-alias",
-            "case-insensitive",
-            "flat-vast",
-        ],
-    )
-    def test_supported_clouds_map_to_provider(
-        self,
-        tmp_path: Path,
-        doc: dict[str, object],
-        expected_provider: str,
-    ) -> None:
-        """Each supported ``resources.cloud`` shape maps to the expected cred-bootstrap provider.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param doc: Parametrized parsed-YAML mapping under test.
-        :param expected_provider: Parametrized expected provider name.
-        """
-
-        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == expected_provider
-
-    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:
-        """An unsupported cloud surfaces as a ValueError naming the offending value.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-
-        doc: dict[str, object] = {"resources": {"cloud": "aws"}}
-        with pytest.raises(ValueError, match="Unsupported cloud"):
-            _detect_provider_from_doc(doc, source=tmp_path / "x.yaml")
+    return _runpod_compute(mount_network_volume="/workspace/network-volume")
 
 
 class TestWorkerSpecUriEnvConstant:
@@ -1462,10 +1145,10 @@ class TestDispatchViaSkypilot:
             "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
         )
 
-    def test_missing_compute_template_raises(self) -> None:
-        """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug."""
-        sky_cfg = SkypilotLaunchConfig(compute_template=None, cmd="echo")
-        with pytest.raises(ValueError, match="compute_template"):
+    def test_missing_compute_raises(self) -> None:
+        """``compute=None`` is the "don't dispatch" sentinel — calling here is a bug."""
+        sky_cfg = SkypilotLaunchConfig(compute=None, cmd="echo")
+        with pytest.raises(ValueError, match="compute"):
             dispatch_via_skypilot(sky_cfg)
 
     def test_missing_cmd_raises(self, tmp_path: Path) -> None:
@@ -1473,39 +1156,33 @@ class TestDispatchViaSkypilot:
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         """
-        template = _write_runpod_yaml(tmp_path)
-        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd=None)
+        sky_cfg = SkypilotLaunchConfig(compute=_runpod_compute(), cmd=None)
         with pytest.raises(ValueError, match="cmd"):
             dispatch_via_skypilot(sky_cfg)
 
-    def test_yaml_run_block_conflicts_with_cmd(
+    def test_run_script_option_conflicts_with_cmd(
         self,
-        tmp_path: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """End-to-end conflict guard: YAML run + sky_cfg.cmd raises before any SkyPilot side effect.
+        """End-to-end conflict guard: run_script + sky_cfg.cmd raises before any side effect.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path, include_run=True)
-        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
-        with pytest.raises(ValueError, match="has a non-empty `run:` block"):
+        compute = _runpod_compute(run_script="debug-noop.sh")
+        sky_cfg = SkypilotLaunchConfig(compute=compute, cmd="echo")
+        with pytest.raises(ValueError, match="cmd cannot be silently dropped"):
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_sentinel_template_without_network_volume_raises_before_launch(
+    def test_volume_option_without_network_volume_raises_before_launch(
         self,
-        tmp_path: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A volume-mounting template with no configured volume name never reaches SkyPilot.
+        """A volume-mounting option with no configured volume name never reaches SkyPilot.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_sentinel_volume_runpod_yaml(tmp_path)
-        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
+        sky_cfg = SkypilotLaunchConfig(compute=_volume_runpod_compute(), cmd="echo")
         with pytest.raises(ValueError, match="does not set network_volume"):
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
@@ -1523,9 +1200,8 @@ class TestDispatchViaSkypilot:
         for key in _SECRET_WORKER_ENV_KEYS:
             monkeypatch.delenv(key, raising=False)
 
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
             env_file=None,
         )
@@ -1549,9 +1225,8 @@ class TestDispatchViaSkypilot:
             "SYNTH_SETTER_STORAGE_ENDPOINT_URL=\n"
         )
 
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
             env_file=str(blank_env_file),
         )
@@ -1562,7 +1237,7 @@ class TestDispatchViaSkypilot:
     @pytest.mark.parametrize(
         "kwargs_overrides, match",
         [
-            ({"compute_template": None}, "compute_template"),
+            ({"compute": None}, "compute"),
             ({"cmd": None}, "cmd"),
             ({"api_server": "https://api.example", "local": True}, "mutually exclusive"),
             ({"job_name": "has/slash"}, "job_name must match"),
@@ -1570,7 +1245,7 @@ class TestDispatchViaSkypilot:
             ({"env_file": None}, "No object storage settings"),
         ],
         ids=[
-            "missing-compute-template",
+            "missing-compute",
             "missing-cmd",
             "api-server-and-local",
             "bad-job-name",
@@ -1609,9 +1284,8 @@ class TestDispatchViaSkypilot:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv(_SKYPILOT_API_SERVER_ENV, raising=False)
 
-        template = _write_runpod_yaml(tmp_path)
         kwargs: dict[str, object] = {
-            "compute_template": str(template),
+            "compute": _runpod_compute(),
             "cmd": "echo",
             "env_file": str(env_file),
             "job_name": "ok-name",
@@ -1644,9 +1318,8 @@ class TestDispatchViaSkypilot:
             "synth_setter.pipeline.skypilot_launch._run_cred_bootstrap",
             MagicMock(side_effect=RuntimeError("simulated bootstrap failure")),
         )
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="bootstrap-raise",
@@ -1659,20 +1332,17 @@ class TestDispatchViaSkypilot:
 
     def test_end_to_end_dispatch_uses_cmd_as_run_block(
         self,
-        tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Happy-path dispatch: sky.Task.from_yaml_config receives a doc whose ``run`` is sky_cfg.cmd.
+        """Happy-path dispatch: the submitted (real) ``sky.Task`` has ``run == sky_cfg.cmd``.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         cmd = "exec synth-setter-generate-dataset-from-hydra experiment=foo"
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd=cmd,
             env_file=str(env_file),
             job_name="dispatch-smoke",
@@ -1680,9 +1350,8 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        mock_sky.Task.from_yaml_config.assert_called()
-        passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert passed_doc["run"] == cmd
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.run == cmd
 
     def test_dispatch_uses_default_env_file_when_unset(
         self,
@@ -1700,9 +1369,8 @@ class TestDispatchViaSkypilot:
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
         monkeypatch.setattr(skypilot_launch, "DEFAULT_ENV_FILE", env_file)
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=None,
             job_name="default-env-file",
@@ -1710,9 +1378,8 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        task = mock_sky.Task.from_yaml_config.return_value
-        worker_env = task.update_envs.call_args.args[0]
-        assert worker_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.envs["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
 
     def test_dispatch_loads_skypilot_auth_from_env_file(
         self,
@@ -1741,9 +1408,8 @@ class TestDispatchViaSkypilot:
             return "launch-req"
 
         mock_sky.jobs.launch.side_effect = assert_dotenv_auth_is_active
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="dotenv-auth",
@@ -1781,9 +1447,8 @@ class TestDispatchViaSkypilot:
             return "launch-req"
 
         mock_sky.jobs.launch.side_effect = assert_local_auth
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="local-clears-auth",
@@ -1808,9 +1473,8 @@ class TestDispatchViaSkypilot:
         """
         mock_sky.stream_and_get.side_effect = RuntimeError("boom")
 
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="dispatch-fail",
@@ -1831,9 +1495,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="fan-out",
@@ -1842,18 +1505,16 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        assert mock_sky.Task.from_yaml_config.call_count == 3
+        assert mock_sky.jobs.launch.call_count == 3
         submitted_names = sorted(
             call.kwargs["name"] for call in mock_sky.jobs.launch.call_args_list
         )
         assert submitted_names == ["fan-out-r0", "fan-out-r1", "fan-out-r2"]
-        ranks_seen = sorted(
-            call.args[0][WORKER_RANK_ENV_VAR]
-            for call in mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        )
+        launched_envs = [call.args[0].envs for call in mock_sky.jobs.launch.call_args_list]
+        ranks_seen = sorted(env[WORKER_RANK_ENV_VAR] for env in launched_envs)
         assert ranks_seen == ["0", "1", "2"]
-        for call in mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list:
-            assert call.args[0][NUM_WORKERS_ENV_VAR] == "3"
+        for env in launched_envs:
+            assert env[NUM_WORKERS_ENV_VAR] == "3"
 
     def test_extra_envs_forwarded_to_each_rank(
         self,
@@ -1867,9 +1528,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="extra-envs",
@@ -1879,14 +1539,13 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        assert len(update_envs_calls) == 2
-        ranks_seen = sorted(call.args[0][WORKER_RANK_ENV_VAR] for call in update_envs_calls)
+        launched_envs = [call.args[0].envs for call in mock_sky.jobs.launch.call_args_list]
+        assert len(launched_envs) == 2
+        ranks_seen = sorted(env[WORKER_RANK_ENV_VAR] for env in launched_envs)
         assert ranks_seen == ["0", "1"]
-        for call in update_envs_calls:
-            injected = call.args[0]
-            assert injected["FOO"] == "bar"
-            assert injected[NUM_WORKERS_ENV_VAR] == "2"
+        for env in launched_envs:
+            assert env["FOO"] == "bar"
+            assert env[NUM_WORKERS_ENV_VAR] == "2"
 
     def test_worker_image_and_image_tag_injected_into_rank_env(
         self,
@@ -1904,9 +1563,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="provenance",
@@ -1915,7 +1573,7 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        injected = mock_sky.jobs.launch.call_args.args[0].envs
         assert injected["WORKER_IMAGE"] == "tinaudio/synth-setter:dev-snapshot-abc123"
         assert injected["IMAGE_TAG"] == "dev-snapshot-abc123"
 
@@ -1934,9 +1592,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="rank-precedence",
@@ -1946,11 +1603,11 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        ranks_seen = sorted(call.args[0][WORKER_RANK_ENV_VAR] for call in update_envs_calls)
+        launched_envs = [call.args[0].envs for call in mock_sky.jobs.launch.call_args_list]
+        ranks_seen = sorted(env[WORKER_RANK_ENV_VAR] for env in launched_envs)
         assert ranks_seen == ["0", "1"]
-        for call in update_envs_calls:
-            assert call.args[0][NUM_WORKERS_ENV_VAR] == "2"
+        for env in launched_envs:
+            assert env[NUM_WORKERS_ENV_VAR] == "2"
 
     def test_extra_envs_collision_with_resolved_env_keys_raises(
         self,
@@ -1965,9 +1622,8 @@ class TestDispatchViaSkypilot:
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="cred-overlap",
@@ -1992,9 +1648,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="no-spec-uri",
@@ -2004,10 +1659,10 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        assert len(update_envs_calls) == 2
-        for call in update_envs_calls:
-            assert WORKER_SPEC_URI_ENV not in call.args[0]
+        launched_envs = [call.args[0].envs for call in mock_sky.jobs.launch.call_args_list]
+        assert len(launched_envs) == 2
+        for env in launched_envs:
+            assert WORKER_SPEC_URI_ENV not in env
 
     def test_single_worker_dispatch_still_injects_rank_world_env(
         self,
@@ -2027,9 +1682,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             job_name="single-worker-env",
@@ -2037,9 +1691,8 @@ class TestDispatchViaSkypilot:
 
         dispatch_via_skypilot(sky_cfg)
 
-        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
-        assert len(update_envs_calls) == 1
-        injected = update_envs_calls[0].args[0]
+        assert mock_sky.jobs.launch.call_count == 1
+        injected = mock_sky.jobs.launch.call_args.args[0].envs
         assert injected[WORKER_RANK_ENV_VAR] == "0"
         assert injected[NUM_WORKERS_ENV_VAR] == "1"
 
@@ -2070,9 +1723,8 @@ class TestDispatchViaSkypilot:
         :param value: Parametrized malformed value for ``field``.
         :param match: Parametrized regex expected in the raised error.
         """
-        template = _write_runpod_yaml(tmp_path)
         kwargs: dict[str, object] = {
-            "compute_template": str(template),
+            "compute": _runpod_compute(),
             "cmd": "echo",
             "env_file": str(env_file),
             "job_name": "ok-name",
@@ -2095,9 +1747,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo",
             env_file=str(env_file),
             api_server="https://api.example.com",
@@ -2122,9 +1773,8 @@ class TestDispatchViaSkypilot:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         sky_cfg = SkypilotLaunchConfig(
-            compute_template=str(template),
+            compute=_runpod_compute(),
             cmd="echo hi",
             env_file=str(env_file),
             job_name=None,
@@ -2165,7 +1815,7 @@ class TestLoadLaunchConfig:
         """
         path = _write_launch_yaml(
             tmp_path,
-            compute_template="configs/compute/runpod-template.yaml",
+            compute="runpod/smoke",
             cmd="exec synth-setter-train experiment=surge/ffn_simple",
             worker_image_tag="dev-snapshot",
             tail=True,
@@ -2173,10 +1823,31 @@ class TestLoadLaunchConfig:
 
         cfg = load_launch_config(path)
 
-        assert cfg.compute_template == "configs/compute/runpod-template.yaml"
+        assert cfg.compute is not None
+        assert cfg.compute.name == "runpod-smoke"
         assert cfg.cmd == "exec synth-setter-train experiment=surge/ffn_simple"
         assert cfg.worker_image_tag == "dev-snapshot"
         assert cfg.tail is True
+
+    def test_unknown_compute_option_raises_value_error(self, tmp_path: Path) -> None:
+        """A mistyped compute option name fails loudly, listing the alternatives.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = _write_launch_yaml(tmp_path, cmd="echo", compute="runpod/typo-option")
+
+        with pytest.raises(ValueError, match="unknown skypilot_launch/compute option"):
+            load_launch_config(path)
+
+    def test_non_string_compute_raises_value_error(self, tmp_path: Path) -> None:
+        """An inline compute mapping is rejected — launch configs name options.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        path = _write_launch_yaml(tmp_path, cmd="echo", compute={"name": "inline"})
+
+        with pytest.raises(ValueError, match="must name a skypilot_launch/compute option"):
+            load_launch_config(path)
 
     @pytest.mark.parametrize(
         "yaml_text",
@@ -2239,11 +1910,10 @@ class TestSkypilotLaunchCli:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         cmd = "cd /home/build/synth-setter && exec synth-setter-train experiment=surge/ffn_simple"
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/smoke",
             cmd=cmd,
             env_file=str(env_file),
         )
@@ -2252,8 +1922,8 @@ class TestSkypilotLaunchCli:
 
         assert result.exit_code == 0, result.output
         mock_sky.jobs.launch.assert_called_once()
-        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert task_doc["run"] == cmd
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.run == cmd
 
     def test_extra_env_options_forward_values_to_worker(
         self,
@@ -2267,10 +1937,9 @@ class TestSkypilotLaunchCli:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/smoke",
             cmd='echo "experiment=${EXPERIMENT:-surge/ffn_simple}"',
             env_file=str(env_file),
             extra_envs={"EXPERIMENT": "surge/ffn_simple"},
@@ -2290,7 +1959,7 @@ class TestSkypilotLaunchCli:
         )
 
         assert result.exit_code == 0, result.output
-        injected = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args.args[0]
+        injected = mock_sky.jobs.launch.call_args.args[0].envs
         assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
         assert injected["EXPERIMENT"] == "surge/flow_simple"
 
@@ -2306,10 +1975,9 @@ class TestSkypilotLaunchCli:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_sentinel_volume_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/network-volume/staging",
             cmd="echo hello",
             env_file=str(env_file),
             network_volume="ss-datasets-us-ca-2",
@@ -2321,8 +1989,8 @@ class TestSkypilotLaunchCli:
         )
 
         assert result.exit_code == 0, result.output
-        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-ap-jp-1"}
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.volumes == {"/workspace/network-volume": "ss-datasets-ap-jp-1"}
 
     def test_config_network_volume_reaches_submitted_task(
         self,
@@ -2336,10 +2004,9 @@ class TestSkypilotLaunchCli:
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         """
-        template = _write_sentinel_volume_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/network-volume/staging",
             cmd="echo hello",
             env_file=str(env_file),
             network_volume="ss-datasets-us-ca-2",
@@ -2348,8 +2015,8 @@ class TestSkypilotLaunchCli:
         result = CliRunner().invoke(main, [str(cfg_path)])
 
         assert result.exit_code == 0, result.output
-        task_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
-        assert task_doc["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
 
     def test_network_volume_without_sentinel_exits_with_clean_error(
         self,
@@ -2361,10 +2028,9 @@ class TestSkypilotLaunchCli:
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         """
-        template = _write_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/smoke",
             cmd="echo hello",
             env_file=str(env_file),
         )
@@ -2376,7 +2042,7 @@ class TestSkypilotLaunchCli:
 
         assert result.exit_code != 0
         assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "no ${NETWORK_VOLUME}" in result.output
+        assert "no mount_network_volume" in result.output
 
     def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
         """A nonexistent path is a usage error, not a dispatch attempt.
@@ -2414,10 +2080,9 @@ class TestSkypilotLaunchCli:
         """
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=not-a-url\n")
-        template = _write_runpod_yaml(tmp_path)
         cfg_path = _write_launch_yaml(
             tmp_path,
-            compute_template=str(template),
+            compute="runpod/smoke",
             cmd="echo",
             env_file=str(env_file),
         )
@@ -2574,12 +2239,17 @@ class TestCheckedInLaunchConfigs:
         cfg = load_launch_config(self._LAUNCH_DIR / name)
 
         assert cfg.cmd, "shipped launch configs must bake the worker cmd"
-        assert cfg.compute_template, "shipped launch configs must name a compute template"
-        template = self._REPO_ROOT / cfg.compute_template
-        assert template.is_file(), f"compute_template does not exist at {template}"
-        doc = _load_compute_template_with_cmd(template, cfg.cmd)
-        assert cfg.cmd in str(doc["run"])
-        assert _detect_provider_from_doc(doc, source=template) == "runpod"
+        assert cfg.compute is not None, "shipped launch configs must name a compute option"
+        from synth_setter.pipeline.compute_task import build_sky_task
+
+        task = build_sky_task(
+            cfg.compute,
+            cmd=cfg.cmd,
+            worker_image="tinaudio/synth-setter:test-tag",
+            network_volume=cfg.network_volume,
+        )
+        assert task.run is not None and cfg.cmd in task.run
+        assert cfg.compute.provider() == "runpod"
 
     def test_every_shipped_launch_config_validates(self) -> None:
         """Future configs added to ``configs/launch/`` stay loadable without test edits."""

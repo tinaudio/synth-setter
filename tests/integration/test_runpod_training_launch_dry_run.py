@@ -12,28 +12,28 @@ import sky
 import yaml
 from sky.volumes import Volume
 
+from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.skypilot_launch import (
-    _inject_network_volume,
-    _load_compute_template_with_cmd,
-    load_launch_config,
-)
+from synth_setter.pipeline.skypilot_launch import load_launch_config
 
 _REPO_ROOT = Path(__file__).parents[2]
 _LAUNCH_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
 
 
-def _compose_task_doc(launch_config: SkypilotLaunchConfig) -> dict[str, object]:
-    """Load the launch config's template and inject cmd + network volume, as dispatch does.
+def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
+    """Build the real ``sky.Task`` from the launch config's compute option, as dispatch does.
 
-    :param launch_config: Loaded ``SkypilotLaunchConfig`` with template and cmd set.
-    :return: Task YAML dict ready for ``sky.Task.from_yaml_config``.
+    :param launch_config: Loaded ``SkypilotLaunchConfig`` with compute and cmd set.
+    :return: Constructed ``sky.Task`` (no submission).
     """
-    assert launch_config.compute_template is not None
+    assert launch_config.compute is not None
     assert launch_config.cmd is not None
-    template_path = _REPO_ROOT / launch_config.compute_template
-    task_doc = _load_compute_template_with_cmd(template_path, launch_config.cmd)
-    return _inject_network_volume(task_doc, launch_config.network_volume, source=template_path)
+    return build_sky_task(
+        launch_config.compute,
+        cmd=launch_config.cmd,
+        worker_image=f"tinaudio/synth-setter:{launch_config.worker_image_tag}",
+        network_volume=launch_config.network_volume,
+    )
 
 
 @pytest.mark.parametrize(
@@ -59,10 +59,10 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     :param launch_config_name: Shipped RunPod training launch config to exercise.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
-    assert launch_config.compute_template is not None
+    assert launch_config.compute is not None
     assert launch_config.cmd is not None
 
-    task = sky.Task.from_yaml_config(_compose_task_doc(launch_config))
+    task = _compose_task(launch_config)
     task.validate()
     assert isinstance(task.run, str)
     _, entrypoint, train_args = task.run.partition("exec synth-setter-train")
@@ -95,10 +95,10 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
 def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None:
     """The network-volume launch copies its mounted dataset to pod-local storage."""
     launch_config = load_launch_config(_LAUNCH_DIR / "train-runpod-flow-simple-440k-volume.yaml")
-    assert launch_config.compute_template is not None
+    assert launch_config.compute is not None
     assert launch_config.cmd is not None
 
-    task = sky.Task.from_yaml_config(_compose_task_doc(launch_config))
+    task = _compose_task(launch_config)
 
     assert task.to_yaml_config()["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
     assert isinstance(task.run, str)
@@ -109,10 +109,10 @@ def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None
 def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> None:
     """The staging launch seeds the mounted volume through the checked script."""
     launch_config = load_launch_config(_LAUNCH_DIR / "stage-runpod-surge-simple-440k-volume.yaml")
-    assert launch_config.compute_template is not None
+    assert launch_config.compute is not None
     assert launch_config.cmd is not None
 
-    task = sky.Task.from_yaml_config(_compose_task_doc(launch_config))
+    task = _compose_task(launch_config)
 
     assert task.to_yaml_config()["volumes"] == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
     assert isinstance(task.run, str)
@@ -121,25 +121,28 @@ def test_runpod_network_volume_staging_task_uses_versioned_dataset_path() -> Non
 
 
 @pytest.mark.parametrize(
-    "template_file",
+    "compute_option",
     [
-        "runpod-network-volume-staging-template.yaml",
-        "runpod-network-volume-training-template.yaml",
-        "runpod-network-volume-training-hclass-template.yaml",
+        "runpod/network-volume/staging",
+        "runpod/network-volume/training",
+        "runpod/network-volume/training-hclass",
     ],
 )
-def test_volume_templates_install_operator_ssh_keys(template_file: str) -> None:
-    """Each volume template's setup decodes forwarded operator keys into authorized_keys.
+def test_volume_options_install_operator_ssh_keys(compute_option: str) -> None:
+    """Each volume option's setup decodes forwarded operator keys into authorized_keys.
 
-    :param template_file: Compute template filename under ``configs/compute/``.
+    :param compute_option: Compute option name under ``skypilot_launch/compute``.
     """
-    template = yaml.safe_load(
-        (_REPO_ROOT / "src/synth_setter/configs/compute" / template_file).read_text()
+    compute = load_compute_option(compute_option)
+    task = build_sky_task(
+        compute,
+        cmd="echo probe",
+        worker_image="tinaudio/synth-setter:test-tag",
+        network_volume="ss-datasets-us-ca-2",
     )
-    setup = template["setup"]
-    assert "OPERATOR_SSH_PUBKEYS_B64" in setup
-    assert "base64 -d >> ~/.ssh/authorized_keys" in setup
-    assert "OPERATOR_SSH_PUBKEYS_B64" in template["envs"]
+    assert task.setup is not None
+    assert "OPERATOR_SSH_PUBKEYS_B64" in task.setup
+    assert "base64 -d >> ~/.ssh/authorized_keys" in task.setup
 
 
 @pytest.mark.parametrize(
