@@ -273,22 +273,27 @@ class TestOperatorSshPubkeys:
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
     def test_unreadable_key_file_fails_open(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """An unreadable key file degrades to no-keys instead of raising.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to simulate the read failure.
         :param capsys: Pytest fixture capturing stdout/stderr.
         """
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
-        locked = ssh_dir / "authorized_keys"
-        locked.write_text("ssh-ed25519 AAAAkey1 box-a\n")
-        locked.chmod(0o000)
-        try:
-            assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
-        finally:
-            locked.chmod(0o600)
+        (ssh_dir / "authorized_keys").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+
+        def _raise_permission_error(_path: Path) -> bytes:
+            raise PermissionError("test key is unreadable")
+
+        monkeypatch.setattr(Path, "read_bytes", _raise_permission_error)
+
+        assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
     def test_binary_junk_in_key_file_salvages_valid_lines(self, tmp_path: Path) -> None:

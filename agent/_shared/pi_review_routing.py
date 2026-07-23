@@ -771,6 +771,13 @@ def build_worker_prompt(
         if path.is_absolute() or path.as_posix() != changed_path or ".." in path.parts:
             raise ValueError("Worker assignment paths must be canonical and repository-relative")
     checklist_path = resolve_checklist_path(skill)
+    skill_instruction = (
+        f"Invoke the tinaudio-synth-setter-skills:{skill} skill via the Skill tool."
+    )
+    if skill in REPO_LOCAL_SKILLS:
+        skill_instruction = (
+            f"Invoke the repo-local {skill} skill by reading agent/skills/{skill}/SKILL.md."
+        )
     paths = "\n".join(f"- {path}" for path in changed_paths)
     return f"""Review assignment
 Target: {target}

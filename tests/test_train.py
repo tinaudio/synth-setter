@@ -52,6 +52,7 @@ from tests.conftest import (
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embeddings,
+    augment_lance_splits_with_same,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
     build_surge_xt_embedding_train_cfg,
@@ -1899,6 +1900,49 @@ def test_train_embedding_conditioning_real_e2e(
     :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
     """
     dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
+    )
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert_finite_train_loss(metric_dict)
+
+
+_SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.same_e2e
+@pytest.mark.parametrize("conditioning", _SAME_CONDITIONING_PROFILES)
+def test_train_same_conditioning_real_e2e(
+    require_same_extra: None,
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+    conditioning: str,
+) -> None:
+    """Train the flow model one step over a real SAME-augmented Surge XT dataset.
+
+    The SAME sibling of :func:`test_train_embedding_conditioning_real_e2e`: renders a
+    Surge XT dataset, appends the ``same_s``/``same_l`` column via the real
+    ``add_embeddings`` SAME endpoint (real ``stable_audio_tools`` encoder — no mocks),
+    then trains ``experiment=surge/flow_simple`` one step under
+    ``conditioning=<profile>`` and asserts a finite ``train/loss``. Needs the optional
+    ``same`` extra, so it carries ``same_e2e`` and runs in that lane.
+
+    :param require_same_extra: Skips before the render when the ``same`` extra is absent.
+    :param tmp_path: The temporary output/log path.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
+    :param param_spec_name: Param spec driving model width and callback labels.
+    :param conditioning: SAME conditioning profile under test (``same_s`` / ``same_l``).
+    """
+    dataset_root = augment_lance_splits_with_same(surge_xt_smoke_datasets, conditioning)
     cfg = build_surge_xt_embedding_train_cfg(
         tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
     )

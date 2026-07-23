@@ -44,6 +44,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embeddings,
+    augment_lance_splits_with_same,
     build_surge_xt_embedding_train_cfg,
 )
 from tests.helpers.eval_fakes import (
@@ -1347,30 +1348,22 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
 _EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
 
 
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.network
-@pytest.mark.parametrize("conditioning", _EMBEDDING_CONDITIONING_PROFILES)
-def test_train_eval_embedding_conditioning_real_e2e(
-    tmp_path: Path,
-    surge_xt_smoke_datasets: Path,
-    param_spec_name: str,
-    conditioning: str,
+def _assert_conditioning_train_validate_finite(
+    tmp_path: Path, dataset_root: Path, param_spec_name: str, conditioning: str
 ) -> None:
-    """Train the flow model then validate its checkpoint over a real clap/m2l dataset.
+    """Train one step then ``evaluate(validate)`` a conditioning profile, asserting finiteness.
 
-    Renders a Surge XT dataset, appends the profile's embedding column via the real
-    ``add_embeddings`` endpoint (real music2latent + CLAP encoders — no mocks),
-    trains ``experiment=surge/flow_simple`` one step under ``conditioning=<profile>``
-    to a checkpoint, then drives ``evaluate(mode=validate)`` and asserts a finite
+    The shared train->checkpoint->validate flow behind both the clap/m2l and SAME
+    real-e2e tests; callers differ only in how they augment ``dataset_root`` with the
+    profile's Lance column. Trains ``experiment=surge/flow_simple`` under
+    ``conditioning=<profile>`` to a checkpoint, then validates it and asserts a finite
     ``val/param_mse`` (the flow model logs param MSE, not ``val/loss``).
 
     :param tmp_path: The temporary output/log path shared by train and eval.
-    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
+    :param dataset_root: Dataset root already augmented with the profile's column.
     :param param_spec_name: Param spec driving model width and callback labels.
-    :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
+    :param conditioning: Conditioning profile group (``m2l``/``clap``/``same_s``/``same_l``).
     """
-    dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
     cfg_train = build_surge_xt_embedding_train_cfg(
         tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
     )
@@ -1416,3 +1409,66 @@ def test_train_eval_embedding_conditioning_real_e2e(
         GlobalHydra.instance().clear()
 
     assert math.isfinite(val_metric_dict["val/param_mse"].item())
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.parametrize("conditioning", _EMBEDDING_CONDITIONING_PROFILES)
+def test_train_eval_embedding_conditioning_real_e2e(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+    conditioning: str,
+) -> None:
+    """Train the flow model then validate its checkpoint over a real clap/m2l dataset.
+
+    Renders a Surge XT dataset, appends the profile's embedding column via the real
+    ``add_embeddings`` endpoint (real music2latent + CLAP encoders — no mocks), then
+    runs the shared train->validate flow under ``conditioning=<profile>``.
+
+    :param tmp_path: The temporary output/log path shared by train and eval.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
+    :param param_spec_name: Param spec driving model width and callback labels.
+    :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
+    """
+    dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
+    _assert_conditioning_train_validate_finite(
+        tmp_path, dataset_root, param_spec_name, conditioning
+    )
+
+
+_SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.same_e2e
+@pytest.mark.parametrize("conditioning", _SAME_CONDITIONING_PROFILES)
+def test_train_eval_same_conditioning_real_e2e(
+    require_same_extra: None,
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+    conditioning: str,
+) -> None:
+    """Train the flow model then validate its checkpoint over a real SAME dataset.
+
+    The SAME sibling of :func:`test_train_eval_embedding_conditioning_real_e2e`:
+    renders a Surge XT dataset, appends the ``same_s``/``same_l`` column via the real
+    ``add_embeddings`` SAME endpoint (real ``stable_audio_tools`` encoder — no mocks),
+    trains ``experiment=surge/flow_simple`` one step to a checkpoint, then drives
+    ``evaluate(mode=validate)`` and asserts a finite ``val/param_mse``. Needs the
+    optional ``same`` extra, so it carries ``same_e2e`` and runs in that lane.
+
+    :param require_same_extra: Skips before the render when the ``same`` extra is absent.
+    :param tmp_path: The temporary output/log path shared by train and eval.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
+    :param param_spec_name: Param spec driving model width and callback labels.
+    :param conditioning: SAME conditioning profile under test (``same_s`` / ``same_l``).
+    """
+    dataset_root = augment_lance_splits_with_same(surge_xt_smoke_datasets, conditioning)
+    _assert_conditioning_train_validate_finite(
+        tmp_path, dataset_root, param_spec_name, conditioning
+    )
