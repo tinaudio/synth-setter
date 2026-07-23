@@ -226,7 +226,7 @@ def fold_lance_shard_into_welford(
 
     shard_rows = 0
     for row in iter_lance_column_rows(shard_uri, MEL_SPEC_FIELD, storage_options=storage_options):
-        existing = update(existing, row)
+        existing = update(existing, row.astype(np.float32, copy=False))
         shard_rows += 1
     if shard_rows == 0:
         raise ValueError(

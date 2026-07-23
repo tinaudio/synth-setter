@@ -50,6 +50,7 @@ __all__ = [
     "R2Location",
     "RenderConfig",
     "ShardSpec",
+    "StorageDType",
     "Split",
 ]
 
@@ -153,6 +154,7 @@ def _current_platform() -> str:
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
 _ParamSampleCadence = Literal["sample", "shard"]
+StorageDType = Literal["float16", "float32"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:
@@ -270,6 +272,14 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     min_loudness: float = Field(
         description="Per-sample loudness floor; renders quieter than this are rejected/retried."
+    )
+    audio_dtype: StorageDType = Field(
+        default="float16",
+        description="Physical scalar dtype used for waveform tensors in the dataset.",
+    )
+    mel_spec_dtype: StorageDType = Field(
+        default="float32",
+        description="Physical scalar dtype used for mel-spectrogram tensors in the dataset.",
     )
     samples_per_render_batch: int = Field(
         default=32,

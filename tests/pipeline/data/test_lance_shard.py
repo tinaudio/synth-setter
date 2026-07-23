@@ -311,6 +311,21 @@ def test_tensor_array_empty_batch_raises_value_error() -> None:
         tensor_array(np.zeros((0, 2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
 
 
+def test_lance_schema_uses_configured_signal_dtypes() -> None:
+    """Schema construction applies configured audio and mel storage widths."""
+    field_dtypes = {
+        **DATASET_FIELD_DTYPES,
+        AUDIO_FIELD: np.dtype("float32"),
+        MEL_SPEC_FIELD: np.dtype("float16"),
+    }
+
+    schema = lance_schema(_FIELD_SHAPES, _METADATA, field_dtypes=field_dtypes)
+
+    assert schema.field(AUDIO_FIELD).type.value_type == pa.float32()
+    assert schema.field(MEL_SPEC_FIELD).type.value_type == pa.float16()
+    assert schema.field(PARAM_ARRAY_FIELD).type.value_type == pa.float32()
+
+
 def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None:
     """Each column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
 

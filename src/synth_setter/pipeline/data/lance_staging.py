@@ -119,7 +119,7 @@ def stage_lance_shard_attempt(
     # pays the `lance` import cost.
     import lance
 
-    from synth_setter.data.vst.shapes import dataset_field_shapes
+    from synth_setter.data.vst.shapes import dataset_field_dtypes, dataset_field_shapes
     from synth_setter.pipeline.data.lance_shard import (
         lance_fragment,
         lance_schema,
@@ -135,7 +135,9 @@ def stage_lance_shard_attempt(
         )
     render = spec.render_for_shard(shard)
     expected_schema = lance_schema(
-        dataset_field_shapes(render, spec.num_params), render.shard_metadata()
+        dataset_field_shapes(render, spec.num_params),
+        render.shard_metadata(),
+        field_dtypes=dataset_field_dtypes(render),
     )
     if not dataset.schema.equals(expected_schema, check_metadata=True):
         raise ValueError(

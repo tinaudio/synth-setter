@@ -44,6 +44,8 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
+            "audio_dtype": "float16",
+            "mel_spec_dtype": "float32",
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
             "max_retries": 0,
