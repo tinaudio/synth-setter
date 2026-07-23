@@ -1,6 +1,6 @@
 # Flow matching on an H-class GPU (H100/H200/B200 any-of) in AP-JP-1,
 # hydrating from the JP dataset volume and reading train batches through the
-# Lance fragment sampler (#2253).
+# map-style loader with num_workers=24, the winning throughput config (#2320).
 
 compute_template: src/synth_setter/configs/compute/runpod-network-volume-training-hclass-template.yaml
 worker_image_tag: devcontainer-tools
@@ -16,8 +16,6 @@ cmd: >-
   experiment=surge/flow_simple_440k
   datamodule.download_dataset_root_uri=file:///workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z
   training.upload_checkpoints_during_training=true
-  datamodule.use_fragment_sampler=true
-  datamodule.num_workers=0
+  datamodule.num_workers=24
   datamodule.batch_size=2048
-  datamodule.batch_readahead=16
   hydra.run.dir=/home/build/synth-setter/train-run
