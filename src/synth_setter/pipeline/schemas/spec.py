@@ -154,7 +154,7 @@ def _current_platform() -> str:
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
 _ParamSampleCadence = Literal["sample", "shard"]
-StorageDType = Literal["float16", "float32"]
+type StorageDType = Literal["float16", "float32"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:
