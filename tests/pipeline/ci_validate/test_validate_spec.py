@@ -146,11 +146,20 @@ class TestValidateStructure:
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
-        """Required render set contains only model fields without defaults."""
-        expected = {
-            name for name, field in RenderConfig.model_fields.items() if field.is_required()
+        """Only backward-compatible storage fields may be omitted."""
+        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
+            "audio_dtype",
+            "mel_spec_dtype",
         }
-        assert set(_REQUIRED_RENDER_FIELDS) == expected
+
+    def test_other_defaulted_render_field_remains_required(self) -> None:
+        """Platform-dependent defaults must be materialized in persisted specs."""
+        spec = _make_valid_spec()
+        del spec["render"]["gui_toggle_cadence"]
+
+        errors = validate_structure(spec)
+
+        assert any("gui_toggle_cadence" in error for error in errors)
 
 
 class TestValidateTestValues:
