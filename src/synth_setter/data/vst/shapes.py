@@ -30,8 +30,8 @@ CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 
-# Backward-compatible storage defaults. Signal fields can be overridden by
-# ``RenderConfig``; parameter arrays remain float32.
+# Backward-compatible storage defaults. ``RenderConfig`` overrides signal
+# storage; parameter arrays retain the default dtype.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
     AUDIO_FIELD: np.dtype("float16"),
     MEL_SPEC_FIELD: np.dtype("float32"),

@@ -381,10 +381,18 @@ def test_fold_lance_float16_mel_accumulates_in_float32(
 
     count, mean, m2 = stats_script.fold_lance_shard_into_welford((0, 0, 0), shard)
 
+    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
+
+    stored_rows = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD))).astype(
+        np.float32
+    )
+    expected_mean = stored_rows.mean(axis=0)
+    expected_m2 = ((stored_rows - expected_mean) ** 2).sum(axis=0)
     assert count == spec.render.samples_per_shard
     assert isinstance(mean, np.ndarray) and mean.dtype == np.float32
     assert isinstance(m2, np.ndarray) and m2.dtype == np.float32
-    assert np.isfinite(m2).all()
+    np.testing.assert_allclose(mean, expected_mean, rtol=1e-6)
+    np.testing.assert_allclose(m2, expected_m2, rtol=1e-5)
 
 
 def test_stream_stats_lance_rejects_empty_shard_sequence(stats_script: ModuleType) -> None:

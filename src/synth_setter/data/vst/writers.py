@@ -263,8 +263,8 @@ def make_lance_dataset(
 
     Not resumable: any dataset already at ``lance_dir`` is overwritten on each
     run. Audio and mel-spectrogram tensors use their configured physical
-    dtypes; parameter arrays stay ``float32``. The shard metadata is embedded
-    in Arrow schema metadata so validation and finalize recover the sidecar
+    dtypes; parameter arrays retain their fixed storage dtype. The shard metadata
+    is embedded in Arrow schema metadata so validation and finalize recover the sidecar
     payload at read time. Each
     render batch becomes one Lance fragment, committed as one dataset at the
     end, then compacted to a single fragment with pre-compaction manifests and
