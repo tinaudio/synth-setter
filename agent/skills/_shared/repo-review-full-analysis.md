@@ -82,8 +82,10 @@ Determine the PR number:
 Fetch metadata once:
 
 ```bash
-gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+gh pr view <N> --repo "$repo" \
+  --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)"
 ```
 
 If no PR exists for the current branch, stop and tell the user to push and open a PR first.
