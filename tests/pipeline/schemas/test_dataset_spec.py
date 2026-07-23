@@ -103,7 +103,7 @@ class TestRenderConfig:
             RenderConfig(**kwargs)
 
     def test_storage_dtype_defaults_preserve_existing_dataset_encoding(self) -> None:
-        """Omitted storage dtypes retain the historical audio and mel encodings."""
+        """Omitted storage dtypes use the RenderConfig defaults."""
         cfg = RenderConfig(**_valid_render_kwargs())
 
         assert cfg.audio_dtype == "float16"

@@ -221,7 +221,12 @@ def _validate_lance_dataset(
             schema_errors.append(f"missing column: {name!r}")
             continue
         schema_errors.extend(
-            _validate_lance_field(name, field, expected_shapes[name], expected_dtypes[name])
+            _validate_lance_field(
+                name,
+                field,
+                expected_shapes[name],
+                expected_dtype=expected_dtypes[name],
+            )
         )
     errors.extend(schema_errors)
     if not schema_errors:
@@ -253,6 +258,7 @@ def _validate_lance_field(
     name: str,
     field: object,
     expected_shape: tuple[int, ...],
+    *,
     expected_dtype: np.dtype,
 ) -> list[str]:
     """Validate one Lance fixed-shape tensor field against the writer contract.
