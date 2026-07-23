@@ -9,6 +9,7 @@ VST renderer).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -150,7 +151,7 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
     return (num_samples, num_params)
 
 
-def dataset_field_dtypes(render: RenderConfig) -> dict[str, np.dtype]:
+def dataset_field_dtypes(render: RenderConfig) -> Mapping[str, np.dtype]:
     """Return the configured physical dtype for each writer-emitted field.
 
     :param render: Per-shard renderer config supplying signal storage dtypes.
