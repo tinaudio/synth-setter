@@ -333,7 +333,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "exactly one model call owns each pass" in text
     assert "agent_id" in text
     assert "output_path" in text
-    assert "foreground host exits" in text
+    assert "treat foreground host exit as proof" in text
     assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)

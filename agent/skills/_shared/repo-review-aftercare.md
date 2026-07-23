@@ -84,8 +84,8 @@ pass not present in the runtime manifest.
 
    Overall `status` is exactly `complete`, `stale`, or `failed`. Attempt status
    is exactly `success`, `failed`, `stale`, `verified`, `rejected`, or
-   `malformed-report`; supervisor-only rows add `adopted-foreground-result` and
-   `terminated-original-worker`. Diagnostic category is exactly `capacity`,
+   `malformed-report`; supervisor-only rows add `adopted-foreground-result`.
+   Diagnostic category is exactly `capacity`,
    `child-exit`, `invalid-result`, `missing-result`, `ownership`, or
    `supervisor-error`. Set `child_exit_code` to `null` and `log_tail` to an empty
    string; the supervisor replaces both with observed process evidence.

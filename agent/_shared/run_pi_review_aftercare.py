@@ -36,7 +36,6 @@ else:
 _AFTERCARE_MODEL = "gpt-5.6-terra"
 _AFTERCARE_PROVIDER = "openai-codex"
 _AFTERCARE_THINKING = "medium"
-_FOREGROUND_STOPPED_ENV = "SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED"
 _RUNTIME_MANIFEST_ENV = "PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST"
 _MAX_LOG_BYTES = 64 * 1024
 _LOG_TAIL_CHARS = 16 * 1024
@@ -49,7 +48,6 @@ _CAPACITY_MARKERS = (
 
 type AttemptStatus = Literal[
     "adopted-foreground-result",
-    "terminated-original-worker",
     "success",
     "failed",
     "stale",
@@ -498,12 +496,11 @@ def _adopt_report(deferred: DeferredPass, target: str) -> WorkerReport | None:
 
 
 def _plan_ownership(manifest: AftercareManifest) -> _OwnershipPlan:
-    """Adopt reports and fail closed unless shutdown ended other owners.
+    """Adopt reports and fail closed when a foreground owner may remain live.
 
     :param manifest: Validated foreground ownership handoff.
-    :returns: Adoption, termination, and relaunch plan.
+    :returns: Adoption and relaunch plan.
     """
-    host_stopped = os.environ.get(_FOREGROUND_STOPPED_ENV) == "1"
     remaining: list[DeferredPass] = []
     adopted_passes: list[DeferredPass] = []
     attempts: list[AftercareAttempt] = []
@@ -522,24 +519,17 @@ def _plan_ownership(manifest: AftercareManifest) -> _OwnershipPlan:
             adopted_passes.append(deferred)
             adopted.append(report)
             continue
-        if not host_stopped:
-            attempts.append(
-                _attempt(
-                    deferred,
-                    "failed",
-                    "foreground owner cannot be stopped through the model-facing Tintin handles",
-                )
-            )
-            blocked = True
+        if deferred.agent_id is None:
+            remaining.append(deferred)
             continue
         attempts.append(
             _attempt(
                 deferred,
-                "terminated-original-worker",
-                "foreground Pi exited and Tintin session shutdown aborted remaining workers",
+                "failed",
+                "foreground owner cannot be stopped through the model-facing Tintin handles",
             )
         )
-        remaining.append(deferred)
+        blocked = True
     return _OwnershipPlan(
         deferred_passes=tuple(remaining),
         adopted_passes=tuple(adopted_passes),
@@ -862,7 +852,6 @@ def launch_aftercare(manifest_path: Path) -> int:
     """
     load_manifest(manifest_path)
     environment = os.environ.copy()
-    environment[_FOREGROUND_STOPPED_ENV] = "1"
     log_path = _sidecar_path(manifest_path, ".aftercare.log")
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(  # noqa: S603

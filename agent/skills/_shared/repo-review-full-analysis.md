@@ -215,14 +215,13 @@ one-snapshot/no-poll contract; do not make a second status call while preparing
 the transfer.
 
 The installed Tintin model-facing tools can inspect or steer an agent but cannot
-stop one. Do not invent a stop tool. The process boundary supplies cancellation:
-`run_pi_review.sh` waits until the foreground host exits, and Tintin's
-`session_shutdown` aborts all remaining workers before the launcher starts the
-detached supervisor. The supervisor first adopts any now-valid `output_path` and
-records `adopted-foreground-result`; otherwise it requires proof that foreground
-shutdown ended the owner, records `terminated-original-worker`, and only then
-permits a fresh pass. It fails closed without launching Pi if neither condition
-can be proven.
+stop one. Do not invent a stop tool or treat foreground host exit as proof that a
+worker stopped; detached workers may continue after that boundary. The supervisor
+adopts any now-valid `output_path` and records `adopted-foreground-result`.
+Otherwise it fails closed with an ownership diagnostic instead of launching a
+duplicate pass. A legacy manifest without ownership handles may launch because it
+cannot identify a foreground owner, but every newly generated row must preserve
+both handles.
 
 Before returning, write the strict manifest at
 `$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred

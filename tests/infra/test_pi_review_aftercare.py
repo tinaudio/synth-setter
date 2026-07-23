@@ -452,19 +452,25 @@ def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) ->
     assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
 
-def test_supervisor_relaunch_after_host_shutdown_records_terminated_owner(tmp_path: Path) -> None:
-    """Audit foreground termination before assigning a fresh aftercare owner.
+def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path) -> None:
+    """Fail closed because foreground host exit does not stop its workers.
 
     :param tmp_path: Temporary review root and fake Pi executable.
     """
-    _fake_pi(tmp_path)
+    launch_marker = tmp_path / "pi-launched"
+    pi = _fake_pi(tmp_path)
+    pi.write_text(
+        pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
+    )
     manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
 
     completed = _run_supervisor(manifest, _environment(tmp_path, mode="valid"))
 
-    assert completed == 0
-    statuses = [attempt.status for attempt in _read_result(manifest).attempts]
-    assert statuses == ["terminated-original-worker", "success"]
+    assert completed == 1
+    assert not launch_marker.exists()
+    result = _read_result(manifest)
+    assert [attempt.status for attempt in result.attempts] == ["failed"]
+    assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
 
 def test_aftercare_result_failed_status_requires_diagnostic() -> None:
