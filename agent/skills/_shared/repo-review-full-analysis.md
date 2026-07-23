@@ -207,20 +207,36 @@ leaves at least two minutes for deterministic aggregation and delivery.
 
 Do not launch another foreground verifier, wait for an unfinished second pass,
 or retry a second-pass candidate after the single snapshot; **defer the
-unfinished second pass to aftercare**. Record its audit status as `deferred`, not
-`unavailable`. Before returning, write the strict manifest at
+unfinished second pass to aftercare**. Deferral is an ownership transfer, and
+exactly one model call owns each pass. Record its audit status as `deferred`, not
+`unavailable`, then preserve the original worker's `Agent ID` as `agent_id` and
+`Output file` as `output_path` in that deferred row. Keep the foreground
+one-snapshot/no-poll contract; do not make a second status call while preparing
+the transfer.
+
+The installed Tintin model-facing tools can inspect or steer an agent but cannot
+stop one. Do not invent a stop tool or treat foreground host exit as proof that a
+worker stopped; detached workers may continue after that boundary. The supervisor
+adopts any now-valid `output_path` and records `adopted-foreground-result`.
+Otherwise it fails closed with an ownership diagnostic instead of launching a
+duplicate pass. A legacy manifest without ownership handles may launch because it
+cannot identify a foreground owner, but every newly generated row must preserve
+both handles.
+
+Before returning, write the strict manifest at
 `$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
 skill/pass/model rows, and fingerprints for every foreground finding.
 The launcher validates it and starts detached aftercare. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
 (`skill`, `pass_name`, `origin`, exact `model`, effective foreground
-`verification_model`, and `thinking`), and `foreground_fingerprints`. Use
-`origin: primary` for independent provider coverage and `origin: codex-fallback`
-only after the free pool exhausted. Aftercare may post only **late Codex-verified
-findings** against the unchanged PR head, following
-`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot create aftercare manifests because they lack a
-stable remote PR/head delivery boundary.
+`verification_model`, `thinking`, `agent_id`, and `output_path`), and
+`foreground_fingerprints`. Use `origin: primary` for independent provider
+coverage and `origin: codex-fallback` only after the free pool exhausted.
+Aftercare may post only **late Codex-verified findings** against the unchanged PR
+head, following `agent/skills/_shared/repo-review-aftercare.md`. Local-branch
+reviews cannot create aftercare manifests because they lack a stable remote
+PR/head delivery boundary.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
 inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist

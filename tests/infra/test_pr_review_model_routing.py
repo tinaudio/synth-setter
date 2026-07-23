@@ -329,6 +329,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "at most 6 turns per" in text
     assert "parallel Codex verification wave" in text
     assert "Record its audit status as `deferred`" in text
+    assert "ownership transfer" in text
+    assert "exactly one model call owns each pass" in text
+    assert "agent_id" in text
+    assert "output_path" in text
+    assert "treat foreground host exit as proof" in text
     assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
@@ -468,7 +473,8 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         assert marker.exists()
     finally:
         manifest.unlink(missing_ok=True)
-        manifest.with_suffix(".log").unlink(missing_ok=True)
+        Path(f"{manifest}.aftercare.log").unlink(missing_ok=True)
+        Path(f"{manifest}.result.json").unlink(missing_ok=True)
         transcript.unlink(missing_ok=True)
 
 
@@ -631,7 +637,11 @@ def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
     assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
     assert 'export PI_REVIEW_PYTHON="${review_python}"' in launcher
     assert '"${review_python}" agent/_shared/run_pi_review_aftercare.py' in launcher
+    assert '"--supervise"' in aftercare
     assert "start_new_session" in aftercare
+    launch_source = aftercare.split("def launch_aftercare", 1)[1]
+    assert "stdout=log_file" in launch_source
+    assert "stderr=subprocess.STDOUT" in launch_source
     assert "openai-codex" in aftercare
     assert "gpt-5.6-terra" in aftercare
     assert "anthropic" not in aftercare.lower()
@@ -692,8 +702,8 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         command = json.loads(str(dry_run))
-        assert str(manifest.resolve()) in command[-1]
-        assert "agent/skills/_shared/repo-review-aftercare.md" in command[-1]
+        assert command[0] == sys.executable
+        assert command[-2:] == ["--supervise", str(manifest.resolve())]
 
         result = sh.Command(sys.executable)(
             launcher,
@@ -709,7 +719,8 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
         _assert_process_terminated(pid, timeout=2)
     finally:
         manifest.unlink(missing_ok=True)
-        manifest.with_suffix(".log").unlink(missing_ok=True)
+        Path(f"{manifest}.aftercare.log").unlink(missing_ok=True)
+        Path(f"{manifest}.result.json").unlink(missing_ok=True)
 
 
 def test_no_comments_review_uses_isolated_findings_path() -> None:
