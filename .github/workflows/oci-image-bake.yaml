@@ -7,7 +7,7 @@ name: Bake OCI Custom Image
 # at the end of the job whether the bake succeeded or not.
 #
 # Why this exists: today every fresh OCI worker re-runs the apt-install +
-# `docker pull tinaudio/synth-setter:<tag>` dance from oci-cpu-template.yaml's
+# `docker pull tinaudio/synth-setter:<tag>` dance from the oci/cpu option's
 # setup: block (~5–10 min depending on image size). Refs #921 — a baked OCI
 # boot image lets the launcher skip that setup and saves ~5–10 min of
 # wall-clock per OCI worker bring-up.
@@ -45,7 +45,7 @@ on:
       source_template:
         description: "SkyPilot task template to provision and bake. Defaults to the production OCI CPU worker template."
         required: false
-        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
+        default: "src/synth_setter/configs/skypilot_launch/compute/oci/cpu.yaml"
       worker_image_tag:
         description: "Docker tag injected as WORKER_IMAGE into the template's setup. Whatever the template pre-pulls will be baked into the resulting OCI image."
         required: false
@@ -71,7 +71,7 @@ on:
       source_template:
         type: string
         required: false
-        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
+        default: "src/synth_setter/configs/skypilot_launch/compute/oci/cpu.yaml"
       worker_image_tag:
         type: string
         required: false

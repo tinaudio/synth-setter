@@ -2,9 +2,9 @@ name: Test SkyPilot Local
 
 # Smoke test for SkyPilot's local Kubernetes ("kind") backend on a GitHub
 # Actions runner. Spins up a kind cluster via `sky local up`, registers it as
-# the SkyPilot "kubernetes" cloud, and launches the
-# `local-debug-rclone-template.yaml` task — which uploads a sentinel file to
-# Cloudflare R2 from inside the pod. No RunPod / OCI capacity used.
+# the SkyPilot "kubernetes" cloud, and launches the `local/debug-rclone`
+# compute option — which uploads a sentinel file to Cloudflare R2 from inside
+# the pod. No RunPod / OCI capacity used.
 #
 # Goal: verify the rclone-prefixed R2 env vars (RCLONE_CONFIG_R2_*) flow
 # through `task.update_envs` into the worker pod, and that the worker can
@@ -13,8 +13,8 @@ name: Test SkyPilot Local
 # cloud backend wiring, not the launcher's env or task wiring.
 #
 # Triggers: `workflow_dispatch` for ad-hoc runs, plus a `pull_request` trigger
-# scoped narrowly to changes in this workflow or the local-debug template (the
-# only inputs to the smoke). `sky local up` + image pull + sky launch is ~5–10
+# scoped narrowly to changes in this workflow or the local-debug compute
+# option (the only inputs to the smoke). `sky local up` + image pull + sky launch is ~5–10
 # min of runner time per dispatch — keep the path filter tight so unrelated PRs
 # don't pay the runner cost. Fork PRs are skipped via the job-level `if:` since
 # they can't read the R2 secrets.
@@ -31,7 +31,9 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "src/synth_setter/configs/compute/local-debug-rclone-template.yaml"
+      - "src/synth_setter/configs/skypilot_launch/compute/local/debug-rclone.yaml"
+      - "src/synth_setter/configs/skypilot_launch/compute/scripts/local-debug-rclone*.sh"
+      - "src/synth_setter/pipeline/compute_task.py"
       - ".github/workflows/test-skypilot-local.yml"
 
 permissions:
@@ -51,7 +53,7 @@ jobs:
     timeout-minutes: 30
     env:
       CLUSTER_NAME: synth-setter-local-${{ github.run_id }}-${{ github.run_attempt }}
-      TEMPLATE: src/synth_setter/configs/compute/local-debug-rclone-template.yaml
+      COMPUTE_OPTION: local/debug-rclone
       LOG_PATH: /tmp/skypilot-local-debug.log
       R2_BUCKET: intermediate-data
     steps:
@@ -139,14 +141,18 @@ jobs:
           import sky
           import sky.check
 
+          from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
+
           cluster = os.environ["CLUSTER_NAME"]
-          template_path = os.environ["TEMPLATE"]
+          compute_option = os.environ["COMPUTE_OPTION"]
 
           print("[probe] sky.check.check(['kubernetes'])")
           sky.check.check(clouds=["kubernetes"], quiet=False)
 
           print(f"[probe] launching cluster={cluster} on local kind kubernetes")
-          task = sky.Task.from_yaml(template_path)
+          task = build_sky_task(
+              load_compute_option(compute_option), cmd=None, worker_image=None
+          )
           task.update_envs(
               {
                   "RCLONE_CONFIG_R2_TYPE": "s3",

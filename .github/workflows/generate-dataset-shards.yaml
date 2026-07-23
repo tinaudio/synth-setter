@@ -5,7 +5,7 @@ name: Generate Dataset Shards
 # `synth_setter.pipeline.ci.validate_shard` before returning. Callers fan out
 # across providers (see test-dataset-generation.yml) and pass per-provider
 # values via inputs. All providers drive `synth-setter-generate-dataset` with
-# a `skypilot_launch.compute_template=...` Hydra override.
+# a `skypilot_launch/compute=...` Hydra group override.
 #
 # Validation is always-on (no opt-in flag): every caller of this workflow
 # gets shard-contract enforcement. This closes the contract-drift gap that
@@ -29,12 +29,11 @@ name: Generate Dataset Shards
 #   * `skypilot-local` — provisions a kind cluster on the runner via
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
 #     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
-#     controller pod fits on kind, then invokes against
-#     `src/synth_setter/configs/compute/local-template.yaml`. The launcher detects
-#     `cloud: kubernetes` and skips its cred bootstrap. Always tears down
-#     kind in `if: always()`.
+#     controller pod fits on kind, then invokes against the `local/kind`
+#     compute option. The launcher detects the kubernetes backend and skips
+#     its cred bootstrap. Always tears down kind in `if: always()`.
 #   * `runpod` / `oci` — in-container invocation against the matching
-#     `src/synth_setter/configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
+#     `skypilot_launch/compute` option. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
 #     is set, the bootstrap is skipped (the remote API server holds creds).
 #
@@ -446,7 +445,7 @@ jobs:
       # cap still bounds a hung launcher so the `if: always()` log-snapshot
       # step runs. NOTE: step-level timeout sends SIGKILL — `finally` blocks
       # are bypassed; operators may need to `sky jobs cancel` manually. See #876.
-      - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
+      - name: Run synth-setter-generate-dataset against local/kind (skypilot-local row)
         id: gen_local
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 40
@@ -466,7 +465,7 @@ jobs:
           set -euo pipefail
           OVERRIDES=(
             "experiment=$CONFIG_PATH"
-            "skypilot_launch.compute_template=src/synth_setter/configs/compute/local-template.yaml"
+            "skypilot_launch/compute=local/kind"
             "skypilot_launch.job_name=$CLUSTER_NAME"
             "skypilot_launch.worker_image_tag=$IMAGE_TAG"
           )
@@ -570,7 +569,7 @@ jobs:
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          TEMPLATE: src/synth_setter/configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
+          COMPUTE_OPTION: ${{ inputs.provider == 'oci' && 'oci/cpu' || 'runpod/smoke' }}
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
@@ -594,7 +593,7 @@ jobs:
             -v "${RUN_METADATA_DIR}:/run-metadata" \
             -e SKYPILOT_API_SERVER_ENDPOINT \
             -e PROVIDER \
-            -e TEMPLATE \
+            -e COMPUTE_OPTION \
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
             -e RUNPOD_API_KEY \
@@ -628,7 +627,7 @@ jobs:
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               synth-setter-generate-dataset \
                 "experiment=$CONFIG_PATH" \
-                "skypilot_launch.compute_template=$TEMPLATE" \
+                "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA \

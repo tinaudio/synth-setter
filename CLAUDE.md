@@ -79,7 +79,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 Documented exception: `src/synth_setter/data/vst/*_param_spec.py` are codespell-excluded — they embed verbatim host parameter labels (load-bearing onehot keys that can't be spell-corrected); `synth-setter-introspect-plugin` self-documents each module, and scoping to per-line `# codespell:ignore` (codespell ≥2.3.0) is tracked in #1674.
 </important>
 
-<important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/compute/*.yaml)">
+<important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/skypilot_launch/compute/**/*.yaml)">
 
 Put comments **above** the step, never inside a `run:` / `setup:` block scalar — the body is bash, and a stray `'`, `` ` ``, `$`, or `\` in a comment has caused unintended shell expansion. A `PreToolUse` hook (`agent/hooks/no-yaml-run-comments.sh`) enforces this.
 </important>
