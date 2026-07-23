@@ -19,6 +19,7 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.data.ot import regular_collate_fn
+from synth_setter.data.sample_seed import derive_sample_seed
 
 # Re-exported for backward compat: training code imports these names from this module.
 from synth_setter.data.vst.torchsynth_param_spec import (
@@ -43,8 +44,6 @@ TorchSynthItem: TypeAlias = tuple[
 TorchSynthBatch: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
-# The odd 64-bit golden-ratio multiplier diffuses nearby split seeds into distinct RNG streams.
-_SEED_MIXER = 0x9E3779B97F4A7C15
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
@@ -213,7 +212,7 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         :returns: Float32 audio shaped ``(1, signal_length)``, float32 parameters shaped ``(1,
             NUM_PARAMS)``, and the renderer callable.
         """
-        sample_seed = (self.seed * _SEED_MIXER + index) % sys.maxsize
+        sample_seed = derive_sample_seed(self.seed, index)
         generator = torch.Generator().manual_seed(sample_seed)
         params = torch.rand((1, self.num_params), generator=generator).clamp(
             _PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS
