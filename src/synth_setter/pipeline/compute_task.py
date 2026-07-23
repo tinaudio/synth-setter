@@ -213,8 +213,7 @@ def build_sky_task(
         every resources entry (skipped for ``docker-in-run`` delivery, where
         the run wrapper consumes ``WORKER_IMAGE`` from env); ``None`` keeps
         any static ``image_id`` pins.
-    :param envs: Base task environment (per-rank keys land later via
-        ``task.update_envs``).
+    :param envs: Task environment, per-rank keys included.
     :param network_volume: SkyPilot volume name mounted at the option's
         ``mount_network_volume`` path.
     :returns: Fully constructed task ready for ``sky.jobs.launch``.

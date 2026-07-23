@@ -147,7 +147,8 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
   Hydra overrides the operator composed with, and the `from_hydra` entrypoint
   on the worker rebuilds the spec from those — so worker re-execution is
   deterministic regardless of operator argv.
-- The canonical `WORKER_SPEC_URI` is forwarded via `task.update_envs(...)`
+- The canonical `WORKER_SPEC_URI` is merged into each rank's env and passed
+  into the task at construction (`build_sky_task(..., envs=...)`),
   primarily for downstream validate-time consumers (validate-spec /
   validate-shard CI jobs read it off the workflow output). The worker itself
   doesn't fetch the JSON. `task.update_file_mounts` is avoided because

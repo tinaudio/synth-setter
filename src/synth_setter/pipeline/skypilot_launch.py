@@ -13,7 +13,8 @@ Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``,
 ``oci/*``, or ``local/*`` (kubernetes-via-``sky local up``) compute options;
 ``synth_setter.pipeline.compute_task.build_sky_task`` turns the validated
 option into a ``sky.Task`` via SDK constructors.
-Worker env is forwarded via `task.update_envs` (#749 explains why
+Worker env is passed into each task at construction via
+``build_sky_task(..., envs=...)`` (#749 explains why
 `task.update_file_mounts` is avoided), and each rank's task is submitted to
 the SkyPilot managed-jobs controller — see
 https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch
@@ -107,7 +108,7 @@ _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 # the SkyPilot managed-job name, so path-separator-free and ≤63 chars. See #876.
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
-# Forwarded via task.update_envs; each resolved from .env then process env.
+# Passed into each rank's task env at construction; resolved from .env then process env.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
