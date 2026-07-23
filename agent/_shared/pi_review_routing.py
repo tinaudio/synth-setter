@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 _REPORT_KEYS = frozenset({"findings", "skill", "target", "what_looks_good"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SKILLS_ROOT_ENV = "PI_REVIEW_SKILLS_ROOT"
 
 REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})
 HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS
@@ -413,6 +415,32 @@ class ReviewPass:
     max_turns: int
 
 
+def resolve_checklist_path(skill: str) -> Path:
+    """Resolve and validate the authoritative checklist for an assignment.
+
+    :param skill: Supported review checklist name.
+    :returns: Absolute path to the checklist's existing ``SKILL.md`` file.
+    :raises ValueError: If the skill is unsupported or its exact checklist file is missing.
+    """
+    if skill not in SUPPORTED_SKILLS:
+        raise ValueError(f"Unknown review skill: {skill}")
+
+    if skill in REPO_LOCAL_SKILLS:
+        checklist_path = Path.cwd() / "agent" / "skills" / skill / "SKILL.md"
+        remediation = "Run assignment generation from the repository root."
+    else:
+        skills_root = Path(os.environ.get(_SKILLS_ROOT_ENV, "~/.agents/skills")).expanduser()
+        checklist_path = skills_root / skill / "SKILL.md"
+        remediation = f"Install the plugin checklist there or set {_SKILLS_ROOT_ENV}."
+
+    checklist_path = checklist_path.resolve()
+    if not checklist_path.is_file():
+        raise ValueError(
+            f"Review checklist for {skill!r} is missing at {checklist_path}. {remediation}"
+        )
+    return checklist_path
+
+
 def parse_available_models(output: str) -> set[str]:
     """Parse ``pi --list-models`` output into canonical selectors.
 
@@ -742,13 +770,7 @@ def build_worker_prompt(
         path = Path(changed_path)
         if path.is_absolute() or path.as_posix() != changed_path or ".." in path.parts:
             raise ValueError("Worker assignment paths must be canonical and repository-relative")
-    skill_instruction = (
-        f"Invoke the tinaudio-synth-setter-skills:{skill} skill via the Skill tool."
-    )
-    if skill in REPO_LOCAL_SKILLS:
-        skill_instruction = (
-            f"Invoke the repo-local {skill} skill by reading agent/skills/{skill}/SKILL.md."
-        )
+    checklist_path = resolve_checklist_path(skill)
     paths = "\n".join(f"- {path}" for path in changed_paths)
     return f"""Review assignment
 Target: {target}
@@ -757,7 +779,7 @@ Base SHA: {base_sha}
 Head SHA: {head_sha}
 Skill: {skill}
 
-{skill_instruction}
+Read the checklist at `{checklist_path}` and execute it. Do not search for skill files anywhere else.
 Inspect only `git diff {base_sha}..{head_sha} -- <changed paths>` and explicit checklist paths.
 Do not recursively discover files, inspect caches, dependencies, sibling worktrees, or modify state.
 Every Bash call has a 60-second timeout.

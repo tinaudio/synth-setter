@@ -174,6 +174,13 @@ mkdir -p "$assignment_dir"
   --output "$assignment_dir/<skill>.txt"
 ```
 
+Assignment generation validates the exact checklist file and embeds its absolute
+path. Repo-local checklists resolve from
+`<cwd>/agent/skills/<skill>/SKILL.md`; plugin-backed checklists resolve from
+`$PI_REVIEW_SKILLS_ROOT/<skill>/SKILL.md`, defaulting to
+`~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal assignment-generation
+error; never launch a worker without the validated path.
+
 Both model passes share that immutable file. Their `Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
@@ -427,14 +434,14 @@ Each worker's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` and `correctness-review` are repo-local, not plugin skills — instruct each agent to invoke the bare skill name (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for either.
+- The validated absolute checklist path and the instruction to read it and not
+  search for skill files anywhere else.
 - The expected output shape (see below).
 
-`lance-review` and `correctness-review` are **repo-local**, not plugin skills:
-each agent attempts the bare skill name via the Skill tool first, and only if
-that call errors (the harness has not registered it) falls back to reading and
-applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
-contract below is unchanged for both.
+`lance-review` and `correctness-review` are **repo-local** checklists. Their
+validated paths are under `agent/skills/<skill-name>/SKILL.md` in the current
+checkout; all other checklist paths come from the configured plugin skills
+root. The per-agent output contract is unchanged for both skill classes.
 
 `lance-review` additionally requires live documentation access. Its Pi worker
 must fetch the required upstream pages through read-only Bash commands within
