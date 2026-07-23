@@ -24,7 +24,9 @@ from synth_setter.pipeline.spec_io import read_spec_text
 _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
 )
-_REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(sorted(RenderConfig.model_fields))
+_REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
+    sorted(name for name, field in RenderConfig.model_fields.items() if field.is_required())
+)
 
 
 def _parse_output_format(value: Any) -> OutputFormat | None:

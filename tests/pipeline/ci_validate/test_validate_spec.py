@@ -89,6 +89,14 @@ class TestValidateStructure:
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
 
+    def test_defaulted_storage_dtypes_may_be_omitted(self) -> None:
+        """Specs may omit fields supplied by RenderConfig defaults."""
+        spec = _make_valid_spec()
+        del spec["render"]["audio_dtype"]
+        del spec["render"]["mel_spec_dtype"]
+
+        assert validate_structure(spec) == []
+
     def test_missing_field_returns_error(self) -> None:
         """Spec missing a required field returns a 'missing' error."""
         spec = _make_valid_spec()
@@ -138,8 +146,11 @@ class TestValidateStructure:
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
-        """Required render set is derived from RenderConfig, not hand-mirrored."""
-        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields)
+        """Required render set contains only model fields without defaults."""
+        expected = {
+            name for name, field in RenderConfig.model_fields.items() if field.is_required()
+        }
+        assert set(_REQUIRED_RENDER_FIELDS) == expected
 
 
 class TestValidateTestValues:

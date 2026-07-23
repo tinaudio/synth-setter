@@ -11,6 +11,7 @@ import pytest
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import stats as _stats_module
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 
 
@@ -357,8 +358,6 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
 
     mean, std = stats_script.stream_stats_lance([shard])
 
-    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
-
     rows = list(iter_lance_column_rows(shard, "mel_spec"))
     expected = np.stack(rows, axis=0)
     np.testing.assert_allclose(mean, expected.mean(axis=0))
@@ -380,8 +379,6 @@ def test_fold_lance_float16_mel_accumulates_in_float32(
     write_minimal_lance_shard(shard, spec)
 
     count, mean, m2 = stats_script.fold_lance_shard_into_welford((0, 0, 0), shard)
-
-    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 
     stored_rows = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD))).astype(
         np.float32

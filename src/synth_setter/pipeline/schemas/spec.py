@@ -50,8 +50,8 @@ __all__ = [
     "R2Location",
     "RenderConfig",
     "ShardSpec",
-    "StorageDType",
     "Split",
+    "StorageDType",
 ]
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.

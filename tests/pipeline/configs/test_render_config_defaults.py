@@ -14,6 +14,7 @@ _GENERIC_RENDER_FIELDS = {
     "channels",
     "gui_toggle_cadence",
     "max_retries",
+    "mel_spec_dtype",
     "min_loudness",
     "parallel",
     "param_sample_cadence",
@@ -23,7 +24,6 @@ _GENERIC_RENDER_FIELDS = {
     "samples_per_render_batch",
     "samples_per_shard",
     "signal_duration_seconds",
-    "mel_spec_dtype",
     "velocity",
 }
 
