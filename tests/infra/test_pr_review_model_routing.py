@@ -222,7 +222,8 @@ def test_review_fanout_promotes_deep_checklists() -> None:
     """Keep high thinking pinned for correctness-sensitive checklists."""
     routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
 
-    assert 'DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
+    assert 'REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
+    assert "HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS" in routing
     assert 'return "high", "deep checklist"' in routing
 
 
@@ -333,7 +334,10 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
     assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
     assert "max_turns: <plan.max_turns>" in text
-    assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
+    assert "Model tiers are fixed by checklist" in text
+    assert "Smart model tier" in text
+    assert "Mechanical model tier" in text
+    assert "| Skill | Model tier | Pass | Model | Thinking | Max turns | Status |" in text
     assert re.search(
         r"Gracefully wrapped `steered` attempts proceed to report\s+validation",
         text,
@@ -342,7 +346,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert re.search(r"both Codex\s+and the free pool pass provider preflight", text)
+    assert re.search(r"both Codex\s+and the selected free-pool tier pass provider", text)
     assert "fallback_candidates" in text
     assert "skip remaining candidates from that provider" in text
     assert "authentication never triggers Codex fallback" in text

@@ -237,15 +237,16 @@ Record `success` with the wrap-up detail in the audit.
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
 opencode launcher; it derives provenance from each successful effective model
-as specified below. Record each attempt's skill,
-pass, exact model, thinking level, Tintin agent id, status, and
-the exact transcript path from the result's `Output file:` field in a
-`## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
-contract. Render it as this table so the sentinel caller never has to inspect a
-process tree or transcript to understand execution:
+as specified below. Record each attempt's skill, model tier, pass, exact model, thinking level,
+Tintin agent id, status, and the exact transcript path from the result's
+`Output file:` field in a `## Pi review audit` section of `review_body`. Copy
+`model_tier` from the tested plan output; do not infer it from the effective
+fallback model. This audit section does not change the findings JSON shape or
+inline-comment contract. Render it as this table so the sentinel caller never
+has to inspect a process tree or transcript to understand execution:
 
-| Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
-| ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
+| Skill | Model tier | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
+| ----- | ---------- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
 
 Use explicit statuses: `success`, `deferred`, `unavailable`, `quota/capacity`,
 `authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
@@ -270,27 +271,44 @@ selected checklist:
 ```
 
 The command runs `pi --list-models` and returns JSON with two logical passes per
-skill, the ordered available `candidates`, skipped `unavailable` models,
-cross-provider Codex `fallback_candidates`, `thinking`, and `reason`. Codex and
-the free pool must both be registered with Pi. If either is absent, stop on the
-planner's single provider-level error instead of expanding every configured
-model into audit rows. Record individually skipped models only after both Codex
-and the free pool pass provider preflight.
+skill, its fixed `model_tier`, the ordered available `candidates`, skipped
+`unavailable` models, cross-provider Codex `fallback_candidates`, `thinking`,
+and `reason`.
+
+Model tiers are fixed by checklist; diff size and risk signals change thinking
+but never change the model tier:
+
+- **Smart model tier:** `correctness-review`, `lance-review`,
+  `ml-data-pipeline`, `ml-test`, and `synth-setter-project-standards`. The Codex
+  pass starts with Sol and may fall back to Terra; the independent pass starts
+  with Kimi K3 and may fall back to the pinned free OpenRouter models.
+- **Mechanical model tier:** `code-health`, `comment-hygiene`,
+  `gha-workflow-validator`, `python-style`, `shell-style`,
+  `tdd-implementation`, and `tdd-refactor`. The Codex pass uses Terra only; the
+  independent pass uses only the pinned free OpenRouter models. Never spend Sol
+  or Kimi K3 on a mechanical checklist, including fallback.
+
+Codex and the checklist's fixed free pool must both be registered with Pi. If
+either is absent, stop on the planner's single provider-level error instead of
+expanding every configured model into audit rows. Record individually skipped
+models only after both Codex and the selected free-pool tier pass provider
+preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next candidate in the pass.
-Codex-pass candidates are always `openai-codex/*`; free-pool candidates span
-`kimi-coding/*` and `openrouter/*` in their fixed order. Exhaust the free-pool
-`candidates` in order before attempting any Codex fallback. If a free-pool attempt
-fails authentication, record it, skip remaining candidates from that provider,
-and continue with the next candidate from a different free-pool provider. Stop
+Codex-pass candidates are always `openai-codex/*`. Smart free-pool candidates
+start with `kimi-coding/k3`; mechanical free-pool candidates contain only the
+pinned free `openrouter/*` models. Exhaust the pass's returned `candidates` in
+order before attempting any Codex fallback. If a free-pool attempt fails
+authentication, record it, skip remaining candidates from that provider, and
+continue with the next candidate from a different free-pool provider. Stop
 when no different free-pool provider remains; authentication never triggers Codex fallback.
-If a free-pool pass has no available candidates, or every candidate exhausts
-quota/capacity, move the successful Codex pass's effective model to the end of
-`fallback_candidates`, then launch a fresh worker with the first model. This
-prefers a distinct fallback even when the Codex pass reached its own fallback.
+If every free-pool candidate exhausts quota/capacity, move the
+successful Codex pass's effective model to the end of `fallback_candidates`,
+then launch a fresh worker with the first model. This prefers a distinct
+fallback when the fixed tier permits one; mechanical fallback remains Terra.
 Continue through that bounded Codex sequence only for the same availability
 failures. Record each launch as `Codex fallback` in the audit detail. Never resume
 a failed session under a different model. Tool/checklist, malformed-report
