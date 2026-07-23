@@ -514,7 +514,7 @@ def test_pi_review_launcher_falls_back_to_path_python_without_repo_venv(
         "--target",
         "2052",
         _cwd=repo_root,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        _env={"PATH": f"{tmp_path}:{Path(sys.executable).parent}:{os.environ['PATH']}"},
         _err=stderr,
     )
     assert str(result).strip() == "pi-complete"

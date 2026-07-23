@@ -242,7 +242,7 @@ def test_aftercare_supervisor_routes_prompt_and_cleans_disposable_worktree(
         **os.environ,
         "FAKE_RESULT": _valid_aftercare_result(),
         "HEAD_SHA": head_sha,
-        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "PATH": f"{tmp_path}:{Path(sys.executable).parent}:{os.environ['PATH']}",
         "PROMPT_CAPTURE": str(prompt_capture),
         "ROUTING_SCRIPT": str(ROUTING_SCRIPT),
     }
@@ -309,7 +309,7 @@ def test_launcher_without_aftercare_cleans_disposable_worktree_after_delivery(
         _cwd=repo,
         _env={
             **os.environ,
-            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "PATH": f"{tmp_path}:{Path(sys.executable).parent}:{os.environ['PATH']}",
             "WORKTREE_PATH_FILE": str(worktree_path_file),
         },
     )
