@@ -15,6 +15,8 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import materialize_lance_subset
+from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 
@@ -192,7 +194,8 @@ class VSTDataModule(LightningDataModule):
 
     shard_suffix = ".lance"
 
-    def __init__(
+    # DOC502: the documented ValueError propagates from _validate_materialize_config.
+    def __init__(  # noqa: DOC502
         self,
         dataset_root: str | Path,
         download_dataset_root_uri: str | None = None,
@@ -207,6 +210,9 @@ class VSTDataModule(LightningDataModule):
         pin_memory: bool = True,
         *,
         param_spec_name: ParamSpecName,
+        materialize_columns: bool = False,
+        dataset_txids: dict[str, str] | None = None,
+        subset_rows: int | None = None,
     ) -> None:
         """Store configuration shared by concrete VST datamodules.
 
@@ -222,7 +228,22 @@ class VSTDataModule(LightningDataModule):
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
+        :param materialize_columns: Whether hydration rematerializes each split as
+            a txid-pinned column/row subset instead of copying the whole root.
+        :param dataset_txids: Per-split transaction uuids pinning the source
+            snapshots; each split is its own Lance dataset, so a single txid
+            cannot pin all of them.
+        :param subset_rows: First-N rows per split at materialization time, or
+            ``None`` for all rows.
+        :raises ValueError: If the materialization settings are inconsistent —
+            fail at construction, never silently hydrate the wrong data.
         """
+        _validate_materialize_config(
+            materialize_columns=materialize_columns,
+            dataset_txids=dataset_txids,
+            subset_rows=subset_rows,
+            download_dataset_root_uri=download_dataset_root_uri,
+        )
         super().__init__()
         self.dataset_root = Path(dataset_root)
         self.download_dataset_root_uri = download_dataset_root_uri
@@ -243,6 +264,28 @@ class VSTDataModule(LightningDataModule):
         )
         self.pin_memory = pin_memory
         self.param_spec_name = param_spec_name
+        self.materialize_columns = materialize_columns
+        self.dataset_txids = dict(dataset_txids) if dataset_txids is not None else None
+        self.subset_rows = subset_rows
+
+    def _conditioning_column(self) -> str:
+        """Return the stored column backing the configured conditioning.
+
+        :returns: Legacy mel column or the resolved embedding column.
+        """
+        spec = self.embedding_conditioning
+        return "mel_spec" if spec is None else spec.column
+
+    def _loader_columns(self, *, read_audio: bool) -> list[str]:
+        """Derive the stored columns the split loaders read.
+
+        :param read_audio: Whether the split additionally serves prediction audio.
+        :returns: Projection for one split — never user-configured.
+        """
+        columns = ["param_array", self._conditioning_column()]
+        if read_audio:
+            columns.append("audio")
+        return columns
 
     def prepare_data(self) -> None:
         """Hydrate ``dataset_root`` from R2 or a mounted directory when configured."""
@@ -250,7 +293,97 @@ class VSTDataModule(LightningDataModule):
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
             r2_io.ensure_r2_env_loaded()
+        if self.materialize_columns:
+            self._materialize_splits(self.download_dataset_root_uri)
+            return
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
+
+    def _materialize_splits(self, source_root_uri: str) -> None:
+        """Rematerialize each pinned split locally, then rclone the sidecars.
+
+        :param source_root_uri: Hydration source holding the split datasets.
+        :raises ValueError: If ``dataset_txids`` was cleared after construction.
+        """
+        if self.dataset_txids is None:
+            raise ValueError("materialize_columns=True requires dataset_txids")
+        for split, txid in self.dataset_txids.items():
+            split_name = f"{split}{self.shard_suffix}"
+            materialize_lance_subset(
+                _join_source_uri(source_root_uri, split_name),
+                self.dataset_root / split_name,
+                txid=txid,
+                columns=self._materialized_columns(split),
+                limit=self.subset_rows,
+            )
+        # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
+        # split datasets and pipeline-internal metadata/ never feed the loaders.
+        r2_io.download_dir_no_overwrite(
+            source_root_uri,
+            self.dataset_root,
+            exclude=f"{{*{self.shard_suffix}/**,metadata/**}}",
+        )
+
+    def _materialized_columns(self, split: str) -> list[str]:
+        """Derive one split's projection from the datamodule's own read set.
+
+        :param split: Split name among ``train`` / ``val`` / ``test``.
+        :returns: Columns the loaders read from this split.
+        """
+        # A split that doubles as the predict file must retain the predict
+        # loader's audio column.
+        serves_predict = self.dataset_root / f"{split}{self.shard_suffix}" == self.predict_file
+        return self._loader_columns(read_audio=serves_predict)
+
+
+_MATERIALIZE_SPLITS = ("train", "val", "test")
+
+
+def _validate_materialize_config(
+    *,
+    materialize_columns: bool,
+    dataset_txids: dict[str, str] | None,
+    subset_rows: int | None,
+    download_dataset_root_uri: str | None,
+) -> None:
+    """Reject inconsistent materialization settings at construction time.
+
+    :param materialize_columns: Whether materializing hydration is enabled.
+    :param dataset_txids: Per-split transaction uuids, or ``None``.
+    :param subset_rows: First-N row cap, or ``None``.
+    :param download_dataset_root_uri: Hydration source URI, or ``None``.
+    :raises ValueError: If materialization lacks a source or a txid for any
+        split, a txid key is unknown, or the knobs are set while the mode is off.
+    """
+    if not materialize_columns:
+        if dataset_txids is not None or subset_rows is not None:
+            raise ValueError(
+                "dataset_txids and subset_rows require materialize_columns=True; "
+                "they would otherwise be silently ignored"
+            )
+        return
+    if not download_dataset_root_uri:
+        raise ValueError("materialize_columns=True requires download_dataset_root_uri")
+    if dataset_txids is None:
+        raise ValueError("materialize_columns=True requires dataset_txids")
+    missing = [split for split in _MATERIALIZE_SPLITS if split not in dataset_txids]
+    if missing:
+        raise ValueError(f"dataset_txids is missing txids for splits: {missing}")
+    unknown = sorted(set(dataset_txids) - set(_MATERIALIZE_SPLITS))
+    if unknown:
+        raise ValueError(f"dataset_txids has unknown split keys: {unknown}")
+
+
+def _join_source_uri(source_root_uri: str, name: str) -> str:
+    """Join a split filename onto the hydration root for Lance to open.
+
+    :param source_root_uri: ``r2://``, ``file://``, or local-path root.
+    :param name: Split filename, e.g. ``train.lance``.
+    :returns: Split source — ``file://`` roots become local paths because
+        ``materialize_lance_subset`` accepts ``r2://`` or local sources only.
+    """
+    if is_file_uri(source_root_uri):
+        return str(file_uri_to_path(source_root_uri) / name)
+    return f"{source_root_uri.rstrip('/')}/{name}"
 
 
 def __getattr__(name: str) -> object:
