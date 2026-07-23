@@ -3,9 +3,10 @@
 Process only the deferred passes in the runtime manifest named by the launch
 prompt. The Python supervisor, not this model, owns the canonical
 `<foreground-manifest>.result.json`. It has already validated any adopted
-foreground outputs, named those rows in the launch prompt, and proved every
-other foreground owner stopped before launching this session. Never repeat a
-pass not present in the runtime manifest.
+foreground outputs and named those rows in the launch prompt. Rows with an
+incomplete known foreground owner fail before this session starts; remaining
+rows come from legacy manifests without ownership handles. Never repeat a pass
+not present in the runtime manifest.
 
 1. Validate the runtime manifest before using it:
 
