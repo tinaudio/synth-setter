@@ -34,6 +34,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from importlib.metadata import version as package_version
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -46,6 +47,7 @@ from synth_setter.cli.generate_dataset import (
     _dispatch_shards_from_claims,
     _dispatch_shards_parallel,
     _load_render_rejections,
+    _render_and_upload_shard,
     _render_one_owned_shard,
     build_generate_args,
     generate,
@@ -62,6 +64,7 @@ from synth_setter.resources import vst_headless_wrapper
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.xvfb import install_failing_xvfb
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
@@ -173,6 +176,99 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
 def spec(tmp_path: Path) -> DatasetSpec:
     """Return a valid single-shard DatasetSpec."""
     return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+def test_generate_vst_shard_failing_xvfb_invokes_headless_wrapper(
+    spec: DatasetSpec,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VST shard reaches the real headless wrapper before renderer startup.
+
+    :param spec: VST-configured dataset specification.
+    :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+    :param tmp_path: Scratch root for the work directory and failing Xvfb.
+    :param monkeypatch: Installs a deterministic failing Xvfb executable.
+    """
+    marker = install_failing_xvfb(tmp_path, monkeypatch)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate(spec, tmp_path / "work", [])
+
+    assert marker.read_text() == "called"
+
+
+def _capture_renderer_dispatch(
+    spec: DatasetSpec,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Capture renderer argv without marker I/O or renderer execution.
+
+    :param spec: Dataset specification dispatched at the shard boundary.
+    :param work_dir: Scratch output directory passed to the renderer.
+    :param monkeypatch: Replaces marker I/O and stops at subprocess dispatch.
+    :returns: Renderer command assembled for the first shard.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset
+
+    renderer_args: list[str] = []
+
+    def _capture_then_stop(args: list[str]) -> None:
+        renderer_args.extend(args)
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(generate_dataset, "_check_call_streamed", _capture_then_stop)
+    monkeypatch.setattr(generate_dataset, "write_rendering_marker", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _render_and_upload_shard(spec, spec.shards[0], work_dir)
+    return renderer_args
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+def test_generate_vst_shard_materializes_headless_wrapper_without_rclone(
+    spec: DatasetSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VST shard command starts with the headless wrapper without storage I/O.
+
+    :param spec: VST-configured dataset specification.
+    :param tmp_path: Scratch root for the worker output directory.
+    :param monkeypatch: Captures the renderer command before execution.
+    """
+    renderer_args = _capture_renderer_dispatch(spec, tmp_path / "work", monkeypatch)
+
+    assert renderer_args[0] == VST_HEADLESS_WRAPPER
+
+
+def test_generate_torchsynth_shard_bypasses_headless_wrapper(
+    spec: DatasetSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TorchSynth shard dispatches Python directly on Linux.
+
+    :param spec: Base dataset specification copied with a validated TorchSynth render config.
+    :param tmp_path: Scratch root for the worker output directory.
+    :param monkeypatch: Captures the renderer command before execution.
+    """
+    render_values = spec.render.model_dump()
+    render_values.update(
+        plugin_path="torchsynth",
+        plugin_state_path="",
+        param_spec_name="torchsynth_simple",
+        renderer_version=package_version("torchsynth"),
+        renderer_backend="torchsynth",
+    )
+    torchsynth_spec = spec.model_copy(update={"render": RenderConfig(**render_values)})
+    renderer_args = _capture_renderer_dispatch(torchsynth_spec, tmp_path / "work", monkeypatch)
+
+    assert renderer_args[0] == sys.executable
+    assert VST_HEADLESS_WRAPPER not in renderer_args
 
 
 def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
