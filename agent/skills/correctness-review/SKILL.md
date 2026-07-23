@@ -47,8 +47,8 @@ stated. A blocked PR must always come with the case that justifies the block.
 
 Get the changed code and read enough of the surrounding code to judge it —
 callers, callees, and the invariants they rely on. `$BASE` and `$HEAD` are the
-PR's base- and head-commit SHAs (from `gh pr view <N> --json baseRefOid,headRefOid`,
-or as set by the harness).
+PR's base- and head-commit SHAs (from `gh api repos/<owner>/<repo>/pulls/<n> --jq .base.sha`
+and `gh pr view <N> --json headRefOid`, or as set by the harness).
 
 ```bash
 git diff --diff-filter=d "$BASE"..."$HEAD"
