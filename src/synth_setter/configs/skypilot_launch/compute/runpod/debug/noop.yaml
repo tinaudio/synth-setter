@@ -1,0 +1,8 @@
+# DEBUG / no-op variant: exercises provision -> setup -> submit -> poll ->
+# teardown without the real worker pipeline; a hang here is in the SkyPilot
+# interaction, not dataset generation. Inherits the smoke pool verbatim.
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-noop
+run_script: debug-noop.sh

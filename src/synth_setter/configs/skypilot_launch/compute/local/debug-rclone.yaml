@@ -1,0 +1,17 @@
+# Local kind backend — DEBUG variant: rclone-against-R2 canary, no cloud
+# capacity. Used by .github/workflows/test-skypilot-local.yml after
+# `sky local up` to verify that RCLONE_CONFIG_R2_* env vars get forwarded
+# into the worker pod and that the worker can talk to Cloudflare R2 from
+# inside a kind-hosted pod.
+#
+# No image pin: defer to SkyPilot's stock kubernetes image, which has
+# python + sudo + the SSH server pre-baked; setup installs rclone so the
+# test doesn't depend on a custom image.
+name: local-debug-rclone
+resources:
+  - cloud: kubernetes
+    cpus: 1+
+    memory: 2+
+setup_scripts:
+  - local-debug-rclone-setup.sh
+run_script: local-debug-rclone.sh

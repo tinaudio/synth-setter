@@ -1,0 +1,32 @@
+# OCI (Oracle Cloud Infrastructure), CPU-only.
+#
+# OCI-specific: the worker image is pulled and run as a sub-docker invocation
+# inside the run block (oci-docker-run.sh) — SkyPilot's OCI backend rejects
+# `image_id: docker:<image>`. The wrapper's ${WORKER_CMD} sentinel receives
+# the launcher's worker cmd; the outer `sudo docker run` must run on the OCI
+# VM host, not inside the worker container.
+# Region intentionally not pinned — `~/.oci/config` is the single source of truth.
+name: oci-cpu
+resources:
+  - cloud: oci
+    instance_type: VM.Standard.E5.Flex$_4_16
+    disk_size: 50
+  - cloud: oci
+    instance_type: VM.Standard.E4.Flex$_4_16
+    disk_size: 50
+  - cloud: oci
+    instance_type: VM.Standard.E5.Flex$_2_16
+    disk_size: 50
+  - cloud: oci
+    instance_type: VM.Standard.E4.Flex$_2_16
+    disk_size: 50
+  - cloud: oci
+    instance_type: VM.Standard.E5.Flex$_2_8
+    disk_size: 50
+  - cloud: oci
+    instance_type: VM.Standard.E4.Flex$_2_8
+    disk_size: 50
+image_delivery: docker-in-run
+setup_scripts:
+  - oci-install-docker.sh
+run_wrapper: oci-docker-run.sh
