@@ -307,6 +307,8 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "The worker does not render Markdown or attach provenance" in text
     assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 6
     assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py' in text
+    assert "PI_REVIEW_SKILLS_ROOT" in text
+    assert "Skill tool" not in text
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from agent._shared.pi_review_routing import (
     provenance_for_model,
     report_is_parseable,
     report_repair_prompt,
+    resolve_checklist_path,
     stream_host_events,
     transcript_stats,
 )
@@ -812,10 +814,105 @@ def test_report_repair_prompt_preserves_analysis_and_includes_diagnostic() -> No
     assert report in prompt
 
 
-def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplication() -> None:
-    """Generate the complete worker packet outside the host LLM."""
+def test_resolve_checklist_path_repo_local_uses_current_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a repo-owned checklist from the assignment-generation checkout.
+
+    :param tmp_path: Temporary repository containing a real checklist file.
+    :param monkeypatch: Changes the assignment-generation working directory.
+    """
+    repo_root = tmp_path / "repo"
+    checklist = repo_root / "agent/skills/correctness-review/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Correctness review\n")
+    monkeypatch.chdir(repo_root)
+
+    assert resolve_checklist_path("correctness-review") == checklist.resolve()
+
+
+def test_resolve_checklist_path_plugin_uses_environment_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Honor an explicit plugin checklist installation root.
+
+    :param tmp_path: Temporary plugin installation containing a real checklist file.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "installed-skills"
+    checklist = skills_root / "code-health/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Code health\n")
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+
+    assert resolve_checklist_path("code-health") == checklist.resolve()
+
+
+def test_resolve_checklist_path_plugin_defaults_to_user_agents_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the user's standard plugin installation when no override is set.
+
+    :param tmp_path: Temporary home directory containing a real checklist file.
+    :param monkeypatch: Replaces HOME and removes the plugin-root override.
+    """
+    home = tmp_path / "home"
+    checklist = home / ".agents/skills/python-style/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Python style\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PI_REVIEW_SKILLS_ROOT", raising=False)
+
+    assert resolve_checklist_path("python-style") == checklist.resolve()
+
+
+def test_build_worker_prompt_missing_checklist_raises_actionable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail assignment generation at the exact absent checklist path.
+
+    :param tmp_path: Empty plugin installation root.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "missing-skills"
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+    expected_path = skills_root / "code-health/SKILL.md"
+
+    with pytest.raises(
+        ValueError,
+        match=rf"code-health.*{re.escape(str(expected_path))}.*PI_REVIEW_SKILLS_ROOT",
+    ):
+        build_worker_prompt(
+            skill="code-health",
+            target="PR #2174",
+            repo="tinaudio/synth-setter",
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            changed_paths=("agent/_shared/pi_review_routing.py",),
+        )
+
+
+def test_build_worker_prompt_contains_absolute_checklist_without_skill_tool_language(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin workers to one validated checklist without unsupported tool guidance.
+
+    :param tmp_path: Temporary plugin installation containing a real checklist file.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "installed-skills"
+    checklist = skills_root / "code-health/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Code health\n")
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+
     prompt = build_worker_prompt(
-        skill="correctness-review",
+        skill="code-health",
         target="PR #2174",
         repo="tinaudio/synth-setter",
         base_sha="a" * 40,
@@ -823,8 +920,11 @@ def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplicatio
         changed_paths=("agent/_shared/pi_review_routing.py", "tests/infra/test.py"),
     )
 
+    assert f"Read the checklist at `{checklist.resolve()}` and execute it." in prompt
+    assert "Do not search for skill files anywhere else." in prompt
+    assert "Skill tool" not in prompt
+    assert "tinaudio-synth-setter-skills:" not in prompt
     assert "PR #2174" in prompt
-    assert "correctness-review" in prompt
     assert "git diff " + "a" * 40 + ".." + "b" * 40 in prompt
     assert "agent/_shared/pi_review_routing.py" in prompt
     assert "exactly one JSON object" in prompt
