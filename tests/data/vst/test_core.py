@@ -3,6 +3,7 @@ from __future__ import annotations
 import plistlib
 import threading
 import time
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
@@ -382,6 +383,46 @@ class TestRenderParamsPreloadedPlugin:
         assert preset_calls == []
         # Non-silent audio proves the pre-loaded plugin ran the note-on render.
         assert np.any(output)
+
+    def test_reset_policy_is_forwarded_to_every_process_call(self) -> None:
+        """A disabled host reset applies to flushes and the audible render."""
+        reset_flags: list[bool] = []
+
+        class _RecordingPlugin(FakeVST3Plugin):
+            def process(
+                self,
+                midi_events: Iterable[tuple[Sequence[int], float]],
+                duration_seconds: float,
+                sample_rate: float,
+                channels: int,
+                block_size: int,
+                tail: bool,
+            ) -> np.ndarray:
+                reset_flags.append(tail)
+                return super().process(
+                    midi_events,
+                    duration_seconds,
+                    sample_rate,
+                    channels,
+                    block_size,
+                    tail,
+                )
+
+        output = render_params(
+            "plugins/CardinalSynth.vst3",
+            params={},
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 1.0),
+            signal_duration_seconds=1.0,
+            sample_rate=44100,
+            channels=2,
+            plugin=cast("VST3Plugin", _RecordingPlugin("plugins/CardinalSynth.vst3")),
+            reset_plugin_before_process=False,
+        )
+
+        assert np.any(output)
+        assert reset_flags == [False, False, False, False]
 
     def test_no_plugin_kwarg_reloads_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.

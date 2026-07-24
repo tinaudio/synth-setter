@@ -129,6 +129,7 @@ patch:
 | Synth                        | `synth_params` | encoded width |
 | ---------------------------- | -------------- | ------------- |
 | `surge_4` (4-param toy spec) | 4              | 7             |
+| `cardinal`                   | 9              | 13            |
 | `surge_simple`               | 89             | 92            |
 | `obxf`                       | 94             | 187           |
 | `surge_xt`                   | 162            | 300           |
@@ -138,9 +139,11 @@ The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
 parameter into several dimensions, and the note parameters add their own. VST
 model configs resolve this width from `datamodule.param_spec_name`; experiments
 must not repeat it as a `num_params`, `d_out`, or `latent_dim` literal.
-See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
-and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
-for hand-tuned examples.
+See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py),
+[`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py), and
+[`cardinal_param_spec.py`](../../src/synth_setter/data/vst/cardinal_param_spec.py)
+for hand-tuned examples. Cardinal's generic host slots are meaningful only with
+its matching committed Rack patch in `presets/cardinal-base.vstpreset`.
 
 ## Step 3 — Register the synth
 
@@ -225,8 +228,9 @@ To run the synth in CI or on distributed workers, add a fetch step to the
 `vst3-synths-fetch` stage in
 [`docker/ubuntu22_04/Dockerfile`](../../docker/ubuntu22_04/Dockerfile): download
 the release asset, pin its `sha256sum`, and unpack the `.vst3` into the staging
-dir. The synths fetched there are x86_64-only, so each step early-exits on
-non-amd64 builds. The build then runs a per-synth headless-X11 load check and
+dir. Gate platforms according to upstream assets: Cardinal supports x86_64 and
+aarch64, while the other fetched synths currently skip non-amd64 builds. The
+build then runs a per-synth headless-X11 load check and
 symlinks the bundle under `plugins/`. Dataset generation resolves the plugin
 from the render config's `plugin_path`; `SYNTH_SETTER_PLUGIN_PATH` only sets the
 default for tools that don't take a render config (tests, the interactive CLIs).

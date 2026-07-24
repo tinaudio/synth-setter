@@ -178,6 +178,16 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "render"
 
+    def test_pedalboard_process_reset_can_be_disabled_for_stateful_plugins(self) -> None:
+        """A render config can preserve host automation across process calls."""
+        default_cfg = RenderConfig(**_valid_render_kwargs())
+        stateful_cfg = RenderConfig(
+            **{**_valid_render_kwargs(), "reset_plugin_before_process": False}
+        )
+
+        assert default_cfg.reset_plugin_before_process is True
+        assert stateful_cfg.reset_plugin_before_process is False
+
     def test_gui_toggle_default_is_never_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714).
 

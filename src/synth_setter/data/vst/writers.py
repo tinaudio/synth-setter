@@ -126,6 +126,7 @@ def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -
         signal_duration_seconds=render_cfg.signal_duration_seconds,
         plugin_state_path=render_cfg.plugin_state_path,
         plugin=plugin,
+        reset_plugin_before_process=render_cfg.reset_plugin_before_process,
     )
 
 

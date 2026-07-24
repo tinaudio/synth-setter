@@ -173,6 +173,19 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
     assert spec.num_params == num_params
 
 
+def test_render_cardinal_composes_into_valid_render_config() -> None:
+    """``render=cardinal`` selects the mapped Rack patch and preserves automation."""
+    spec = _spec_from_dataset_overrides(["render=cardinal"])
+
+    assert spec.render.param_spec_name == "cardinal"
+    assert spec.render.renderer_version == "0.26.2"
+    assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
+    assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
+    assert spec.render.reset_plugin_before_process is False
+    assert spec.num_params == 13
+    assert spec.render.plugin_reload_cadence == "once"
+
+
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["render=obxf"])

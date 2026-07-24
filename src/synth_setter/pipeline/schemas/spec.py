@@ -326,6 +326,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "local disk scales with pool size."
         ),
     )
+    reset_plugin_before_process: bool = Field(
+        default=True,
+        description=(
+            "Whether pedalboard resets plugin state before each process call. Disable for "
+            "plugins whose host-parameter automation is cleared by pedalboard's reset."
+        ),
+    )
     plugin_reload_cadence: _PluginReloadCadence = Field(
         default="once",
         description=(

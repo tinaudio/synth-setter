@@ -39,6 +39,7 @@ _BUNDLED_PATH = "plugins/Surge XT.vst3"
 
 # Absent from the spec: inert or harmful under the harness's single-note,
 # monophonic, no-pitch-bend playback (``core.make_midi_events``).
+_CARDINAL_SYNTH_PARAMS = tuple(f"parameter_{index}_v" for index in range(1, 10))
 _OBXF_PRUNED_PARAMS = (
     "bypass",
     "pitch_bend_up_semitones",
@@ -92,6 +93,7 @@ def test_param_spec_widths_match_known_values() -> None:
     assert param_specs["surge_simple"].encoded_width == 92
     assert param_specs["surge_4"].encoded_width == 7
     assert param_specs["obxf"].encoded_width == 187
+    assert param_specs["cardinal"].encoded_width == 13
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:
@@ -133,6 +135,33 @@ def test_public_param_specs_view_rejects_mutation() -> None:
 def test_every_param_spec_has_a_plugin_state_path() -> None:
     """``param_specs`` and ``plugin_state_paths`` cover the same keys — no spec lacks a preset."""
     assert set(param_specs) == set(plugin_state_paths)
+
+
+def test_cardinal_is_registered_with_an_existing_preset() -> None:
+    """The Cardinal registry entry resolves its committed Rack patch state."""
+    assert "cardinal" in param_specs
+    assert "cardinal" in plugin_state_paths
+    assert (_REPO_ROOT / plugin_state_paths["cardinal"]).is_file()
+
+
+def test_cardinal_spec_round_trip_preserves_curated_host_slots() -> None:
+    """Cardinal values survive encoding without admitting unmapped host slots."""
+    spec = param_specs["cardinal"]
+
+    synth, note = spec.sample(np.random.default_rng(2376))
+    encoded = spec.encode(synth, note)
+    decoded_synth, decoded_note = spec.decode(encoded)
+
+    assert tuple(spec.synth_param_names) == _CARDINAL_SYNTH_PARAMS
+    assert encoded.shape == (13,)
+    assert encoded.dtype == np.float32
+    assert np.isfinite(encoded).all()
+    assert np.all((encoded >= 0.0) & (encoded <= 1.0))
+    assert decoded_synth == pytest.approx(synth, abs=1e-6)
+    assert decoded_note["pitch"] == note["pitch"]
+    assert decoded_note["note_start_and_end"] == pytest.approx(
+        note["note_start_and_end"], abs=1e-6
+    )
 
 
 def test_obxf_is_registered_with_an_existing_preset() -> None:

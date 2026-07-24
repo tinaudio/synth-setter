@@ -15,9 +15,9 @@ parameters.
 The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (plugin path, preset, spec name) looked up from a registry by
-name. Surge XT is the default; OB-Xf is registered as a second synth, and any
-VST3 plugin can be onboarded with **no edits to core pipeline, storage, or model
-code**. See
+name. Surge XT is the default; OB-Xf and Cardinal Synth are registered
+production integrations. New VST3 plugins compose through the same registry,
+render, storage, and model contracts without per-synth pipeline branches. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 ## System Diagram
@@ -51,7 +51,7 @@ code**. See
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt` or `render=obxf`); each render config
+   group override (e.g. `render=surge_xt`, `render=obxf`, or `render=cardinal`); each render config
    names the registered `param_spec_name`, preset, and plugin path. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
@@ -61,7 +61,9 @@ code**. See
    synth, producing Lance
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
    and ground-truth parameter arrays. Workers are fully parallel with no shared
-   state.
+   state. Cardinal's committed preset maps its generic host slots to a curated
+   Rack patch; its smoke experiment assigns one shard to each of three workers
+   so every worker process owns one Cardinal instance.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments

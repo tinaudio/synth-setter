@@ -168,7 +168,12 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
             32,
             2,
         ),
-        "kwargs": {"plugin_state_path": "preset.vstpreset", "plugin": None, "warmup": False},
+        "kwargs": {
+            "plugin_state_path": "preset.vstpreset",
+            "plugin": None,
+            "warmup": False,
+            "reset_plugin_before_process": True,
+        },
     }
 
 

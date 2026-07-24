@@ -30,6 +30,7 @@ TEST_PRESET_PATH = plugin_state_paths[TEST_SYNTH]
 # dataset test labels provenance for the selected synth, not always Surge XT's.
 # The Surge family shares one plugin binary, hence one version.
 TEST_RENDERER_VERSION = {
+    "cardinal": "0.26.2",
     "surge_xt": "1.3.4",
     "surge_simple": "1.3.4",
     "surge_4": "1.3.4",

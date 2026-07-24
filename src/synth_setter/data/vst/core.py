@@ -214,6 +214,7 @@ def render_params(
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
+    reset_plugin_before_process: bool = True,
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
@@ -234,6 +235,8 @@ def render_params(
     :param plugin_state_path: Optional pedalboard plugin-state file to load.
     :param plugin: Existing plugin instance to reuse.
     :param warmup: Whether to run the plugin warm-up sequence.
+    :param reset_plugin_before_process: Whether each pedalboard process call starts
+        by resetting plugin state.
     :returns: Rendered audio as a channel-first NumPy array.
     """
     if plugin is None:
@@ -245,26 +248,30 @@ def render_params(
         warmup_plugin(plugin)
 
     logger.debug("post-load flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
+    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
     plugin.reset()
 
     logger.debug("setting params")
     set_params(plugin, params)
-    # plugin.reset()
 
     logger.debug("post-param flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
+    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
     plugin.reset()
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
     logger.debug("rendering audio")
     output = plugin.process(
-        midi_events, signal_duration_seconds, sample_rate, channels, 2048, True
+        midi_events,
+        signal_duration_seconds,
+        sample_rate,
+        channels,
+        2048,
+        reset_plugin_before_process,
     )
 
     logger.debug("post-render flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
+    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
     plugin.reset()
 
     return output

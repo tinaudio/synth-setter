@@ -177,9 +177,14 @@ class PedalboardRenderer(AudioRenderer):
     .. attribute :: plugin
 
        Optional preloaded pedalboard plugin instance.
+
+    .. attribute :: reset_plugin_before_process
+
+       Whether pedalboard resets plugin state before each process call.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
+    reset_plugin_before_process: bool = True
 
     def render(
         self,
@@ -214,6 +219,7 @@ class PedalboardRenderer(AudioRenderer):
                 plugin_state_path=self.plugin_state_path,
                 plugin=self.plugin,
                 warmup=warmup,
+                reset_plugin_before_process=self.reset_plugin_before_process,
             ),
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),

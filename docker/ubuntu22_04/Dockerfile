@@ -220,13 +220,14 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 # ==========================================
 # VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
-# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
-# binaries, so non-amd64 builds stage nothing and downstream steps skip.
+# /plugins-staging for the runtime stage to copy. Cardinal ships amd64 and
+# arm64 bundles; the remaining fetched synths are x86_64-only.
 # Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
 # built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
 # License: these third-party binaries ship in the published GHCR image —
 # review upstream license/redistribution terms before adding or bumping an
-# asset (Dexed: GPL-3.0; OB-Xf: GPL-3.0; Six Sines: MIT).
+# asset (Cardinal: GPL-3.0-or-later; Dexed: GPL-3.0; OB-Xf: GPL-3.0;
+# Six Sines: MIT).
 # ==========================================
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
@@ -240,6 +241,22 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     unzip \
     wget
 WORKDIR /plugins-staging
+
+ARG CARDINAL_VERSION=26.02
+ARG CARDINAL_ASSET_X86_64=Cardinal-linux-x86_64-26.02.tar.gz
+ARG CARDINAL_SHA256_X86_64=657df0beeec04184de7359cbd3e173a36eeab78077e1e26da81405632f98ec25
+ARG CARDINAL_ASSET_AARCH64=Cardinal-linux-aarch64-26.02.tar.gz
+ARG CARDINAL_SHA256_AARCH64=b36b6d5b04e55bb808bc4b99ac3e08007b1dc48df7e75dbda25664ab974f7a98
+RUN case "${TARGETARCH:-}" in \
+      amd64) cardinal_asset="${CARDINAL_ASSET_X86_64}"; cardinal_sha="${CARDINAL_SHA256_X86_64}" ;; \
+      arm64) cardinal_asset="${CARDINAL_ASSET_AARCH64}"; cardinal_sha="${CARDINAL_SHA256_AARCH64}" ;; \
+      *) echo "ERROR: unsupported TARGETARCH for Cardinal: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    wget -q -O /tmp/cardinal.tar.gz \
+      "https://github.com/DISTRHO/Cardinal/releases/download/${CARDINAL_VERSION}/${cardinal_asset}" && \
+    echo "${cardinal_sha}  /tmp/cardinal.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/cardinal.tar.gz -C . CardinalSynth.vst3 && \
+    rm /tmp/cardinal.tar.gz
 
 ARG DEXED_VERSION=0.9.8
 ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
@@ -338,8 +355,8 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Surge XT is the only bundle present here; the amd64-only fetched synths land
-# downstream (vst3-synths-fetch COPY), gated and load-validated there.
+# Surge XT is the only bundle present here; fetched synths land downstream
+# (vst3-synths-fetch COPY), gated by architecture and load-validated there.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
     || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 
@@ -475,21 +492,26 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
 COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
-# Presence gate for the bundles the image must ship: Surge XT on every arch,
-# bundled plugin synths on amd64 only. Load-validation follows.
-RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
-      if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
+# Presence gate for the bundles the image must ship: Surge XT and Cardinal
+# on every arch, with the other plugin synths on amd64 only.
+RUN for bundle in "Surge XT" "CardinalSynth" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+      if [[ "$bundle" != "Surge XT" && "$bundle" != "CardinalSynth" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
 
-# Validate each bundled synth loads under headless X11 — one wrapper run per
-# plugin, since sequential in-process loads crash order-dependently (#1649) —
-# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
+# Cardinal is available on both image architectures and must load before the
+# amd64-only plugin loop.
+RUN ./run-linux-vst-headless.sh \
+      python -X faulthandler load_vst3_check.py "/usr/lib/vst3/CardinalSynth.vst3" && \
+    ln -s "/usr/lib/vst3/CardinalSynth.vst3" "/home/build/synth-setter/plugins/CardinalSynth.vst3"
+
+# Validate each amd64-only synth in a separate process because sequential
+# plugin loads crash order-dependently (#1649).
 # Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping amd64-only VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
     for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \

@@ -91,13 +91,13 @@ have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
 
-To mirror the full plugin set the runtime docker image ships — Surge XT plus
-Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
-synths publish x86_64 Linux binaries only, matching the image; on other hosts
-those targets print a notice and exit 0, so on macOS the aggregate still
-succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
-itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
-Dockerfile ARGs and are kept in sync by
+To mirror the full plugin set the runtime Docker image ships, run
+`make install-plugins`. The aggregate adds Cardinal Synth, Dexed, OB-Xf, Six
+Sines, and Ultramaster KR-106 to Surge XT. Cardinal publishes pinned x86_64 and
+aarch64 Linux bundles; the remaining extras are x86_64-only. Unsupported
+targets print a notice and exit 0, while non-x86_64 Linux still requires the
+Surge XT workaround below because that upstream release is x86_64-only. Plugin
+version and integrity pins mirror the Dockerfile ARGs and are kept in sync by
 `tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip

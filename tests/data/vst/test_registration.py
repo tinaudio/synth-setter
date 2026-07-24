@@ -28,6 +28,7 @@ from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
 REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
 _RESERVED_RENDER_CONFIG_NAMES = (
+    "cardinal",
     "obxf",
     "surge_4",
     "surge_simple",

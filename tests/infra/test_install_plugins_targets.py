@@ -1,8 +1,8 @@
 """`make install-plugins` provisions every VST3 bundle the runtime docker image ships.
 
-The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
-synths (Dexed, OB-Xf, Six Sines) and source-builds Ultramaster KR-106. The Makefile mirrors those
-pins for local installs; these tests fail when either side drifts.
+The image (docker/ubuntu22_04/Dockerfile) installs Surge XT and four SHA256-pinned prebuilt
+synths (Cardinal, Dexed, OB-Xf, Six Sines), then source-builds Ultramaster KR-106. The Makefile
+mirrors those pins for local installs; these tests fail when either side drifts.
 
 The download-path tests never touch the network: they seed the archive cache under a throwaway
 ``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
@@ -37,6 +37,7 @@ _TIMEOUT_S = 60
 # Every VST3 bundle staged into the runtime image, by plugins/ basename.
 _IMAGE_BUNDLES = (
     "Surge XT.vst3",
+    "CardinalSynth.vst3",
     "Dexed.vst3",
     "OB-Xf.vst3",
     "Six Sines.vst3",
@@ -52,6 +53,11 @@ _LINUX_X86_64_PLUGIN_TARGETS = (
 
 # Pins that must stay identical between the Makefile and the Dockerfile ARGs.
 _SHARED_PINS = (
+    "CARDINAL_ASSET_AARCH64",
+    "CARDINAL_ASSET_X86_64",
+    "CARDINAL_SHA256_AARCH64",
+    "CARDINAL_SHA256_X86_64",
+    "CARDINAL_VERSION",
     "DEXED_VERSION",
     "DEXED_SHA256",
     "OBXF_VERSION",
@@ -471,6 +477,63 @@ def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
 
 
 @requires_x86_64_linux
+def test_install_cardinal_cached_archive_verifies_and_installs_bundle(
+    makefile_checkout: Path,
+) -> None:
+    """The x86_64 Cardinal asset installs only its Synth VST3 bundle.
+
+    :param makefile_checkout: Throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    asset = _makefile_var("CARDINAL_ASSET_X86_64")
+    payload = _targz_containing("CardinalSynth.vst3")
+    digest = _seed_cache(home, asset, payload)
+
+    result = _run_make(
+        makefile_checkout,
+        "install-cardinal",
+        f"CARDINAL_SHA256_X86_64={digest}",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    installed = makefile_checkout / "plugins" / "CardinalSynth.vst3"
+    assert (installed / "Contents" / "x86_64-linux" / "plugin.so").is_file()
+
+
+def test_install_cardinal_aarch64_selects_arch_specific_asset(
+    makefile_checkout: Path,
+) -> None:
+    """An aarch64 host verifies and extracts the upstream aarch64 archive.
+
+    :param makefile_checkout: Throwaway checkout holding the Makefile.
+    """
+    home, env = _home_env(makefile_checkout)
+    asset = _makefile_var("CARDINAL_ASSET_AARCH64")
+    payload = _targz_containing("CardinalSynth.vst3")
+    digest = _seed_cache(home, asset, payload)
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    fake_uname = bindir / "uname"
+    fake_uname.write_text(
+        '#!/bin/sh\nif [ "$1" = "-m" ]; then echo aarch64; else echo Linux; fi\n'
+    )
+    fake_uname.chmod(0o755)
+    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+
+    result = _run_make(
+        makefile_checkout,
+        "install-cardinal",
+        f"CARDINAL_SHA256_AARCH64={digest}",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert asset in result.stdout
+    assert (makefile_checkout / "plugins" / "CardinalSynth.vst3").is_dir()
+
+
+@requires_x86_64_linux
 def test_install_dexed_cached_archive_verifies_and_installs_bundle(
     makefile_checkout: Path,
 ) -> None:
@@ -529,6 +592,7 @@ def test_install_plugins_mixed_presence_installs_only_missing_bundle(
     plugins.mkdir()
     for name in (
         "Surge XT.vst3",
+        "CardinalSynth.vst3",
         "OB-Xf.vst3",
         "Six Sines.vst3",
         "Ultramaster KR-106.vst3",

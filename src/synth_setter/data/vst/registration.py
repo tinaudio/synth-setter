@@ -20,6 +20,7 @@ _REGISTRY_RELPATH = Path("src/synth_setter/data/vst/param_spec_registry.py")
 # Registration writes configs/render; protect shipped groups from being overwritten.
 _RESERVED_RENDER_CONFIG_NAMES = frozenset(
     {
+        "cardinal",
         "obxf",
         "surge_4",
         "surge_simple",

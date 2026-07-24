@@ -49,6 +49,9 @@ on:
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "presets/**"
+      - "docker/ubuntu22_04/Dockerfile"
+      - "Makefile"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
@@ -66,6 +69,9 @@ on:
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "presets/**"
+      - "docker/ubuntu22_04/Dockerfile"
+      - "Makefile"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
@@ -85,12 +91,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
-    # No write grant here: both matrix cells stay at the workflow-default
+    # No write grant here: all matrix cells stay at the workflow-default
     # ``contents: read``. Pushing to ``gh-pages`` is scoped to the separate
-    # ``publish_benchmarks`` job, so a compromised test/run step in either
-    # synth cell can't reach the repo's contents (#703).
+    # ``publish_benchmarks`` job, so a compromised test/run step can't reach
+    # the repo's contents (#703).
 
-    # One cell per synth (``fail-fast: false`` so neither masks the other);
+    # One cell per synth (``fail-fast: false`` so failures do not mask peers);
     # only ``surge_xt`` runs the full suite and publishes benchmarks (see #703).
     strategy:
       fail-fast: false
@@ -108,6 +114,9 @@ jobs:
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
+          - synth: cardinal
+            plugin_path: /usr/lib/vst3/CardinalSynth.vst3
+            pytest_targets: tests/data/vst/test_cardinal_preset.py
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
@@ -134,11 +143,17 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -e "PLUGIN_PATH=$PLUGIN_PATH" \
+            -e "TEST_SYNTH=${{ matrix.synth }}" \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              if [[ "$TEST_SYNTH" == cardinal && ! -e "$PLUGIN_PATH" ]]; then
+                make install-cardinal
+                PLUGIN_PATH="$PWD/plugins/CardinalSynth.vst3"
+                export PLUGIN_PATH
+              fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 python -X faulthandler -c "import os; from synth_setter.data.vst.core import load_plugin; load_plugin(os.environ[\"PLUGIN_PATH\"])"
             '
@@ -183,6 +198,16 @@ jobs:
               UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
                 uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
               uv pip install --no-deps -e .
+              if [[ "$SYNTH_SETTER_TEST_SYNTH" == cardinal && ! -e "$SYNTH_SETTER_PLUGIN_PATH" ]]; then
+                make install-cardinal
+                SYNTH_SETTER_PLUGIN_PATH="$PWD/plugins/CardinalSynth.vst3"
+                export SYNTH_SETTER_PLUGIN_PATH
+              fi
+              mkdir -p plugins
+              plugin_link="$PWD/plugins/$(basename "$SYNTH_SETTER_PLUGIN_PATH")"
+              if [[ "$SYNTH_SETTER_PLUGIN_PATH" != "$plugin_link" ]]; then
+                ln -sfn "$SYNTH_SETTER_PLUGIN_PATH" "$plugin_link"
+              fi
               read -ra targets <<< "$PYTEST_TARGETS"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
@@ -206,7 +231,7 @@ jobs:
         # publish steps expect it. Each prefix maps 1:1 to a chart bucket.
         # Skipped cleanly if a file is missing (test deselected, xfailed
         # before emit, etc). Surge-only: the benchmark buckets (Issue #703)
-        # track Surge's noise floor; the obxf cell renders but never publishes.
+        # track Surge's noise floor; non-Surge cells render but never publish.
         if: always() && matrix.synth == 'surge_xt'
         run: |
           for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do

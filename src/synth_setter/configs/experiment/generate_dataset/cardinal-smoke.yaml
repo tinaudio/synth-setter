@@ -1,0 +1,23 @@
+# @package _global_
+
+# Production completion signal for Cardinal onboarding: one real shard per split.
+defaults:
+  - override /datamodule: vst
+  - override /render: cardinal
+  - _self_
+
+task_name: cardinal-smoke
+mask_degenerate_bins: true
+train_val_test_sizes: [2, 2, 2]
+
+datamodule:
+  param_spec_name: cardinal
+
+skypilot_launch:
+  num_workers: 3
+
+render:
+  samples_per_render_batch: 2
+  samples_per_shard: 2
+  gui_toggle_cadence: never
+  plugin_reload_cadence: once

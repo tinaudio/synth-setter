@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import cast
 
+from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.surge_xt_param_spec import (
@@ -34,6 +35,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.param_spec_name import ParamSpecName
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("cardinal"): CARDINAL_PARAM_SPEC,
     ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
@@ -45,6 +47,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
 plugin_state_paths: dict[str, str] = {
+    "cardinal": "presets/cardinal-base.vstpreset",
     "surge_xt": "presets/surge-base.vstpreset",
     "surge_simple": "presets/surge-simple.vstpreset",
     "surge_4": "presets/surge-mini.vstpreset",

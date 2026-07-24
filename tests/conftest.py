@@ -422,6 +422,29 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_cardinal(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the Cardinal smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: Cardinal smoke config with paths pinned under ``tmp_path``.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/cardinal-smoke"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose ``dataset.yaml`` with ``render=obxf`` for entrypoint OB-Xf coverage.
 
