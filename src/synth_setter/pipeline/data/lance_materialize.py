@@ -150,18 +150,20 @@ def _reuse_or_raise(
     txid: str | None,
     columns: tuple[str, ...],
     limit: int | None,
+    resolved_version: int | None = None,
 ) -> Path:
     """Validate an existing destination against the current request.
 
-    Trusts the sidecar's ``resolved_version`` only through the hash: the hash
-    is recomputed from the current arguments plus that stored version, so any
-    drift in source, txid, columns, or limit fails the comparison.
+    Recomputes the hash from the current request. Pinned requests retain the
+    stored resolved version; unpinned requests include the source's current
+    version so an advanced source rejects the stale cache.
 
     :param dest_path: Existing materialized dataset directory.
     :param source_uri: Current request's source URI.
     :param txid: Current request's transaction uuid, or ``None`` for latest.
     :param columns: Current request's projected columns.
     :param limit: Current request's row cap.
+    :param resolved_version: Current latest version for an unpinned request.
     :returns: ``dest_path`` on a cache hit.
     :raises ValueError: The sidecar is missing/unparsable, its stored hash
         does not cover its own fields, or the request diverges from it —
@@ -181,7 +183,10 @@ def _reuse_or_raise(
         manifest.columns,
         manifest.limit,
     )
-    requested_hash = request_hash(source_uri, txid, manifest.resolved_version, columns, limit)
+    requested_version = (
+        manifest.resolved_version if resolved_version is None else resolved_version
+    )
+    requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
     if manifest.request_hash != stored_hash or manifest.request_hash != requested_hash:
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
@@ -231,7 +236,7 @@ def materialize_lance_subset(  # noqa: DOC502
     """
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
-    if dest_path.exists():
+    if dest_path.exists() and txid is not None:
         return _reuse_or_raise(dest_path, source_uri, txid, requested_columns, limit)
     if r2_io.is_r2_uri(source_uri):
         open_uri, storage_options = r2_io.lance_target(source_uri)
@@ -241,6 +246,15 @@ def materialize_lance_subset(  # noqa: DOC502
         open_uri, storage_options = source_uri, None
     ds = lance.dataset(open_uri, storage_options=storage_options)
     resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
+    if dest_path.exists():
+        return _reuse_or_raise(
+            dest_path,
+            source_uri,
+            txid,
+            requested_columns,
+            limit,
+            resolved_version,
+        )
     snapshot = ds.checkout_version(resolved_version)
     scanner = snapshot.scanner(
         columns=list(requested_columns), limit=limit, batch_size=batch_size

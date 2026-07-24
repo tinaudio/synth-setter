@@ -188,6 +188,23 @@ def test_materialize_without_txid_uses_latest_version(
     assert manifest.resolved_version == 2
 
 
+def test_materialize_without_txid_source_advance_rejects_stale_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned cache cannot masquerade as latest after the source advances.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    lance.write_dataset(pa.table({"a": [6], "b": ["r"]}), source, mode="append")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+
 def test_materialize_row_limit_limit_two_row_count_matches(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:

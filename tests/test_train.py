@@ -454,6 +454,37 @@ def test_train_file_uri_hydrates_local_dataset_root(tmp_path: Path) -> None:
     assert (destination / ".synth-setter-stage-complete").is_file()
 
 
+@pytest.mark.slow
+def test_train_row_limited_file_uri_hydration_without_txids(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes latest-snapshot row-limited hydration.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.batch_size = 2
+        cfg_train_lance.datamodule.num_workers = 0
+
+    HydraConfig().set_config(cfg_train_lance)
+    _, object_dict = train(cfg_train_lance)
+
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    try:
+        batch = next(iter(datamodule.train_dataloader()))
+        assert len(datamodule.train_dataset) == 2
+    finally:
+        datamodule.teardown("fit")
+    assert batch["params"].shape[0] == 2
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
