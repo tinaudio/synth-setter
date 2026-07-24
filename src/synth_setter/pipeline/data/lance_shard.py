@@ -11,10 +11,16 @@ import pyarrow as pa
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
+from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES, DEBUG_FIELD
+from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
+DEBUG_JSON_TYPE = pa.json_()
+_LANCE_JSON_FIELD_METADATA = {
+    b"ARROW:extension:name": b"lance.json",
+    b"ARROW:extension:metadata": b"",
+}
 
 # Pin the Lance on-disk format instead of floating with the pylance default;
 # "2.2" leads that default and needs a reader new enough to open it (#1714).
@@ -48,6 +54,7 @@ def lance_schema(
             field_shapes[field][1:],
         )
         fields.append(pa.field(field, tensor_type, nullable=False))
+    fields.append(pa.field(DEBUG_FIELD, DEBUG_JSON_TYPE, nullable=False))
     return pa.schema(
         fields,
         metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")},
@@ -74,14 +81,55 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
     return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
 
 
+def seed_debug_array(
+    master_seed: int,
+    sample_indices: Sequence[int],
+    attempts: Sequence[int],
+    sampler_seeds: Sequence[int | None],
+    *,
+    shard_id: int | None,
+    parameter_source: ParameterSource = "sampled",
+) -> pa.Array:
+    """Build row-level seed provenance as Arrow JSON documents.
+
+    :param master_seed: Dataset or split master seed shared by these rows.
+    :param sample_indices: Stable logical row indices within the seed stream.
+    :param attempts: Accepted loudness-gate attempt for each row.
+    :param sampler_seeds: Concrete sampler seed consumed by each row, or ``None``.
+    :param shard_id: Logical shard number, or ``None`` for an ad hoc render.
+    :param parameter_source: Whether parameters were sampled, fixed, or mixed.
+    :returns: JSON documents containing consumed seeds and their derivation inputs.
+    :raises ValueError: Input lengths differ or a debug document violates its schema.
+    """
+    if len({len(sample_indices), len(attempts), len(sampler_seeds)}) != 1:
+        raise ValueError("sample_indices, attempts, and sampler_seeds must have equal lengths")
+    documents = []
+    for sample_idx, attempt, sampler_seed in zip(
+        sample_indices, attempts, sampler_seeds, strict=True
+    ):
+        document = SeedDebugDocument(
+            seed=sampler_seed,
+            master_seed=master_seed,
+            sample_idx=sample_idx,
+            attempt=attempt,
+            shard_id=shard_id,
+            parameter_source=parameter_source,
+        )
+        documents.append(document.model_dump_json(exclude_none=True))
+    return pa.array(documents, type=DEBUG_JSON_TYPE)
+
+
 def record_batch_from_arrays(
     arrays: dict[str, np.ndarray],
     schema: pa.Schema,
+    *,
+    debug: pa.Array | None,
 ) -> pa.RecordBatch:
     """Build a Lance record batch from numpy arrays keyed by dataset field.
 
     :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
     :param schema: Schema returned by :func:`lance_schema`.
+    :param debug: Row-level seed provenance; ``None`` writes empty documents for fixtures.
     :returns: Arrow record batch for :func:`write_lance_dataset` / :func:`lance_fragment`.
     """
     columns = []
@@ -91,6 +139,9 @@ def record_batch_from_arrays(
         tensor_type = schema.field(field).type
         np_dtype = np.dtype(tensor_type.value_type.to_pandas_dtype())
         columns.append(tensor_array(arrays[field], np_dtype, tuple(tensor_type.shape)))
+    if debug is None:
+        debug = pa.repeat(pa.scalar("{}", type=DEBUG_JSON_TYPE), len(columns[0]))
+    columns.append(debug)
     return pa.record_batch(columns, schema=schema)
 
 
@@ -185,6 +236,56 @@ def schema_mismatch_detail(physical: pa.Schema, expected: pa.Schema) -> str:
     return "; ".join(parts)
 
 
+def _logical_fragment_schema(physical: pa.Schema, logical: pa.Schema) -> pa.Schema:
+    """Restore logical JSON typing on a physical fragment schema.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Physical schema with Lance's JSON storage field restored to its logical type.
+    """
+    index = logical.get_field_index(DEBUG_FIELD)
+    if index < 0 or physical.names != logical.names:
+        return physical
+    physical_debug = physical.field(index)
+    logical_debug = logical.field(index)
+    if (
+        logical_debug.type != DEBUG_JSON_TYPE
+        or physical_debug.type != pa.large_binary()
+        or physical_debug.metadata != _LANCE_JSON_FIELD_METADATA
+    ):
+        return physical
+    restored_debug = pa.field(
+        physical_debug.name,
+        logical_debug.type,
+        nullable=physical_debug.nullable,
+        metadata=logical_debug.metadata,
+    )
+    return physical.set(index, restored_debug)
+
+
+def fragment_schema_matches(physical: pa.Schema, logical: pa.Schema) -> bool:
+    """Return whether a fragment file matches its logical dataset schema.
+
+    Lance stores Arrow JSON as ``large_binary`` plus field metadata in fragment
+    files, then restores the JSON extension from the committed dataset schema.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Whether all logical fields have the expected physical representation.
+    """
+    return _logical_fragment_schema(physical, logical).equals(logical, check_metadata=True)
+
+
+def fragment_schema_mismatch_detail(physical: pa.Schema, logical: pa.Schema) -> str:
+    """Describe a fragment mismatch after restoring logical JSON typing.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Field and metadata differences suitable for an operator error.
+    """
+    return schema_mismatch_detail(_logical_fragment_schema(physical, logical), logical)
+
+
 def lance_fragment(
     uri: Path | str,
     schema: pa.Schema,
@@ -230,12 +331,12 @@ def lance_fragment(
         .metadata()
         .schema
     )
-    if not physical.equals(schema, check_metadata=True):
+    if not fragment_schema_matches(physical, schema):
         raise ValueError(
             f"fragment under {uri} was written with the existing dataset's schema, not the "
             "spec-derived one (Lance append mode adopts a committed dataset's schema; the "
             f"target likely holds stale data from an older code version — #2084): "
-            f"{schema_mismatch_detail(physical, schema)}"
+            f"{fragment_schema_mismatch_detail(physical, schema)}"
         )
     return fragment
 

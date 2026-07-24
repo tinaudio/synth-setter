@@ -202,6 +202,21 @@ def test_build_generate_args_passes_shard_seed_as_base_seed(tmp_path: Path) -> N
     assert passed_seeds == ["42", "43", "44"]
 
 
+def test_build_generate_args_passes_shard_id(tmp_path: Path) -> None:
+    """Renderer argv carries the shard identity written into row debug documents.
+
+    :param tmp_path: Output dir build_generate_args composes shard paths under.
+    """
+    spec = _multi_shard_spec(tmp_path, n=3)
+
+    passed_ids = []
+    for shard in spec.shards:
+        args = build_generate_args(spec, shard, tmp_path)
+        passed_ids.append(args[args.index("--shard_id") + 1])
+
+    assert passed_ids == ["0", "1", "2"]
+
+
 def test_build_generate_args_passes_split_local_sample_offset(tmp_path: Path) -> None:
     """Renderer argv carries each shard's split-local seed position.
 
@@ -1980,15 +1995,20 @@ class TestBuildGenerateArgs:
         flag_idx = args.index("--samples_per_shard")
         assert args[flag_idx + 1] == str(spec.render.samples_per_shard)
 
-    def test_all_render_config_fields_passed_as_options(self, spec: DatasetSpec) -> None:
-        """The flag set equals ``RenderConfig.model_fields`` — auto-derived parity guard."""
+    def test_all_render_config_fields_and_shard_id_passed_as_options(
+        self, spec: DatasetSpec
+    ) -> None:
+        """The flag set carries render config plus launcher-only shard identity.
+
+        :param spec: Dataset spec providing render fields and shard identity.
+        """
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
         option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
-        assert option_keys == set(RenderConfig.model_fields.keys())
+        assert option_keys == {*RenderConfig.model_fields.keys(), "shard_id"}
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
         """First arg is the Python executable, second is the generation script."""

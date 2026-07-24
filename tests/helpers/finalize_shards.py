@@ -179,7 +179,11 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
     }
     # record_batch_from_arrays rejects empty batches, so a zero-row shard is
     # written as a schema-only dataset with no batches at all.
-    batches = [] if shapes[MEL_SPEC_FIELD][0] == 0 else [record_batch_from_arrays(arrays, schema)]
+    batches = (
+        []
+        if shapes[MEL_SPEC_FIELD][0] == 0
+        else [record_batch_from_arrays(arrays, schema, debug=None)]
+    )
     write_lance_dataset(dest, schema, batches)
 
 

@@ -100,7 +100,7 @@ def _write_smoke_dataset(path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None
         MEL_SPEC_FIELD: np.zeros(_FIELD_SHAPES[MEL_SPEC_FIELD], dtype=np.float32),
         PARAM_ARRAY_FIELD: np.zeros(_FIELD_SHAPES[PARAM_ARRAY_FIELD], dtype=np.float32),
     }
-    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema, debug=None)])
 
 
 def _decode_mp3(payload: bytes) -> tuple[np.ndarray, int]:

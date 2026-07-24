@@ -116,7 +116,7 @@ def write_local_shard(
     render = spec.render_for_shard(shard)
     metadata = render.shard_metadata()
     schema = lance_schema(dataset_field_shapes(render, spec.num_params), metadata)
-    batch = record_batch_from_arrays(shard_arrays(spec, shard_id, value_offset), schema)
+    batch = record_batch_from_arrays(shard_arrays(spec, shard_id, value_offset), schema, debug=None)
     shard_path = work_dir / shard.filename
     write_lance_dataset(shard_path, schema, [batch])
     return shard_path
@@ -367,7 +367,7 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
         for field in DATASET_FIELD_NAMES
     }
     shard_path = tmp_path / shard.filename
-    write_lance_dataset(shard_path, schema, [record_batch_from_arrays(oversized, schema)])
+    write_lance_dataset(shard_path, schema, [record_batch_from_arrays(oversized, schema, debug=None)])
 
     with pytest.raises(ValueError, match="row"):
         stage_lance_shard_attempt(spec, shard, shard_path, worker_id="pod-a", attempt_uuid="a1b2")
@@ -392,7 +392,7 @@ def test_stage_attempt_rejects_local_shard_with_schema_drift(
     write_lance_dataset(
         shard_path,
         drifted,
-        [record_batch_from_arrays(shard_arrays(spec, 0), drifted)],
+        [record_batch_from_arrays(shard_arrays(spec, 0), drifted, debug=None)],
     )
 
     with pytest.raises(ValueError, match="schema does not match"):

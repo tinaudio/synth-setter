@@ -264,6 +264,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     render_args = spec.render_for_shard(shard).model_dump()
     for key, value in render_args.items():
         args.extend([f"--{key}", str(value)])
+    args.extend(["--shard_id", str(shard.shard_id)])
 
     return args
 

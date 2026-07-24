@@ -95,7 +95,7 @@ def _worker_writes_fragment(
     :param arrays: One shard's field arrays.
     :returns: The live fragment metadata and its sidecar JSON string.
     """
-    batch = record_batch_from_arrays(arrays, schema)
+    batch = record_batch_from_arrays(arrays, schema, debug=None)
     frag = lance_fragment(split_uri, schema, batch)
     return frag, json.dumps(frag.to_json())
 

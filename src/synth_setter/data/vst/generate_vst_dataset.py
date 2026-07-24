@@ -4,13 +4,14 @@ from pathlib import Path
 import librosa
 import numpy as np
 from loguru import logger
+from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
-from synth_setter.data.vst.seeding import rng_for_sample
+from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import (
     MEL_N_MELS,
     MEL_WINDOW,
@@ -63,6 +64,8 @@ class VSTDataSample:
     audio: np.ndarray
     mel_spec: np.ndarray
     param_array: np.ndarray = field(init=False)
+    # Concrete sampler seed consumed for this row; fully fixed renders consume none.
+    sampler_seed: int | None = None
     # Loudness-gate attempt the accepted draw came from (#884).
     attempt: int = 0
     # Per-draw rejection counts carried to the shard writer for aggregation.
@@ -110,8 +113,8 @@ def generate_sample(
     ``min_loudness``. When only ``fixed_note_params`` (or nothing) is supplied, the
     synth is re-sampled per attempt and the loop is meaningful.
 
-    With ``seed`` set, sampling draws from
-    ``rng_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
+    With ``seed`` set, sampling draws from a generator initialized with
+    ``seed_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
     reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
     from a fresh non-deterministic generator and uses the default attempt budget.
 
@@ -141,13 +144,14 @@ def generate_sample(
     clipped_rejections = 0
     silent_rejections = 0
     for attempt in range(max_attempts):
+        sampler_seed = None
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
-            rng = (
-                rng_for_sample(seed.master_seed, seed.sample_idx, attempt)
-                if seed is not None
-                else None
-            )
+            if seed is not None:
+                sampler_seed = seed_for_sample(seed.master_seed, seed.sample_idx, attempt)
+                rng = np.random.default_rng(sampler_seed)
+            else:
+                rng = None
             sampled_synth, sampled_note = param_spec.sample(rng)
             synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
@@ -203,6 +207,7 @@ def generate_sample(
             sample_rate=renderer.sample_rate,
             channels=renderer.channels,
             param_spec=param_spec,
+            sampler_seed=sampler_seed,
             attempt=attempt,
             clipped_rejections=clipped_rejections,
             silent_rejections=silent_rejections,
@@ -227,9 +232,19 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
 
     Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
     automatically — adding or removing a field on ``RenderConfig`` extends or
-    shrinks the CLI surface without a parallel update here. Adds ``data_file``
-    as the sole positional arg (the destination shard path; its ``.lance``
-    suffix selects the Lance writer via ``OutputFormat.from_extension``).
+    shrinks the CLI surface without a parallel update here.
+
+    .. attribute :: model_config
+
+        Strict pydantic-settings CLI behavior.
+
+    .. attribute :: data_file
+
+        Destination Lance dataset path.
+
+    .. attribute :: shard_id
+
+        Optional launcher-supplied shard identity for row provenance.
     """
 
     model_config = SettingsConfigDict(
@@ -241,6 +256,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
+    shard_id: int | None = Field(default=None, ge=0)
 
 
 def main() -> None:
@@ -255,7 +271,7 @@ def main() -> None:
     from synth_setter.data.vst.writers import make_lance_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "shard_id"}))
     ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
@@ -264,7 +280,7 @@ def main() -> None:
 
     metrics_path = render_metrics_path(args.data_file)
     metrics_path.unlink(missing_ok=True)
-    metrics = make_lance_dataset(args.data_file, render_cfg)
+    metrics = make_lance_dataset(args.data_file, render_cfg, shard_id=args.shard_id)
     metrics_path.write_text(metrics.model_dump_json())
 
 

@@ -49,7 +49,7 @@ def _write_lance_with_shapes(
         field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
         for field, shape in shapes.items()
     }
-    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema, debug=None)])
 
 
 def _valid_default_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
