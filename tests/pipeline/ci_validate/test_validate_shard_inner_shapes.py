@@ -10,13 +10,19 @@ row-count / dtype / metadata cases.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES
+from synth_setter.data.vst.shapes import (
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    DATASET_FIELD_DTYPES,
+    dataset_field_shapes,
+)
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
@@ -25,6 +31,7 @@ from synth_setter.pipeline.data.lance_shard import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from tests.helpers.finalize_shards import smoke_shard_metadata
+from tests.helpers.lance_fixtures import with_preview_columns
 
 _VALID_AUDIO_CHANNELS = 2
 _VALID_AUDIO_SAMPLES_PER_ROW = 176400
@@ -45,11 +52,25 @@ def _write_lance_with_shapes(
     """
     render = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
     schema = lance_schema(shapes, smoke_shard_metadata(render))
-    arrays = {
+    tensor_arrays = {
         field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
         for field, shape in shapes.items()
     }
-    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema, debug=None)])
+    arrays: dict[str, np.ndarray | Sequence[bytes] | Sequence[str]]
+    if shapes == dataset_field_shapes(spec.render, spec.num_params):
+        arrays = with_preview_columns(tensor_arrays, spec.render.sample_rate)
+    else:
+        rows = shapes["audio"][0]
+        arrays = {
+            **tensor_arrays,
+            AUDIO_MP3_FIELD: [b"unused"] * rows,
+            AUDIO_UUID_FIELD: ["unused"] * rows,
+        }
+    write_lance_dataset(
+        path,
+        schema,
+        [record_batch_from_arrays(arrays, schema, debug=None)],
+    )
 
 
 def _valid_default_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:

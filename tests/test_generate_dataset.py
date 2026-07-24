@@ -26,6 +26,7 @@ and the arg-builders live in
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import multiprocessing
@@ -48,9 +49,17 @@ import pyarrow as pa
 import pytest
 from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf, open_dict
+from pedalboard.io import AudioFile
 
 from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    PARAM_ARRAY_FIELD,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
@@ -439,6 +448,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
             DATASET_FIELD_DTYPES,
             dataset_field_shapes,
         )
+        from tests.helpers.lance_fixtures import with_preview_columns
 
         output_file = Path(args[find_script_index(args) + 1])
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -452,7 +462,15 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
             for field, shape in shapes.items()
         }
         write_lance_dataset(
-            output_file, schema, [record_batch_from_arrays(arrays, schema, debug=None)]
+            output_file,
+            schema,
+            [
+                record_batch_from_arrays(
+                    with_preview_columns(arrays, oversized.sample_rate),
+                    schema,
+                    debug=None,
+                )
+            ],
         )
         render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
 
@@ -1359,17 +1377,28 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
             first_shard_in_split = spec.split_shard_ranges[split][0]
             offset = (shard.shard_id - first_shard_in_split) * spec.render.samples_per_shard
             s3_uri = r2_io.to_s3_uri(spec.r2.split_lance_uri(split))
-            rows = (
-                lance.dataset(s3_uri, storage_options=storage_options)
-                .to_table(columns=["param_array"])
-                .column("param_array")
-                .to_numpy(zero_copy_only=False)
+            table = lance.dataset(s3_uri, storage_options=storage_options).to_table(
+                columns=[AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD, PARAM_ARRAY_FIELD]
             )
-            params = np.stack(rows[offset : offset + spec.render.samples_per_shard])
+            row_slice = slice(offset, offset + spec.render.samples_per_shard)
+            params = np.stack(
+                table.column(PARAM_ARRAY_FIELD).to_numpy(zero_copy_only=False)[row_slice]
+            )
             assert params.shape[0] == spec.render.samples_per_shard
             assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
                 f"shard {shard.filename} has non-identical param rows under shard cadence"
             )
+
+            audio_rows = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()[row_slice]
+            mp3_rows = table.column(AUDIO_MP3_FIELD).to_pylist()[row_slice]
+            uuid_rows = table.column(AUDIO_UUID_FIELD).to_pylist()[row_slice]
+            assert uuid_rows == [audio_uuid(row) for row in audio_rows]
+            for payload in mp3_rows:
+                with AudioFile(io.BytesIO(payload)) as audio_file:
+                    decoded = audio_file.read(audio_file.frames)
+                    assert int(audio_file.samplerate) == spec.render.sample_rate
+                assert decoded.shape[0] == spec.render.channels
+                assert decoded.shape[1] > 0
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 

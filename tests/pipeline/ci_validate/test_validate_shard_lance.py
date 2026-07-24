@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import lance
@@ -10,11 +10,13 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
+from synth_setter.data.vst.audio_preview import audio_uuid, encode_audio_to_mp3
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
-    DEBUG_FIELD,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
@@ -22,9 +24,10 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
-    record_batch_from_arrays,
-    tensor_array,
     write_lance_dataset,
+)
+from synth_setter.pipeline.data.lance_shard import (
+    record_batch_from_arrays as _record_batch_from_arrays,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -33,6 +36,7 @@ from tests.helpers.finalize_shards import (
     smoke_shard_metadata,
     write_minimal_lance_shard,
 )
+from tests.helpers.lance_fixtures import with_preview_columns
 
 
 def _one_row_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
@@ -57,6 +61,31 @@ def _zero_arrays(shapes: Mapping[str, tuple[int, ...]]) -> dict[str, np.ndarray]
         field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
         for field, shape in shapes.items()
     }
+
+
+def record_batch_from_arrays(
+    arrays: Mapping[str, np.ndarray | Sequence[bytes] | Sequence[str]],
+    schema: pa.Schema,
+    *,
+    debug: pa.Array | None = None,
+) -> pa.RecordBatch:
+    """Build a canonical batch, deriving previews for tensor-only test inputs.
+
+    :param arrays: Tensor columns, optionally with explicit preview values.
+    :param schema: Arrow schema for the test shard.
+    :param debug: Optional row-level seed provenance.
+    :returns: Record batch matching ``schema``.
+    """
+    if AUDIO_MP3_FIELD in arrays and AUDIO_UUID_FIELD in arrays:
+        return _record_batch_from_arrays(arrays, schema, debug=debug)
+    tensor_arrays = {
+        name: values for name, values in arrays.items() if isinstance(values, np.ndarray)
+    }
+    return _record_batch_from_arrays(
+        with_preview_columns(tensor_arrays, 8000),
+        schema,
+        debug=debug,
+    )
 
 
 def _first_shard_metadata(spec: DatasetSpec) -> ShardMetadata:
@@ -111,6 +140,203 @@ def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     write_minimal_lance_shard(shard, spec)
 
     assert validate_shard(shard, spec) == []
+
+
+def test_validate_lance_shard_missing_preview_columns_reports_both(tmp_path: Path) -> None:
+    """The breaking initial-write schema rejects shards without preview columns.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    for preview_field in (AUDIO_MP3_FIELD, AUDIO_UUID_FIELD):
+        schema = schema.remove(schema.get_field_index(preview_field))
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert f"missing column: {AUDIO_MP3_FIELD!r}" in errors
+    assert f"missing column: {AUDIO_UUID_FIELD!r}" in errors
+
+
+def test_validate_lance_shard_mismatched_uuid_reports_row(tmp_path: Path) -> None:
+    """A UUID not derived from its stored audio fails row-level validation.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    tensor_arrays = _zero_arrays(shapes)
+    audio_rows = tensor_arrays[AUDIO_FIELD]
+    arrays: dict[str, np.ndarray | Sequence[bytes] | Sequence[str]] = {
+        **tensor_arrays,
+        AUDIO_MP3_FIELD: [
+            encode_audio_to_mp3(row, spec.render.sample_rate, 128) for row in audio_rows
+        ],
+        AUDIO_UUID_FIELD: ["not-the-audio-uuid"] * len(audio_rows),
+    }
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert f"column {AUDIO_UUID_FIELD!r} row 0 does not match audio" in errors
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "message"),
+    [
+        (
+            AUDIO_MP3_FIELD,
+            pa.field(
+                AUDIO_MP3_FIELD,
+                pa.binary(),
+                nullable=True,
+                metadata={b"mime_type": b"audio/mpeg"},
+            ),
+            "column 'audio_mp3' must be non-nullable",
+        ),
+        (
+            AUDIO_MP3_FIELD,
+            pa.field(
+                AUDIO_MP3_FIELD,
+                pa.binary(),
+                nullable=False,
+                metadata={b"mime_type": b"application/octet-stream"},
+            ),
+            "column 'audio_mp3' has metadata",
+        ),
+        (
+            AUDIO_UUID_FIELD,
+            pa.field(AUDIO_UUID_FIELD, pa.binary(), nullable=False),
+            "column 'audio_uuid' has type binary, expected string",
+        ),
+    ],
+)
+def test_validate_lance_shard_preview_schema_drift_reports_contract(
+    field_name: str,
+    replacement: pa.Field,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    """Preview type, nullability, and MIME drift fail structural validation.
+
+    :param field_name: Preview field replaced in the canonical schema.
+    :param replacement: Drifted Arrow field definition.
+    :param message: Expected schema error.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    schema = schema.set(schema.get_field_index(field_name), replacement)
+    tensor_arrays = _zero_arrays(shapes)
+    arrays = with_preview_columns(tensor_arrays, spec.render.sample_rate)
+    if field_name == AUDIO_UUID_FIELD:
+        arrays[AUDIO_UUID_FIELD] = [audio_uuid(row).encode() for row in tensor_arrays[AUDIO_FIELD]]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    assert any(message in error for error in validate_shard(shard, spec))
+
+
+def test_validate_lance_shard_invalid_mp3_reports_row(tmp_path: Path) -> None:
+    """A binary payload that cannot decode as MP3 fails row-level validation.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    tensor_arrays = _zero_arrays(shapes)
+    audio_rows = tensor_arrays[AUDIO_FIELD]
+    arrays: dict[str, np.ndarray | Sequence[bytes] | Sequence[str]] = {
+        **tensor_arrays,
+        AUDIO_MP3_FIELD: [b"not an mp3"] * len(audio_rows),
+        AUDIO_UUID_FIELD: [audio_uuid(row) for row in audio_rows],
+    }
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    errors = validate_shard(shard, spec)
+
+    assert any(f"column {AUDIO_MP3_FIELD!r} row 0 is not decodable" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("encoded_rate", "encoded_channels", "message"),
+    [
+        (16000, 2, "has sample rate 16000, expected 8000"),
+        (8000, 1, "has 1 channels, expected 2"),
+    ],
+)
+def test_validate_lance_shard_mp3_playback_contract_mismatch_reports_row(
+    encoded_rate: int,
+    encoded_channels: int,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    """A decodable preview with wrong playback geometry fails validation.
+
+    :param encoded_rate: Sample rate used to encode the drifted preview.
+    :param encoded_channels: Channel count used to encode the drifted preview.
+    :param message: Expected playback-contract error.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    tensor_arrays = _zero_arrays(shapes)
+    audio_rows = tensor_arrays[AUDIO_FIELD]
+    arrays = with_preview_columns(tensor_arrays, spec.render.sample_rate)
+    arrays[AUDIO_MP3_FIELD] = [
+        encode_audio_to_mp3(row[:encoded_channels], encoded_rate, 128) for row in audio_rows
+    ]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    assert any(message in error for error in validate_shard(shard, spec))
+
+
+def test_validate_lance_shard_incomplete_mp3_decode_reports_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation reads the complete preview and rejects a short decoder result.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Pytest fixture replacing the codec with an incomplete decoder.
+    """
+
+    class _IncompleteAudioFile:
+        samplerate = 8000
+        num_channels = 2
+        frames = 3200
+
+        def __init__(self, _payload: object) -> None:
+            pass
+
+        def __enter__(self) -> _IncompleteAudioFile:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def read(self, frames: int) -> np.ndarray:
+            decoded_frames = 1 if frames == 1 else frames - 1
+            return np.zeros((self.num_channels, decoded_frames), dtype=np.float32)
+
+    spec = build_lance_smoke_spec()
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+    monkeypatch.setattr("pedalboard.io.AudioFile", _IncompleteAudioFile)
+
+    errors = validate_shard(shard, spec)
+
+    assert any("decoded 3199 frames, expected at least 3200" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -248,20 +474,9 @@ def test_validate_lance_shard_reports_value_dtype_mismatch(tmp_path: Path) -> No
     )
     schema = schema.set(schema.get_field_index(AUDIO_FIELD), float32_audio)
     dtypes = {**DATASET_FIELD_DTYPES, AUDIO_FIELD: np.dtype("float32")}
-    columns = [
-        tensor_array(
-            np.zeros(shapes[field], dtype=dtypes[field]), dtypes[field], shapes[field][1:]
-        )
-        for field in DATASET_FIELD_NAMES
-    ]
-    columns.append(
-        pa.repeat(
-            pa.scalar("{}", type=schema.field(DEBUG_FIELD).type),
-            spec.render.samples_per_shard,
-        )
-    )
+    arrays = {field: np.zeros(shapes[field], dtype=dtypes[field]) for field in DATASET_FIELD_NAMES}
     shard = tmp_path / spec.shards[0].filename
-    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
     errors = validate_shard(shard, spec)
 
@@ -278,11 +493,13 @@ def test_validate_lance_shard_reports_missing_schema_metadata(tmp_path: Path) ->
     """
     spec = build_lance_smoke_spec()
     shapes = dataset_field_shapes(spec.render, spec.num_params)
-    schema = lance_schema(shapes, _first_shard_metadata(spec)).remove_metadata()
-    shard = tmp_path / spec.shards[0].filename
-    write_lance_dataset(
-        shard, schema, [record_batch_from_arrays(_zero_arrays(shapes), schema, debug=None)]
+    full_schema = lance_schema(shapes, _first_shard_metadata(spec))
+    batch = record_batch_from_arrays(_zero_arrays(shapes), full_schema).replace_schema_metadata(
+        None
     )
+    schema = full_schema.remove_metadata()
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [batch])
 
     errors = validate_shard(shard, spec)
 
@@ -359,22 +576,12 @@ def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
     shapes = dataset_field_shapes(spec.render, spec.num_params)
     full_schema = lance_schema(shapes, _first_shard_metadata(spec))
     schema = full_schema.remove(full_schema.get_field_index(PARAM_ARRAY_FIELD))
-    columns = [
-        tensor_array(
-            np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field]),
-            DATASET_FIELD_DTYPES[field],
-            shapes[field][1:],
-        )
+    arrays = {
+        field: np.zeros(shapes[field], dtype=DATASET_FIELD_DTYPES[field])
         for field in (AUDIO_FIELD, MEL_SPEC_FIELD)
-    ]
-    columns.append(
-        pa.repeat(
-            pa.scalar("{}", type=schema.field(DEBUG_FIELD).type),
-            spec.render.samples_per_shard,
-        )
-    )
+    }
     shard = tmp_path / spec.shards[0].filename
-    write_lance_dataset(shard, schema, [pa.record_batch(columns, schema=schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
 
     errors = validate_shard(shard, spec)
 

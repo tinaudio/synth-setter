@@ -6,11 +6,11 @@ suffix via ``synth_setter.pipeline.schemas.spec.OutputFormat.from_extension``
 to the Lance path (``.lance``):
 
 - Lance path (local shard, worker-side pre-staging check): schema metadata
-  parses as a strict ``ShardMetadata``; every field is a fixed-shape tensor
-  column whose dtype and inner shape match the writer's source-of-truth shape
-  helpers in ``synth_setter.data.vst.shapes``; and ``num_rows`` equals
-  ``spec.render.samples_per_shard``. Values must be finite, audio must lie in
-  ``[-1, 1]``, and parameters in ``[0, 1]``.
+  parses as a strict ``ShardMetadata``; tensor fields match the writer's dtype
+  and shape contracts; preview fields are non-null binary/string columns; and
+  ``num_rows`` equals ``spec.render.samples_per_shard``. Tensor values must be
+  finite and normalized, UUIDs must match stored audio, and MP3s must decode at
+  the configured sample rate and channel count.
 - Lance path (from R2): structural check of each shard's staged winner
   attempt — sidecar + stats + ``.valid`` present, sidecar round-trips through
   Lance, row counts agree, fragment data files exist under the assigned split.
@@ -33,11 +33,16 @@ import numpy as np
 
 if TYPE_CHECKING:
     import lance
+    import pyarrow as pa
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_MP3_FIELD_METADATA,
+    AUDIO_UUID_FIELD,
     DATASET_FIELD_NAMES,
     PARAM_ARRAY_FIELD,
+    PREVIEW_FIELD_NAMES,
     dataset_field_dtypes,
     dataset_field_shapes,
 )
@@ -228,30 +233,125 @@ def _validate_lance_dataset(
                 expected_dtype=expected_dtypes[name],
             )
         )
+    for name in PREVIEW_FIELD_NAMES:
+        field = schema.field(name) if name in schema.names else None
+        if field is None:
+            schema_errors.append(f"missing column: {name!r}")
+            continue
+        schema_errors.extend(_validate_preview_field(name, field))
     errors.extend(schema_errors)
     if not schema_errors:
-        errors.extend(_validate_lance_values(dataset))
+        errors.extend(_validate_lance_values(dataset, spec))
     return errors
 
 
-def _validate_lance_values(dataset: lance.LanceDataset) -> list[str]:
-    """Validate finite and normalized values before a worker stages a shard.
+def _validate_lance_values(dataset: lance.LanceDataset, spec: DatasetSpec) -> list[str]:
+    """Validate tensor and preview values before a worker stages a shard.
 
     :param dataset: Structurally valid local Lance shard dataset.
+    :param spec: Dataset contract supplying playback rate and channel count.
     :returns: One error per violated field value contract.
     """
     errors: set[str] = set()
-    for batch in dataset.to_batches(columns=list(DATASET_FIELD_NAMES)):
-        for name, column in zip(DATASET_FIELD_NAMES, batch.columns, strict=True):
-            values = column.to_numpy_ndarray()
-            if not np.isfinite(values).all():
-                errors.add(f"column {name!r} contains non-finite values")
-                continue
-            if name == AUDIO_FIELD and ((values < -1) | (values > 1)).any():
-                errors.add(f"column {name!r} contains values outside [-1, 1]")
-            if name == PARAM_ARRAY_FIELD and ((values < 0) | (values > 1)).any():
-                errors.add(f"column {name!r} contains values outside [0, 1]")
+    row_offset = 0
+    columns = [*DATASET_FIELD_NAMES, *PREVIEW_FIELD_NAMES]
+    for batch in dataset.to_batches(columns=columns):
+        errors.update(_validate_tensor_batch_values(batch))
+        errors.update(_validate_preview_batch_values(batch, spec, row_offset))
+        row_offset += batch.num_rows
     return sorted(errors)
+
+
+def _validate_tensor_batch_values(batch: pa.RecordBatch) -> set[str]:
+    """Validate finite and normalized tensor values in one record batch.
+
+    :param batch: Structurally valid shard rows.
+    :returns: Violated tensor value contracts.
+    """
+    errors: set[str] = set()
+    for name in DATASET_FIELD_NAMES:
+        values = batch.column(name).to_numpy_ndarray()
+        if not np.isfinite(values).all():
+            errors.add(f"column {name!r} contains non-finite values")
+            continue
+        if name == AUDIO_FIELD and ((values < -1) | (values > 1)).any():
+            errors.add(f"column {name!r} contains values outside [-1, 1]")
+        if name == PARAM_ARRAY_FIELD and ((values < 0) | (values > 1)).any():
+            errors.add(f"column {name!r} contains values outside [0, 1]")
+    return errors
+
+
+def _validate_preview_batch_values(
+    batch: pa.RecordBatch,
+    spec: DatasetSpec,
+    row_offset: int,
+) -> set[str]:
+    """Validate UUID integrity and complete MP3 playback geometry for one batch.
+
+    :param batch: Structurally valid shard rows.
+    :param spec: Dataset contract supplying playback rate and channel count.
+    :param row_offset: Dataset row index of the batch's first row.
+    :returns: Violated preview value contracts.
+    """
+    from synth_setter.data.vst.audio_preview import audio_uuid
+
+    errors: set[str] = set()
+    audio_rows = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+    mp3_rows = batch.column(AUDIO_MP3_FIELD).to_pylist()
+    uuid_rows = batch.column(AUDIO_UUID_FIELD).to_pylist()
+    for batch_index, (audio, mp3, stored_uuid) in enumerate(
+        zip(audio_rows, mp3_rows, uuid_rows, strict=True)
+    ):
+        row_index = row_offset + batch_index
+        if stored_uuid != audio_uuid(audio):
+            errors.add(f"column {AUDIO_UUID_FIELD!r} row {row_index} does not match audio")
+        errors.update(_validate_mp3_payload(mp3, audio.shape[-1], spec, row_index))
+    return errors
+
+
+def _validate_mp3_payload(
+    payload: bytes,
+    expected_frames: int,
+    spec: DatasetSpec,
+    row_index: int,
+) -> set[str]:
+    """Decode one complete MP3 payload and validate its playback contract.
+
+    :param payload: Stored MP3 byte string.
+    :param expected_frames: Minimum decoded frame count from the source audio row.
+    :param spec: Dataset contract supplying playback rate and channel count.
+    :param row_index: Dataset row index used in diagnostics.
+    :returns: Violated MP3 playback contracts.
+    """
+    import io
+
+    from pedalboard.io import AudioFile
+
+    errors: set[str] = set()
+    try:
+        with AudioFile(io.BytesIO(payload)) as audio_file:
+            decoded = audio_file.read(audio_file.frames)
+            decoded_rate = int(audio_file.samplerate)
+            decoded_channels = audio_file.num_channels
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return {f"column {AUDIO_MP3_FIELD!r} row {row_index} is not decodable: {exc}"}
+    decoded_frames = decoded.shape[1]
+    if decoded_frames < expected_frames:
+        errors.add(
+            f"column {AUDIO_MP3_FIELD!r} row {row_index} decoded {decoded_frames} frames, "
+            f"expected at least {expected_frames}"
+        )
+    if decoded_rate != spec.render.sample_rate:
+        errors.add(
+            f"column {AUDIO_MP3_FIELD!r} row {row_index} has sample rate "
+            f"{decoded_rate}, expected {spec.render.sample_rate}"
+        )
+    if decoded_channels != spec.render.channels:
+        errors.add(
+            f"column {AUDIO_MP3_FIELD!r} row {row_index} has {decoded_channels} "
+            f"channels, expected {spec.render.channels}"
+        )
+    return errors
 
 
 def _validate_lance_field(
@@ -289,6 +389,32 @@ def _validate_lance_field(
         errors.append(
             f"column {name!r} has value type {field_type.value_type}, "
             f"expected {expected_arrow_dtype}"
+        )
+    return errors
+
+
+def _validate_preview_field(name: str, field: object) -> list[str]:
+    """Validate one preview field's Arrow type, nullability, and metadata.
+
+    :param name: Preview column name.
+    :param field: Arrow schema field read from the Lance dataset.
+    :returns: Schema contract violations for the preview column.
+    """
+    import pyarrow as pa
+
+    if not isinstance(field, pa.Field):
+        return [f"column {name!r} schema entry is not an Arrow field: {field!r}"]
+    arrow_field = cast(pa.Field, field)
+    expected_type = pa.binary() if name == AUDIO_MP3_FIELD else pa.string()
+    errors = []
+    if arrow_field.type != expected_type:
+        errors.append(f"column {name!r} has type {arrow_field.type}, expected {expected_type}")
+    if arrow_field.nullable:
+        errors.append(f"column {name!r} must be non-nullable")
+    if name == AUDIO_MP3_FIELD and arrow_field.metadata != AUDIO_MP3_FIELD_METADATA:
+        errors.append(
+            f"column {name!r} has metadata {arrow_field.metadata}, "
+            f"expected {AUDIO_MP3_FIELD_METADATA}"
         )
     return errors
 

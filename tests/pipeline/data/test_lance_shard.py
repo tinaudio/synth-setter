@@ -33,12 +33,13 @@ from synth_setter.pipeline.data.lance_shard import (
     fragment_schema_matches,
     lance_fragment,
     lance_schema,
-    record_batch_from_arrays,
+    record_batch_from_arrays as _record_batch_from_arrays,
     seed_debug_array,
     tensor_array,
     write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from tests.helpers.lance_fixtures import with_preview_columns
 
 # Small shapes: each element gets a unique value, exactly representable as float16 (<= 2048).
 _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
@@ -52,12 +53,32 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,
-    sample_rate=100,
+    sample_rate=8000,
     channels=2,
     min_loudness=-55.0,
     base_seed=42,
     attempts_per_sample=100,
 )
+
+
+def record_batch_from_arrays(
+    arrays: dict[str, np.ndarray],
+    schema: pa.Schema,
+    *,
+    debug: pa.Array | None,
+) -> pa.RecordBatch:
+    """Build a canonical preview-bearing record batch.
+
+    :param arrays: Tensor columns to persist.
+    :param schema: Canonical shard schema.
+    :param debug: Optional row-level seed provenance.
+    :returns: Record batch with previews derived from persisted audio values.
+    """
+    return _record_batch_from_arrays(
+        with_preview_columns(arrays, _METADATA.sample_rate),
+        schema,
+        debug=debug,
+    )
 
 
 def _arange_arrays(offset: int) -> dict[str, np.ndarray]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from tqdm import trange
 
+from synth_setter.data.vst.audio_preview import validate_mp3_sample_rate
 from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
@@ -33,6 +34,8 @@ from synth_setter.data.vst.renderers import (
     TorchSynthRenderer,
 )
 from synth_setter.data.vst.shapes import (
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
     DATASET_FIELD_NAMES,
     dataset_field_dtypes,
     dataset_field_shapes,
@@ -41,18 +44,21 @@ from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
-def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
-    """Stack rendered samples into writer-field arrays.
+def _sample_batch_arrays(
+    samples: list[VSTDataSample],
+) -> dict[str, np.ndarray | Sequence[bytes] | Sequence[str]]:
+    """Return persisted tensor and preview columns for samples in row order.
 
     :param samples: Rendered samples in row order.
-    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
-    :rtype: dict[str, np.ndarray]
+    :returns: Tensor and preview columns keyed by their Lance field names.
     """
     audio_name, mel_name, param_name = DATASET_FIELD_NAMES
     return {
         audio_name: np.stack([s.audio.T for s in samples], axis=0),
         mel_name: np.stack([s.mel_spec for s in samples], axis=0),
         param_name: np.stack([s.param_array for s in samples], axis=0),
+        AUDIO_MP3_FIELD: [sample.audio_mp3 for sample in samples],
+        AUDIO_UUID_FIELD: [sample.audio_uuid for sample in samples],
     }
 
 
@@ -214,6 +220,7 @@ def _render_in_batches(
                     sample_idx=render_cfg.sample_offset + i,
                     max_attempts=render_cfg.attempts_per_sample,
                 ),
+                audio_dtype=render_cfg.audio_dtype,
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
@@ -282,6 +289,8 @@ def make_lance_dataset(
         contract as ``fixed_synth_params_list``.
     :returns: Counts of silent and clipped draws rejected across the shard.
     """
+    validate_mp3_sample_rate(render_cfg.sample_rate)
+
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
     import lance
