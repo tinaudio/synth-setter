@@ -279,14 +279,15 @@ def test_pi_project_explore_agent_is_disabled() -> None:
     assert yaml.safe_load(frontmatter) == {"enabled": False}
 
 
-def test_pi_project_append_system_forbids_anthropic_agents() -> None:
-    """Tell Pi sessions and project subagents not to select Anthropic models."""
+def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
+    """Tell Pi sessions to use allowed fully qualified subagent model selectors."""
     text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
 
     assert "Anthropic" in text
     assert "Do not select Anthropic providers or models" in text
     assert "Do not launch subagents" in text
-    assert "openai-codex" in text
+    assert "openai-codex/gpt-5.6-sol" in text
+    assert "Never pass the provider-only `openai-codex`" in text
     assert "kimi-coding" in text
     assert "openrouter" in text
 
