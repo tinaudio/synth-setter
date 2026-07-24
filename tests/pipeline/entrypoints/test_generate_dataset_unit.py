@@ -2491,6 +2491,7 @@ class TestMainDispatchBranches:
         fake_sky.jobs.launch.return_value = "launch-req"
         fake_sky.stream_and_get.return_value = ([1], MagicMock())
         monkeypatch.setattr(sl, "sky", fake_sky)
+        monkeypatch.setattr(sl, "_resolve_worker_git_ref", lambda _env: "a" * 40)
 
         def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("generate must not be called on the dispatch branch")

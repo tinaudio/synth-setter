@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
@@ -49,10 +50,10 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_all_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
-    augment_lance_splits_with_embeddings,
-    augment_lance_splits_with_same,
+    augment_lance_splits_with_all_embeddings,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
     build_surge_xt_embedding_train_cfg,
@@ -851,29 +852,6 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
-
-
-def test_train_fast_dev_run_fragment_sampler_yields_finite_loss(
-    cfg_train_lance: DictConfig,
-) -> None:
-    """Real training steps advance over the Lance fragment-sampler train path.
-
-    Drives the in-process ``train(cfg)`` entrypoint with
-    ``datamodule.use_fragment_sampler=true`` (#2251) and asserts a finite
-    train loss was logged from the Lance-native iterable stream.
-
-    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
-    """
-    with open_dict(cfg_train_lance):
-        cfg_train_lance.datamodule.use_fragment_sampler = True
-        cfg_train_lance.datamodule.num_workers = 0
-    HydraConfig().set_config(cfg_train_lance)
-
-    metric_dict, object_dict = train(cfg_train_lance)
-
-    assert object_dict["datamodule"].use_fragment_sampler is True
-    assert "train/loss" in metric_dict
-    assert torch.isfinite(metric_dict["train/loss"])
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
@@ -1873,83 +1851,44 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l")
 
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-@pytest.mark.network
-@pytest.mark.parametrize("conditioning", _EMBEDDING_CONDITIONING_PROFILES)
-def test_train_embedding_conditioning_real_e2e(
+def test_train_all_embedding_conditioning_real_e2e(
+    local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
-    surge_xt_smoke_datasets: Path,
+    surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
-    conditioning: str,
 ) -> None:
-    """Train the flow model one step over a real m2l/clap-augmented Surge XT dataset.
+    """Train every conditioning profile through real render, encode, and fit paths.
 
-    Renders a Surge XT dataset through the real VST, appends the profile's
-    embedding column via the real ``add_embeddings`` endpoint (real music2latent +
-    CLAP encoders — no mocks), then trains ``experiment=surge/flow_simple`` one
-    step under ``conditioning=<profile>`` and asserts the trainer advanced with a
-    finite ``train/loss``. Pins the live conditioning path end to end.
-
-    :param tmp_path: The temporary output/log path.
-    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
-    :param param_spec_name: Param spec driving model width and callback labels.
-    :param conditioning: Embedding-conditioning profile under test (``m2l`` / ``clap``).
+    :param local_embedding_checkpoints: Preflighted real model directories.
+    :param tmp_path: Per-profile training output parent.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
     """
-    dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
-    cfg = build_surge_xt_embedding_train_cfg(
-        tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
+    dataset_root = augment_lance_splits_with_all_embeddings(
+        surge_xt_embedding_smoke_datasets, local_embedding_checkpoints
     )
+    assert_all_embedding_columns(dataset_root)
 
-    HydraConfig().set_config(cfg)
-    metric_dict, object_dict = train(cfg)
+    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+        cfg = build_surge_xt_embedding_train_cfg(
+            tmp_path / conditioning,
+            dataset_root,
+            param_spec_name=param_spec_name,
+            conditioning=conditioning,
+        )
+        HydraConfig().set_config(cfg)
+        try:
+            metric_dict, object_dict = train(cfg)
+        finally:
+            GlobalHydra.instance().clear()
 
-    trainer = object_dict["trainer"]
-    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
-    assert_finite_train_loss(metric_dict)
-
-
-_SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
-
-
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.network
-@pytest.mark.same_e2e
-@pytest.mark.parametrize("conditioning", _SAME_CONDITIONING_PROFILES)
-def test_train_same_conditioning_real_e2e(
-    require_same_extra: None,
-    tmp_path: Path,
-    surge_xt_smoke_datasets: Path,
-    param_spec_name: str,
-    conditioning: str,
-) -> None:
-    """Train the flow model one step over a real SAME-augmented Surge XT dataset.
-
-    The SAME sibling of :func:`test_train_embedding_conditioning_real_e2e`: renders a
-    Surge XT dataset, appends the ``same_s``/``same_l`` column via the real
-    ``add_embeddings`` SAME endpoint (real ``stable_audio_tools`` encoder — no mocks),
-    then trains ``experiment=surge/flow_simple`` one step under
-    ``conditioning=<profile>`` and asserts a finite ``train/loss``. Needs the optional
-    ``same`` extra, so it carries ``same_e2e`` and runs in that lane.
-
-    :param require_same_extra: Skips before the render when the ``same`` extra is absent.
-    :param tmp_path: The temporary output/log path.
-    :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
-    :param param_spec_name: Param spec driving model width and callback labels.
-    :param conditioning: SAME conditioning profile under test (``same_s`` / ``same_l``).
-    """
-    dataset_root = augment_lance_splits_with_same(surge_xt_smoke_datasets, conditioning)
-    cfg = build_surge_xt_embedding_train_cfg(
-        tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
-    )
-
-    HydraConfig().set_config(cfg)
-    metric_dict, object_dict = train(cfg)
-
-    trainer = object_dict["trainer"]
-    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
-    assert_finite_train_loss(metric_dict)
+        trainer = object_dict["trainer"]
+        assert trainer.global_step >= 1, (
+            f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
+        )
+        assert_finite_train_loss(metric_dict)

@@ -140,15 +140,17 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Post-finalize CLAP + music2latent Lance column augmentation via the `add_embeddings(config)` endpoint."
+        covers: "Post-finalize registry-driven Lance column augmentation (EMBEDDING_REGISTRY keys: clap/m2l/same_s/same_l) via the `add_embeddings(config)` endpoint."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
-        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus the clap/index knobs."
+        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus embedding-selection, index, and device/batch knobs."
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
         covers: "AddEmbeddingsConfig — the strict/frozen knobs the endpoint validates from its composed cfg via `from_hydra_cfg`."
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"
         covers: "`synth-setter-add-preview-columns` CLI — one `lance.batch_udf` `add_columns` pass that adds an `audio_mp3` Arrow binary preview column and an `audio_uuid` UUIDv5 fingerprint of each row's `audio` bytes (neither a training input)."
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "Adds music2latent embeddings to Lance datasets"
+      - pattern: "src/synth_setter/pipeline/data/lance_materialize.py"
+        covers: "materialize_lance_subset — txid-pinned, projected/row-limited Lance subset materialization for training hydration, with MaterializeManifest sidecar-gated cache reuse"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md
@@ -176,7 +178,7 @@ docs:
     description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + Vast + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
-        covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
+        covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`, and preflight-verified worker commit pinning. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
       - pattern: "src/synth_setter/pipeline/compute_task.py"
         covers: "Programmatic `sky.Task` construction from a validated `ComputeConfig` (`build_sky_task`): per-entry `sky.Resources` with any-of accelerator splitting, per-launch image pin (`docker:<image>`, skipped for docker-in-run delivery), `${WORKER_CMD}` wrapper substitution, packaged setup/run script loading, network-volume mount resolution, and the Hydra-compose option loader (`load_compute_option`)."
       - pattern: "src/synth_setter/pipeline/schemas/compute.py"
@@ -194,7 +196,7 @@ docs:
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
-        covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper invoked by the launcher-built worker cmd on every provider. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
+        covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper invoked by the launcher-built worker cmd on every provider. The launcher always supplies a preflight-verified ref; full transitive resolve handles commits that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
         covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor); PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
@@ -456,7 +458,7 @@ docs:
       - pattern: "tests/infra/**"
         covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, post-create agent full-auto seeding (Codex config + agy wrapper), act --list parse, Makefile install-plugins targets + Dockerfile pin parity, PR-review model-routing + review-launcher contract tests (Claude/Codex/OpenCode role pinning, launcher dry-run and degrade paths)"
       - pattern: "tests/integration/**"
-        covers: "Four classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` (path-scoped) on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`; and (4) real-R2 streaming round-trips for pipeline/dataloader reads (`test_lance_r2_multipart.py`, `test_lance_torch_r2.py`, `test_finalize_dataset_r2.py`, `test_add_embeddings_r2.py`; `integration_r2`+`r2`+`slow`) that run wherever R2 credentials are provisioned. The `integration_r2` marker spans classes 1 and 4 — it gates on credentials, it does not identify a class."
+        covers: "Four classes of integration tests: (1) launcher-against-real-R2 round-trips with a stubbed VST renderer subprocess — fast PR-tier alternative to the kind + dev-snapshot matrix in `test-dataset-generation.yml`, run by `test-local-launcher-roundtrip.yml` (path-scoped) on same-repo PRs; (2) unmarked cross-platform shard-dispatch tests (`test_parallel_shard_dispatch.py`) that run in the default fast lane via `test.yml`; (3) real-Surge parallel renders parametrized over cadence cells (`test_parallel_shard_render_linux.py`, `requires_vst`+`slow`) run by `test-vst-slow.yml` — the cadence coverage retired from `test-dataset-generation-render-matrix.yml`; and (4) real-R2 streaming round-trips for pipeline/dataloader reads and writes (see files under `tests/integration/` marked `integration_r2`+`r2`+`slow`, e.g. `test_lance_torch_r2.py`, `test_lance_materialize_r2.py`) that run wherever R2 credentials are provisioned. The `integration_r2` marker spans classes 1 and 4 — it gates on credentials, it does not identify a class."
       - pattern: ".github/workflows/test-local-launcher-roundtrip.yml"
         covers: "Fast PR-tier (~8-10 min) lane for `tests/integration/`: invokes the `synth-setter-generate-dataset` CLI entrypoint (`cli.generate_dataset.main()`, which then calls `generate()` internally) end-to-end against real R2 with the VST renderer subprocess stubbed; no kind, no sky.launch, no dev-snapshot image pull. Gated on same-repo PRs (forks skipped). Unique per-run R2 prefix + best-effort rclone purge teardown. PR #1170; tracks #1164."
       - pattern: ".github/workflows/test-generate-dataset-from-spec-uri.yml"

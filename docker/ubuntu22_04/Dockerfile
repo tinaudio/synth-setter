@@ -74,9 +74,11 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
   software-properties-common \
   gcc-12 \
   g++-12 \
@@ -229,9 +231,11 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
     wget
@@ -407,26 +411,27 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
 # on 22.04, so install only `fuse`. The launch path must also grant
 # --device=/dev/fuse --cap-add=SYS_ADMIN.
+COPY --chmod=755 scripts/docker/run_after_apt_update.sh /usr/local/bin/
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      xvfb \
-      xauth \
-      dbus-x11 \
-      xsettingsd \
-      libgl1-mesa-dri \
-      libgl1-mesa-glx \
-      mesa-utils \
-      openbox \
-      x11-utils \
-      x11-xserver-utils \
-      rclone \
-      fuse \
-      rsync \
-      openssh-client \
-      python3-pip \
-      unzip; \
+    run_after_apt_update.sh \
+      apt-get install -y --no-install-recommends \
+        dbus-x11 \
+        fuse \
+        libgl1-mesa-dri \
+        libgl1-mesa-glx \
+        mesa-utils \
+        openbox \
+        openssh-client \
+        python3-pip \
+        rclone \
+        rsync \
+        unzip \
+        x11-utils \
+        x11-xserver-utils \
+        xauth \
+        xsettingsd \
+        xvfb; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 

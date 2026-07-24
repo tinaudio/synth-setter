@@ -1128,11 +1128,16 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
 `nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
-latent column, both derived from the audio column. An optional
+latent column, both derived from the audio column. `same_s`/`same_l` SAME
+latent columns are also selectable via `embeddings=` (multi-GB encoders, each
+loaded and written in its own sequential pass); the selectable set is
+`EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`. An optional
 `resume_cache=<path>` caches per-batch encoder outputs so an interrupted run can
 resume without re-encoding already-processed rows (see `add_embeddings.py`).
 
 `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
+
+Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory; a sidecar manifest gates cache reuse by request hash.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 

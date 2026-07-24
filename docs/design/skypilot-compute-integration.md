@@ -150,15 +150,19 @@ setting missing or blank everywhere), no rclone credentials are forwarded —
 only the structural TYPE/PROVIDER defaults — and `dispatch_via_skypilot` raises
 its "No object storage settings resolved" error before submitting anything.
 
-The two non-storage keys (`WANDB_API_KEY`, `WORKER_GIT_REF`) still resolve
-per key: first non-blank value from the `.env` file, then the launcher's
-process env, else skipped so the key keeps the SkyPilot template's default
-(typically `""`).
+`WANDB_API_KEY` resolves per key: the first non-blank value from the `.env`
+file, then the launcher's process env, else it is skipped. `WORKER_GIT_REF`
+uses the same explicit-value precedence, but an absent value defaults to the
+operator checkout's current `HEAD`. Before any submission, the launcher runs a
+dry-run fetch of the selected SHA from `origin`; an unpushed or unreachable
+commit rejects the launch instead of falling back to image-baked source. After
+checkout, `log_wandb_provenance()` records that synced `HEAD` as `github_sha`;
+`IMAGE_TAG` separately records the container image.
 
-In both paths a blank/whitespace value (a `.env` line `KEY=`) counts as absent
-and falls through — matching `StorageSettings` resolution — so an empty `.env`
-line never forwards an empty credential and a stale blank can't shadow a real
-process-env value. Resolved values are stripped.
+In both explicit-value paths a blank/whitespace value (a `.env` line `KEY=`)
+counts as absent and falls through — matching `StorageSettings` resolution —
+so an empty `.env` line never forwards an empty credential and a stale blank
+can't shadow a real process-env value. Resolved values are stripped.
 
 #### Local dev story
 

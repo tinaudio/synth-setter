@@ -100,9 +100,9 @@ _IMAGE_TAG_ENV = "IMAGE_TAG"
 # OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
-# Validates WORKER_GIT_REF when set — must be a 7-40 char hex git SHA. Worker
-# templates pass this verbatim into `git fetch + checkout` inside the container.
-_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# Worker templates pass this full SHA verbatim into `git fetch + checkout`.
+_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{40}$")
+_WORKER_GIT_REF_PREFLIGHT_TIMEOUT_S = 30
 
 # Validates sky_cfg.job_name: k8s-label subset — interpolated into a tempfile path and
 # the SkyPilot managed-job name, so path-separator-free and ≤63 chars. See #876.
@@ -112,7 +112,7 @@ _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
-    # Pod checks out this ref before generate_dataset, bypassing image-bake lag in PR CI.
+    # Pod checks out this launcher-pinned ref before running worker code.
     "WORKER_GIT_REF",
 )
 
@@ -341,9 +341,68 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
         raise click.ClickException(
-            f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
+            f"WORKER_GIT_REF must be a 40-character hex git SHA, got {git_ref!r}"
         )
     return resolved
+
+
+def _run_workspace_git(args: list[str], *, failure_message: str) -> str:
+    """Run a git preflight command against the operator workspace.
+
+    :param args: Git subcommand and validated arguments.
+    :param failure_message: User-facing error when git cannot complete.
+    :return: Command stdout without surrounding whitespace.
+    :raises click.ClickException: Git is unavailable, times out, or exits non-zero.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — caller supplies validated git arguments
+            ["git", "-C", str(_OPERATOR_WORKSPACE), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_WORKER_GIT_REF_PREFLIGHT_TIMEOUT_S,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise click.ClickException(failure_message) from exc
+    return result.stdout.strip()
+
+
+def _resolve_worker_git_ref(worker_env: Mapping[str, str]) -> str:
+    """Select a worker commit and verify the worker can fetch it from origin.
+
+    An explicit ``WORKER_GIT_REF`` remains authoritative. Otherwise the
+    operator checkout's current ``HEAD`` is used so local launches cannot
+    silently run stale image-baked source.
+
+    :param worker_env: Resolved worker environment, optionally containing an
+        explicit ``WORKER_GIT_REF``.
+    :return: Fetchable worker commit SHA.
+    :raises click.ClickException: The checkout has no resolvable ``HEAD`` or
+        the selected commit cannot be fetched from ``origin``.
+    """
+    configured_ref = worker_env.get("WORKER_GIT_REF")
+    if configured_ref is None:
+        configured_ref = _run_workspace_git(
+            ["rev-parse", "HEAD"],
+            failure_message=(
+                f"Cannot resolve WORKER_GIT_REF from checkout {_OPERATOR_WORKSPACE}; "
+                "set it to a fetchable commit SHA explicitly."
+            ),
+        )
+
+    if not _WORKER_GIT_REF_RE.fullmatch(configured_ref):
+        raise click.ClickException(
+            f"WORKER_GIT_REF must be a 40-character hex git SHA, got {configured_ref!r}"
+        )
+
+    _run_workspace_git(
+        ["fetch", "--dry-run", "--depth=1", "origin", configured_ref],
+        failure_message=(
+            f"WORKER_GIT_REF {configured_ref} is not fetchable from origin; "
+            "push the commit or select a fetchable SHA before launching."
+        ),
+    )
+    return configured_ref
 
 
 def _reset_skypilot_client_cache() -> None:
@@ -588,6 +647,9 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     """Dispatch ``sky_cfg.cmd`` to the SkyPilot compute option in ``sky_cfg``.
 
     ``sky_cfg.compute`` and ``sky_cfg.cmd`` must both be non-None.
+    Worker source defaults to the operator checkout's current ``HEAD``; an
+    explicit ``WORKER_GIT_REF`` overrides it. The selected commit must be
+    fetchable from ``origin`` before submission.
 
     :param sky_cfg: Validated launcher config; see ``SkypilotLaunchConfig`` for
         per-field semantics.
@@ -646,6 +708,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{env_file_path}. "
             "Expected access key id, secret access key, and endpoint URL."
         )
+    worker_env["WORKER_GIT_REF"] = _resolve_worker_git_ref(worker_env)
     worker_env.update(sky_cfg.extra_envs)
 
     try:

@@ -174,6 +174,13 @@ mkdir -p "$assignment_dir"
   --output "$assignment_dir/<skill>.txt"
 ```
 
+Assignment generation validates the exact checklist file and embeds its absolute
+path. Repo-local checklists resolve from
+`<cwd>/agent/skills/<skill>/SKILL.md`; plugin-backed checklists resolve from
+`$PI_REVIEW_SKILLS_ROOT/<skill>/SKILL.md`, defaulting to
+`~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal assignment-generation
+error; never launch a worker without the validated path.
+
 Both model passes share that immutable file. Their `Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
@@ -207,20 +214,36 @@ leaves at least two minutes for deterministic aggregation and delivery.
 
 Do not launch another foreground verifier, wait for an unfinished second pass,
 or retry a second-pass candidate after the single snapshot; **defer the
-unfinished second pass to aftercare**. Record its audit status as `deferred`, not
-`unavailable`. Before returning, write the strict manifest at
+unfinished second pass to aftercare**. Deferral is an ownership transfer, and
+exactly one model call owns each pass. Record its audit status as `deferred`, not
+`unavailable`, then preserve the original worker's `Agent ID` as `agent_id` and
+`Output file` as `output_path` in that deferred row. Keep the foreground
+one-snapshot/no-poll contract; do not make a second status call while preparing
+the transfer.
+
+The installed Tintin model-facing tools can inspect or steer an agent but cannot
+stop one. Do not invent a stop tool or treat foreground host exit as proof that a
+worker stopped; detached workers may continue after that boundary. The supervisor
+adopts any now-valid `output_path` and records `adopted-foreground-result`.
+Otherwise it fails closed with an ownership diagnostic instead of launching a
+duplicate pass. A legacy manifest without ownership handles may launch because it
+cannot identify a foreground owner, but every newly generated row must preserve
+both handles.
+
+Before returning, write the strict manifest at
 `$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
 skill/pass/model rows, and fingerprints for every foreground finding.
 The launcher validates it and starts detached aftercare. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
 (`skill`, `pass_name`, `origin`, exact `model`, effective foreground
-`verification_model`, and `thinking`), and `foreground_fingerprints`. Use
-`origin: primary` for independent provider coverage and `origin: codex-fallback`
-only after the free pool exhausted. Aftercare may post only **late Codex-verified
-findings** against the unchanged PR head, following
-`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot create aftercare manifests because they lack a
-stable remote PR/head delivery boundary.
+`verification_model`, `thinking`, `agent_id`, and `output_path`), and
+`foreground_fingerprints`. Use `origin: primary` for independent provider
+coverage and `origin: codex-fallback` only after the free pool exhausted.
+Aftercare may post only **late Codex-verified findings** against the unchanged PR
+head, following `agent/skills/_shared/repo-review-aftercare.md`. Local-branch
+reviews cannot create aftercare manifests because they lack a stable remote
+PR/head delivery boundary.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
 inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
@@ -237,15 +260,16 @@ Record `success` with the wrap-up detail in the audit.
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
 opencode launcher; it derives provenance from each successful effective model
-as specified below. Record each attempt's skill,
-pass, exact model, thinking level, Tintin agent id, status, and
-the exact transcript path from the result's `Output file:` field in a
-`## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
-contract. Render it as this table so the sentinel caller never has to inspect a
-process tree or transcript to understand execution:
+as specified below. Record each attempt's skill, model tier, pass, exact model, thinking level,
+Tintin agent id, status, and the exact transcript path from the result's
+`Output file:` field in a `## Pi review audit` section of `review_body`. Copy
+`model_tier` from the tested plan output; do not infer it from the effective
+fallback model. This audit section does not change the findings JSON shape or
+inline-comment contract. Render it as this table so the sentinel caller never
+has to inspect a process tree or transcript to understand execution:
 
-| Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
-| ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
+| Skill | Model tier | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
+| ----- | ---------- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
 
 Use explicit statuses: `success`, `deferred`, `unavailable`, `quota/capacity`,
 `authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
@@ -270,27 +294,44 @@ selected checklist:
 ```
 
 The command runs `pi --list-models` and returns JSON with two logical passes per
-skill, the ordered available `candidates`, skipped `unavailable` models,
-cross-provider Codex `fallback_candidates`, `thinking`, and `reason`. Codex and
-the free pool must both be registered with Pi. If either is absent, stop on the
-planner's single provider-level error instead of expanding every configured
-model into audit rows. Record individually skipped models only after both Codex
-and the free pool pass provider preflight.
+skill, its fixed `model_tier`, the ordered available `candidates`, skipped
+`unavailable` models, cross-provider Codex `fallback_candidates`, `thinking`,
+and `reason`.
+
+Model tiers are fixed by checklist; diff size and risk signals change thinking
+but never change the model tier:
+
+- **Smart model tier:** `correctness-review`, `lance-review`,
+  `ml-data-pipeline`, `ml-test`, and `synth-setter-project-standards`. The Codex
+  pass starts with Sol and may fall back to Terra; the independent pass starts
+  with Kimi K3 and may fall back to the pinned free OpenRouter models.
+- **Mechanical model tier:** `code-health`, `comment-hygiene`,
+  `gha-workflow-validator`, `python-style`, `shell-style`,
+  `tdd-implementation`, and `tdd-refactor`. The Codex pass uses Terra only; the
+  independent pass uses only the pinned free OpenRouter models. Never spend Sol
+  or Kimi K3 on a mechanical checklist, including fallback.
+
+Codex and the checklist's fixed free pool must both be registered with Pi. If
+either is absent, stop on the planner's single provider-level error instead of
+expanding every configured model into audit rows. Record individually skipped
+models only after both Codex and the selected free-pool tier pass provider
+preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next candidate in the pass.
-Codex-pass candidates are always `openai-codex/*`; free-pool candidates span
-`kimi-coding/*` and `openrouter/*` in their fixed order. Exhaust the free-pool
-`candidates` in order before attempting any Codex fallback. If a free-pool attempt
-fails authentication, record it, skip remaining candidates from that provider,
-and continue with the next candidate from a different free-pool provider. Stop
+Codex-pass candidates are always `openai-codex/*`. Smart free-pool candidates
+start with `kimi-coding/k3`; mechanical free-pool candidates contain only the
+pinned free `openrouter/*` models. Exhaust the pass's returned `candidates` in
+order before attempting any Codex fallback. If a free-pool attempt fails
+authentication, record it, skip remaining candidates from that provider, and
+continue with the next candidate from a different free-pool provider. Stop
 when no different free-pool provider remains; authentication never triggers Codex fallback.
-If a free-pool pass has no available candidates, or every candidate exhausts
-quota/capacity, move the successful Codex pass's effective model to the end of
-`fallback_candidates`, then launch a fresh worker with the first model. This
-prefers a distinct fallback even when the Codex pass reached its own fallback.
+If every free-pool candidate exhausts quota/capacity, move the
+successful Codex pass's effective model to the end of `fallback_candidates`,
+then launch a fresh worker with the first model. This prefers a distinct
+fallback when the fixed tier permits one; mechanical fallback remains Terra.
 Continue through that bounded Codex sequence only for the same availability
 failures. Record each launch as `Codex fallback` in the audit detail. Never resume
 a failed session under a different model. Tool/checklist, malformed-report
@@ -393,14 +434,14 @@ Each worker's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` and `correctness-review` are repo-local, not plugin skills — instruct each agent to invoke the bare skill name (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for either.
+- The validated absolute checklist path and the instruction to read it and not
+  search for skill files anywhere else.
 - The expected output shape (see below).
 
-`lance-review` and `correctness-review` are **repo-local**, not plugin skills:
-each agent attempts the bare skill name via the Skill tool first, and only if
-that call errors (the harness has not registered it) falls back to reading and
-applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
-contract below is unchanged for both.
+`lance-review` and `correctness-review` are **repo-local** checklists. Their
+validated paths are under `agent/skills/<skill-name>/SKILL.md` in the current
+checkout; all other checklist paths come from the configured plugin skills
+root. The per-agent output contract is unchanged for both skill classes.
 
 `lance-review` additionally requires live documentation access. Its Pi worker
 must fetch the required upstream pages through read-only Bash commands within

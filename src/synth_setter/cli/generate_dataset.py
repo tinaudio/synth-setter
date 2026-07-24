@@ -979,8 +979,8 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so spaces/metachars survive bash
-    interpretation. ``sync_worker_checkout.sh`` runs between cd and exec for
-    the PR-CI bake-lag bypass (see #735 / #841).
+    interpretation. ``sync_worker_checkout.sh`` applies the launcher's pinned
+    worker commit between cd and exec.
 
     ``spec.created_at`` is pinned as a Hydra override so the worker's
     re-compose lands on the same ``r2.prefix`` as the launcher (the

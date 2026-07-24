@@ -15,6 +15,7 @@ import base64
 import os
 import re
 import shlex
+import subprocess
 from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
@@ -177,11 +178,28 @@ def _succeeded_run(mock_sky: MagicMock) -> None:
 
 @pytest.fixture()
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace the launcher's module-level ``sky`` with a MagicMock pre-configured for success.
+    """Replace external launch boundaries with successful deterministic fakes.
 
-    Tests that need a different behavior tweak knobs on the returned mock (e.g. set
-    ``mock_sky.jobs.tail_logs.return_value = 100`` for a worker failure, or
-    ``mock_sky.jobs.tail_logs.side_effect = ...`` for a transport raise).
+    Tests that need different SkyPilot behavior tweak the returned mock. Worker
+    git-ref integration tests use ``mock_sky_with_git_ref_preflight`` instead so
+    the real git preflight runs against a local bare remote.
+    """
+    fake = MagicMock()
+    monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.skypilot_launch._resolve_worker_git_ref",
+        lambda worker_env: worker_env.get("WORKER_GIT_REF", "a" * 40),
+    )
+    _succeeded_run(fake)
+    return fake
+
+
+@pytest.fixture()
+def mock_sky_with_git_ref_preflight(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Fake SkyPilot while preserving the real worker git-ref preflight.
+
+    :param monkeypatch: Pytest fixture for replacing the external SkyPilot SDK.
+    :returns: Successful SkyPilot mock used only after the real git preflight.
     """
     fake = MagicMock()
     monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
@@ -268,22 +286,27 @@ class TestOperatorSshPubkeys:
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
     def test_unreadable_key_file_fails_open(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """An unreadable key file degrades to no-keys instead of raising.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture used to simulate the read failure.
         :param capsys: Pytest fixture capturing stdout/stderr.
         """
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
-        locked = ssh_dir / "authorized_keys"
-        locked.write_text("ssh-ed25519 AAAAkey1 box-a\n")
-        locked.chmod(0o000)
-        try:
-            assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
-        finally:
-            locked.chmod(0o600)
+        (ssh_dir / "authorized_keys").write_text("ssh-ed25519 AAAAkey1 box-a\n")
+
+        def _raise_permission_error(_path: Path) -> bytes:
+            raise PermissionError("test key is unreadable")
+
+        monkeypatch.setattr(Path, "read_bytes", _raise_permission_error)
+
+        assert _operator_ssh_pubkeys_b64(ssh_dir) == ""
         assert "operator SSH key forwarding skipped" in capsys.readouterr().out
 
     def test_binary_junk_in_key_file_salvages_valid_lines(self, tmp_path: Path) -> None:
@@ -367,7 +390,7 @@ class TestLoadWorkerEnv:
 
 
 class TestResolveWorkerEnvGitRefValidation:
-    """``WORKER_GIT_REF``, when set, must be a 7-40 char hex git SHA.
+    """``WORKER_GIT_REF``, when set, must be a full 40-character git SHA.
 
     The validation lives at the env-resolution seam (host-side) instead of in the worker template's
     bash because the SHA is rendered into a ``git fetch + checkout`` invocation; rejecting a
@@ -375,7 +398,7 @@ class TestResolveWorkerEnvGitRefValidation:
     """
 
     def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Empty/unset WORKER_GIT_REF is the common case (no PR-CI bake-lag bypass).
+        """The raw env resolver leaves an absent ref for dispatch to default.
 
         :param monkeypatch: Pytest fixture for env/attribute mocking.
         """
@@ -383,17 +406,14 @@ class TestResolveWorkerEnvGitRefValidation:
         resolved = resolve_worker_env(None)
         assert "WORKER_GIT_REF" not in resolved
 
-    @pytest.mark.parametrize(
-        "good_sha",
-        ["abc1234", "abc1234deadbeef", "0" * 40, "f" * 40],
-    )
+    @pytest.mark.parametrize("good_sha", ["0" * 40, "f" * 40])
     def test_valid_hex_sha_is_accepted(
         self, monkeypatch: pytest.MonkeyPatch, good_sha: str
     ) -> None:
-        """7-40 char lowercase hex strings pass — both short and long form.
+        """Full lowercase hexadecimal commit SHAs pass validation.
 
         :param monkeypatch: Pytest fixture for env/attribute mocking.
-        :param good_sha: Parametrized 7-40 char lowercase hex git SHA.
+        :param good_sha: Parametrized 40-character lowercase hexadecimal commit SHA.
         """
         monkeypatch.setenv("WORKER_GIT_REF", good_sha)
         resolved = resolve_worker_env(None)
@@ -405,6 +425,8 @@ class TestResolveWorkerEnvGitRefValidation:
             "main",  # branch name, not SHA
             "ABC1234",  # uppercase rejected
             "abc",  # too short
+            "abc1234",  # abbreviated SHA is not a remote fetch ref
+            "abc1234deadbeef",  # longer abbreviation is still not a full SHA
             "g" * 7,  # non-hex char
             "abc1234; rm -rf /",  # injection attempt
             "abc 1234",  # whitespace
@@ -1092,6 +1114,44 @@ def _volume_runpod_compute() -> ComputeConfig:
     return _runpod_compute(mount_network_volume="/workspace/network-volume")
 
 
+def _git(repo: Path, args: tuple[str, ...]) -> str:
+    """Run git in ``repo`` and return stripped stdout.
+
+    :param repo: Checkout used as the git working directory.
+    :param args: Git subcommand and test-controlled arguments.
+    :returns: Command stdout without surrounding whitespace.
+    """
+    result = subprocess.run(  # noqa: S603 — test controls every git argument
+        ["git", "-C", str(repo), *args],  # noqa: S607 — git is a test prerequisite
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+@pytest.fixture()
+def fetchable_git_checkout(tmp_path: Path) -> tuple[Path, str]:
+    """Create a checkout whose HEAD is fetchable from a local bare origin.
+
+    :param tmp_path: Pytest temporary directory for both repositories.
+    :returns: Checkout path and its initial remote-advertised HEAD SHA.
+    """
+    origin = tmp_path / "origin.git"
+    checkout = tmp_path / "checkout"
+    _git(tmp_path, ("init", "--bare", str(origin)))
+    _git(tmp_path, ("init", str(checkout)))
+    _git(checkout, ("config", "user.email", "tests@example.com"))
+    _git(checkout, ("config", "user.name", "Test User"))
+    (checkout / "tracked.txt").write_text("initial\n")
+    _git(checkout, ("add", "tracked.txt"))
+    _git(checkout, ("commit", "-m", "initial"))
+    _git(checkout, ("branch", "-M", "main"))
+    _git(checkout, ("remote", "add", "origin", str(origin)))
+    _git(checkout, ("push", "-u", "origin", "main"))
+    return checkout, _git(checkout, ("rev-parse", "HEAD"))
+
+
 class TestWorkerSpecUriEnvConstant:
     """``WORKER_SPEC_URI_ENV`` is the canonical public env-var name for worker spec URIs."""
 
@@ -1144,6 +1204,128 @@ class TestDispatchViaSkypilot:
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
         )
+
+    def test_missing_worker_git_ref_defaults_to_fetchable_checkout_head(
+        self,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky_with_git_ref_preflight: MagicMock,
+        fetchable_git_checkout: tuple[Path, str],
+    ) -> None:
+        """An unpinned launch forwards the current fetchable checkout commit.
+
+        :param env_file: Valid worker credential environment file.
+        :param monkeypatch: Pytest fixture for selecting the operator checkout.
+        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
+        :param fetchable_git_checkout: Real local checkout and bare origin.
+        """
+        checkout, head_sha = fetchable_git_checkout
+        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="default-git-ref",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        worker_env = mock_sky_with_git_ref_preflight.jobs.launch.call_args.args[0].envs
+        assert worker_env["WORKER_GIT_REF"] == head_sha
+
+    def test_unfetchable_checkout_head_rejects_before_submission(
+        self,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky_with_git_ref_preflight: MagicMock,
+        fetchable_git_checkout: tuple[Path, str],
+    ) -> None:
+        """A local-only HEAD fails before the launcher submits billable work.
+
+        :param env_file: Valid worker credential environment file.
+        :param monkeypatch: Pytest fixture for selecting the operator checkout.
+        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
+        :param fetchable_git_checkout: Real local checkout and bare origin.
+        """
+        checkout, _ = fetchable_git_checkout
+        (checkout / "tracked.txt").write_text("unpushed\n")
+        _git(checkout, ("add", "tracked.txt"))
+        _git(checkout, ("commit", "-m", "unpushed"))
+        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="unfetchable-git-ref",
+        )
+
+        with pytest.raises(click.ClickException, match="not fetchable from origin"):
+            dispatch_via_skypilot(sky_cfg)
+
+        mock_sky_with_git_ref_preflight.jobs.launch.assert_not_called()
+
+    def test_explicit_worker_git_ref_overrides_checkout_head(
+        self,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky_with_git_ref_preflight: MagicMock,
+        fetchable_git_checkout: tuple[Path, str],
+    ) -> None:
+        """An explicit fetchable SHA remains authoritative over local HEAD.
+
+        :param env_file: Valid worker credential environment file.
+        :param monkeypatch: Pytest fixture for environment and checkout selection.
+        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
+        :param fetchable_git_checkout: Real local checkout and bare origin.
+        """
+        checkout, explicit_sha = fetchable_git_checkout
+        (checkout / "tracked.txt").write_text("second\n")
+        _git(checkout, ("add", "tracked.txt"))
+        _git(checkout, ("commit", "-m", "second"))
+        _git(checkout, ("push", "origin", "main"))
+        monkeypatch.setenv("WORKER_GIT_REF", explicit_sha)
+        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="explicit-git-ref",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        worker_env = mock_sky_with_git_ref_preflight.jobs.launch.call_args.args[0].envs
+        assert worker_env["WORKER_GIT_REF"] == explicit_sha
+
+    def test_checkout_without_head_rejects_before_submission(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky_with_git_ref_preflight: MagicMock,
+    ) -> None:
+        """A checkout without a commit fails during worker-source resolution.
+
+        :param tmp_path: Pytest temporary directory for the checkout.
+        :param env_file: Valid worker credential environment file.
+        :param monkeypatch: Pytest fixture for selecting the empty checkout.
+        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
+        """
+        checkout = tmp_path / "empty-checkout"
+        checkout.mkdir()
+        _git(checkout, ("init", "--initial-branch=main"))
+        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="headless-git-checkout",
+        )
+
+        with pytest.raises(click.ClickException, match="Cannot resolve WORKER_GIT_REF"):
+            dispatch_via_skypilot(sky_cfg)
+
+        mock_sky_with_git_ref_preflight.jobs.launch.assert_not_called()
 
     def test_missing_compute_raises(self) -> None:
         """``compute=None`` is the "don't dispatch" sentinel — calling here is a bug."""
@@ -1924,6 +2106,37 @@ class TestSkypilotLaunchCli:
         mock_sky.jobs.launch.assert_called_once()
         submitted_task = mock_sky.jobs.launch.call_args.args[0]
         assert submitted_task.run == cmd
+
+    def test_missing_worker_ref_cli_pins_fetchable_checkout_head(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky_with_git_ref_preflight: MagicMock,
+        fetchable_git_checkout: tuple[Path, str],
+    ) -> None:
+        """The real CLI defaults worker source to its fetchable checkout HEAD.
+
+        :param tmp_path: Pytest temporary directory for launcher files.
+        :param env_file: Valid worker credential environment file.
+        :param monkeypatch: Pytest fixture for selecting the operator checkout.
+        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
+        :param fetchable_git_checkout: Real local checkout and bare origin.
+        """
+        checkout, head_sha = fetchable_git_checkout
+        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute="runpod/smoke",
+            cmd="echo",
+            env_file=str(env_file),
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code == 0, result.output
+        worker_env = mock_sky_with_git_ref_preflight.jobs.launch.call_args.args[0].envs
+        assert worker_env["WORKER_GIT_REF"] == head_sha
 
     def test_extra_env_options_forward_values_to_worker(
         self,
