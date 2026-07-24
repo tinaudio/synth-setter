@@ -391,6 +391,24 @@ def test_materialize_stamps_cloned_from_txn_transaction_property(
     assert txn.transaction_properties["cloned_from_txn"] == txid
 
 
+def test_materialize_legacy_pinned_sidecar_without_resolved_txid_reuses_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A pinned cache remains valid when its legacy sidecar lacks resolved_txid.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    del payload["resolved_txid"]
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+
+
 def test_materialize_tampered_sidecar_resolved_txid_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:

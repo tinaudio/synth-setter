@@ -224,8 +224,10 @@ def _reuse_or_raise(
         manifest.resolved_version if resolved_version is None else resolved_version
     )
     requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    expected_resolved_txid = txid if txid is not None else resolved_txid
-    source_changed = manifest.resolved_txid != expected_resolved_txid
+    if txid is not None:
+        source_changed = manifest.resolved_txid not in (None, txid)
+    else:
+        source_changed = manifest.resolved_txid != resolved_txid
     if (
         manifest.request_hash != stored_hash
         or manifest.request_hash != requested_hash

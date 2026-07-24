@@ -186,14 +186,21 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
-        for split in ("train", "val"):
-            dataset = lance.dataset(str(destination / f"{split}.lance"))
-            assert dataset.schema.names == ["param_array", "mel_spec"]
-            assert dataset.count_rows() == 4
-        # The default predict file is test.lance, so its projection keeps audio.
-        test_split = lance.dataset(str(destination / "test.lance"))
-        assert test_split.schema.names == ["param_array", "mel_spec", "audio"]
-        assert test_split.count_rows() == 4
+        expected_columns = {
+            "train": ["param_array", "mel_spec"],
+            "val": ["param_array", "mel_spec"],
+            "test": ["param_array", "mel_spec", "audio"],
+        }
+        for split, columns in expected_columns.items():
+            source = lance.dataset(str(source_root / f"{split}.lance"))
+            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            assert materialized.schema.names == columns
+            assert materialized.count_rows() == 4
+            for column in columns:
+                assert materialized.schema.field(column).type == source.schema.field(column).type
+            expected_params = source.scanner(columns=["param_array"], limit=4).to_table()
+            actual_params = materialized.scanner(columns=["param_array"]).to_table()
+            assert actual_params.equals(expected_params)
         assert hydrate_calls == [
             {
                 "source_uri": source_root.as_uri(),
