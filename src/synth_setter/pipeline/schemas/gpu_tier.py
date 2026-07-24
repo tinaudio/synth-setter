@@ -7,7 +7,24 @@ from enum import StrEnum
 
 
 class GpuTier(StrEnum):
-    """Select the maximum GPU class allowed in a compute pool."""
+    """Select the maximum GPU class allowed in a compute pool.
+
+    .. attribute :: LOW
+
+        Consumer RTX 30/40 cards only.
+
+    .. attribute :: MID
+
+        Adds workstation cards (A40, RTX A-series/Ada).
+
+    .. attribute :: HIGH
+
+        Adds datacenter cards (L40S, RTX 6000 Ada, H100/H200, B200).
+
+    .. attribute :: ANY
+
+        No filter; every classified SKU is allowed.
+    """
 
     LOW = "low"
     MID = "mid"
