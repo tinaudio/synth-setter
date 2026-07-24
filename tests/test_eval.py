@@ -827,7 +827,7 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
 
     :param cfg_train_lance: Composed Lance config supplying the source dataset.
     :param tmp_path: Parent of the fresh local hydration destination.
-    :param monkeypatch: Replaces only the separately tested rclone sidecar boundary.
+    :param monkeypatch: Replaces the separately tested external rclone boundaries.
     """
     source = Path(cfg_train_lance.datamodule.dataset_root)
     destination = tmp_path / "row-limited-data"
@@ -837,6 +837,10 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
         dest_path.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
 
+    monkeypatch.setattr(
+        "synth_setter.pipeline.dataset_lineage.r2_io.ensure_r2_env_loaded",
+        lambda: None,
+    )
     monkeypatch.setattr(
         "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
         copy_stats,
