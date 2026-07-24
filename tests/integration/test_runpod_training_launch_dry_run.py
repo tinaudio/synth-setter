@@ -44,6 +44,7 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     [
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
+        "train-runpod-flow-simple-440k-clap-100k.yaml",
         "train-runpod-flow-simple-440k-m2l-100k.yaml",
         "train-runpod-flow-simple-440k-volume.yaml",
         "train-runpod-flow-simple-440k-volume-jp.yaml",
@@ -51,6 +52,7 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     ids=[
         "smoke",
         "flow-simple-440k",
+        "flow-simple-440k-clap-100k",
         "flow-simple-440k-m2l-100k",
         "flow-simple-440k-volume",
         "flow-simple-440k-volume-jp",

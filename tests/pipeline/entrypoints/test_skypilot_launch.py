@@ -2405,15 +2405,22 @@ class TestCheckedInLaunchConfigs:
         assert "experiment=${EXPERIMENT:-surge/flow_simple_440k}" in tokens
         assert "training.upload_checkpoints_during_training=true" in tokens
 
-    def test_flow_simple_440k_m2l_100k_config_selects_the_run_recipe(self) -> None:
-        """The m2l launch selects its self-contained run recipe and consumer GPU pool."""
-        cfg = load_launch_config(self._LAUNCH_DIR / "train-runpod-flow-simple-440k-m2l-100k.yaml")
+    @pytest.mark.parametrize("conditioning", ["clap", "m2l"])
+    def test_flow_simple_440k_conditioned_100k_config_selects_run_recipe(
+        self, conditioning: str
+    ) -> None:
+        """Each conditioned launch selects its run recipe and consumer GPU pool.
+
+        :param conditioning: Conditioning profile encoded in the launch filename.
+        """
+        filename = f"train-runpod-flow-simple-440k-{conditioning}-100k.yaml"
+        cfg = load_launch_config(self._LAUNCH_DIR / filename)
 
         assert cfg.compute is not None
         assert cfg.compute.name == "runpod-training-consumer"
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
-        assert "experiment=surge/flow_simple_440k_m2l_100k" in tokens
+        assert f"experiment=surge/flow_simple_440k_{conditioning}_100k" in tokens
         assert "training.upload_checkpoints_during_training=true" in tokens
 
     def test_default_train_config_selects_the_smoke_experiment(self) -> None:
