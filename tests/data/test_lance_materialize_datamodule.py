@@ -1,4 +1,4 @@
-"""Behavioral tests for txid-pinned materializing hydration in ``LanceVSTDataModule``.
+"""Behavioral tests for projected hydration in ``LanceVSTDataModule``.
 
 Sources are real local Lance datasets written through the pipeline writer, so
 ``prepare_data()`` drives the real ``materialize_lance_subset`` path; only the
@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import hydra
 import lance
@@ -131,17 +132,56 @@ class TestMaterializeInitValidation:
                 param_spec_name=_PARAM_SPEC,
             )
 
-    def test_init_row_limit_without_txids_raises(self, tmp_path: Path) -> None:
-        """A row cap without txids is rejected: a full download cannot cap rows.
+    def test_init_row_limit_without_download_uri_raises(self, tmp_path: Path) -> None:
+        """A row cap without a hydration source is rejected.
+
+        :param tmp_path: Local dataset root.
+        """
+        with pytest.raises(ValueError, match="download_dataset_root_uri"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                download_dataset_row_limit=100,
+                param_spec_name=_PARAM_SPEC,
+            )
+
+    def test_init_boolean_row_limit_raises(self, tmp_path: Path) -> None:
+        """A boolean is not accepted as an integer row limit.
 
         :param tmp_path: Local dataset root.
         """
         with pytest.raises(ValueError, match="download_dataset_row_limit"):
             LanceVSTDataModule(
                 dataset_root=tmp_path,
-                download_dataset_row_limit=100,
+                download_dataset_root_uri="r2://experiments/data/ds",
+                download_dataset_row_limit=cast(int, True),
                 param_spec_name=_PARAM_SPEC,
             )
+
+    def test_init_numeric_txid_raises(self, tmp_path: Path) -> None:
+        """Transaction identifiers must be strings at the config boundary.
+
+        :param tmp_path: Local dataset root.
+        """
+        txids = cast(dict[str, str], {"train": 1, "val": 2, "test": 3})
+        with pytest.raises(ValueError, match="download_dataset_txids"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                download_dataset_root_uri="r2://experiments/data/ds",
+                download_dataset_txids=txids,
+                param_spec_name=_PARAM_SPEC,
+            )
+
+    def test_init_row_limit_without_txids_succeeds(self, tmp_path: Path) -> None:
+        """A row cap may select projected materialization from the latest snapshots.
+
+        :param tmp_path: Local dataset root.
+        """
+        LanceVSTDataModule(
+            dataset_root=tmp_path,
+            download_dataset_root_uri="r2://experiments/data/ds",
+            download_dataset_row_limit=100,
+            param_spec_name=_PARAM_SPEC,
+        )
 
 
 class TestMaterializePrepareData:
@@ -174,14 +214,21 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
-        for split in ("train", "val"):
-            dataset = lance.dataset(str(destination / f"{split}.lance"))
-            assert dataset.schema.names == ["param_array", "mel_spec"]
-            assert dataset.count_rows() == 4
-        # The default predict file is test.lance, so its projection keeps audio.
-        test_split = lance.dataset(str(destination / "test.lance"))
-        assert test_split.schema.names == ["param_array", "mel_spec", "audio"]
-        assert test_split.count_rows() == 4
+        expected_columns = {
+            "train": ["param_array", "mel_spec"],
+            "val": ["param_array", "mel_spec"],
+            "test": ["param_array", "mel_spec", "audio"],
+        }
+        for split, columns in expected_columns.items():
+            source = lance.dataset(str(source_root / f"{split}.lance"))
+            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            assert materialized.schema.names == columns
+            assert materialized.count_rows() == 4
+            for column in columns:
+                assert materialized.schema.field(column).type == source.schema.field(column).type
+            expected_params = source.scanner(columns=["param_array"], limit=4).to_table()
+            actual_params = materialized.scanner(columns=["param_array"]).to_table()
+            assert actual_params.equals(expected_params)
         assert hydrate_calls == [
             {
                 "source_uri": source_root.as_uri(),
@@ -228,6 +275,46 @@ class TestMaterializePrepareData:
         for split in ("train", "val", "test"):
             materialized = lance.dataset(str(dest_root / f"{split}.lance"))
             assert materialized.count_rows() == 4
+
+    def test_prepare_data_row_limit_without_txids_feeds_train_dataloader(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Latest split subsets hydrate and feed the normal training data flow.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_row_limit=4,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+        module.setup("fit")
+        try:
+            batch = next(iter(module.train_dataloader()))
+        finally:
+            module.teardown()
+
+        for split in ("train", "val", "test"):
+            source = lance.dataset(str(source_root / f"{split}.lance"))
+            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            expected_params = source.scanner(columns=["param_array"], limit=4).to_table()
+            actual_params = materialized.scanner(columns=["param_array"]).to_table()
+            assert actual_params.equals(expected_params)
+        assert batch["params"].shape == (2, NUM_PARAMS)
+        assert batch["mel_spec"] is not None
 
     def test_prepare_data_materialized_root_feeds_train_dataloader(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

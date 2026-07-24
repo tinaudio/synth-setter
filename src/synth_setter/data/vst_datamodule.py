@@ -1,11 +1,12 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import NotRequired, Self, TypedDict
 
 import numpy as np
 import torch
 from lightning import LightningDataModule
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.conditioning import (
     Conditioning,
@@ -18,6 +19,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import materialize_splits
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
+_MATERIALIZE_SPLITS = ("train", "val", "test")
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
@@ -183,6 +185,63 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
     return mean, std
 
 
+class _MaterializeConfig(BaseModel):
+    """Strict materialization settings parsed at the Hydra boundary.
+
+    .. attribute :: model_config
+
+        Strict frozen-model configuration.
+
+    .. attribute :: download_dataset_root_uri
+
+        Hydration source URI, or ``None``.
+
+    .. attribute :: download_dataset_txids
+
+        Per-split transaction pins, or ``None`` for latest snapshots.
+
+    .. attribute :: download_dataset_row_limit
+
+        First-N row cap per split, or ``None``.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True)
+
+    download_dataset_root_uri: str | None
+    download_dataset_txids: dict[str, str] | None
+    download_dataset_row_limit: int | None
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> Self:
+        """Reject incomplete or contradictory materialization settings.
+
+        :returns: Validated settings.
+        :raises ValueError: Materialization lacks a source or has invalid split keys.
+        """
+        materialize = (
+            self.download_dataset_txids is not None
+            or self.download_dataset_row_limit is not None
+        )
+        if materialize and not self.download_dataset_root_uri:
+            raise ValueError(
+                "download_dataset_txids and download_dataset_row_limit require "
+                "download_dataset_root_uri"
+            )
+        if self.download_dataset_txids is None:
+            return self
+        missing = [
+            split
+            for split in _MATERIALIZE_SPLITS
+            if split not in self.download_dataset_txids
+        ]
+        if missing:
+            raise ValueError(f"download_dataset_txids is missing txids for splits: {missing}")
+        unknown = sorted(set(self.download_dataset_txids) - set(_MATERIALIZE_SPLITS))
+        if unknown:
+            raise ValueError(f"download_dataset_txids has unknown split keys: {unknown}")
+        return self
+
+
 class VSTDataModule(LightningDataModule):
     """Store shared VST loader configuration and optionally hydrate data from R2.
 
@@ -193,7 +252,7 @@ class VSTDataModule(LightningDataModule):
 
     shard_suffix = ".lance"
 
-    # DOC502: the documented ValueError propagates from _validate_materialize_config.
+    # DOC502: the documented ValueError propagates from _MaterializeConfig.
     def __init__(  # noqa: DOC502
         self,
         dataset_root: str | Path,
@@ -227,21 +286,24 @@ class VSTDataModule(LightningDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
-            source snapshots; present selects the materialize path, and each split
-            is its own Lance dataset with independent transaction history.
+            source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
-            time, or ``None`` for all rows.
+            time. Without txids, disposable runs use the latest source snapshots.
         :raises ValueError: If the materialization settings are inconsistent —
             fail at construction, never silently hydrate the wrong data.
         """
-        _validate_materialize_config(
-            download_dataset_txids=download_dataset_txids,
+        materialize_config = _MaterializeConfig(
+            download_dataset_txids=(
+                dict(download_dataset_txids)
+                if download_dataset_txids is not None
+                else None
+            ),
             download_dataset_row_limit=download_dataset_row_limit,
             download_dataset_root_uri=download_dataset_root_uri,
         )
         super().__init__()
         self.dataset_root = Path(dataset_root)
-        self.download_dataset_root_uri = download_dataset_root_uri
+        self.download_dataset_root_uri = materialize_config.download_dataset_root_uri
         self.use_saved_mean_and_variance = use_saved_mean_and_variance
         self.batch_size = batch_size
         self.ot = ot
@@ -259,10 +321,8 @@ class VSTDataModule(LightningDataModule):
         )
         self.pin_memory = pin_memory
         self.param_spec_name = param_spec_name
-        self.download_dataset_txids = (
-            dict(download_dataset_txids) if download_dataset_txids is not None else None
-        )
-        self.download_dataset_row_limit = download_dataset_row_limit
+        self.download_dataset_txids = materialize_config.download_dataset_txids
+        self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
 
     def _conditioning_column(self) -> str:
         """Return the stored column backing the configured conditioning.
@@ -289,19 +349,19 @@ class VSTDataModule(LightningDataModule):
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
             r2_io.ensure_r2_env_loaded()
-        if self.download_dataset_txids is not None:
+        if (
+            self.download_dataset_txids is not None
+            or self.download_dataset_row_limit is not None
+        ):
             self._materialize_splits(self.download_dataset_root_uri)
             return
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def _materialize_splits(self, source_root_uri: str) -> None:
-        """Rematerialize each pinned split locally, then rclone the sidecars.
+        """Rematerialize each split locally, then rclone the sidecars.
 
         :param source_root_uri: Hydration source holding the split datasets.
-        :raises ValueError: If ``download_dataset_txids`` was cleared after construction.
         """
-        if self.download_dataset_txids is None:
-            raise ValueError("materialization requires download_dataset_txids")
         materialize_splits(
             source_root_uri,
             self.dataset_root,
@@ -322,40 +382,6 @@ class VSTDataModule(LightningDataModule):
         serves_predict = self.dataset_root / f"{split}{self.shard_suffix}" == self.predict_file
         return self._loader_columns(read_audio=serves_predict)
 
-
-_MATERIALIZE_SPLITS = ("train", "val", "test")
-
-
-def _validate_materialize_config(
-    *,
-    download_dataset_txids: dict[str, str] | None,
-    download_dataset_row_limit: int | None,
-    download_dataset_root_uri: str | None,
-) -> None:
-    """Reject inconsistent hydration settings at construction time.
-
-    :param download_dataset_txids: Per-split transaction uuids selecting the
-        materialize path, or ``None`` for a full-directory download.
-    :param download_dataset_row_limit: First-N row cap, or ``None``.
-    :param download_dataset_root_uri: Hydration source URI, or ``None``.
-    :raises ValueError: If a row cap is set without txids, txids lack a source,
-        or the txid split keys are incomplete or unknown.
-    """
-    if download_dataset_txids is None:
-        if download_dataset_row_limit is not None:
-            raise ValueError(
-                "download_dataset_row_limit requires download_dataset_txids; "
-                "a full-directory download cannot cap rows"
-            )
-        return
-    if not download_dataset_root_uri:
-        raise ValueError("download_dataset_txids requires download_dataset_root_uri")
-    missing = [split for split in _MATERIALIZE_SPLITS if split not in download_dataset_txids]
-    if missing:
-        raise ValueError(f"download_dataset_txids is missing txids for splits: {missing}")
-    unknown = sorted(set(download_dataset_txids) - set(_MATERIALIZE_SPLITS))
-    if unknown:
-        raise ValueError(f"download_dataset_txids has unknown split keys: {unknown}")
 
 
 def __getattr__(name: str) -> object:

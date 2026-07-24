@@ -28,23 +28,10 @@ _SUBSET_ROWS = 8
 _BATCH_SIZE = 4
 
 
-def _live_txid(split_uri: str) -> str:
-    """Pin a live split's current version by its real transaction uuid.
-
-    :param split_uri: ``r2://`` URI of one split dataset.
-    :return: Transaction uuid of the split's current version.
-    """
-    open_uri, storage_options = r2_io.lance_target(split_uri)
-    dataset = lance.dataset(open_uri, storage_options=storage_options)
-    transaction = dataset.read_transaction(dataset.version)
-    assert transaction is not None
-    return transaction.uuid
-
-
 def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
     tmp_path: Path,
 ) -> None:
-    """Full production hydration: txid-pinned subsets land locally and train loads.
+    """Full production hydration: latest row-limited splits land and train loads.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -54,13 +41,11 @@ def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
             "or rclone lsd r2: failed)"
         )
     r2_io.ensure_r2_env_loaded()
-    txids = {split: _live_txid(f"{_ROOT_URI}/{split}.lance") for split in ("train", "val", "test")}
 
     destination = tmp_path / "data"
     module = LanceVSTDataModule(
         dataset_root=destination,
         download_dataset_root_uri=_ROOT_URI,
-        download_dataset_txids=txids,
         download_dataset_row_limit=_SUBSET_ROWS,
         batch_size=_BATCH_SIZE,
         num_workers=0,

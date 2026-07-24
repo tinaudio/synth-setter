@@ -818,6 +818,52 @@ def _compose_fake_oracle_eval_cfg(
     return cfg
 
 
+def test_evaluate_row_limited_file_uri_hydration_without_txids(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The eval entrypoint consumes latest-snapshot row-limited hydration.
+
+    :param cfg_train_lance: Composed Lance config supplying the source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    :param monkeypatch: Replaces only the separately tested rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        destination,
+        mode="test",
+        param_spec_name=str(cfg_train_lance.datamodule.param_spec_name),
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg.datamodule.download_dataset_row_limit = 2
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = evaluate(cfg)
+
+    assert torch.isfinite(metric_dict["test/param_mse"])
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("test")
+    try:
+        assert len(datamodule.test_dataset) == 2
+    finally:
+        datamodule.teardown("test")
+
+
 def _compose_parametrized_fake_oracle_eval_cfg(
     tmp_path: Path,
     request: pytest.FixtureRequest,
