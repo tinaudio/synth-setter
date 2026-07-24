@@ -65,6 +65,7 @@ from tests._vst import (
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
@@ -1203,17 +1204,13 @@ def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> Non
     try:
         ShardClaims(uri=uri, storage_options=storage_options, owner="operator").populate(range(2))
 
-        ctx = multiprocessing.get_context("spawn")
-        out: multiprocessing.Queue = ctx.Queue()
-        procs = [
-            ctx.Process(target=_r2_claims_steal_worker, args=(uri, storage_options, index, out))
-            for index in range(3)
-        ]
-        for proc in procs:
-            proc.start()
-        results = [out.get(timeout=600) for _ in procs]
-        for proc in procs:
-            proc.join(timeout=120)
+        results = cast(
+            "list[list[tuple[int, int]]]",
+            collect_process_results(
+                _r2_claims_steal_worker,
+                [(uri, storage_options, index) for index in range(3)],
+            ),
+        )
 
         all_wins = [win for wins in results for win in wins]
         assert all_wins, "at least one steal must land for the invariant to be exercised"

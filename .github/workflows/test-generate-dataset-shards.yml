@@ -17,6 +17,7 @@ on:
   pull_request:
     paths:
       - "tests/test_generate_dataset.py"
+      - "tests/helpers/processes.py"
       - "tests/conftest.py"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"

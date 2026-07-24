@@ -1,0 +1,45 @@
+"""Process-lifecycle tests for spawned integration-test workers."""
+
+from __future__ import annotations
+
+import os
+import signal
+from multiprocessing.queues import Queue
+from pathlib import Path
+
+import pytest
+
+from tests.helpers.processes import collect_process_results
+
+
+def _report_pid_then_stall(pid_file: str, out: Queue[str]) -> None:
+    """Publish a result, then model a worker stuck during interpreter shutdown.
+
+    :param pid_file: Path receiving the worker PID.
+    :param out: Multiprocessing queue receiving the worker result.
+    """
+    path = Path(pid_file)
+    path.write_text(str(os.getpid()))
+    out.put("reported")
+    signal.pause()
+
+
+def test_collect_process_results_worker_stalls_after_result_terminates_process(
+    tmp_path: Path,
+) -> None:
+    """A worker that reports success but never exits is terminated and reaped.
+
+    :param tmp_path: Scratch location receiving the worker PID.
+    """
+    pid_file = tmp_path / "worker.pid"
+
+    results = collect_process_results(
+        _report_pid_then_stall,
+        [(str(pid_file),)],
+        exit_timeout_s=0.1,
+    )
+
+    assert results == ["reported"]
+    worker_pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(worker_pid, 0)
