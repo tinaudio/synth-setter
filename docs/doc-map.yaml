@@ -178,7 +178,7 @@ docs:
     description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + Vast + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
-        covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
+        covers: "Managed-job dispatch with preflight-verified worker commit pinning"
       - pattern: "src/synth_setter/configs/compute/runpod-template.yaml"
         covers: 'SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`sky_cfg.worker_image_tag`, default `"dev-snapshot"`) via `_override_image_id`, env-var injection (currently projected rclone env for the worker backend), R2-URI spec contract (`WORKER_SPEC_URI` carries the canonical `input_spec.json` URI for CI validate-time consumers; the worker rebuilds the spec from pinned Hydra overrides)'
       - pattern: "src/synth_setter/configs/compute/vast-template.yaml"
@@ -190,7 +190,7 @@ docs:
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
-        covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
+        covers: "Worker checkout synchronization to the launcher's preflight-verified `WORKER_GIT_REF`"
       - pattern: "scripts/skypilot/write_provider_creds.sh"
         covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor); PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"

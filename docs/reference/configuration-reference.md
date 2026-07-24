@@ -210,7 +210,7 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
-  WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
+  WORKER_GIT_REF: ""                  # Launcher-pinned checkout SHA for sync_worker_checkout.sh
   SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized per-rank by _launch_one_rank_from_doc)
   SYNTH_SETTER_NUM_WORKERS: ""
 
