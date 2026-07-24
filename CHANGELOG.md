@@ -1,6 +1,146 @@
 # CHANGELOG
 
 
+## v10.7.0 (2026-07-24)
+
+### Continuous Integration
+
+- **data-pipeline**: Increase shard e2e timeout
+  ([#2408](https://github.com/tinaudio/synth-setter/pull/2408),
+  [`37f0962`](https://github.com/tinaudio/synth-setter/commit/37f0962f57170ea00273f67b3f632d106bfc8ae3))
+
+### Documentation
+
+- **testing**: Add production-path e2e test skill
+  ([#2386](https://github.com/tinaudio/synth-setter/pull/2386),
+  [`182be44`](https://github.com/tinaudio/synth-setter/commit/182be44103c95e659f72f19a703764de80e19070))
+
+### Features
+
+- **data-pipeline**: Write previews in initial Lance fragments
+  ([#2392](https://github.com/tinaudio/synth-setter/pull/2392),
+  [`276dc7e`](https://github.com/tinaudio/synth-setter/commit/276dc7e18aef33271167edea396587bc8e8fa7f6))
+
+* internal-fix(data-pipeline): write previews in initial Lance fragments
+
+* internal-fix(data-pipeline): harden preview validation
+
+* internal-fix(data-pipeline): repair preview smoke fixtures
+
+### Internal-Feat
+
+- **pipeline**: Index pooled sequence embeddings for nearest=
+  ([#2343](https://github.com/tinaudio/synth-setter/pull/2343),
+  [`e3bab00`](https://github.com/tinaudio/synth-setter/commit/e3bab00932c95f60dec28af8c2b065ba52345d9c))
+
+* internal-feat(pipeline): index pooled sequence embeddings
+
+* internal-fix(pipeline): scope sub-vector validation to clap selection
+
+- **training**: Hydrate row-limited data without txids
+  ([#2393](https://github.com/tinaudio/synth-setter/pull/2393),
+  [`2789599`](https://github.com/tinaudio/synth-setter/commit/2789599e966c7ada460d8e4ae57c110a33d65b40))
+
+* internal-feat(training): allow row-limited hydration without txids
+
+Use each Lance split latest snapshot when a download row limit is configured without transaction
+  pins. Preserve projected materialization, sidecar cache provenance, and normal dataloader
+  consumption for quick tuning and smoke-test runs.
+
+Refs #2353
+
+* internal-fix(training): reject stale unpinned hydration caches
+
+Compare unpinned cache manifests with the current Lance source version so latest-snapshot hydration
+  cannot silently reuse old rows. Cover the row-limited no-txid path through the real train and eval
+  entrypoints.
+
+* internal-fix(training): bind latest hydration cache to source identity
+
+Record and compare the selected source transaction UUID so replacing a Lance dataset at the same URI
+  and version cannot reuse stale local rows. Document no-txid hydration as a disposable smoke and
+  tuning mode.
+
+* internal-fix(training): validate materialization provenance
+
+Treat cache request fields as keyword-only, validate recorded source transaction identity in both
+  pinned and latest modes, and split source open and snapshot writes into focused helpers.
+
+* internal-fix(training): preserve pinned cache compatibility
+
+Accept legacy pinned manifests whose requested txid already identifies the resolved snapshot.
+  Strengthen multi-split tests with source-row identity and Arrow field dtype assertions.
+
+* internal-fix(training): stage materialized dataset publication
+
+Publish each local Lance subset only after its manifest is durable so an interrupted write leaves a
+  recoverable partial directory. Verify unpinned hydration preserves each split source.
+
+* internal-fix(training): validate hydration config strictly
+
+Parse materialization inputs with a strict Pydantic model, isolate cache identity comparison, and
+  assert finite training behavior in the row-limited entrypoint test.
+
+* test(training): isolate entrypoint hydration sidecars
+
+Replace only the separately covered rclone sidecar boundary so the real train and eval hydration
+  tests run in the minimal conda environment.
+
+### Internal-Fix
+
+- **ci-automation**: Expose worktree tools in test-fast
+  ([#2397](https://github.com/tinaudio/synth-setter/pull/2397),
+  [`5419cce`](https://github.com/tinaudio/synth-setter/commit/5419cce14b56d8adea89dba43cb3bf658ed38b0c))
+
+- **ci-automation**: Reap real-R2 contention workers
+  ([#2402](https://github.com/tinaudio/synth-setter/pull/2402),
+  [`4333521`](https://github.com/tinaudio/synth-setter/commit/4333521a3c96338831253577015f20ca48c1625d))
+
+* internal-fix(ci-automation): reap real-R2 contention workers
+
+* test(ci-automation): report spawned worker failures promptly
+
+* refactor(ci-automation): isolate spawned worker cleanup
+
+- **ci-automation**: Select compatible Pi hook Node
+  ([#2407](https://github.com/tinaudio/synth-setter/pull/2407),
+  [`25ed4cb`](https://github.com/tinaudio/synth-setter/commit/25ed4cbccd58c6e975eec7a82e59f56462bcac25))
+
+Probe candidate runtimes against the real TypeScript extension so sanitized hook tests reject old
+  Node versions without skipping Pi readiness behavior.
+
+- **storage**: Recognize rclone config credentials
+  ([#2396](https://github.com/tinaudio/synth-setter/pull/2396),
+  [`8f295f0`](https://github.com/tinaudio/synth-setter/commit/8f295f0ca074c2eb10f97f12bae9a94d71512045))
+
+Fall back to the resolved r2 remote when environment settings are absent. Keep live probes bounded
+  and fail closed on authentication errors. Use the same probe for integration-test collection so
+  config-backed devcontainers run live R2 coverage.
+
+- **storage**: Retry transient Lance hydration reads
+  ([#2395](https://github.com/tinaudio/synth-setter/pull/2395),
+  [`ed1a52a`](https://github.com/tinaudio/synth-setter/commit/ed1a52a476f91657e85100f7e034b6b6a56fc8a7))
+
+Retry source opens and transaction identity reads only for narrowly classified transient transport
+  failures. Keep permanent auth and schema failures immediate, emit secret-free attempt metadata,
+  and raise a sanitized error after three failed transient attempts.
+
+- **storage**: Skip R2 preflight for file URIs
+  ([#2405](https://github.com/tinaudio/synth-setter/pull/2405),
+  [`8745507`](https://github.com/tinaudio/synth-setter/commit/874550702889dfbee27203bb7fa32dd06f976f40))
+
+Resolve mounted dataset lineage directly instead of invoking the R2 credential preflight, allowing
+  file-URI eval hydration without rclone.
+
+Fixes #2401
+
+### Testing
+
+- **testing**: Accept Lance missing-object wording
+  ([#2391](https://github.com/tinaudio/synth-setter/pull/2391),
+  [`615427d`](https://github.com/tinaudio/synth-setter/commit/615427de16010c21c735eb7fa4cd15c4f19656ff))
+
+
 ## v10.6.1 (2026-07-24)
 
 ### Bug Fixes
