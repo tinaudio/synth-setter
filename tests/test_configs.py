@@ -673,38 +673,32 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
-def test_flow_simple_440k_m2l_100k_experiment_pins_run_contract() -> None:
-    """The m2l run recipe pins conditioning, duration, and a distinct run identity."""
-    cfg = _compose("train.yaml", ["experiment=surge/flow_simple_440k_m2l_100k"])
+@pytest.mark.parametrize(
+    ("conditioning", "input_shape"),
+    [("clap", [512]), ("m2l", [128, 42])],
+)
+def test_flow_simple_440k_conditioned_100k_experiment_pins_run_contract(
+    conditioning: str, input_shape: list[int]
+) -> None:
+    """Each conditioned run pins its input contract, duration, and identity.
+
+    :param conditioning: Conditioning profile and Lance column name.
+    :param input_shape: Expected conditioning tensor shape per sample.
+    """
+    experiment = f"surge/flow_simple_440k_{conditioning}_100k"
+    cfg = _compose("train.yaml", [f"experiment={experiment}"])
 
     assert cfg.datamodule.download_dataset_root_uri == (
         "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
         "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
     )
-    assert cfg.datamodule.conditioning.column == "m2l"
-    assert list(cfg.datamodule.conditioning.input_shape) == [128, 42]
-    assert cfg.model.conditioning.column == "m2l"
-    assert list(cfg.model.conditioning.input_shape) == [128, 42]
+    assert cfg.datamodule.conditioning.column == conditioning
+    assert list(cfg.datamodule.conditioning.input_shape) == input_shape
+    assert cfg.model.conditioning.column == conditioning
+    assert list(cfg.model.conditioning.input_shape) == input_shape
     assert cfg.trainer.min_steps == 100_000
     assert cfg.trainer.max_steps == 100_000
-    assert cfg.run_name == "flow_440k_m2l_100k"
-
-
-def test_flow_simple_440k_clap_100k_experiment_pins_run_contract() -> None:
-    """The CLAP run recipe pins conditioning, duration, and a distinct run identity."""
-    cfg = _compose("train.yaml", ["experiment=surge/flow_simple_440k_clap_100k"])
-
-    assert cfg.datamodule.download_dataset_root_uri == (
-        "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
-        "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
-    )
-    assert cfg.datamodule.conditioning.column == "clap"
-    assert list(cfg.datamodule.conditioning.input_shape) == [512]
-    assert cfg.model.conditioning.column == "clap"
-    assert list(cfg.model.conditioning.input_shape) == [512]
-    assert cfg.trainer.min_steps == 100_000
-    assert cfg.trainer.max_steps == 100_000
-    assert cfg.run_name == "flow_440k_clap_100k"
+    assert cfg.run_name == f"flow_440k_{conditioning}_100k"
 
 
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
