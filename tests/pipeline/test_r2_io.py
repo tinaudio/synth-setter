@@ -356,26 +356,41 @@ class TestR2StorageOptions:
             "region": "auto",
         }
 
+    @pytest.mark.parametrize(
+        ("leading_frame", "trailing_frame"),
+        [("", ""), ("--------------------\n", "--------------------\n")],
+        ids=["plain", "legacy-framed"],
+    )
     def test_rclone_config_output_builds_storage_options(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        leading_frame: str,
+        trailing_frame: str,
     ) -> None:
-        """Config parsing remains covered when the test host lacks rclone.
+        """Plain and legacy-framed rclone output both produce storage options.
 
-        :param monkeypatch: Pytest fixture used to isolate the subprocess boundary.
+        :param tmp_path: Pytest tmp dir containing an executable rclone boundary.
+        :param monkeypatch: Pytest fixture used to isolate executable resolution.
+        :param leading_frame: Optional line before the remote section.
+        :param trailing_frame: Optional line after the remote section.
         """
-        config = subprocess.CompletedProcess(
-            args=["rclone", "config", "show", "r2"],
-            returncode=0,
-            stdout=(
-                "[r2]\n"
-                "type = s3\n"
-                "access_key_id = parsed-access-key\n"
-                "secret_access_key = parsed-secret-key\n"
-                "endpoint = https://parsed.r2.cloudflarestorage.com\n"
-            ),
-            stderr="",
+        config_output = (
+            f"{leading_frame}"
+            "[r2]\n"
+            "type = s3\n"
+            "access_key_id = parsed-access-key\n"
+            "secret_access_key = parsed-secret-key\n"
+            "endpoint = https://parsed.r2.cloudflarestorage.com\n"
+            f"{trailing_frame}"
         )
-        monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: config)
+        rclone = tmp_path / "rclone"
+        rclone.write_text(
+            f"#!/usr/bin/env python3\nprint({config_output!r}, end='')\n",
+            encoding="utf-8",
+        )
+        rclone.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
         assert r2_io.r2_storage_options()["access_key_id"] == "parsed-access-key"
 
@@ -390,8 +405,10 @@ class TestR2StorageOptions:
 
         monkeypatch.setattr(r2_io.subprocess, "run", _timeout)
 
-        with pytest.raises(RuntimeError, match="Object storage settings unresolved"):
+        with pytest.raises(RuntimeError, match="Object storage settings unresolved") as excinfo:
             r2_io.r2_storage_options()
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "rclone configuration read timed out after 10s" in str(excinfo.value.__cause__)
 
     def test_rclone_config_command_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A nonzero config command fails closed without consuming its output.
@@ -403,8 +420,10 @@ class TestR2StorageOptions:
         )
         monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: failed)
 
-        with pytest.raises(RuntimeError, match="Object storage settings unresolved"):
+        with pytest.raises(RuntimeError, match="Object storage settings unresolved") as excinfo:
             r2_io.r2_storage_options()
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "rclone config show r2 failed with exit code 1" in str(excinfo.value.__cause__)
 
 
 class TestR2DirectoryExists:
