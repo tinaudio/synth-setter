@@ -18,6 +18,7 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from tqdm import trange
 
+from synth_setter.data.vst.audio_preview import validate_mp3_sample_rate
 from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
@@ -288,6 +289,8 @@ def make_lance_dataset(
         contract as ``fixed_synth_params_list``.
     :returns: Counts of silent and clipped draws rejected across the shard.
     """
+    validate_mp3_sample_rate(render_cfg.sample_rate)
+
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
     import lance

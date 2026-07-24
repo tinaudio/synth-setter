@@ -10,7 +10,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from synth_setter.data.vst.generate_vst_dataset import audio_uuid, encode_audio_to_mp3
+from synth_setter.data.vst.audio_preview import audio_uuid, encode_audio_to_mp3
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     AUDIO_MP3_FIELD,
@@ -186,6 +186,63 @@ def test_validate_lance_shard_mismatched_uuid_reports_row(tmp_path: Path) -> Non
     assert f"column {AUDIO_UUID_FIELD!r} row 0 does not match audio" in errors
 
 
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "message"),
+    [
+        (
+            AUDIO_MP3_FIELD,
+            pa.field(
+                AUDIO_MP3_FIELD,
+                pa.binary(),
+                nullable=True,
+                metadata={b"mime_type": b"audio/mpeg"},
+            ),
+            "column 'audio_mp3' must be non-nullable",
+        ),
+        (
+            AUDIO_MP3_FIELD,
+            pa.field(
+                AUDIO_MP3_FIELD,
+                pa.binary(),
+                nullable=False,
+                metadata={b"mime_type": b"application/octet-stream"},
+            ),
+            "column 'audio_mp3' has metadata",
+        ),
+        (
+            AUDIO_UUID_FIELD,
+            pa.field(AUDIO_UUID_FIELD, pa.binary(), nullable=False),
+            "column 'audio_uuid' has type binary, expected string",
+        ),
+    ],
+)
+def test_validate_lance_shard_preview_schema_drift_reports_contract(
+    field_name: str,
+    replacement: pa.Field,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    """Preview type, nullability, and MIME drift fail structural validation.
+
+    :param field_name: Preview field replaced in the canonical schema.
+    :param replacement: Drifted Arrow field definition.
+    :param message: Expected schema error.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    schema = schema.set(schema.get_field_index(field_name), replacement)
+    tensor_arrays = _zero_arrays(shapes)
+    arrays = with_preview_columns(tensor_arrays, spec.render.sample_rate)
+    if field_name == AUDIO_UUID_FIELD:
+        arrays[AUDIO_UUID_FIELD] = [audio_uuid(row).encode() for row in tensor_arrays[AUDIO_FIELD]]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    assert any(message in error for error in validate_shard(shard, spec))
+
+
 def test_validate_lance_shard_invalid_mp3_reports_row(tmp_path: Path) -> None:
     """A binary payload that cannot decode as MP3 fails row-level validation.
 
@@ -207,6 +264,79 @@ def test_validate_lance_shard_invalid_mp3_reports_row(tmp_path: Path) -> None:
     errors = validate_shard(shard, spec)
 
     assert any(f"column {AUDIO_MP3_FIELD!r} row 0 is not decodable" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("encoded_rate", "encoded_channels", "message"),
+    [
+        (16000, 2, "has sample rate 16000, expected 8000"),
+        (8000, 1, "has 1 channels, expected 2"),
+    ],
+)
+def test_validate_lance_shard_mp3_playback_contract_mismatch_reports_row(
+    encoded_rate: int,
+    encoded_channels: int,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    """A decodable preview with wrong playback geometry fails validation.
+
+    :param encoded_rate: Sample rate used to encode the drifted preview.
+    :param encoded_channels: Channel count used to encode the drifted preview.
+    :param message: Expected playback-contract error.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    tensor_arrays = _zero_arrays(shapes)
+    audio_rows = tensor_arrays[AUDIO_FIELD]
+    arrays = with_preview_columns(tensor_arrays, spec.render.sample_rate)
+    arrays[AUDIO_MP3_FIELD] = [
+        encode_audio_to_mp3(row[:encoded_channels], encoded_rate, 128) for row in audio_rows
+    ]
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+    assert any(message in error for error in validate_shard(shard, spec))
+
+
+def test_validate_lance_shard_incomplete_mp3_decode_reports_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation reads the complete preview and rejects a short decoder result.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Pytest fixture replacing the codec with an incomplete decoder.
+    """
+
+    class _IncompleteAudioFile:
+        samplerate = 8000
+        num_channels = 2
+        frames = 80
+
+        def __init__(self, _payload: object) -> None:
+            pass
+
+        def __enter__(self) -> _IncompleteAudioFile:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def read(self, frames: int) -> np.ndarray:
+            decoded_frames = 1 if frames == 1 else frames - 1
+            return np.zeros((self.num_channels, decoded_frames), dtype=np.float32)
+
+    spec = build_lance_smoke_spec()
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+    monkeypatch.setattr("pedalboard.io.AudioFile", _IncompleteAudioFile)
+
+    errors = validate_shard(shard, spec)
+
+    assert any("decoded 79 frames, expected at least 80" in error for error in errors)
 
 
 @pytest.mark.parametrize(

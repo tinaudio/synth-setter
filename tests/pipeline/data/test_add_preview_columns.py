@@ -19,12 +19,12 @@ import pytest
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
+from synth_setter.data.vst.audio_preview import audio_uuid, encode_audio_to_mp3
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
-from synth_setter.data.vst.generate_vst_dataset import audio_uuid, encode_audio_to_mp3
 from synth_setter.pipeline.data.add_preview_columns import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,

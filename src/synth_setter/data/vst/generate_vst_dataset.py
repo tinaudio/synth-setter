@@ -1,16 +1,18 @@
-import io
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import librosa
 import numpy as np
 from loguru import logger
-from pedalboard.io import AudioFile
 from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
+from synth_setter.data.vst.audio_preview import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
+)
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
@@ -30,44 +32,6 @@ from synth_setter.pipeline.schemas.spec import (
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
 DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
-DEFAULT_MP3_BITRATE_KBPS = 128
-
-_AUDIO_UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "synth-setter.com")
-
-
-def encode_audio_to_mp3(audio: np.ndarray, sample_rate: int, bitrate_kbps: int) -> bytes:
-    """Encode one ``(channels, time)`` audio tensor to a CBR MP3 byte string.
-
-    :param audio: Float audio shaped ``(channels, time_samples)`` with non-empty axes.
-    :param sample_rate: Playback rate in Hz.
-    :param bitrate_kbps: Constant bitrate in kbps.
-    :returns: Complete MP3 bitstream.
-    :raises ValueError: If ``audio`` is not a non-empty two-dimensional tensor.
-    """
-    if audio.ndim != 2 or 0 in audio.shape:
-        raise ValueError(
-            f"audio must be 2-D (channels, time) with non-empty axes, got shape {audio.shape}"
-        )
-    buffer = io.BytesIO()
-    with AudioFile(
-        buffer,
-        "w",
-        samplerate=sample_rate,
-        num_channels=audio.shape[0],
-        format="mp3",
-        quality=str(bitrate_kbps),
-    ) as output:
-        output.write(np.ascontiguousarray(audio, dtype=np.float32))
-    return buffer.getvalue()
-
-
-def audio_uuid(audio: np.ndarray) -> str:
-    """Return the deterministic UUIDv5 fingerprint of C-ordered audio bytes.
-
-    :param audio: Audio tensor whose element bytes form the UUID name.
-    :returns: Canonical UUIDv5 string under the ``synth-setter.com`` namespace.
-    """
-    return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes(order="C").hex()))
 
 
 @dataclass(frozen=True)

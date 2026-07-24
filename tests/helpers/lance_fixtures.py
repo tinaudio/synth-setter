@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 
-from synth_setter.data.vst.generate_vst_dataset import (
+from synth_setter.data.vst.audio_preview import (
     DEFAULT_MP3_BITRATE_KBPS,
     audio_uuid,
     encode_audio_to_mp3,
