@@ -69,7 +69,7 @@ jobs:
               else
                 make install-cardinal
               fi
-              test -d plugins/CardinalSynth.vst3
+              [[ -d plugins/CardinalSynth.vst3 ]]
               wrapper=src/synth_setter/scripts/run-linux-vst-headless.sh
               "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\"); load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\"); load_plugin(\"plugins/CardinalSynth.vst3\")" >&2
               "$wrapper" pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
@@ -134,7 +134,7 @@ jobs:
               if [[ ! -d plugins/CardinalSynth.vst3 ]]; then
                 make install-cardinal
               fi
-              test -d plugins/CardinalSynth.vst3
+              [[ -d plugins/CardinalSynth.vst3 ]]
               read -ra shard_files <<< "$SHARD_FILES"
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \

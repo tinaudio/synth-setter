@@ -1,5 +1,8 @@
 """Curated host controls for the Cardinal Synth 26.02 baseline patch."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -8,17 +11,19 @@ from synth_setter.data.vst.param_spec import (
     ParamSpec,
 )
 
-CARDINAL_HOST_PARAMETER_TARGETS = {
-    "parameter_1_v": "VCO frequency",
-    "parameter_2_v": "VCO pulse width",
-    "parameter_3_v": "amplitude envelope attack",
-    "parameter_4_v": "amplitude envelope decay",
-    "parameter_5_v": "amplitude envelope sustain",
-    "parameter_6_v": "amplitude envelope release",
-    "parameter_7_v": "VCA level",
-    "parameter_8_v": "host output level",
-    "parameter_9_v": "VCA response mode",
-}
+CARDINAL_HOST_PARAMETER_TARGETS: Mapping[str, str] = MappingProxyType(
+    {
+        "parameter_1_v": "VCO frequency",
+        "parameter_2_v": "VCO pulse width",
+        "parameter_3_v": "amplitude envelope attack",
+        "parameter_4_v": "amplitude envelope decay",
+        "parameter_5_v": "amplitude envelope sustain",
+        "parameter_6_v": "amplitude envelope release",
+        "parameter_7_v": "VCA level",
+        "parameter_8_v": "host output level",
+        "parameter_9_v": "VCA response mode",
+    }
+)
 
 CARDINAL_PARAM_SPEC = ParamSpec(
     [

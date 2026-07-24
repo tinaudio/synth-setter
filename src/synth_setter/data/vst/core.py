@@ -21,6 +21,8 @@ _EDITOR_INIT_DELAY_SECONDS = 0.5
 # ``RenderWorkerLeaked`` (#1204) so the helper never returns with a live
 # worker thread.
 _EDITOR_JOIN_TIMEOUT_SECONDS = 2.0
+_FLUSH_DURATION_SECONDS = 32.0
+_PROCESS_BLOCK_SIZE = 2048
 
 _BodyResult = TypeVar("_BodyResult")
 
@@ -201,6 +203,31 @@ def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -
         f.write(audio.T)
 
 
+def _flush_plugin(
+    plugin: VST3Plugin,
+    sample_rate: float,
+    channels: int,
+    reset_plugin_before_process: bool,
+) -> None:
+    """Drain queued audio, then clear the plugin's processing buffers.
+
+    :param plugin: Loaded VST3 plugin instance.
+    :param sample_rate: Audio sample rate in Hz.
+    :param channels: Number of output channels.
+    :param reset_plugin_before_process: Whether pedalboard resets plugin state before processing
+        the flush.
+    """
+    plugin.process(
+        [],
+        _FLUSH_DURATION_SECONDS,
+        sample_rate,
+        channels,
+        _PROCESS_BLOCK_SIZE,
+        reset_plugin_before_process,
+    )
+    plugin.reset()
+
+
 def render_params(
     plugin_path: str,
     params: dict[str, float],
@@ -248,15 +275,13 @@ def render_params(
         warmup_plugin(plugin)
 
     logger.debug("post-load flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
-    plugin.reset()
+    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
 
     logger.debug("setting params")
     set_params(plugin, params)
 
     logger.debug("post-param flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
-    plugin.reset()
+    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
@@ -266,13 +291,12 @@ def render_params(
         signal_duration_seconds,
         sample_rate,
         channels,
-        2048,
+        _PROCESS_BLOCK_SIZE,
         reset_plugin_before_process,
     )
 
     logger.debug("post-render flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, reset_plugin_before_process)
-    plugin.reset()
+    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
 
     return output
 

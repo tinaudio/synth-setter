@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import subprocess
 import tarfile
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
+from pydantic import BaseModel, ConfigDict, Field
 
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_HOST_PARAMETER_TARGETS
 from synth_setter.data.vst.core import load_plugin, load_preset
@@ -47,7 +46,100 @@ _EXPECTED_HOST_PARAMETER_MAP = {
 }
 
 
-def _read_rack_patch() -> dict[str, Any]:
+class _HostParameterMapping(BaseModel):
+    """Validated Cardinal host-slot target.
+
+    .. attribute :: model_config
+
+       Strict parsing configuration.
+
+    .. attribute :: host_param_id
+
+       Zero-based Cardinal host slot.
+
+    .. attribute :: module_id
+
+       Rack module receiving the host value.
+
+    .. attribute :: param_id
+
+       Module-local parameter index.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    host_param_id: int = Field(alias="hostParamId")
+    module_id: int = Field(alias="moduleId")
+    param_id: int = Field(alias="paramId")
+
+
+class _HostParameterMapData(BaseModel):
+    """Validated mappings stored by Cardinal's HostParametersMap module.
+
+    .. attribute :: model_config
+
+       Strict parsing configuration.
+
+    .. attribute :: maps
+
+       Cardinal host-slot targets.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    maps: list[_HostParameterMapping]
+
+
+class _RackModule(BaseModel):
+    """Rack module fields needed to resolve host mappings.
+
+    .. attribute :: model_config
+
+       Strict parsing configuration.
+
+    .. attribute :: id
+
+       Patch-local module identifier.
+
+    .. attribute :: plugin
+
+       Rack plugin slug.
+
+    .. attribute :: model
+
+       Rack module slug.
+
+    .. attribute :: data
+
+       Module-specific state for boundary validation.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    id: int
+    plugin: str
+    model: str
+    data: object = None
+
+
+class _RackPatch(BaseModel):
+    """Validated module list from the committed Cardinal patch.
+
+    .. attribute :: model_config
+
+       Strict parsing configuration.
+
+    .. attribute :: modules
+
+       Modules embedded in the patch.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    modules: list[_RackModule]
+
+
+def _read_rack_patch() -> _RackPatch:
     preset = Path(plugin_state_paths["cardinal"]).read_bytes()
     encoded_patch = preset.split(b"patch\0", 1)[1].split(b"\0", 1)[0]
     archive = subprocess.run(  # noqa: S603 — fixed zstd decoder and in-memory input
@@ -59,7 +151,7 @@ def _read_rack_patch() -> dict[str, Any]:
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as patch_archive:
         patch_file = patch_archive.extractfile("./patch.json")
         assert patch_file is not None
-        return json.loads(patch_file.read())
+        return _RackPatch.model_validate_json(patch_file.read())
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +160,8 @@ def cardinal_renderer() -> PedalboardRenderer:
 
     :returns: Renderer with the Cardinal patch loaded.
     """
+    if not Path(_PLUGIN_PATH).exists():
+        pytest.skip(f"Cardinal bundle not found at {_PLUGIN_PATH}")
     plugin = load_plugin(_PLUGIN_PATH)
     load_preset(plugin, plugin_state_paths["cardinal"])
     return PedalboardRenderer(
@@ -110,32 +204,26 @@ def test_cardinal_preset_exposes_every_curated_host_slot(
     """
     plugin = cardinal_renderer.plugin
     assert plugin is not None
-    assert set(CARDINAL_HOST_PARAMETER_TARGETS) == set(
-        param_specs["cardinal"].synth_param_names
-    )
+    assert set(CARDINAL_HOST_PARAMETER_TARGETS) == set(param_specs["cardinal"].synth_param_names)
     assert set(CARDINAL_HOST_PARAMETER_TARGETS).issubset(getattr(plugin, "parameters"))
 
 
 def test_cardinal_preset_maps_every_curated_slot_to_expected_rack_control() -> None:
     """The opaque preset maps all curated slots to the documented module controls."""
     patch = _read_rack_patch()
-    modules = {
-        module["id"]: (module["plugin"], module["model"])
-        for module in patch["modules"]
-    }
+    modules = {module.id: (module.plugin, module.model) for module in patch.modules}
     host_map_module = next(
-        module for module in patch["modules"] if module["model"] == "HostParametersMap"
+        module for module in patch.modules if module.model == "HostParametersMap"
     )
+    host_map = _HostParameterMapData.model_validate(host_map_module.data)
     actual = {
-        f"parameter_{mapping['hostParamId'] + 1}_v": (
-            CARDINAL_HOST_PARAMETER_TARGETS[
-                f"parameter_{mapping['hostParamId'] + 1}_v"
-            ],
-            *modules[mapping["moduleId"]],
-            mapping["paramId"],
+        f"parameter_{mapping.host_param_id + 1}_v": (
+            CARDINAL_HOST_PARAMETER_TARGETS[f"parameter_{mapping.host_param_id + 1}_v"],
+            *modules[mapping.module_id],
+            mapping.param_id,
         )
-        for mapping in host_map_module["data"]["maps"]
-        if mapping["hostParamId"] < len(CARDINAL_HOST_PARAMETER_TARGETS)
+        for mapping in host_map.maps
+        if mapping.host_param_id < len(CARDINAL_HOST_PARAMETER_TARGETS)
     }
 
     assert actual == _EXPECTED_HOST_PARAMETER_MAP

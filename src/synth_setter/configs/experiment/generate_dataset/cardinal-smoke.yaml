@@ -1,6 +1,6 @@
 # @package _global_
 
-# Production completion signal for Cardinal onboarding: one real shard per split.
+# Production completion signal for Cardinal onboarding.
 defaults:
   - override /datamodule: vst
   - override /render: cardinal

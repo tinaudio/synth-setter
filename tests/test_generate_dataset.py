@@ -1426,6 +1426,9 @@ def test_cardinal_smoke_generates_and_finalizes_real_r2_dataset(
                 assert audio.shape == (2, 176_400)
                 assert mel.shape == (2, 128, 401)
                 assert params.shape == (13,)
+                assert audio.dtype == np.float16
+                assert mel.dtype == np.float32
+                assert params.dtype == np.float32
                 assert np.isfinite(audio).all()
                 assert np.isfinite(mel).all()
                 assert np.isfinite(params).all()
