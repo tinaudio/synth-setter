@@ -179,6 +179,36 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
         raise ValueError(f"unparsable materialize sidecar {manifest_path}: {exc}") from exc
 
 
+def _manifest_matches_request(
+    manifest: MaterializeManifest,
+    requested_hash: str,
+    resolved_txid: str | None,
+) -> bool:
+    """Return whether a sidecar covers the request and selected source identity.
+
+    :param manifest: Parsed sidecar manifest.
+    :param requested_hash: Hash of the current materialization request.
+    :param resolved_txid: Current source transaction for an unpinned request.
+    :returns: Whether the manifest is internally sound and current.
+    """
+    stored_hash = request_hash(
+        manifest.source_uri,
+        manifest.txid,
+        manifest.resolved_version,
+        manifest.columns,
+        manifest.limit,
+    )
+    if manifest.txid is not None:
+        source_matches = manifest.resolved_txid in (None, manifest.txid)
+    else:
+        source_matches = manifest.resolved_txid == resolved_txid
+    return (
+        manifest.request_hash == stored_hash
+        and manifest.request_hash == requested_hash
+        and source_matches
+    )
+
+
 def _reuse_or_raise(
     dest_path: Path,
     *,
@@ -214,26 +244,11 @@ def _reuse_or_raise(
             f"({manifest_path}); delete the dataset and re-materialize"
         )
     manifest = _read_manifest(manifest_path)
-    stored_hash = request_hash(
-        manifest.source_uri,
-        manifest.txid,
-        manifest.resolved_version,
-        manifest.columns,
-        manifest.limit,
-    )
     requested_version = (
         manifest.resolved_version if resolved_version is None else resolved_version
     )
     requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    if txid is not None:
-        source_changed = manifest.resolved_txid not in (None, txid)
-    else:
-        source_changed = manifest.resolved_txid != resolved_txid
-    if (
-        manifest.request_hash != stored_hash
-        or manifest.request_hash != requested_hash
-        or source_changed
-    ):
+    if not _manifest_matches_request(manifest, requested_hash, resolved_txid):
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
             f"for source={manifest.source_uri!r} txid={manifest.txid!r} "

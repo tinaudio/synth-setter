@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import hydra
 import lance
@@ -140,6 +141,33 @@ class TestMaterializeInitValidation:
             LanceVSTDataModule(
                 dataset_root=tmp_path,
                 download_dataset_row_limit=100,
+                param_spec_name=_PARAM_SPEC,
+            )
+
+    def test_init_boolean_row_limit_raises(self, tmp_path: Path) -> None:
+        """A boolean is not accepted as an integer row limit.
+
+        :param tmp_path: Local dataset root.
+        """
+        with pytest.raises(ValueError, match="download_dataset_row_limit"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                download_dataset_root_uri="r2://experiments/data/ds",
+                download_dataset_row_limit=cast(int, True),
+                param_spec_name=_PARAM_SPEC,
+            )
+
+    def test_init_numeric_txid_raises(self, tmp_path: Path) -> None:
+        """Transaction identifiers must be strings at the config boundary.
+
+        :param tmp_path: Local dataset root.
+        """
+        txids = cast(dict[str, str], {"train": 1, "val": 2, "test": 3})
+        with pytest.raises(ValueError, match="download_dataset_txids"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                download_dataset_root_uri="r2://experiments/data/ds",
+                download_dataset_txids=txids,
                 param_spec_name=_PARAM_SPEC,
             )
 

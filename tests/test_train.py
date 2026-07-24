@@ -473,8 +473,11 @@ def test_train_row_limited_file_uri_hydration_without_txids(
         cfg_train_lance.datamodule.num_workers = 0
 
     HydraConfig().set_config(cfg_train_lance)
-    _, object_dict = train(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
 
+    assert object_dict["trainer"].global_step > 0
+    assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     try:
@@ -483,6 +486,9 @@ def test_train_row_limited_file_uri_hydration_without_txids(
     finally:
         datamodule.teardown("fit")
     assert batch["params"].shape[0] == 2
+    assert torch.isfinite(batch["params"]).all()
+    assert batch["mel_spec"] is not None
+    assert torch.isfinite(batch["mel_spec"]).all()
 
 
 @pytest.mark.dataloader_multiprocess
