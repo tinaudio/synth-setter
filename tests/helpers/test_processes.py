@@ -24,6 +24,25 @@ def _report_pid_then_stall(pid_file: str, out: Queue[str]) -> None:
     signal.pause()
 
 
+def _fail_before_reporting(_out: Queue[object]) -> None:
+    """Exit before publishing a result.
+
+    :param _out: Unused result queue supplied by the process collector.
+    :raises RuntimeError: Always, to model a worker-side failure.
+    """
+    raise RuntimeError("worker failed")
+
+
+def test_collect_process_results_worker_failure_before_result_raises_promptly() -> None:
+    """A worker failure is reported without waiting for the result budget."""
+    with pytest.raises(RuntimeError, match="worker processes failed"):
+        collect_process_results(
+            _fail_before_reporting,
+            [()],
+            result_timeout_s=1.0,
+        )
+
+
 def test_collect_process_results_worker_stalls_after_result_terminates_process(
     tmp_path: Path,
 ) -> None:
