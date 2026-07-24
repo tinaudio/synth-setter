@@ -10,12 +10,14 @@ import pytest
 import sky
 
 from synth_setter.pipeline.compute_task import (
+    apply_tier_filter,
     build_task_doc,
     compute_option_names,
     load_compute_option,
     load_compute_script,
 )
 from synth_setter.pipeline.schemas.compute import ComputeConfig, ComputeResources
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier
 from synth_setter.resources import configs_dir
 
 
@@ -322,3 +324,90 @@ class TestComputeOptionCompose:
         compute = load_compute_option("runpod/smoke")
         task = _build_task(compute, cmd="echo hi")
         assert len(list(task.resources)) == 7
+
+
+class TestApplyTierFilter:
+    """GPU tiers narrow validated compute options without mutating them."""
+
+    def test_apply_tier_filter_any_returns_equal_new_config(self) -> None:
+        """The passthrough tier preserves values in a distinct model."""
+        compute = _runpod_compute()
+
+        filtered = apply_tier_filter(compute, GpuTier.ANY)
+
+        assert filtered == compute
+        assert filtered is not compute
+
+    def test_apply_tier_filter_low_narrows_multi_sku_pool_to_consumers(self) -> None:
+        """The low tier removes workstation and datacenter accelerators."""
+        compute = _runpod_compute(
+            resources=[
+                ComputeResources(
+                    cloud="runpod",
+                    accelerators={"RTX3090": 1, "A40": 1, "H100-SXM": 1},
+                )
+            ]
+        )
+
+        filtered = apply_tier_filter(compute, GpuTier.LOW)
+
+        assert filtered.resources[0].accelerators == {"RTX3090": 1}
+        assert compute.resources[0].accelerators == {
+            "RTX3090": 1,
+            "A40": 1,
+            "H100-SXM": 1,
+        }
+
+    def test_apply_tier_filter_empty_intersection_raises_with_option_and_tier(self) -> None:
+        """A tier incompatible with an alternative fails before task construction."""
+        compute = _runpod_compute(
+            name="datacenter-only",
+            resources=[ComputeResources(cloud="runpod", accelerators={"H100-SXM": 1})],
+        )
+
+        with pytest.raises(ValueError, match=r"datacenter-only.*tier=low"):
+            apply_tier_filter(compute, GpuTier.LOW)
+
+    def test_apply_tier_filter_unknown_sku_raises_naming_sku(self) -> None:
+        """A classified tier rejects a pool SKU missing from the tier map."""
+        compute = _runpod_compute(
+            resources=[ComputeResources(cloud="runpod", accelerators={"FutureGPU": 1})]
+        )
+
+        with pytest.raises(ValueError, match="FutureGPU"):
+            apply_tier_filter(compute, GpuTier.LOW)
+
+    def test_apply_tier_filter_multiple_resources_filters_each_pool(self) -> None:
+        """Every GPU resource alternative is narrowed independently."""
+        compute = _runpod_compute(
+            resources=[
+                ComputeResources(
+                    cloud="runpod",
+                    accelerators={"RTX3080": 1, "A40": 1},
+                ),
+                ComputeResources(
+                    cloud="vast",
+                    accelerators={"RTX4090": 2, "RTX6000-Ada": 2},
+                ),
+            ]
+        )
+
+        filtered = apply_tier_filter(compute, GpuTier.LOW)
+
+        assert [resource.accelerators for resource in filtered.resources] == [
+            {"RTX3080": 1},
+            {"RTX4090": 2},
+        ]
+
+    def test_apply_tier_filter_runpod_smoke_low_keeps_consumer_pool(self) -> None:
+        """The real RunPod smoke option composes and narrows to consumer GPUs."""
+        compute = load_compute_option("runpod/smoke")
+
+        filtered = apply_tier_filter(compute, GpuTier.LOW)
+
+        assert filtered.resources[0].accelerators == {
+            "RTX3070": 1,
+            "RTX3080": 1,
+            "RTX3090": 1,
+            "RTX4090": 1,
+        }

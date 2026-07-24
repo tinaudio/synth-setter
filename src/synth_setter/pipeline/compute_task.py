@@ -7,6 +7,7 @@ from functools import cache
 from importlib.abc import Traversable
 
 from synth_setter.pipeline.schemas.compute import ComputeConfig
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier, filter_gpu_skus
 from synth_setter.resources import configs_dir
 
 WORKER_CMD_SENTINEL = "${WORKER_CMD}"
@@ -88,6 +89,41 @@ def load_compute_option(name: str) -> ComputeConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"compute option {name!r} must compose to a mapping")
     return ComputeConfig(**{str(k): v for k, v in raw.items()})
+
+
+def apply_tier_filter(compute: ComputeConfig, tier: GpuTier) -> ComputeConfig:
+    """Return a copy of a compute option narrowed to one cumulative GPU tier.
+
+    CPU-only resource alternatives have no accelerator pool to filter.
+
+    :param compute: Validated compute option to narrow.
+    :param tier: Maximum GPU class to allow.
+    :returns: New compute config containing the filtered resource alternatives.
+    :raises ValueError: A GPU pool contains an unclassified SKU or has no
+        accelerator allowed by ``tier``.
+    """
+    if tier is GpuTier.ANY:
+        return compute.model_copy(deep=True)
+
+    filtered_resources = []
+    for resource in compute.resources:
+        if resource.accelerators is None:
+            filtered_resources.append(resource.model_copy(deep=True))
+            continue
+
+        filtered_skus = filter_gpu_skus(resource.accelerators, tier)
+        if not filtered_skus:
+            raise ValueError(
+                f"compute option {compute.name!r} has no accelerators allowed by tier={tier.value}"
+            )
+        accelerators = {
+            sku: count for sku, count in resource.accelerators.items() if sku in filtered_skus
+        }
+        filtered_resources.append(
+            resource.model_copy(update={"accelerators": accelerators}, deep=True)
+        )
+
+    return compute.model_copy(update={"resources": filtered_resources}, deep=True)
 
 
 def resolve_run_block(compute: ComputeConfig, cmd: str | None) -> str:
