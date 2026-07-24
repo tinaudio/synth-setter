@@ -47,7 +47,7 @@ def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.infra
 def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """integration_r2 item gets a skip marker with a credential hint when R2 is absent.
+    """integration_r2 item gets a probe hint when R2 is absent.
 
     :param monkeypatch: rebinds ``_R2_AVAILABLE`` on ``conftest_module``.
     """
@@ -55,7 +55,7 @@ def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPa
     item = _FakeItem({"integration_r2": pytest.mark.integration_r2})
     conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
     assert len(item.added_markers) == 1
-    assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" in item.added_markers[0].kwargs["reason"]
+    assert "rclone lsd r2:" in item.added_markers[0].kwargs["reason"]
 
 
 @pytest.mark.infra
@@ -72,7 +72,7 @@ def test_requires_vst_item_not_skipped_when_vst_present(monkeypatch: pytest.Monk
 
 @pytest.mark.infra
 def test_integration_r2_item_not_skipped_when_r2_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    """integration_r2 item receives no skip marker when R2 credentials are present.
+    """integration_r2 item receives no skip marker when R2 is reachable.
 
     :param monkeypatch: rebinds ``_R2_AVAILABLE`` on ``conftest_module``.
     """
