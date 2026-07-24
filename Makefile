@@ -233,29 +233,40 @@ if [ -e "$$DEST" ]; then \
 	exit 0; \
 fi; \
 OS=$$(uname -s); ARCH=$$(uname -m); \
-if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
+if [ "$$OS" != "Linux" ]; then \
+	echo "skipping $(1): Linux assets only (host: $$OS/$$ARCH)."; \
 	exit 0; \
 fi; \
+case "$$ARCH" in \
+	x86_64) URL="$(2)"; SHA256="$(3)" ;; \
+	aarch64|arm64) \
+		if [ -z "$(4)" ]; then \
+			echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; exit 0; \
+		fi; \
+		URL="$(4)"; SHA256="$(5)" ;; \
+	*) echo "skipping $(1): unsupported Linux architecture $$ARCH."; exit 0 ;; \
+esac; \
 CACHE="$(HOME)/.cache/synth-setter"; \
-ASSET="$(notdir $(2))"; \
+ASSET="$${URL##*/}"; \
 mkdir -p "$$CACHE" plugins; \
 ARCHIVE="$$CACHE/$$ASSET"; \
 if [ ! -f "$$ARCHIVE" ]; then \
-	echo "Downloading $(2)"; \
-	curl -fSL -o "$$ARCHIVE" "$(2)"; \
+	echo "Downloading $$URL"; \
+	curl -fSL -o "$$ARCHIVE" "$$URL"; \
 else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \
 command -v sha256sum >/dev/null 2>&1 || { \
 	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
+echo "$$SHA256  $$ARCHIVE" | sha256sum -c - || { \
 	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
 TMP="$$(mktemp -d)"; \
 trap 'rm -rf "$$TMP"' EXIT; \
 case "$$ASSET" in \
 	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
-	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
+	*.tgz|*.tar.gz) \
+		if [ -n "$(6)" ]; then tar -xzf "$$ARCHIVE" -C "$$TMP" "$(6)"; \
+		else tar -xzf "$$ARCHIVE" -C "$$TMP"; fi ;; \
 	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
 esac; \
 SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
@@ -267,40 +278,7 @@ echo "Installed $$DEST"
 endef
 
 install-cardinal: ## Download Cardinal Synth VST3 into plugins/ (skipped if already present)
-	@set -e; \
-	DEST="plugins/CardinalSynth.vst3"; \
-	if [ -e "$$DEST" ]; then \
-		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-		exit 0; \
-	fi; \
-	OS=$$(uname -s); ARCH=$$(uname -m); \
-	if [ "$$OS" != "Linux" ]; then \
-		echo "skipping Cardinal Synth: Linux assets only (host: $$OS/$$ARCH)."; \
-		exit 0; \
-	fi; \
-	case "$$ARCH" in \
-		x86_64) ASSET="$(CARDINAL_ASSET_X86_64)"; SHA256="$(CARDINAL_SHA256_X86_64)" ;; \
-		aarch64|arm64) ASSET="$(CARDINAL_ASSET_AARCH64)"; SHA256="$(CARDINAL_SHA256_AARCH64)" ;; \
-		*) echo "skipping Cardinal Synth: unsupported Linux architecture $$ARCH."; exit 0 ;; \
-	esac; \
-	CACHE="$(HOME)/.cache/synth-setter"; \
-	ARCHIVE="$$CACHE/$$ASSET"; \
-	mkdir -p "$$CACHE" plugins; \
-	if [ ! -f "$$ARCHIVE" ]; then \
-		echo "Downloading Cardinal $(CARDINAL_VERSION) ($$ASSET)"; \
-		curl -fSL -o "$$ARCHIVE" "https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$$ASSET"; \
-	else \
-		echo "Using cached $$ARCHIVE"; \
-	fi; \
-	command -v sha256sum >/dev/null 2>&1 || { \
-		echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-	echo "$$SHA256  $$ARCHIVE" | sha256sum -c - || { \
-		echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
-	TMP="$$(mktemp -d)"; \
-	trap 'rm -rf "$$TMP"' EXIT; \
-	tar -xzf "$$ARCHIVE" -C "$$TMP" CardinalSynth.vst3; \
-	mv "$$TMP/CardinalSynth.vst3" "$$DEST"; \
-	echo "Installed $$DEST"
+	$(call install_fetched_synth,CardinalSynth,https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_X86_64),$(CARDINAL_SHA256_X86_64),https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_AARCH64),$(CARDINAL_SHA256_AARCH64),CardinalSynth.vst3)
 
 install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256))

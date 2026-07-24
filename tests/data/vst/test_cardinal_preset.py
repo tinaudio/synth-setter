@@ -119,7 +119,7 @@ class _RackModule(BaseModel):
     id: int
     plugin: str
     model: str
-    data: object = None
+    data: object | None = None
 
 
 class _RackPatch(BaseModel):
@@ -227,6 +227,51 @@ def test_cardinal_preset_maps_every_curated_slot_to_expected_rack_control() -> N
     }
 
     assert actual == _EXPECTED_HOST_PARAMETER_MAP
+
+
+def test_cardinal_reused_instance_is_independent_of_render_history(
+    cardinal_renderer: PedalboardRenderer,
+) -> None:
+    """An intervening patch does not change audio for identical parameters.
+
+    :param cardinal_renderer: Renderer with the Cardinal patch loaded.
+    """
+    first = _render(cardinal_renderer, parameter_1_v=0.44)
+    _render(cardinal_renderer, parameter_1_v=0.56)
+    repeated = _render(cardinal_renderer, parameter_1_v=0.44)
+
+    np.testing.assert_array_equal(first, repeated)
+
+
+@pytest.mark.parametrize(
+    ("parameter_name", "low", "high"),
+    [
+        ("parameter_2_v", 0.1, 0.9),
+        ("parameter_4_v", 0.1, 0.65),
+        ("parameter_5_v", 0.35, 1.0),
+        ("parameter_6_v", 0.1, 0.65),
+        ("parameter_7_v", 0.6, 1.0),
+        ("parameter_9_v", 0.0, 1.0),
+    ],
+)
+def test_cardinal_remaining_mapped_control_changes_audio(
+    cardinal_renderer: PedalboardRenderer,
+    parameter_name: str,
+    low: float,
+    high: float,
+) -> None:
+    """Every remaining curated host slot audibly affects the routed signal.
+
+    :param cardinal_renderer: Renderer with the Cardinal patch loaded.
+    :param parameter_name: Cardinal host slot under test.
+    :param low: Lower raw host value.
+    :param high: Upper raw host value.
+    """
+    low_audio = _render(cardinal_renderer, **{parameter_name: low})
+    high_audio = _render(cardinal_renderer, **{parameter_name: high})
+
+    difference_rms = np.sqrt(np.mean(np.square(low_audio - high_audio)))
+    assert difference_rms > 0.01
 
 
 def test_cardinal_frequency_mapping_moves_spectral_peak_upward(

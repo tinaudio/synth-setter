@@ -421,6 +421,30 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
     GlobalHydra.instance().clear()
 
 
+def _compose_dataset_cfg(
+    tmp_path: Path,
+    overrides: list[str],
+) -> Iterator[DictConfig]:
+    """Compose a dataset config with temporary paths and isolated Hydra state.
+
+    :param tmp_path: Per-test output/work/log root.
+    :param overrides: Hydra overrides selecting the dataset experiment and renderer.
+    :yields DictConfig: Composed config with paths pinned under ``tmp_path``.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="dataset", overrides=overrides)
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    try:
+        yield cfg
+    finally:
+        GlobalHydra.instance().clear()
+
+
 @pytest.fixture(scope="function")
 def cfg_dataset_cardinal(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose the Cardinal smoke experiment with temporary local paths.
@@ -428,20 +452,10 @@ def cfg_dataset_cardinal(tmp_path: Path) -> Iterator[DictConfig]:
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: Cardinal smoke config with paths pinned under ``tmp_path``.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/cardinal-smoke"],
-        )
-        with open_dict(cfg):
-            _set_workspace_root(cfg)
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
+    yield from _compose_dataset_cfg(
+        tmp_path,
+        ["experiment=generate_dataset/cardinal-smoke"],
+    )
 
 
 @pytest.fixture(scope="function")
@@ -458,20 +472,10 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     :yields DictConfig: ``render=obxf`` cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
-        )
-        with open_dict(cfg):
-            _set_workspace_root(cfg)
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
+    yield from _compose_dataset_cfg(
+        tmp_path,
+        ["experiment=generate_dataset/smoke-shard", "render=obxf"],
+    )
 
 
 @pytest.fixture(scope="function")
@@ -483,20 +487,10 @@ def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
     :yields DictConfig: torchsynth smoke cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/torchsynth-smoke"],
-        )
-        with open_dict(cfg):
-            _set_workspace_root(cfg)
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
+    yield from _compose_dataset_cfg(
+        tmp_path,
+        ["experiment=generate_dataset/torchsynth-smoke"],
+    )
 
 
 @pytest.fixture(scope="function")
@@ -513,20 +507,10 @@ def cfg_dataset_default_cadence(tmp_path: Path) -> Iterator[DictConfig]:
     :yields DictConfig: No-cadence-override cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/ci-materialize-test"],
-        )
-        with open_dict(cfg):
-            _set_workspace_root(cfg)
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
+    yield from _compose_dataset_cfg(
+        tmp_path,
+        ["experiment=generate_dataset/ci-materialize-test"],
+    )
 
 
 @pytest.fixture(scope="function")
@@ -538,20 +522,10 @@ def cfg_dataset_dawdreamer(tmp_path: Path) -> Iterator[DictConfig]:
     :yields DictConfig: DawDreamer smoke cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="dataset",
-            overrides=["experiment=generate_dataset/surge-xt-dawdreamer-smoke"],
-        )
-        with open_dict(cfg):
-            _set_workspace_root(cfg)
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.work_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-    yield cfg
-
-    GlobalHydra.instance().clear()
+    yield from _compose_dataset_cfg(
+        tmp_path,
+        ["experiment=generate_dataset/surge-xt-dawdreamer-smoke"],
+    )
 
 
 @pytest.fixture(scope="package")
