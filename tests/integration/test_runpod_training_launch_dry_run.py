@@ -12,9 +12,9 @@ import sky
 import yaml
 from sky.volumes import Volume
 
-from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
+from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.skypilot_launch import load_launch_config
+from synth_setter.pipeline.skypilot_launch import _override_image_id, load_launch_config
 
 _REPO_ROOT = Path(__file__).parents[2]
 _LAUNCH_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
@@ -28,12 +28,15 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     """
     assert launch_config.compute is not None
     assert launch_config.cmd is not None
-    return build_sky_task(
-        launch_config.compute,
-        cmd=launch_config.cmd,
-        worker_image=f"tinaudio/synth-setter:{launch_config.worker_image_tag}",
-        network_volume=launch_config.network_volume,
+    task = sky.Task.from_yaml_config(
+        build_task_doc(
+            launch_config.compute,
+            cmd=launch_config.cmd,
+            network_volume=launch_config.network_volume,
+        )
     )
+    _override_image_id(task, f"tinaudio/synth-setter:{launch_config.worker_image_tag}")
+    return task
 
 
 @pytest.mark.parametrize(
@@ -134,11 +137,12 @@ def test_volume_options_install_operator_ssh_keys(compute_option: str) -> None:
     :param compute_option: Compute option name under ``skypilot_launch/compute``.
     """
     compute = load_compute_option(compute_option)
-    task = build_sky_task(
-        compute,
-        cmd="echo probe",
-        worker_image="tinaudio/synth-setter:test-tag",
-        network_volume="ss-datasets-us-ca-2",
+    task = sky.Task.from_yaml_config(
+        build_task_doc(
+            compute,
+            cmd="echo probe",
+            network_volume="ss-datasets-us-ca-2",
+        )
     )
     assert task.setup is not None
     assert "OPERATOR_SSH_PUBKEYS_B64" in task.setup

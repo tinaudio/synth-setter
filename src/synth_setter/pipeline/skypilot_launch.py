@@ -11,11 +11,9 @@ whose ``compute:`` field names a ``skypilot_launch/compute`` Hydra option.
 
 Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``,
 ``oci/*``, or ``local/*`` (kubernetes-via-``sky local up``) compute options;
-``synth_setter.pipeline.compute_task.build_sky_task`` turns the validated
-option into a ``sky.Task`` via SDK constructors.
-Worker env is passed into each task at construction via
-``build_sky_task(..., envs=...)`` (#749 explains why
-`task.update_file_mounts` is avoided), and each rank's task is submitted to
+``synth_setter.pipeline.compute_task.build_task_doc`` turns the validated
+option into the dictionary consumed by ``sky.Task.from_yaml_config``.
+Worker env is applied with ``task.update_envs`` before each rank's task is submitted to
 the SkyPilot managed-jobs controller — see
 https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch
 
@@ -68,7 +66,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.compute_task import (
-    build_sky_task,
+    build_task_doc,
     load_compute_option,
     resolve_run_block,
     resolve_volumes,
@@ -475,6 +473,21 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
+def _override_image_id(task: sky.Task, worker_image: str) -> None:
+    """Pin a Docker image on every non-OCI resource alternative."""
+    from sky.clouds import OCI
+
+    if not task.resources:
+        return
+
+    docker_ref = f"docker:{worker_image}"
+    resources = [
+        resource if isinstance(resource.cloud, OCI) else resource.copy(image_id=docker_ref)
+        for resource in task.resources
+    ]
+    task.set_resources(type(task.resources)(resources))
+
+
 def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:
     """Tail-mode runner: tail logs per rank, cancel every job in finally."""
     num_workers = len(job_names)
@@ -565,7 +578,7 @@ def _launch_one_rank(
     cmd: str,
     network_volume: str | None,
 ) -> int:
-    """Submit one rank, building the ``sky.Task`` via ``build_sky_task``.
+    """Submit one rank from a native SkyPilot task document.
 
     :param rank: This rank's index into ``job_names``.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
@@ -587,13 +600,11 @@ def _launch_one_rank(
         _WORKER_IMAGE_ENV: worker_image,
         _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
-    task = build_sky_task(
-        compute,
-        cmd=cmd,
-        worker_image=worker_image,
-        envs=env_for_rank,
-        network_volume=network_volume,
-    )
+    task_doc = build_task_doc(compute, cmd=cmd, network_volume=network_volume)
+    task = sky.Task.from_yaml_config(task_doc)
+    if compute.image_delivery != "docker-in-run":
+        _override_image_id(task, worker_image)
+    task.update_envs(env_for_rank)
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
     launch_request_id = sky.jobs.launch(task, name=job_name)
     launch_result = sky.stream_and_get(launch_request_id)

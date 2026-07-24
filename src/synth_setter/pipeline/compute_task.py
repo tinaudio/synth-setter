@@ -1,23 +1,13 @@
-"""Programmatic ``sky.Task`` construction from a validated ``ComputeConfig``.
-
-Replaces the legacy raw-YAML compute templates: option YAMLs live in the
-``skypilot_launch/compute`` Hydra group, bash lives in ``compute/scripts/*.sh``
-package data, and this module assembles the task via ``sky.Task`` /
-``sky.Resources`` constructors (no ``from_yaml_config`` on a raw file).
-"""
+"""Build SkyPilot task documents from validated Hydra compute options."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from functools import cache
 from importlib.abc import Traversable
-from typing import TYPE_CHECKING
 
-from synth_setter.pipeline.schemas.compute import ComputeConfig, ComputeResources
+from synth_setter.pipeline.schemas.compute import ComputeConfig
 from synth_setter.resources import configs_dir
-
-if TYPE_CHECKING:
-    import sky
 
 WORKER_CMD_SENTINEL = "${WORKER_CMD}"
 
@@ -154,92 +144,40 @@ def resolve_volumes(compute: ComputeConfig, network_volume: str | None) -> dict[
     return {compute.mount_network_volume: network_volume}
 
 
-def _sky_resources(entry: ComputeResources, image_id: str | None) -> list[sky.Resources]:
-    """Expand one resources entry into constructor-built ``sky.Resources``.
-
-    A multi-key ``accelerators`` mapping expands into one ``sky.Resources``
-    per accelerator — mirroring ``sky.Resources.from_yaml_config``, which
-    treats such a mapping as any-of (the bare constructor would keep the dict
-    on a single Resources with different launch semantics).
-
-    :param entry: Validated resources entry.
-    :param image_id: Resolved ``docker:<image>`` pin, or ``None``.
-    :returns: One ``sky.Resources`` per accelerator alternative.
-    """
-    import sky
-    from sky.utils.registry import CLOUD_REGISTRY
-
-    cloud = CLOUD_REGISTRY.from_str(entry.cloud)
-    accelerator_options: list[dict[str, int | float] | None] = (
-        [{accel: count} for accel, count in entry.accelerators.items()]
-        if entry.accelerators
-        else [None]
-    )
-    overrides = (
-        {"kubernetes": {"pod_config": entry.kubernetes_pod_config}}
-        if entry.kubernetes_pod_config is not None
-        else None
-    )
-    return [
-        sky.Resources(
-            cloud=cloud,
-            accelerators=accelerators,
-            instance_type=entry.instance_type,
-            cpus=entry.cpus,
-            memory=entry.memory,
-            disk_size=entry.disk_size,
-            use_spot=entry.use_spot,
-            image_id=image_id,
-            _cluster_config_overrides=overrides,
-        )
-        for accelerators in accelerator_options
-    ]
-
-
-def build_sky_task(
+def build_task_doc(
     compute: ComputeConfig,
     *,
     cmd: str | None,
-    worker_image: str | None,
-    envs: Mapping[str, str] | None = None,
     network_volume: str | None = None,
-) -> sky.Task:
-    """Build a ``sky.Task`` from a compute option via SDK constructors.
+) -> dict[str, object]:
+    """Build a SkyPilot task document with scripts and volume names resolved.
 
-    :param compute: Validated compute option.
-    :param cmd: Launcher-injected worker command; forbidden with a
-        ``run_script`` option, required otherwise.
-    :param worker_image: ``repo:tag`` image pinned as ``docker:<image>`` into
-        every resources entry (skipped for ``docker-in-run`` delivery, where
-        the run wrapper consumes ``WORKER_IMAGE`` from env); ``None`` keeps
-        any static ``image_id`` pins.
-    :param envs: Task environment, per-rank keys included.
-    :param network_volume: SkyPilot volume name mounted at the option's
-        ``mount_network_volume`` path.
-    :returns: Fully constructed task ready for ``sky.jobs.launch``.
+    :param compute: Validated Hydra compute option.
+    :param cmd: Worker command required by injected-command options.
+    :param network_volume: Volume name paired with the option's mount path.
+    :returns: Mapping accepted by ``sky.Task.from_yaml_config``.
     """
-    import sky
+    task_doc = compute.model_dump(exclude_none=True)
+    resources = task_doc.pop("resources")
+    assert isinstance(resources, list)
 
-    run = resolve_run_block(compute, cmd)
+    task_doc.pop("mount_network_volume", None)
+    image_delivery = task_doc.pop("image_delivery")
+    setup_scripts = task_doc.pop("setup_scripts")
+    task_doc.pop("run_wrapper", None)
+    task_doc.pop("run_script", None)
+
+    if image_delivery == "docker-in-run":
+        for resource in resources:
+            resource.pop("image_id", None)
+    task_doc["resources"] = resources[0] if len(resources) == 1 else {"any_of": resources}
+
+    setup = "".join(load_compute_script(script) for script in setup_scripts)
+    if setup:
+        task_doc["setup"] = setup
+    task_doc["run"] = resolve_run_block(compute, cmd)
+
     volumes = resolve_volumes(compute, network_volume)
-    setup = "".join(load_compute_script(script) for script in compute.setup_scripts)
-
-    def image_id_for(entry: ComputeResources) -> str | None:
-        if compute.image_delivery == "docker-in-run":
-            return None
-        return f"docker:{worker_image}" if worker_image is not None else entry.image_id
-
-    resources_list = [
-        res for entry in compute.resources for res in _sky_resources(entry, image_id_for(entry))
-    ]
-
-    task = sky.Task(
-        run=run,
-        setup=setup or None,
-        envs=dict(envs) if envs else None,
-        file_mounts=dict(compute.file_mounts) if compute.file_mounts else None,
-        volumes=dict(volumes) if volumes else None,
-    )
-    # A set is SkyPilot's any-of (a list would be an ordered preference).
-    task.set_resources(resources_list[0] if len(resources_list) == 1 else set(resources_list))
-    return task
+    if volumes:
+        task_doc["volumes"] = volumes
+    return task_doc

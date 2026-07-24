@@ -1,19 +1,40 @@
-"""Tests for ``build_sky_task`` and the ``skypilot_launch/compute`` option loader."""
+"""Tests for SkyPilot task documents and compute-option loading."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
+import sky
 
 from synth_setter.pipeline.compute_task import (
-    build_sky_task,
+    build_task_doc,
     compute_option_names,
     load_compute_option,
     load_compute_script,
 )
 from synth_setter.pipeline.schemas.compute import ComputeConfig, ComputeResources
 from synth_setter.resources import configs_dir
+
+
+def _build_task(
+    compute: ComputeConfig,
+    *,
+    cmd: str | None,
+    network_volume: str | None = None,
+) -> sky.Task:
+    """Parse a generated task document through SkyPilot's public loader.
+
+    :param compute: Validated compute option.
+    :param cmd: Worker command for injected-command options.
+    :param network_volume: Optional network-volume name.
+    :returns: Parsed SkyPilot task.
+    """
+    return sky.Task.from_yaml_config(
+        build_task_doc(compute, cmd=cmd, network_volume=network_volume)
+    )
 
 
 def _runpod_compute(**overrides: object) -> ComputeConfig:
@@ -24,9 +45,7 @@ def _runpod_compute(**overrides: object) -> ComputeConfig:
     """
     kwargs: dict[str, object] = {
         "name": "test-runpod",
-        "resources": (
-            ComputeResources(cloud="runpod", accelerators={"RTX3090": 1}, disk_size=50),
-        ),
+        "resources": [ComputeResources(cloud="runpod", accelerators={"RTX3090": 1}, disk_size=50)],
     }
     kwargs.update(overrides)
     return ComputeConfig(**kwargs)  # type: ignore[arg-type]
@@ -52,24 +71,24 @@ class TestLoadComputeScript:
             load_compute_script("no-such-script.sh")
 
 
-class TestBuildSkyTaskRunBlock:
+class TestBuildTaskDocRunBlock:
     """Cmd / run_wrapper / run_script resolution preserves legacy failure semantics."""
 
     def test_cmd_becomes_run_block(self) -> None:
         """Cmd becomes run block."""
-        task = build_sky_task(_runpod_compute(), cmd="echo hello", worker_image="repo:tag")
+        task = _build_task(_runpod_compute(), cmd="echo hello")
         assert task.run == "echo hello"
 
     def test_run_script_with_cmd_raises(self) -> None:
         """Run script with cmd raises."""
         compute = _runpod_compute(run_script="debug-noop.sh")
         with pytest.raises(ValueError, match="cmd cannot be silently dropped"):
-            build_sky_task(compute, cmd="echo hello", worker_image="repo:tag")
+            _build_task(compute, cmd="echo hello")
 
     def test_run_script_without_cmd_ships_script_verbatim(self) -> None:
         """Run script without cmd ships script verbatim."""
         compute = _runpod_compute(run_script="debug-noop.sh")
-        task = build_sky_task(compute, cmd=None, worker_image="repo:tag")
+        task = _build_task(compute, cmd=None)
         assert task.run is not None
         assert "skypilot-debug job done" in task.run
 
@@ -78,12 +97,12 @@ class TestBuildSkyTaskRunBlock:
         oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
         compute = ComputeConfig(
             name="oci-cpu",
-            resources=(oci,),
+            resources=[oci],
             image_delivery="docker-in-run",
-            setup_scripts=("oci-install-docker.sh",),
+            setup_scripts=["oci-install-docker.sh"],
             run_wrapper="oci-docker-run.sh",
         )
-        task = build_sky_task(compute, cmd="echo hello && exec foo", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hello && exec foo")
         assert task.run is not None
         assert "${WORKER_CMD}" not in task.run
         assert 'bash -c "echo hello && exec foo"' in task.run
@@ -93,102 +112,69 @@ class TestBuildSkyTaskRunBlock:
         oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
         compute = ComputeConfig(
             name="oci-cpu",
-            resources=(oci,),
+            resources=[oci],
             image_delivery="docker-in-run",
             run_wrapper="oci-docker-run.sh",
         )
         with pytest.raises(ValueError, match="cmd"):
-            build_sky_task(compute, cmd=None, worker_image="repo:tag")
+            _build_task(compute, cmd=None)
 
     def test_no_run_source_and_no_cmd_raises(self) -> None:
         """No run source and no cmd raises."""
         with pytest.raises(ValueError, match="cmd"):
-            build_sky_task(_runpod_compute(), cmd=None, worker_image="repo:tag")
+            _build_task(_runpod_compute(), cmd=None)
 
 
-class TestBuildSkyTaskResources:
+class TestBuildTaskDocResources:
     """Resources construction matches SkyPilot's YAML any-of semantics."""
 
     def test_multi_key_accelerators_split_into_any_of_entries(self) -> None:
         """Multi key accelerators split into any of entries."""
         compute = _runpod_compute(
-            resources=(
+            resources=[
                 ComputeResources(
                     cloud="runpod", accelerators={"RTX3090": 1, "A40": 1}, disk_size=50
-                ),
-            )
+                )
+            ]
         )
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hi")
         accels = sorted(str(res.accelerators) for res in task.resources)
         assert accels == ["{'A40': 1}", "{'RTX3090': 1}"]
-
-    def test_image_pinned_as_docker_reference_on_every_entry(self) -> None:
-        """Image pinned as docker reference on every entry."""
-        task = build_sky_task(
-            _runpod_compute(), cmd="echo hi", worker_image="tinaudio/synth-setter:abc"
-        )
-        assert [res.image_id for res in task.resources] == [
-            {None: "docker:tinaudio/synth-setter:abc"}
-        ]
 
     def test_oci_docker_in_run_entries_get_no_image_id(self) -> None:
         """Oci docker in run entries get no image id."""
         oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
         compute = ComputeConfig(
             name="oci-cpu",
-            resources=(oci,),
+            resources=[oci],
             image_delivery="docker-in-run",
             run_wrapper="oci-docker-run.sh",
         )
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hi")
         assert [res.image_id for res in task.resources] == [None]
-
-    def test_no_worker_image_keeps_static_image_pin(self) -> None:
-        """No worker image keeps static image pin."""
-        compute = _runpod_compute(
-            resources=(
-                ComputeResources(
-                    cloud="runpod",
-                    accelerators={"RTX3090": 1},
-                    disk_size=50,
-                    image_id="docker:tinaudio/synth-setter:dev-snapshot",
-                ),
-            )
-        )
-        task = build_sky_task(compute, cmd="echo hi", worker_image=None)
-        assert [res.image_id for res in task.resources] == [
-            {None: "docker:tinaudio/synth-setter:dev-snapshot"}
-        ]
 
     def test_kubernetes_pod_config_round_trips_as_cluster_config_override(self) -> None:
         """Kubernetes pod config round trips as cluster config override."""
         pod_config: dict[str, object] = {"spec": {"containers": [{"imagePullPolicy": "Never"}]}}
         compute = ComputeConfig(
             name="local-kind",
-            resources=(
-                ComputeResources(
-                    cloud="kubernetes",
-                    cpus="1+",
-                    memory="4+",
-                    kubernetes_pod_config=pod_config,
-                ),
-            ),
+            config={"kubernetes": {"pod_config": pod_config}},
+            resources=[ComputeResources(cloud="kubernetes", cpus="1+", memory="4+")],
         )
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hi")
         rendered = task.to_yaml_config()["resources"]
         assert rendered["_cluster_config_overrides"] == {"kubernetes": {"pod_config": pod_config}}
 
 
-class TestBuildSkyTaskVolumesAndEnvs:
-    """Network-volume both-or-neither and env forwarding."""
+class TestBuildTaskDocVolumes:
+    """Network-volume validation and task-document fields."""
 
     def test_mount_with_volume_name_populates_task_volumes(self) -> None:
         """Mount with volume name populates task volumes."""
         compute = _runpod_compute(mount_network_volume="/workspace/network-volume")
-        task = build_sky_task(
+        task = _build_task(
             compute,
             cmd="echo hi",
-            worker_image="repo:tag",
             network_volume="ss-datasets-us-ca-2",
         )
         assert task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
@@ -197,37 +183,64 @@ class TestBuildSkyTaskVolumesAndEnvs:
         """Mount without volume name raises."""
         compute = _runpod_compute(mount_network_volume="/workspace/network-volume")
         with pytest.raises(ValueError, match="network_volume"):
-            build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+            _build_task(compute, cmd="echo hi")
 
     def test_volume_name_without_mount_raises(self) -> None:
         """Volume name without mount raises."""
         with pytest.raises(ValueError, match="mount_network_volume"):
-            build_sky_task(
-                _runpod_compute(), cmd="echo hi", worker_image="repo:tag", network_volume="vol-x"
-            )
-
-    def test_envs_are_forwarded_to_the_task(self) -> None:
-        """Envs are forwarded to the task."""
-        task = build_sky_task(
-            _runpod_compute(),
-            cmd="echo hi",
-            worker_image="repo:tag",
-            envs={"WANDB_API_KEY": "k"},
-        )
-        assert task.envs == {"WANDB_API_KEY": "k"}
+            _build_task(_runpod_compute(), cmd="echo hi", network_volume="vol-x")
 
     def test_setup_concatenates_scripts_in_order(self) -> None:
         """Setup concatenates scripts in order."""
-        compute = _runpod_compute(setup_scripts=("worker-ready.sh", "operator-ssh.sh"))
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        compute = _runpod_compute(setup_scripts=["worker-ready.sh", "operator-ssh.sh"])
+        task = _build_task(compute, cmd="echo hi")
         assert task.setup is not None
         assert task.setup.index("worker ready") < task.setup.index("OPERATOR_SSH_PUBKEYS_B64")
 
     def test_file_mounts_are_forwarded_to_the_task(self) -> None:
         """File mounts are forwarded to the task."""
         compute = _runpod_compute(file_mounts={"/remote/probe.txt": "src/some/local.yaml"})
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hi")
         assert task.file_mounts == {"/remote/probe.txt": "src/some/local.yaml"}
+
+
+def _task_fields_digest(fields: dict[str, object]) -> str:
+    """Hash task fields after canonicalizing unordered resource alternatives.
+
+    :param fields: Observable task fields from the constructor or native loader.
+    :returns: Stable SHA-256 digest.
+    """
+    resources = fields["resources"]
+    if isinstance(resources, dict) and "any_of" in resources:
+        resources["any_of"] = sorted(
+            resources["any_of"], key=lambda item: json.dumps(item, sort_keys=True)
+        )
+    payload = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def test_all_compute_options_match_constructor_oracle() -> None:
+    """Native parsing preserves every checked-in option's observable task fields."""
+    fixture_path = Path(__file__).parent / "fixtures" / "build_sky_task_oracle.json"
+    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    actual = {}
+    for option in compute_option_names():
+        compute = load_compute_option(option)
+        cmd = None if compute.run_script is not None else "echo oracle"
+        volume = "oracle-volume" if compute.mount_network_volume is not None else None
+        task = _build_task(compute, cmd=cmd, network_volume=volume)
+        actual[option] = _task_fields_digest(
+            {
+                "resources": task.to_yaml_config()["resources"],
+                "run": task.run,
+                "setup": task.setup,
+                "file_mounts": task.file_mounts,
+                "volumes": task.volumes,
+            }
+        )
+
+    assert actual == expected
 
 
 def _all_compute_option_names() -> list[str]:
@@ -307,5 +320,5 @@ class TestComputeOptionCompose:
     def test_smoke_option_builds_a_seven_gpu_any_of_task(self) -> None:
         """Smoke option builds a seven gpu any of task."""
         compute = load_compute_option("runpod/smoke")
-        task = build_sky_task(compute, cmd="echo hi", worker_image="repo:tag")
+        task = _build_task(compute, cmd="echo hi")
         assert len(list(task.resources)) == 7

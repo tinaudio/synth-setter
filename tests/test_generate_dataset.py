@@ -881,7 +881,8 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
 
     fake_sky.jobs.launch.side_effect = assert_env_file_endpoint_is_active
     fake_sky.stream_and_get.return_value = ([1], MagicMock())
-    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1013,7 +1014,8 @@ def _patch_remote_dispatch_boundaries(
     monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
     monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
     fake_sky = MagicMock()
-    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
     return fake_sky
 
 

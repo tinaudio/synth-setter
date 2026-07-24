@@ -147,9 +147,9 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
   Hydra overrides the operator composed with, and the `from_hydra` entrypoint
   on the worker rebuilds the spec from those — so worker re-execution is
   deterministic regardless of operator argv.
-- The canonical `WORKER_SPEC_URI` is merged into each rank's env and passed
-  into the task at construction (`build_sky_task(..., envs=...)`),
-  primarily for downstream validate-time consumers (validate-spec /
+- The canonical `WORKER_SPEC_URI` is merged into each rank's env with
+  `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`, primarily
+  for downstream validate-time consumers (validate-spec /
   validate-shard CI jobs read it off the workflow output). The worker itself
   doesn't fetch the JSON. `task.update_file_mounts` is avoided because
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
@@ -192,8 +192,8 @@ ______________________________________________________________________
 
 Compute options are Hydra configs under
 `src/synth_setter/configs/skypilot_launch/compute/`, validated by the strict
-pydantic `ComputeConfig` model and turned into a `sky.Task` programmatically
-by `build_sky_task` (`src/synth_setter/pipeline/compute_task.py`).
+pydantic `ComputeConfig` model. `build_task_doc` produces the native task-YAML
+mapping consumed by `sky.Task.from_yaml_config`.
 
 **RunPod** (`skypilot_launch/compute/runpod/smoke.yaml`) — abridged shape
 (see the file for the full option):
@@ -217,7 +217,7 @@ resources:
 
 The option declares no run block — the launcher's `_build_worker_cmd`
 constructs the cd + sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>` one-liner
-and `build_sky_task` sets it as the task's `run`. An option carrying a
+and `build_task_doc` sets it as the task's `run`. An option carrying a
 `run_script:` (debug canaries) rejects an injected cmd instead of silently
 dropping it.
 

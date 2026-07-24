@@ -185,12 +185,15 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     the real git preflight runs against a local bare remote.
     """
     fake = MagicMock()
-    monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
+    _succeeded_run(fake)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "cancel", fake.jobs.cancel)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "tail_logs", fake.jobs.tail_logs)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake.stream_and_get)
     monkeypatch.setattr(
         "synth_setter.pipeline.skypilot_launch._resolve_worker_git_ref",
         lambda worker_env: worker_env.get("WORKER_GIT_REF", "a" * 40),
     )
-    _succeeded_run(fake)
     return fake
 
 
@@ -202,8 +205,11 @@ def mock_sky_with_git_ref_preflight(monkeypatch: pytest.MonkeyPatch) -> MagicMoc
     :returns: Successful SkyPilot mock used only after the real git preflight.
     """
     fake = MagicMock()
-    monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake)
     _succeeded_run(fake)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "cancel", fake.jobs.cancel)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "tail_logs", fake.jobs.tail_logs)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake.stream_and_get)
     return fake
 
 
@@ -963,10 +969,10 @@ class TestRunpodBalancePreflight:
             lambda: 1.0,
         )
         compute = _runpod_compute(
-            resources=(
+            resources=[
                 ComputeResources(cloud="vast", accelerators={"RTX3090": 1}),
                 ComputeResources(cloud="runpod", accelerators={"RTX3070": 1}),
-            ),
+            ],
         )
         sky_cfg = SkypilotLaunchConfig(
             compute=compute,
@@ -1100,7 +1106,7 @@ def _runpod_compute(**overrides: object) -> ComputeConfig:
     """
     kwargs: dict[str, object] = {
         "name": "test-runpod",
-        "resources": (ComputeResources(cloud="runpod", accelerators={"RTX3070": 1}),),
+        "resources": [ComputeResources(cloud="runpod", accelerators={"RTX3070": 1})],
     }
     kwargs.update(overrides)
     return ComputeConfig(**kwargs)  # type: ignore[arg-type]
@@ -1534,6 +1540,59 @@ class TestDispatchViaSkypilot:
 
         submitted_task = mock_sky.jobs.launch.call_args.args[0]
         assert submitted_task.run == cmd
+
+    def test_dispatch_pins_worker_image_on_runpod_resources(
+        self,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Pin the launch image after parsing the native task document.
+
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked SkyPilot submission boundary.
+        """
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="image-pin",
+            worker_image_tag="test-tag",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        task = mock_sky.jobs.launch.call_args.args[0]
+        assert [resource.image_id for resource in task.resources] == [
+            {None: "docker:tinaudio/synth-setter:test-tag"}
+        ]
+
+    def test_dispatch_omits_resources_image_for_oci_docker_in_run(
+        self,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Leave OCI resources unpinned for nested-Docker delivery.
+
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked SkyPilot submission boundary.
+        """
+        compute = ComputeConfig(
+            name="oci-cpu",
+            resources=[ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8")],
+            image_delivery="docker-in-run",
+            run_wrapper="oci-docker-run.sh",
+        )
+        sky_cfg = SkypilotLaunchConfig(
+            compute=compute,
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="oci-image",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        task = mock_sky.jobs.launch.call_args.args[0]
+        assert [resource.image_id for resource in task.resources] == [None]
 
     def test_dispatch_uses_default_env_file_when_unset(
         self,
@@ -2453,13 +2512,14 @@ class TestCheckedInLaunchConfigs:
 
         assert cfg.cmd, "shipped launch configs must bake the worker cmd"
         assert cfg.compute is not None, "shipped launch configs must name a compute option"
-        from synth_setter.pipeline.compute_task import build_sky_task
+        from synth_setter.pipeline.compute_task import build_task_doc
 
-        task = build_sky_task(
-            cfg.compute,
-            cmd=cfg.cmd,
-            worker_image="tinaudio/synth-setter:test-tag",
-            network_volume=cfg.network_volume,
+        task = skypilot_launch.sky.Task.from_yaml_config(
+            build_task_doc(
+                cfg.compute,
+                cmd=cfg.cmd,
+                network_volume=cfg.network_volume,
+            )
         )
         assert task.run is not None and cfg.cmd in task.run
         assert cfg.compute.provider() == "runpod"

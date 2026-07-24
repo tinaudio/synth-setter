@@ -18,11 +18,13 @@
 # kube-system + sky-jobs-controller; disk_size omitted because the k8s
 # backend rejects the field — see PR #876.
 name: local-kind
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - imagePullPolicy: Never
 resources:
   - cloud: kubernetes
     cpus: 1+
     memory: 4+
-    kubernetes_pod_config:
-      spec:
-        containers:
-          - imagePullPolicy: Never

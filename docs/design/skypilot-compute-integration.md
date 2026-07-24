@@ -88,9 +88,9 @@ compute_config: null
 
 Compute is a nested Hydra config group (`skypilot_launch/compute`) backed by
 the strict pydantic `ComputeConfig` model
-(`src/synth_setter/pipeline/schemas/compute.py`); the launcher builds each
-`sky.Task` programmatically via `build_sky_task`
-(`src/synth_setter/pipeline/compute_task.py`) — no raw SkyPilot YAML.
+(`src/synth_setter/pipeline/schemas/compute.py`). `build_task_doc` resolves the
+option into SkyPilot's task-YAML dictionary shape, and the launcher passes that
+mapping to `sky.Task.from_yaml_config` without a disk round trip.
 
 ```
 src/synth_setter/configs/skypilot_launch/compute/
@@ -115,11 +115,10 @@ the `@hydra.main` worker-side console script in
 provider-specific credential setup in CI. Future targets follow the same
 pattern.
 
-`build_sky_task` sets the task's `run` block from the launcher's injected
+`build_task_doc` sets the task's `run` block from the launcher's injected
 `cmd` (or the option's `run_wrapper` with `${WORKER_CMD}` substituted, or a
-debug option's verbatim `run_script`); credentials + the spec URI ride in the
-task env. Per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK`
-/ `SYNTH_SETTER_NUM_WORKERS` envs.
+debug option's verbatim `run_script`). SkyPilot parses the resulting mapping;
+the launcher then applies the per-launch image and rank-specific environment.
 
 #### 4.1.1 Launch mode (`sky_cfg.tail`)
 
@@ -249,7 +248,7 @@ Notes:
 | `docker run -e ...` flags              | Passes `SYNTH_SETTER_STORAGE_*`; launcher projects rclone env only at the worker-backend boundary | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                                                                              |
 | Launcher's `_WORKER_ENV_KEYS`          | projected rclone env, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)    | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_launch_one_rank` and passed into the task env at construction.                                                                                                    |
 | Launcher's client settings             | `SKYPILOT_API_SERVER_ENDPOINT`, optional `SKYPILOT_SERVICE_ACCOUNT_TOKEN`                         | Resolves from the same `.env` before process env, projects into the launcher process, and clears SkyPilot's import-time endpoint cache before provisioning.                                                                                                                                                                                                                                          |
-| Task env at construction               | Same keys, real values                                                                            | `build_sky_task` passes the resolved worker env straight into `sky.Task(envs=...)` — no placeholder declarations needed.                                                                                                                                                                                                                                                                             |
+| Task env before submission             | Same keys, real values                                                                            | The launcher calls `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`; compute options need no placeholder declarations.                                                                                                                                                                                                                                                                 |
 | `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                  | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)). |
 
 #### Failure modes
