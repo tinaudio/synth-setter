@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,57 @@ def test_make_target_with_foreign_environment_uses_checkout_venv(
     )
 
     assert marker.read_text(encoding="utf-8") == "worktree\n"
+
+
+def test_test_fast_foreign_path_resolves_worktree_tools_for_python_and_subprocess(
+    tmp_path: Path,
+) -> None:
+    """Prepend .venv/bin so Python and child-process lookup agree.
+
+    :param tmp_path: Pytest fixture providing a throwaway checkout.
+    """
+    checkout = tmp_path / "checkout $HOME with spaces"
+    checkout.mkdir()
+    shutil.copy(PROJECT_ROOT / "Makefile", checkout / "Makefile")
+    local_bin = checkout / ".venv" / "bin"
+    foreign_bin = tmp_path / "foreign-bin"
+    marker = tmp_path / "tool-origin.txt"
+    results = tmp_path / "path-results.txt"
+    _write_tool(local_bin / "path-probe", "worktree")
+    _write_tool(foreign_bin / "path-probe", "foreign")
+    pytest_harness = local_bin / "pytest"
+    pytest_harness.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "import shutil\n"
+        "import subprocess\n"
+        "from pathlib import Path\n"
+        'resolved = shutil.which("path-probe")\n'
+        'subprocess.run(["path-probe"], check=True)\n'
+        'Path(os.environ["PATH_RESULTS"]).write_text(\n'
+        '    f"{resolved}\\n" + Path(os.environ["TOOL_MARKER"]).read_text(),\n'
+        '    encoding="utf-8",\n'
+        ")\n",
+        encoding="utf-8",
+    )
+    pytest_harness.chmod(0o755)
+    make = shutil.which("make")
+    assert make is not None
+    env = {
+        **os.environ,
+        "PATH": f"{foreign_bin}:{SYSTEM_PATH}",
+        "PATH_RESULTS": str(results),
+        "TOOL_MARKER": str(marker),
+    }
+
+    subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [make, "test-fast"], cwd=checkout, env=env, check=True
+    )
+
+    assert results.read_text(encoding="utf-8").splitlines() == [
+        str(local_bin / "path-probe"),
+        "worktree",
+    ]
 
 
 def _full_cpu_checkout(tmp_path: Path) -> tuple[Path, Path]:

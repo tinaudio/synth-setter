@@ -8,6 +8,7 @@ validation code can share one implementation. The application reads
 
 from __future__ import annotations
 
+import configparser
 import os
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
@@ -75,20 +76,64 @@ _DEFAULT_ENV_FILE = _default_env_file()
 
 # Wall-clock cap for the credential auth ping; rclone's --timeout is IO-idle only.
 _AUTH_PING_TIMEOUT_SECONDS = 45
+_RCLONE_CONFIG_READ_TIMEOUT_SECONDS = 10
 
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
 
 
+def _storage_config_from_rclone() -> StorageConfig:
+    """Load the ``r2`` remote through rclone's standard config resolution.
+
+    :returns: Strict storage config parsed from rclone's resolved remote.
+    :raises RuntimeError: The config cannot be read or lacks required S3 fields.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "config", "show", RCLONE_REMOTE],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_RCLONE_CONFIG_READ_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("rclone configuration is unavailable") from exc
+    if result.returncode != 0:
+        raise RuntimeError("rclone configuration is unavailable")
+
+    parser = configparser.RawConfigParser()
+    try:
+        parser.read_string(result.stdout)
+        remote = parser[RCLONE_REMOTE]
+        return StorageConfig(
+            access_key_id=SecretStr(remote.get("access_key_id", "")),
+            secret_access_key=SecretStr(remote.get("secret_access_key", "")),
+            endpoint_url=remote.get("endpoint", ""),
+            region=remote.get("region", "auto"),
+            rclone_type=remote.get("type", "s3"),
+        )
+    except (configparser.Error, KeyError, ValidationError) as exc:
+        raise RuntimeError("rclone configuration is incomplete") from exc
+
+
 def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
+    """Resolve storage config from application sources, then standard rclone config.
+
+    :param env_file: Optional dotenv path; ``None`` uses the workspace default.
+    :returns: Strict storage configuration from the first complete source.
+    :raises RuntimeError: No source supplies a complete configuration.
+    """
     resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
     try:
         return storage_settings_from_sources(resolved_env_file).to_config()
     except ValidationError as exc:
-        raise RuntimeError(
-            f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
-            f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)}."
-        ) from exc
+        try:
+            return _storage_config_from_rclone()
+        except RuntimeError:
+            raise RuntimeError(
+                f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
+                f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)} or a configured r2 remote."
+            ) from exc
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
@@ -122,9 +167,8 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. If the resolved dotenv file exists on disk, mirror every non-blank
-       canonical storage key or legacy rclone credential key from it into the
-       storage settings view.
+    1. Resolve canonical or legacy settings from dotenv/process env, falling
+       back to rclone's standard config resolution for the ``r2`` remote.
        ``env_file=None`` means the default dotenv lookup:
        ``$SYNTH_SETTER_WORKSPACE/.env``, the checkout marker root's ``.env``,
        then cwd ``.env``. Blank/whitespace values are skipped so a ``.env``
@@ -137,15 +181,14 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
        with no arguments) and the auth ping both see the normalized values.
        A non-zero ping exit also raises.
 
-    No-op on the dotenv step if the resolved file doesn't exist; the
-    resolution + normalization + auth checks still run against whatever
-    ``os.environ`` already has.
+    If the resolved dotenv file doesn't exist and process env is incomplete,
+    the same normalization and auth checks apply to standard rclone config.
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
         (typically ``sky_cfg.env_file``). ``None`` means the resolved default
         dotenv path.
-    :raises RuntimeError: A required setting is unset/blank after the load, or
-        ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
+    :raises RuntimeError: A required setting is unset/blank after the load, the
+        rclone executable is unavailable, or ``rclone lsd r2:`` fails.
     """
     config = _storage_config_from_sources(env_file)
     os.environ.update({**config.storage_env(), **config.rclone_env()})
@@ -160,6 +203,10 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
             check=False,
             timeout=_AUTH_PING_TIMEOUT_SECONDS,
         )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "rclone executable was not found while validating R2 credentials"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             "rclone auth ping timed out while validating the resolved R2 credentials "
@@ -174,36 +221,29 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
 
 def is_r2_reachable() -> bool:
-    """Return ``True`` iff every :func:`ensure_r2_env_loaded` precondition holds.
+    """Return whether rclone can reach the configured ``r2:`` remote.
 
-    Tests gate ``@pytest.mark.integration_r2`` cases on this helper. The
-    predicate has to match :func:`ensure_r2_env_loaded`'s contract — if it
-    returns ``True`` only because a user's local rclone config makes
-    ``rclone lsd r2:`` succeed while the secret env keys are unset, the
-    test then calls :func:`ensure_r2_env_loaded` and hits a hard
-    ``RuntimeError`` instead of the intended auto-skip.
+    Canonical or legacy environment settings are projected when available;
+    otherwise rclone resolves the remote through its standard configuration.
 
-    Settings resolve from the default dotenv file and process env, matching
-    the preflight's sources.
-
-    :returns: ``True`` when rclone is on PATH, storage settings resolve, and a
-        credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
+    :returns: ``True`` when rclone is on PATH and a credentialled
+        ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
         return False
     try:
         config = _storage_config_from_sources()
     except RuntimeError:
-        return False
+        probe_env = None
+    else:
+        probe_env = {**os.environ, **config.rclone_env()}
     try:
-        # Project the resolved settings into the probe env so a developer's
-        # ambient rclone config can't make the gate pass with wrong settings.
         subprocess.run(  # noqa: S603 — args are literal strings
             ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
-            env={**os.environ, **config.rclone_env()},
+            env=probe_env,
             timeout=_AUTH_PING_TIMEOUT_SECONDS,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
@@ -212,10 +252,10 @@ def is_r2_reachable() -> bool:
 
 
 def r2_storage_options() -> dict[str, str]:
-    """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
+    """Build Lance's object-store ``storage_options`` for the R2 bucket.
 
-    Reads canonical storage names or legacy rclone credential names and raises
-    ``RuntimeError`` if a required setting is unset or blank.
+    Reads canonical settings, legacy rclone environment names, or the standard
+    rclone config and raises ``RuntimeError`` if no source is complete.
 
     :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
         for ``lance.dataset`` / ``lance.write_dataset``.
