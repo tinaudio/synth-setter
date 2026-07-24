@@ -71,9 +71,9 @@ jobs:
               fi
               [[ -d plugins/CardinalSynth.vst3 ]]
               wrapper=src/synth_setter/scripts/run-linux-vst-headless.sh
-              "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")" >&2
-              "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/OB-Xf.vst3\")" >&2
-              "$wrapper" python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"plugins/CardinalSynth.vst3\")" >&2
+              for plugin in "/usr/lib/vst3/Surge XT.vst3" "/usr/lib/vst3/OB-Xf.vst3" "plugins/CardinalSynth.vst3"; do
+                "$wrapper" python -X faulthandler src/synth_setter/scripts/load_vst3_check.py "$plugin" >&2
+              done
               "$wrapper" pytest --collect-only -q -p no:cacheprovider -m "$VST_MARKER"
             ' | tee "${{ runner.temp }}/collected.txt"
 

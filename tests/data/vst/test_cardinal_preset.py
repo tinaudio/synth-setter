@@ -180,6 +180,15 @@ def _render(cardinal_renderer: PedalboardRenderer, **overrides: float) -> np.nda
     return cardinal_renderer.render(params, 60, 100, _NOTE_WINDOW)
 
 
+def _rms(audio: np.ndarray) -> float:
+    """Return the root-mean-square amplitude.
+
+    :param audio: Audio samples.
+    :returns: Root-mean-square amplitude.
+    """
+    return float(np.sqrt(np.mean(np.square(audio))))
+
+
 def test_cardinal_preset_renders_finite_non_silent_stereo(
     cardinal_renderer: PedalboardRenderer,
 ) -> None:
@@ -192,7 +201,7 @@ def test_cardinal_preset_renders_finite_non_silent_stereo(
     assert audio.shape == (2, 2 * _SAMPLE_RATE)
     assert np.isfinite(audio).all()
     assert np.max(np.abs(audio)) <= 1.0
-    assert np.sqrt(np.mean(np.square(audio))) > 0.01
+    assert _rms(audio) > 0.01
 
 
 def test_cardinal_preset_exposes_every_curated_host_slot(
@@ -270,7 +279,7 @@ def test_cardinal_remaining_mapped_control_changes_audio(
     low_audio = _render(cardinal_renderer, **{parameter_name: low})
     high_audio = _render(cardinal_renderer, **{parameter_name: high})
 
-    difference_rms = np.sqrt(np.mean(np.square(low_audio - high_audio)))
+    difference_rms = _rms(low_audio - high_audio)
     assert difference_rms > 0.01
 
 
@@ -301,8 +310,8 @@ def test_cardinal_attack_mapping_reduces_early_energy(
     slow = _render(cardinal_renderer, parameter_3_v=0.55)
     early = slice(int(0.11 * _SAMPLE_RATE), int(0.16 * _SAMPLE_RATE))
 
-    fast_rms = np.sqrt(np.mean(np.square(fast[:, early])))
-    slow_rms = np.sqrt(np.mean(np.square(slow[:, early])))
+    fast_rms = _rms(fast[:, early])
+    slow_rms = _rms(slow[:, early])
 
     assert fast_rms > slow_rms * 2.0
 
@@ -317,8 +326,8 @@ def test_cardinal_output_mapping_changes_rms_monotonically(
     quiet = _render(cardinal_renderer, parameter_8_v=0.7)
     loud = _render(cardinal_renderer, parameter_8_v=0.85)
 
-    quiet_rms = np.sqrt(np.mean(np.square(quiet)))
-    loud_rms = np.sqrt(np.mean(np.square(loud)))
+    quiet_rms = _rms(quiet)
+    loud_rms = _rms(loud)
 
     assert quiet_rms > 0.0
     assert loud_rms > quiet_rms * 1.25
