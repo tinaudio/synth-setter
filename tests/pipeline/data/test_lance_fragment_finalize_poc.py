@@ -221,5 +221,7 @@ def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> No
     # Manifest metadata reports rows even though the data file is absent...
     assert lance.dataset(str(train_uri)).count_rows() == _ROWS_PER_SHARD
     # ...but an actual read fails, proving the co-location requirement.
-    with pytest.raises(pa.ArrowInvalid, match="LanceError|Object at location"):
+    with pytest.raises(
+        pa.ArrowInvalid, match="LanceError|Object at location|External error: Not found:"
+    ):
         list(iter_lance_column_rows(train_uri, PARAM_ARRAY_FIELD))
