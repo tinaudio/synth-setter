@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import base64
 import io
-import subprocess
 import tarfile
 from pathlib import Path
 
 import numpy as np
 import pytest
+from backports import zstd
 from pydantic import BaseModel, ConfigDict, Field
 
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_HOST_PARAMETER_TARGETS
@@ -142,12 +142,7 @@ class _RackPatch(BaseModel):
 def _read_rack_patch() -> _RackPatch:
     preset = Path(plugin_state_paths["cardinal"]).read_bytes()
     encoded_patch = preset.split(b"patch\0", 1)[1].split(b"\0", 1)[0]
-    archive = subprocess.run(  # noqa: S603 — fixed zstd decoder and in-memory input
-        ["zstd", "--decompress", "--quiet", "--stdout"],
-        input=base64.b64decode(encoded_patch),
-        capture_output=True,
-        check=True,
-    ).stdout
+    archive = zstd.decompress(base64.b64decode(encoded_patch))
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as patch_archive:
         patch_file = patch_archive.extractfile("./patch.json")
         assert patch_file is not None
