@@ -1,0 +1,43 @@
+# Loader throughput sweep — map-style path (#2320 / #2231).
+# Grid over the worker-pool loader; batch_readahead is fragment-only so omitted.
+# Trials read a pre-hydrated local dataset_root (download uri nulled) so the
+# 509 GiB dataset is fetched once per pod, not per trial; max_steps is short
+# because we measure steady-state train/samples_per_sec, not convergence.
+# Hardcoded — wandb sweep CLI does not support OmegaConf resolvers.
+# WANDB_ENTITY / WANDB_PROJECT env vars override these at runtime.
+program: src/synth_setter/cli/train.py
+entity: tinaudio
+project: synth-setter
+command:
+  - python
+  - src/synth_setter/cli/train.py
+  - experiment=surge/flow_simple_440k
+  - callbacks=throughput
+  - trainer.max_steps=200
+  - trainer.limit_val_batches=0
+  - training.upload_checkpoints_during_training=false
+  - training.val_audio_probe=false
+  - datamodule.download_dataset_root_uri=null
+  - datamodule.dataset_root=/workspace/data/surge-simple-lance-440k-20k-20k-20260706T005448315Z
+  - datamodule.use_fragment_sampler=false
+  - ${args_no_hyphens}
+name: loader_throughput_mapstyle
+method: grid
+metric:
+  goal: maximize
+  name: train/device/samples_per_sec
+parameters:
+  datamodule.num_workers:
+    values:
+      - 0
+      - 12
+      - 24
+  datamodule.batch_size:
+    values:
+      - 512
+      - 1024
+      - 2048
+  datamodule.ot:
+    values:
+      - true
+      - false
