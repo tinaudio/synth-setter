@@ -15,8 +15,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import materialize_lance_subset
-from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
+from synth_setter.pipeline.data.lance_materialize import materialize_splits
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 
@@ -306,21 +305,13 @@ class VSTDataModule(LightningDataModule):
         """
         if self.dataset_txids is None:
             raise ValueError("materialize_columns=True requires dataset_txids")
-        for split, txid in self.dataset_txids.items():
-            split_name = f"{split}{self.shard_suffix}"
-            materialize_lance_subset(
-                _join_source_uri(source_root_uri, split_name),
-                self.dataset_root / split_name,
-                txid=txid,
-                columns=self._materialized_columns(split),
-                limit=self.subset_rows,
-            )
-        # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
-        # split datasets and pipeline-internal metadata/ never feed the loaders.
-        r2_io.download_dir_no_overwrite(
+        materialize_splits(
             source_root_uri,
             self.dataset_root,
-            exclude=f"{{*{self.shard_suffix}/**,metadata/**}}",
+            txids=self.dataset_txids,
+            columns_for=self._materialized_columns,
+            subset_rows=self.subset_rows,
+            shard_suffix=self.shard_suffix,
         )
 
     def _materialized_columns(self, split: str) -> list[str]:
@@ -371,19 +362,6 @@ def _validate_materialize_config(
     unknown = sorted(set(dataset_txids) - set(_MATERIALIZE_SPLITS))
     if unknown:
         raise ValueError(f"dataset_txids has unknown split keys: {unknown}")
-
-
-def _join_source_uri(source_root_uri: str, name: str) -> str:
-    """Join a split filename onto the hydration root for Lance to open.
-
-    :param source_root_uri: ``r2://``, ``file://``, or local-path root.
-    :param name: Split filename, e.g. ``train.lance``.
-    :returns: Split source — ``file://`` roots become local paths because
-        ``materialize_lance_subset`` accepts ``r2://`` or local sources only.
-    """
-    if is_file_uri(source_root_uri):
-        return str(file_uri_to_path(source_root_uri) / name)
-    return f"{source_root_uri.rstrip('/')}/{name}"
 
 
 def __getattr__(name: str) -> object:
