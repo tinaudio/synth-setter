@@ -103,8 +103,12 @@ def test_runpod_consumer_training_pool_restricts_gpu_types() -> None:
 
     assert len(compute.resources) == 1
     assert compute.resources[0].accelerators == {"RTX3090": 1, "RTX4090": 1}
-    assert compute.resources[0].disk_size == 750
+    assert compute.resources[0].disk_size == 1200
     assert compute.resources[0].use_spot is False
+    dataset_size_bytes = 1_116_619_342_038
+    working_reserve_bytes = 100 * 1024**3
+    provisioned_bytes = compute.resources[0].disk_size * 1024**3
+    assert provisioned_bytes - dataset_size_bytes >= working_reserve_bytes
 
 
 def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None:
