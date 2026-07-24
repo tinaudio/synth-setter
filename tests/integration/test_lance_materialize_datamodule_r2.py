@@ -36,10 +36,7 @@ def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     if not r2_io.is_r2_reachable():
-        pytest.skip(
-            "R2 not reachable (rclone missing, RCLONE_CONFIG_R2_* env vars missing, "
-            "or rclone lsd r2: failed)"
-        )
+        pytest.skip("R2 not reachable (rclone missing or rclone lsd r2: failed)")
     r2_io.ensure_r2_env_loaded()
 
     destination = tmp_path / "data"
