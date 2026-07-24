@@ -252,7 +252,13 @@ mkdir -p "$$CACHE" plugins; \
 ARCHIVE="$$CACHE/$$ASSET"; \
 if [ ! -f "$$ARCHIVE" ]; then \
 	echo "Downloading $$URL"; \
-	curl -fSL -o "$$ARCHIVE" "$$URL"; \
+	if command -v curl >/dev/null 2>&1; then \
+		curl -fSL -o "$$ARCHIVE" "$$URL"; \
+	elif command -v python3 >/dev/null 2>&1; then \
+		python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$$URL" "$$ARCHIVE"; \
+	else \
+		echo "ERROR: curl or python3 is required to download $$URL" >&2; exit 1; \
+	fi; \
 else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \

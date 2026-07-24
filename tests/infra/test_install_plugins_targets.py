@@ -477,6 +477,58 @@ def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
 
 
 @requires_x86_64_linux
+def test_install_cardinal_downloads_with_python_when_curl_is_absent(
+    makefile_checkout: Path,
+) -> None:
+    """The runtime-image fallback downloads Cardinal through Python.
+
+    :param makefile_checkout: Throwaway checkout holding the Makefile.
+    """
+    _home, env = _home_env(makefile_checkout)
+    payload_path = makefile_checkout / "cardinal-release.tar.gz"
+    payload_path.write_bytes(_targz_containing("CardinalSynth.vst3"))
+    digest = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    bindir = makefile_checkout / "bin"
+    bindir.mkdir()
+    for command in (
+        "find",
+        "gzip",
+        "head",
+        "make",
+        "mkdir",
+        "mktemp",
+        "mv",
+        "rm",
+        "sha256sum",
+        "tar",
+        "uname",
+    ):
+        executable = shutil.which(command)
+        assert executable is not None
+        (bindir / command).symlink_to(executable)
+    python = bindir / "python3"
+    python.write_text('#!/bin/sh\n/bin/cp "$CARDINAL_TEST_ARCHIVE" "$4"\n')
+    python.chmod(0o755)
+    env.update(
+        {
+            "CARDINAL_TEST_ARCHIVE": str(payload_path),
+            "PATH": str(bindir),
+        }
+    )
+
+    result = _run_make(
+        makefile_checkout,
+        "install-cardinal",
+        f"CARDINAL_SHA256_X86_64={digest}",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Downloading" in result.stdout
+    assert (makefile_checkout / "plugins" / "CardinalSynth.vst3").is_dir()
+
+
+@requires_x86_64_linux
 def test_install_cardinal_cached_archive_verifies_and_installs_bundle(
     makefile_checkout: Path,
 ) -> None:
