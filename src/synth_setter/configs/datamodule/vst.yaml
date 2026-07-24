@@ -12,6 +12,11 @@ persistent_workers: true
 # Null delegates prefetch depth to PyTorch; in-process loading ignores it.
 prefetch_factor: null
 predict_file: null
+# Per-split {train/val/test: transaction-uuid} pins; present selects txid-pinned
+# projected rematerialization instead of a whole-dir copy.
+download_dataset_txids: null
+# First-N rows per split at materialization time; requires txids, null keeps all rows.
+download_dataset_row_limit: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.
 param_spec_name: ???

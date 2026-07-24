@@ -9,9 +9,11 @@ import lance
 import pyarrow as pa
 import pytest
 
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
     MaterializeManifest,
     materialize_lance_subset,
+    materialize_splits,
     resolve_txid_version,
     sidecar_path,
 )
@@ -73,6 +75,95 @@ def test_materialize_column_projection_subset_columns_only_requested_schema(
     materialize_lance_subset(source, dest, txid=txid, columns=("a",))
     out = lance.dataset(str(dest))
     assert out.schema.names == ["a"]
+
+
+def test_materialize_file_uri_source_resolves_local_path(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A file URI source materializes the pinned local dataset snapshot.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(f"file://{source}", dest, txid=txid, columns=("a",))
+    out = lance.dataset(str(dest))
+    assert out.schema.names == ["a"]
+    assert out.to_table().column("a").to_pylist() == [1, 2, 3]
+
+
+def test_materialize_splits_builds_projected_capped_splits_per_txid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each pinned split materializes with its requested projection and row cap.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture replacing the rclone sidecar boundary.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    txids: dict[str, str] = {}
+    for split in ("train", "val", "test"):
+        dataset = lance.write_dataset(
+            pa.table({"a": [1, 2, 3], "b": ["x", "y", "z"]}),
+            str(source_root / f"{split}.lance"),
+        )
+        transaction = dataset.read_transaction(dataset.version)
+        assert transaction is not None
+        txids[split] = transaction.uuid
+
+    calls: list[tuple[str, Path, str | None]] = []
+
+    def download_spy(source_uri: str, dest_path: Path, *, exclude: str | None = None) -> None:
+        calls.append((source_uri, dest_path, exclude))
+
+    def columns_for(_split: str) -> tuple[str, ...]:
+        return ("a",)
+
+    monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
+    dest_root = tmp_path / "dest"
+    materialize_splits(
+        str(source_root),
+        dest_root,
+        txids=txids,
+        columns_for=columns_for,
+        row_limit=2,
+        shard_suffix=".lance",
+    )
+
+    for split in ("train", "val", "test"):
+        dataset = lance.dataset(str(dest_root / f"{split}.lance"))
+        assert dataset.schema.names == ["a"]
+        assert dataset.count_rows() == 2
+
+
+def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sidecar hydration excludes split datasets and pipeline metadata.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture replacing the rclone sidecar boundary.
+    """
+    calls: list[tuple[str, Path, str | None]] = []
+
+    def download_spy(source_uri: str, dest_path: Path, *, exclude: str | None = None) -> None:
+        calls.append((source_uri, dest_path, exclude))
+
+    monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
+    source_root = str(tmp_path / "source")
+    dest_root = tmp_path / "dest"
+    materialize_splits(
+        source_root,
+        dest_root,
+        txids={},
+        columns_for=lambda _split: (),
+        row_limit=None,
+        shard_suffix=".lance",
+    )
+
+    assert calls == [(source_root, dest_root, "{*.lance/**,metadata/**}")]
 
 
 def test_materialize_row_limit_limit_two_row_count_matches(

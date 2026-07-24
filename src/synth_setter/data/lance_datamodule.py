@@ -391,6 +391,8 @@ class LanceVSTDataModule(VSTDataModule):
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
+        download_dataset_txids: dict[str, str] | None = None,
+        download_dataset_row_limit: int | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -409,6 +411,10 @@ class LanceVSTDataModule(VSTDataModule):
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
+        :param download_dataset_txids: Per-split transaction uuids pinning the
+            source snapshots; present selects the materialize path.
+        :param download_dataset_row_limit: First-N rows per split at materialization
+            time.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -423,6 +429,8 @@ class LanceVSTDataModule(VSTDataModule):
             conditioning=conditioning,
             pin_memory=pin_memory,
             param_spec_name=param_spec_name,
+            download_dataset_txids=download_dataset_txids,
+            download_dataset_row_limit=download_dataset_row_limit,
         )
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
@@ -461,14 +469,6 @@ class LanceVSTDataModule(VSTDataModule):
         """Return the prediction dataset built for the current stage."""
         return self._dataset_for("predict")
 
-    def _conditioning_column(self) -> str:
-        """Return the stored column backing the configured conditioning.
-
-        :returns: Legacy mel column or the resolved embedding column.
-        """
-        spec = self.embedding_conditioning
-        return "mel_spec" if spec is None else spec.column
-
     def _build_lance_split(
         self,
         shard_path: Path,
@@ -488,9 +488,7 @@ class LanceVSTDataModule(VSTDataModule):
         spec = self.embedding_conditioning
         if spec is not None:
             _validate_embedding_column(shard_path, spec)
-        columns = ["param_array", self._conditioning_column()]
-        if read_audio:
-            columns.append("audio")
+        columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
             dataset=LanceMapDataset(shard_path, columns=columns),

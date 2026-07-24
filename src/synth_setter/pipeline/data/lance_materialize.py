@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import lance
@@ -19,6 +19,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
 
@@ -234,6 +235,8 @@ def materialize_lance_subset(  # noqa: DOC502
         return _reuse_or_raise(dest_path, source_uri, txid, requested_columns, limit)
     if r2_io.is_r2_uri(source_uri):
         open_uri, storage_options = r2_io.lance_target(source_uri)
+    elif is_file_uri(source_uri):
+        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
     else:
         open_uri, storage_options = source_uri, None
     ds = lance.dataset(open_uri, storage_options=storage_options)
@@ -273,3 +276,41 @@ def materialize_lance_subset(  # noqa: DOC502
         rows=written.count_rows(),
     )
     return dest_path
+
+
+def materialize_splits(
+    source_root_uri: str,
+    dest_root: Path,
+    *,
+    txids: dict[str, str],
+    columns_for: Callable[[str], Sequence[str]],
+    row_limit: int | None,
+    shard_suffix: str,
+) -> None:
+    """Materialize each pinned split under a root, then rclone non-Lance sidecars.
+
+    :param source_root_uri: Hydration root (``r2://``, ``file://``, or local path)
+        holding the split datasets.
+    :param dest_root: Local destination root; each split lands at
+        ``dest_root / f"{split}{shard_suffix}"``.
+    :param txids: Per-split transaction uuids pinning each split's source snapshot.
+    :param columns_for: Callback returning the columns to project for a given split name.
+    :param row_limit: First-N row cap per split, or ``None`` for all rows.
+    :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    """
+    for split, txid in txids.items():
+        name = f"{split}{shard_suffix}"
+        materialize_lance_subset(
+            f"{source_root_uri.rstrip('/')}/{name}",
+            dest_root / name,
+            txid=txid,
+            columns=columns_for(split),
+            limit=row_limit,
+        )
+    # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
+    # split datasets and pipeline-internal metadata/ never feed the loaders.
+    r2_io.download_dir_no_overwrite(
+        source_root_uri,
+        dest_root,
+        exclude=f"{{*{shard_suffix}/**,metadata/**}}",
+    )

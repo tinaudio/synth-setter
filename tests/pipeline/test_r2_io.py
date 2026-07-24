@@ -492,6 +492,30 @@ class TestDownloadDirNoOverwrite:
         assert str(source) in args
         assert str(destination) in args
 
+    def test_exclude_glob_skips_matching_subtree(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """An exclude glob copies the sidecars while skipping the split subtrees.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        prefix = fake_r2_remote / "bucket" / "dataset"
+        (prefix / "train.lance").mkdir(parents=True)
+        (prefix / "train.lance" / "fragment.bin").write_text("rows")
+        (prefix / "metadata" / "workers").mkdir(parents=True)
+        (prefix / "metadata" / "workers" / "report.json").write_text("{}")
+        (prefix / "stats.npz").write_text("stats")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite(
+            "r2://bucket/dataset", dest, exclude="{*.lance/**,metadata/**}"
+        )
+
+        assert (dest / "stats.npz").read_text() == "stats"
+        assert not (dest / "train.lance").exists()
+        assert not (dest / "metadata").exists()
+
     def test_rejects_unsupported_source_uri(self, tmp_path: Path) -> None:
         """A source outside the R2 and local-file contracts is rejected.
 
