@@ -43,22 +43,23 @@ def test_collect_process_results_worker_failure_before_result_raises_promptly() 
         )
 
 
-def test_collect_process_results_worker_stalls_after_result_terminates_process(
+def test_collect_process_results_workers_stall_after_results_terminates_processes(
     tmp_path: Path,
 ) -> None:
     """A worker that reports success but never exits is terminated and reaped.
 
     :param tmp_path: Scratch location receiving the worker PID.
     """
-    pid_file = tmp_path / "worker.pid"
+    pid_files = [tmp_path / "worker-0.pid", tmp_path / "worker-1.pid"]
 
     results = collect_process_results(
         _report_pid_then_stall,
-        [(str(pid_file),)],
+        [(str(pid_file),) for pid_file in pid_files],
         exit_timeout_s=0.1,
     )
 
-    assert results == ["reported"]
-    worker_pid = int(pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(worker_pid, 0)
+    assert results == ["reported", "reported"]
+    for pid_file in pid_files:
+        worker_pid = int(pid_file.read_text())
+        with pytest.raises(ProcessLookupError):
+            os.kill(worker_pid, 0)
