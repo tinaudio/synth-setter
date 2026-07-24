@@ -216,13 +216,15 @@ jobs:
           import json, os, pathlib, time
           import sky
 
-          from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
+          from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
 
           cluster = os.environ["CLUSTER_NAME"]
           compute_option = os.environ["COMPUTE_OPTION"]
           deadline_seconds = int(os.environ["DEADLINE"])
 
-          task = build_sky_task(load_compute_option(compute_option), cmd="true", worker_image=None)
+          task = sky.Task.from_yaml_config(
+              build_task_doc(load_compute_option(compute_option), cmd="true")
+          )
           task.workdir = os.getcwd()
           task.update_envs(
               {

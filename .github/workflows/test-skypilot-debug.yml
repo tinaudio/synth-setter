@@ -286,7 +286,8 @@ jobs:
           import os, time
           import sky
 
-          from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
+          from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
+          from synth_setter.pipeline.skypilot_launch import _override_image_id
 
           cluster = os.environ["CLUSTER_NAME"]
           deadline_seconds = int(os.environ["DEADLINE"])
@@ -294,11 +295,10 @@ jobs:
           variant = os.environ["VARIANT"]
 
           print(f"[probe] launching cluster={cluster} variant={variant}")
-          task = build_sky_task(
-              load_compute_option(compute_option),
-              cmd=None,
-              worker_image=f"tinaudio/synth-setter:{os.environ['IMAGE_TAG']}",
+          task = sky.Task.from_yaml_config(
+              build_task_doc(load_compute_option(compute_option), cmd=None)
           )
+          _override_image_id(task, f"tinaudio/synth-setter:{os.environ['IMAGE_TAG']}")
           task.workdir = os.getcwd()
           print(f"[probe] workdir set to {task.workdir}")
           task.update_envs(

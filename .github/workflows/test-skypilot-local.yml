@@ -141,7 +141,7 @@ jobs:
           import sky
           import sky.check
 
-          from synth_setter.pipeline.compute_task import build_sky_task, load_compute_option
+          from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
 
           cluster = os.environ["CLUSTER_NAME"]
           compute_option = os.environ["COMPUTE_OPTION"]
@@ -150,8 +150,8 @@ jobs:
           sky.check.check(clouds=["kubernetes"], quiet=False)
 
           print(f"[probe] launching cluster={cluster} on local kind kubernetes")
-          task = build_sky_task(
-              load_compute_option(compute_option), cmd=None, worker_image=None
+          task = sky.Task.from_yaml_config(
+              build_task_doc(load_compute_option(compute_option), cmd=None)
           )
           task.update_envs(
               {
