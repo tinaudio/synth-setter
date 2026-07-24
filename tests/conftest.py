@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -46,6 +47,12 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
+_EMBEDDING_E2E_ROWS = 2
+_EMBEDDING_E2E_CHECKPOINTS = {
+    "clap": Path.home() / ".cache/synth-setter/encoders/clap-htsat-unfused",
+    "same_s": Path.home() / ".cache/synth-setter/encoders/same-s",
+    "same_l": Path.home() / ".cache/synth-setter/encoders/same-l",
+}
 
 
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
@@ -848,16 +855,18 @@ def cfg_surge_xt_global(
     )
 
 
-def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> None:
-    """Render the smoke ``train`` shard via the ``generate_vst_dataset`` subprocess (real VST), failing loud on timeout/non-zero exit/missing output.
-
-    The writer is dispatched on ``output_path``'s ``.lance`` suffix by
-    ``generate_vst_dataset``, backing the real-VST smoke fixture.
+def _render_smoke_train_subprocess(
+    output_path: Path,
+    param_spec_name: str,
+    *,
+    num_samples: int = NUM_FIXTURE_SAMPLES,
+) -> None:
+    """Render a smoke ``train`` shard through the real VST subprocess.
 
     :param output_path: Destination shard path (``train.lance``); its
         parent must already exist.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
+    :param param_spec_name: Parameter specification and preset selector.
+    :param num_samples: Number of real VST renders to write.
     """
     generate_dataset_args = []
     if sys.platform == "linux":
@@ -876,8 +885,8 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
         f"--velocity={_SURGE_FIXTURE_VELOCITY}",
         f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
         f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
-        f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
-        f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
+        f"--samples_per_render_batch={num_samples}",
+        f"--samples_per_shard={num_samples}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
@@ -886,7 +895,7 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
     # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
     # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
     # is what the failure branch needs to fail loud. See #695.
-    timeout = _scaled_vst_subprocess_timeout()
+    timeout = _scaled_vst_subprocess_timeout(num_samples)
     try:
         result = subprocess.run(  # noqa: S603
             generate_dataset_args,
@@ -950,6 +959,8 @@ def _build_surge_smoke_lance_datasets(
     tmp_path: Path,
     param_spec_name: str,
     render_train_lance: Callable[[Path, str], None],
+    *,
+    num_samples: int = NUM_FIXTURE_SAMPLES,
 ) -> Path:
     """Render the N-sample Surge smoke dataset natively as single-file Lance shards.
 
@@ -965,7 +976,7 @@ def _build_surge_smoke_lance_datasets(
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
         :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :param render_train_lance: Renders ``train.lance`` given ``(train_lance, param_spec_name)``.
-
+    :param num_samples: Expected rows in the rendered train split.
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
@@ -975,7 +986,7 @@ def _build_surge_smoke_lance_datasets(
     train_lance = smoke_dataset_dir / "train.lance"
 
     render_train_lance(train_lance, param_spec_name)
-    _validate_surge_dataset(train_lance, NUM_FIXTURE_SAMPLES)
+    _validate_surge_dataset(train_lance, num_samples)
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
@@ -1009,6 +1020,62 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     )
 
 
+@pytest.fixture(scope="function")
+def local_embedding_checkpoints(require_same_extra: None) -> dict[str, str]:
+    """Return complete local checkpoints or skip before rendering the E2E fixture.
+
+    :param require_same_extra: Ensures the real SAME model implementation is installed.
+    :returns: Local checkpoint directories keyed by embedding registry name.
+    """
+    del require_same_extra
+    from music2latent.inference import load_path_inference_default
+
+    required_files = {
+        _EMBEDDING_E2E_CHECKPOINTS["clap"]: (
+            "config.json",
+            "preprocessor_config.json",
+            "pytorch_model.bin",
+        ),
+        _EMBEDDING_E2E_CHECKPOINTS["same_s"]: ("model_config.json", "model.safetensors"),
+        _EMBEDDING_E2E_CHECKPOINTS["same_l"]: ("model_config.json", "model.safetensors"),
+    }
+    missing = [
+        directory / filename
+        for directory, filenames in required_files.items()
+        for filename in filenames
+        if not (directory / filename).is_file()
+    ]
+    m2l_checkpoint = Path(load_path_inference_default)
+    if not m2l_checkpoint.is_file():
+        missing.append(m2l_checkpoint)
+    if missing:
+        pytest.skip(f"local embedding checkpoints missing: {[str(path) for path in missing]}")
+    return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+
+
+@pytest.fixture(scope="function")
+def surge_xt_embedding_smoke_datasets(
+    local_embedding_checkpoints: dict[str, str],
+    tmp_path: Path,
+    param_spec_name: str,
+) -> Path:
+    """Build the two-row real-VST Lance dataset for all-embedding training E2E.
+
+    :param local_embedding_checkpoints: Preflights model weights before VST rendering.
+    :param tmp_path: Per-test dataset directory parent.
+    :param param_spec_name: Parameter specification and preset selector.
+    :returns: Finalized local ``{train,val,test}.lance`` dataset root.
+    """
+    del local_embedding_checkpoints
+    render_two_rows = partial(_render_smoke_train_subprocess, num_samples=_EMBEDDING_E2E_ROWS)
+    return _build_surge_smoke_lance_datasets(
+        tmp_path,
+        param_spec_name,
+        render_two_rows,
+        num_samples=_EMBEDDING_E2E_ROWS,
+    )
+
+
 def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     """Add real ``m2l`` + ``clap`` columns to a rendered smoke dataset's splits.
 
@@ -1029,7 +1096,12 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="add_embeddings",
-            overrides=[f"lance_uri={train_uri}", "build_index=false", "device=cpu"],
+            overrides=[
+                f"lance_uri={train_uri}",
+                "embeddings=[clap,m2l]",
+                "build_index=false",
+                "device=cpu",
+            ],
         )
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
     GlobalHydra.instance().clear()
@@ -1292,6 +1364,97 @@ def cfg_surge_fake_train(
     GlobalHydra.instance().clear()
 
 
+def augment_lance_splits_with_all_embeddings(
+    dataset_root: Path, checkpoints: dict[str, str]
+) -> Path:
+    """Add every real embedding to one rendered dataset and clone its splits.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param checkpoints: Complete local checkpoint directories from preflight.
+    :returns: Augmented dataset root.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(train_uri),
+            embeddings=("clap", "m2l", "same_s", "same_l"),
+            checkpoints=checkpoints,
+            device="cpu",
+            build_index=False,
+        )
+    )
+    for split in ("val", "test"):
+        destination = dataset_root / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    return dataset_root
+
+
+def assert_all_embedding_columns(dataset_root: Path) -> None:
+    """Assert every real embedding is finite, shaped, and input-dependent.
+
+    :param dataset_root: Directory holding the augmented train split.
+    """
+    import lance
+
+    from synth_setter.data.vst.shapes import (
+        AUDIO_FIELD,
+        CLAP_FIELD,
+        M2L_FIELD,
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        SAME_L_FIELD,
+        SAME_S_FIELD,
+    )
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+    train_lance = dataset_root / "train.lance"
+    _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
+    dataset = lance.dataset(train_lance)
+    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l"}
+    assert {
+        AUDIO_FIELD,
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        CLAP_FIELD,
+        M2L_FIELD,
+        SAME_S_FIELD,
+        SAME_L_FIELD,
+    } <= set(dataset.schema.names)
+    assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
+
+    table = dataset.to_table(
+        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD]
+    )
+    for column in table.columns:
+        assert column.null_count == 0
+
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    clap = np.stack(table.column(CLAP_FIELD).to_numpy(zero_copy_only=False))
+    m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
+    same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
+    same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+
+    assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
+    assert not np.array_equal(audio[0], audio[1])
+    for name, values, shape in (
+        ("clap", clap, (_EMBEDDING_E2E_ROWS, 512)),
+        ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
+        ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
+        ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
+    ):
+        assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
+        assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
+        assert np.isfinite(values).all(), f"{name} contains non-finite values"
+        flat = values.reshape(_EMBEDDING_E2E_ROWS, -1)
+        assert np.linalg.norm(flat, axis=1).min() > 0, f"{name} contains a zero row"
+        assert flat.std(axis=1).min() > 0, f"{name} contains a constant row"
+        assert not np.array_equal(values[0], values[1]), f"{name} collapsed distinct inputs"
+
+
 # Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
 _SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
     "same_s": "stabilityai/SAME-S",
@@ -1326,14 +1489,12 @@ def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Pat
     from synth_setter.pipeline.data.add_embeddings import add_embeddings
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
-    variant = conditioning.removeprefix("same_")
     train_uri = dataset_root / "train.lance"
     add_embeddings(
         AddEmbeddingsConfig(
             lance_uri=str(train_uri),
-            same_variants=(variant,),
-            same_s_checkpoint=_SAME_E2E_HF_CHECKPOINTS["same_s"],
-            same_l_checkpoint=_SAME_E2E_HF_CHECKPOINTS["same_l"],
+            embeddings=(conditioning,),
+            checkpoints={conditioning: _SAME_E2E_HF_CHECKPOINTS[conditioning]},
             device="cpu",
         )
     )
