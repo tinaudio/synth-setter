@@ -24,6 +24,7 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD, DEBUG_FIELD, MEL_SPEC_FIEL
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
 from synth_setter.pipeline.partitioning import get_my_shards
+from synth_setter.pipeline.schemas.seed_debug import SeedDebugDocument
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.data.vst.test_fake_plugin_e2e import _fake_render_cfg
@@ -80,14 +81,14 @@ def _read_param_array(out: Path) -> np.ndarray:
     return _read_column(out, PARAM_ARRAY_FIELD)
 
 
-def _read_debug_rows(out: Path) -> list[dict[str, int | str | None]]:
-    """Read row-level seed provenance from a rendered Lance shard.
+def _read_debug_rows(out: Path) -> list[SeedDebugDocument]:
+    """Read and validate row-level seed provenance from a rendered Lance shard.
 
     :param out: Rendered Lance shard path.
-    :returns: Parsed JSON documents in row order.
+    :returns: Typed debug documents in row order.
     """
     documents = lance.dataset(str(out)).to_table(columns=[DEBUG_FIELD]).column(0).to_pylist()
-    return [json.loads(document) for document in documents]
+    return [SeedDebugDocument.model_validate_json(document) for document in documents]
 
 
 def _read_seed_metadata(out: Path) -> dict[str, int]:
@@ -245,7 +246,7 @@ def test_launcher_args_through_renderer_main_persist_shard_id(
     main()
 
     out = tmp_path / shard.filename
-    assert _read_debug_rows(out)[0]["shard_id"] == shard.shard_id
+    assert _read_debug_rows(out)[0].shard_id == shard.shard_id
 
 
 @pytest.mark.fake_vst
@@ -265,22 +266,22 @@ def test_writer_populates_debug_json_with_seed_and_inputs(
     make_lance_dataset(out, cfg, shard_id=7)
 
     assert _read_debug_rows(out) == [
-        {
-            "seed": seed_for_sample(_BASE_SEED, 12, 0),
-            "master_seed": _BASE_SEED,
-            "sample_idx": 12,
-            "attempt": 0,
-            "shard_id": 7,
-        "parameter_source": "sampled",
-        },
-        {
-            "seed": seed_for_sample(_BASE_SEED, 13, 0),
-            "master_seed": _BASE_SEED,
-            "sample_idx": 13,
-            "attempt": 0,
-            "shard_id": 7,
-        "parameter_source": "sampled",
-        },
+        SeedDebugDocument(
+            seed=seed_for_sample(_BASE_SEED, 12, 0),
+            master_seed=_BASE_SEED,
+            sample_idx=12,
+            attempt=0,
+            shard_id=7,
+            parameter_source="sampled",
+        ),
+        SeedDebugDocument(
+            seed=seed_for_sample(_BASE_SEED, 13, 0),
+            master_seed=_BASE_SEED,
+            sample_idx=13,
+            attempt=0,
+            shard_id=7,
+            parameter_source="sampled",
+        ),
     ]
 
 
@@ -306,8 +307,8 @@ def test_writer_marks_external_fixed_parameter_provenance(
     )
 
     row = _read_debug_rows(out)[0]
-    assert row["parameter_source"] == "fixed"
-    assert "parameter_seed" not in row
+    assert row.parameter_source == "fixed"
+    assert row.parameter_seed is None
 
 
 @pytest.mark.fake_vst
@@ -325,7 +326,7 @@ def test_writer_marks_mixed_parameter_provenance(
 
     make_lance_dataset(out, cfg, shard_id=7, fixed_synth_params_list=[synth_params])
 
-    assert _read_debug_rows(out)[0]["parameter_source"] == "mixed"
+    assert _read_debug_rows(out)[0].parameter_source == "mixed"
 
 
 @pytest.mark.fake_vst
@@ -351,11 +352,11 @@ def test_writer_persists_shard_cadence_parameter_seed_across_batches(
 
     rows = _read_debug_rows(out)
     for sample_idx, row in enumerate(rows, start=12):
-        assert row["sample_idx"] == sample_idx
-        assert row["parameter_seed"] == seed_for_sample(_BASE_SEED, 12, 0)
-        assert row["parameter_sample_idx"] == 12
-        assert row["parameter_attempt"] == 0
-        assert row["parameter_source"] == "sampled"
+        assert row.sample_idx == sample_idx
+        assert row.parameter_seed == seed_for_sample(_BASE_SEED, 12, 0)
+        assert row.parameter_sample_idx == 12
+        assert row.parameter_attempt == 0
+        assert row.parameter_source == "sampled"
 
 
 @pytest.mark.fake_vst
@@ -406,14 +407,14 @@ def test_writer_persists_nonzero_accepted_attempt(
 
     make_lance_dataset(out, cfg, shard_id=7)
 
-    assert _read_debug_rows(out)[0] == {
-        "seed": seed_for_sample(_BASE_SEED, 12, 2),
-        "master_seed": _BASE_SEED,
-        "sample_idx": 12,
-        "attempt": 2,
-        "shard_id": 7,
-        "parameter_source": "sampled",
-    }
+    assert _read_debug_rows(out)[0] == SeedDebugDocument(
+        seed=seed_for_sample(_BASE_SEED, 12, 2),
+        master_seed=_BASE_SEED,
+        sample_idx=12,
+        attempt=2,
+        shard_id=7,
+        parameter_source="sampled",
+    )
 
 
 @pytest.mark.fake_vst

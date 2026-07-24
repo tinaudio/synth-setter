@@ -154,6 +154,12 @@ def test_seed_debug_array_mismatched_lengths_raises_value_error() -> None:
         seed_debug_array(42, [9, 10], [2], shard_id=7)
 
 
+def test_seed_debug_array_partial_parameter_provenance_raises_value_error() -> None:
+    """The Arrow serializer enforces the typed document's provenance invariant."""
+    with pytest.raises(ValueError, match="must be provided together"):
+        seed_debug_array(42, [9], [2], shard_id=7, parameter_sample_idx=9)
+
+
 def test_fragment_schema_matches_does_not_mask_debug_nullability_mismatch() -> None:
     """JSON physical-type normalization preserves other field constraints."""
     logical = lance_schema(_FIELD_SHAPES, _METADATA)

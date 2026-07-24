@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from pydantic import ValidationError
 
 from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES, DEBUG_FIELD
+from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
@@ -86,7 +86,7 @@ def seed_debug_array(
     shard_id: int | None,
     parameter_sample_idx: int | None = None,
     parameter_attempt: int | None = None,
-    parameter_source: str = "sampled",
+    parameter_source: ParameterSource = "sampled",
 ) -> pa.Array:
     """Build row-level seed provenance as Arrow JSON documents.
 
@@ -98,34 +98,31 @@ def seed_debug_array(
     :param parameter_attempt: Accepted attempt that supplied a shard-cadence patch.
     :param parameter_source: Whether parameters were sampled, fixed, or mixed.
     :returns: JSON documents containing each concrete seed and its derivation inputs.
-    :raises ValueError: ``sample_indices`` and ``attempts`` have different lengths.
+    :raises ValueError: Input lengths differ or a debug document violates its schema.
     """
     if len(sample_indices) != len(attempts):
         raise ValueError(
             f"sample_indices has length {len(sample_indices)}, attempts has length {len(attempts)}"
         )
-    if (parameter_sample_idx is None) != (parameter_attempt is None):
-        raise ValueError("parameter_sample_idx and parameter_attempt must be provided together")
-
-    documents = []
-    for sample_idx, attempt in zip(sample_indices, attempts, strict=True):
-        document = {
-            "seed": seed_for_sample(master_seed, sample_idx, attempt),
-            "master_seed": master_seed,
-            "sample_idx": sample_idx,
-            "attempt": attempt,
-            "shard_id": shard_id,
-            "parameter_source": parameter_source,
-        }
-        if parameter_sample_idx is not None and parameter_attempt is not None:
-            document.update(
-                parameter_seed=seed_for_sample(
-                    master_seed, parameter_sample_idx, parameter_attempt
-                ),
-                parameter_sample_idx=parameter_sample_idx,
-                parameter_attempt=parameter_attempt,
-            )
-        documents.append(json.dumps(document, separators=(",", ":")))
+    parameter_seed = (
+        seed_for_sample(master_seed, parameter_sample_idx, parameter_attempt)
+        if parameter_sample_idx is not None and parameter_attempt is not None
+        else None
+    )
+    documents = [
+        SeedDebugDocument(
+            seed=seed_for_sample(master_seed, sample_idx, attempt),
+            master_seed=master_seed,
+            sample_idx=sample_idx,
+            attempt=attempt,
+            shard_id=shard_id,
+            parameter_source=parameter_source,
+            parameter_seed=parameter_seed,
+            parameter_sample_idx=parameter_sample_idx,
+            parameter_attempt=parameter_attempt,
+        ).model_dump_json(exclude_none=True)
+        for sample_idx, attempt in zip(sample_indices, attempts, strict=True)
+    ]
     return pa.array(documents, type=DEBUG_JSON_TYPE)
 
 
