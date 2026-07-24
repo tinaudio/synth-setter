@@ -314,7 +314,7 @@ def test_validate_lance_shard_incomplete_mp3_decode_reports_row(
     class _IncompleteAudioFile:
         samplerate = 8000
         num_channels = 2
-        frames = 80
+        frames = 3200
 
         def __init__(self, _payload: object) -> None:
             pass
@@ -336,7 +336,7 @@ def test_validate_lance_shard_incomplete_mp3_decode_reports_row(
 
     errors = validate_shard(shard, spec)
 
-    assert any("decoded 79 frames, expected at least 80" in error for error in errors)
+    assert any("decoded 3199 frames, expected at least 3200" in error for error in errors)
 
 
 @pytest.mark.parametrize(

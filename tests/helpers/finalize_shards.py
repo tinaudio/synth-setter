@@ -30,7 +30,7 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from tests.helpers.lance_fixtures import with_preview_columns
 
-# The shortest MP3-supported rate and duration keep preview-bearing shards tiny.
+# The shortest MP3-supported rate and loudness-compatible duration keep shards small.
 _LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
     "plugin_path": "/fake/Plugin.vst3",
     "plugin_state_path": "presets/surge-base.vstpreset",
@@ -39,7 +39,7 @@ _LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
     "sample_rate": 8000,
     "channels": 2,
     "velocity": 100,
-    "signal_duration_seconds": 0.01,
+    "signal_duration_seconds": 0.4,
     "min_loudness": -55.0,
     "samples_per_render_batch": 4,
     "samples_per_shard": 4,
