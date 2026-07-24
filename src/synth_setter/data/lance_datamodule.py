@@ -414,7 +414,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param download_dataset_txids: Per-split transaction uuids pinning the
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
-            time. Without txids, the latest source snapshots are used.
+            time. Without txids, disposable runs use the latest source snapshots.
         """
         super().__init__(
             dataset_root=dataset_root,

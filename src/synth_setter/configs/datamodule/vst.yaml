@@ -14,7 +14,7 @@ prefetch_factor: null
 predict_file: null
 # Per-split {train/val/test: transaction-uuid} pins for projected rematerialization.
 download_dataset_txids: null
-# First-N rows per split; selects latest-snapshot rematerialization without txids.
+# First-N rows per split; without txids, intended for disposable smoke/tuning runs.
 download_dataset_row_limit: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import lance
@@ -43,7 +43,11 @@ class MaterializeManifest(BaseModel):
 
     .. attribute :: resolved_version
 
-        Source dataset version the txid resolved to at materialization time.
+        Source dataset version selected at materialization time.
+
+    .. attribute :: resolved_txid
+
+        Transaction uuid identifying the selected source snapshot when recorded.
 
     .. attribute :: columns
 
@@ -63,6 +67,7 @@ class MaterializeManifest(BaseModel):
     source_uri: str
     txid: str | None
     resolved_version: int
+    resolved_txid: str | None = None
     columns: tuple[str, ...]
     limit: int | None
     request_hash: str
@@ -129,6 +134,20 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     )
 
 
+def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
+    """Return the transaction uuid identifying a source version.
+
+    :param ds: Open source dataset.
+    :param version: Source version to identify.
+    :returns: Transaction uuid for ``version``.
+    :raises ValueError: The source version has no transaction record.
+    """
+    transaction = ds.read_transaction(version)
+    if transaction is None:
+        raise ValueError(f"source version {version} has no transaction record")
+    return transaction.uuid
+
+
 def _read_manifest(manifest_path: Path) -> MaterializeManifest:
     """Parse an existing sidecar manifest, failing loudly on any damage.
 
@@ -151,6 +170,7 @@ def _reuse_or_raise(
     columns: tuple[str, ...],
     limit: int | None,
     resolved_version: int | None = None,
+    resolved_txid: str | None = None,
 ) -> Path:
     """Validate an existing destination against the current request.
 
@@ -164,6 +184,7 @@ def _reuse_or_raise(
     :param columns: Current request's projected columns.
     :param limit: Current request's row cap.
     :param resolved_version: Current latest version for an unpinned request.
+    :param resolved_txid: Current source transaction uuid for an unpinned request.
     :returns: ``dest_path`` on a cache hit.
     :raises ValueError: The sidecar is missing/unparsable, its stored hash
         does not cover its own fields, or the request diverges from it —
@@ -187,7 +208,12 @@ def _reuse_or_raise(
         manifest.resolved_version if resolved_version is None else resolved_version
     )
     requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    if manifest.request_hash != stored_hash or manifest.request_hash != requested_hash:
+    source_changed = txid is None and manifest.resolved_txid != resolved_txid
+    if (
+        manifest.request_hash != stored_hash
+        or manifest.request_hash != requested_hash
+        or source_changed
+    ):
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
             f"for source={manifest.source_uri!r} txid={manifest.txid!r} "
@@ -205,7 +231,7 @@ def _reuse_or_raise(
 
 
 # DOC502: the documented LookupError/ValueError propagate from
-# resolve_txid_version and _reuse_or_raise.
+# resolve_txid_version, _reuse_or_raise, and _transaction_uuid.
 def materialize_lance_subset(  # noqa: DOC502
     source_uri: str,
     dest_path: Path,
@@ -246,6 +272,7 @@ def materialize_lance_subset(  # noqa: DOC502
         open_uri, storage_options = source_uri, None
     ds = lance.dataset(open_uri, storage_options=storage_options)
     resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
+    resolved_txid = _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,
@@ -254,6 +281,7 @@ def materialize_lance_subset(  # noqa: DOC502
             requested_columns,
             limit,
             resolved_version,
+            resolved_txid,
         )
     snapshot = ds.checkout_version(resolved_version)
     scanner = snapshot.scanner(
@@ -284,6 +312,7 @@ def materialize_lance_subset(  # noqa: DOC502
         source_uri=source_uri,
         txid=txid,
         resolved_version=resolved_version,
+        resolved_txid=resolved_txid,
         columns=requested_columns,
         limit=limit,
         request_hash=request_hash(source_uri, txid, resolved_version, requested_columns, limit),
@@ -301,7 +330,7 @@ def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
-    txids: dict[str, str] | None,
+    txids: Mapping[str, str] | None,
     columns_for: Callable[[str], Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,

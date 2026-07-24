@@ -229,7 +229,7 @@ class VSTDataModule(LightningDataModule):
         :param download_dataset_txids: Per-split transaction uuids pinning the
             source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
-            time. Without txids, the latest source snapshots are used.
+            time. Without txids, disposable runs use the latest source snapshots.
         :raises ValueError: If the materialization settings are inconsistent —
             fail at construction, never silently hydrate the wrong data.
         """

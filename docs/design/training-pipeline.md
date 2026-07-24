@@ -310,6 +310,7 @@ Behavior:
 - Local-only by default
 - If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
 - If `download_dataset_txids` or `download_dataset_row_limit` is set, each split is instead rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); txids pin source snapshots when supplied, otherwise row-limited hydration uses the latest snapshots, and only non-Lance sidecars still download via `download_dir_no_overwrite`
+- No-txid hydration is intentionally non-reproducible and reserved for disposable smoke/tuning runs; resumable or reproducible runs must supply per-split txids
 - No hidden default R2 fetch
 
 ### 6.2 Checkpoint Durability via R2

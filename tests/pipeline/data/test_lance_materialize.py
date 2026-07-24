@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import lance
@@ -186,6 +187,44 @@ def test_materialize_without_txid_uses_latest_version(
     )
     assert manifest.txid is None
     assert manifest.resolved_version == 2
+
+
+def test_materialize_without_txid_unchanged_source_reuses_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned rerun reuses its cache while the source snapshot is unchanged.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    version_after_first = lance.dataset(str(dest)).version
+
+    result = materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+    assert result == dest
+    assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_without_txid_replaced_source_rejects_stale_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned cache rejects a different dataset at the same URI and version.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    shutil.rmtree(source)
+    lance.write_dataset(pa.table({"a": [10], "b": ["new"]}), source)
+    lance.write_dataset(pa.table({"a": [11], "b": ["newer"]}), source, mode="append")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
 
 
 def test_materialize_without_txid_source_advance_rejects_stale_cache(
