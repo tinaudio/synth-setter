@@ -11,10 +11,6 @@ num_workers: 4
 persistent_workers: true
 # Null delegates prefetch depth to PyTorch; in-process loading ignores it.
 prefetch_factor: null
-# Opt-in Lance-native fragment-sequential train reads (#2251); v1 single-rank only.
-use_fragment_sampler: false
-# Lance scanner read-ahead batches on the fragment-sampler path.
-batch_readahead: 8
 predict_file: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.

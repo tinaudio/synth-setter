@@ -41,7 +41,7 @@ def test_throughput_callback_group_builds_the_two_builtin_monitors() -> None:
     assert kinds == {ThroughputMonitor, DeviceStatsMonitor}
 
 
-def _assert_common_sweep_shape(cfg: dict, expected_fragment: str) -> None:
+def _assert_common_sweep_shape(cfg: dict) -> None:
     assert cfg["program"] == "src/synth_setter/cli/train.py"
     assert cfg["method"] == "grid"
     assert cfg["metric"] == {"goal": "maximize", "name": "train/device/samples_per_sec"}
@@ -55,28 +55,15 @@ def _assert_common_sweep_shape(cfg: dict, expected_fragment: str) -> None:
     # 509 GiB dataset from being re-fetched per trial.
     assert "datamodule.download_dataset_root_uri=null" in cmd
     assert any(t.startswith("datamodule.dataset_root=") for t in cmd)
-    assert f"datamodule.use_fragment_sampler={expected_fragment}" in cmd
 
 
 def test_mapstyle_sweep_grids_the_worker_pool_axes() -> None:
-    """Map-style sweep varies workers/batch/ot and never touches fragment knobs."""
+    """Map-style sweep varies workers/batch/ot as the sole production loader path."""
     cfg = yaml.safe_load((_SWEEP_DIR / "loader_throughput_mapstyle.yaml").read_text())
-    _assert_common_sweep_shape(cfg, expected_fragment="false")
+    _assert_common_sweep_shape(cfg)
     assert set(cfg["parameters"]) == {
         "datamodule.num_workers",
         "datamodule.batch_size",
         "datamodule.ot",
     }
     assert cfg["parameters"]["datamodule.num_workers"]["values"] == [0, 12, 24]
-
-
-def test_fragment_sweep_pins_workers_zero_and_grids_readahead() -> None:
-    """Fragment sweep fixes num_workers=0 (constraint) and varies batch/readahead/ot."""
-    cfg = yaml.safe_load((_SWEEP_DIR / "loader_throughput_fragment.yaml").read_text())
-    _assert_common_sweep_shape(cfg, expected_fragment="true")
-    assert "datamodule.num_workers=0" in cfg["command"]
-    assert set(cfg["parameters"]) == {
-        "datamodule.batch_size",
-        "datamodule.batch_readahead",
-        "datamodule.ot",
-    }

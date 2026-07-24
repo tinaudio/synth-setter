@@ -1,5 +1,5 @@
 # Loader throughput sweep — map-style path (#2320 / #2231).
-# Grid over the worker-pool loader; batch_readahead is fragment-only so omitted.
+# Grid over the worker-pool loader (the sole production Lance train path).
 # Trials read a pre-hydrated local dataset_root (download uri nulled) so the
 # 509 GiB dataset is fetched once per pod, not per trial; max_steps is short
 # because we measure steady-state train/samples_per_sec, not convergence.
@@ -19,7 +19,6 @@ command:
   - training.val_audio_probe=false
   - datamodule.download_dataset_root_uri=null
   - datamodule.dataset_root=/workspace/data/surge-simple-lance-440k-20k-20k-20260706T005448315Z
-  - datamodule.use_fragment_sampler=false
   - ${args_no_hyphens}
 name: loader_throughput_mapstyle
 method: grid

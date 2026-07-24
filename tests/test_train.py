@@ -854,29 +854,6 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
 
 
-def test_train_fast_dev_run_fragment_sampler_yields_finite_loss(
-    cfg_train_lance: DictConfig,
-) -> None:
-    """Real training steps advance over the Lance fragment-sampler train path.
-
-    Drives the in-process ``train(cfg)`` entrypoint with
-    ``datamodule.use_fragment_sampler=true`` (#2251) and asserts a finite
-    train loss was logged from the Lance-native iterable stream.
-
-    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
-    """
-    with open_dict(cfg_train_lance):
-        cfg_train_lance.datamodule.use_fragment_sampler = True
-        cfg_train_lance.datamodule.num_workers = 0
-    HydraConfig().set_config(cfg_train_lance)
-
-    metric_dict, object_dict = train(cfg_train_lance)
-
-    assert object_dict["datamodule"].use_fragment_sampler is True
-    assert "train/loss" in metric_dict
-    assert torch.isfinite(metric_dict["train/loss"])
-
-
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
     cfg_train_lance: DictConfig,
 ) -> None:
