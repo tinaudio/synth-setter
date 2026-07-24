@@ -1,5 +1,7 @@
 """Tests for typed row-level seed debug documents."""
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -21,6 +23,22 @@ def test_seed_debug_document_json_round_trip_omits_absent_parameter_fields() -> 
 
     assert SeedDebugDocument.model_validate_json(encoded) == document
     assert "parameter_seed" not in encoded
+
+
+def test_seed_debug_document_without_consumed_seed_omits_seed() -> None:
+    """Rows rendered from fixed parameters have no concrete sampler seed."""
+    document = SeedDebugDocument(
+        master_seed=42,
+        sample_idx=9,
+        attempt=0,
+        shard_id=7,
+        parameter_source="fixed",
+    )
+
+    encoded = document.model_dump_json(exclude_none=True)
+
+    assert SeedDebugDocument.model_validate_json(encoded) == document
+    assert "seed" not in json.loads(encoded)
 
 
 def test_seed_debug_document_invalid_parameter_source_raises_validation_error() -> None:

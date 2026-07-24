@@ -308,6 +308,7 @@ def test_writer_marks_external_fixed_parameter_provenance(
 
     row = _read_debug_rows(out)[0]
     assert row.parameter_source == "fixed"
+    assert row.seed is None
     assert row.parameter_seed is None
 
 
@@ -351,6 +352,7 @@ def test_writer_persists_shard_cadence_parameter_seed_across_batches(
     make_lance_dataset(out, cfg, shard_id=7)
 
     rows = _read_debug_rows(out)
+    assert [row.seed for row in rows] == [seed_for_sample(_BASE_SEED, 12, 0), None, None]
     for sample_idx, row in enumerate(rows, start=12):
         assert row.sample_idx == sample_idx
         assert row.parameter_seed == seed_for_sample(_BASE_SEED, 12, 0)

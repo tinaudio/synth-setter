@@ -16,7 +16,7 @@ class SeedDebugDocument(BaseModel):
 
     .. attribute :: seed
 
-        Concrete seed used to render the row.
+        Concrete sampler seed consumed by the row, or ``None`` when sampling was bypassed.
 
     .. attribute :: master_seed
 
@@ -53,7 +53,7 @@ class SeedDebugDocument(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    seed: int = Field(ge=0)
+    seed: int | None = Field(default=None, ge=0)
     master_seed: int
     sample_idx: int = Field(ge=0)
     attempt: int = Field(ge=0)

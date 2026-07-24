@@ -94,10 +94,11 @@ def seed_debug_array(
     :param sample_indices: Stable logical row indices within the seed stream.
     :param attempts: Accepted loudness-gate attempt for each row.
     :param shard_id: Logical shard number, or ``None`` for an ad hoc render.
-    :param parameter_sample_idx: Seed-stream row that supplied a shard-cadence patch.
+    :param parameter_sample_idx: Seed-stream row that supplied a shard-cadence patch; other
+        rows reused that patch without consuming their row seed.
     :param parameter_attempt: Accepted attempt that supplied a shard-cadence patch.
     :param parameter_source: Whether parameters were sampled, fixed, or mixed.
-    :returns: JSON documents containing each concrete seed and its derivation inputs.
+    :returns: JSON documents containing consumed seeds and their derivation inputs.
     :raises ValueError: Input lengths differ or a debug document violates its schema.
     """
     if len(sample_indices) != len(attempts):
@@ -109,9 +110,13 @@ def seed_debug_array(
         if parameter_sample_idx is not None and parameter_attempt is not None
         else None
     )
-    documents = [
-        SeedDebugDocument(
-            seed=seed_for_sample(master_seed, sample_idx, attempt),
+    documents = []
+    for sample_idx, attempt in zip(sample_indices, attempts, strict=True):
+        row_consumed_seed = parameter_source != "fixed" and (
+            parameter_sample_idx is None or sample_idx == parameter_sample_idx
+        )
+        document = SeedDebugDocument(
+            seed=seed_for_sample(master_seed, sample_idx, attempt) if row_consumed_seed else None,
             master_seed=master_seed,
             sample_idx=sample_idx,
             attempt=attempt,
@@ -120,9 +125,8 @@ def seed_debug_array(
             parameter_seed=parameter_seed,
             parameter_sample_idx=parameter_sample_idx,
             parameter_attempt=parameter_attempt,
-        ).model_dump_json(exclude_none=True)
-        for sample_idx, attempt in zip(sample_indices, attempts, strict=True)
-    ]
+        )
+        documents.append(document.model_dump_json(exclude_none=True))
     return pa.array(documents, type=DEBUG_JSON_TYPE)
 
 

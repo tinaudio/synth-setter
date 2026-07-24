@@ -124,22 +124,34 @@ def test_seed_debug_array_serializes_seed_and_derivation_inputs() -> None:
     }
 
 
-def test_seed_debug_array_includes_shard_parameter_provenance() -> None:
-    """Shard-cadence documents distinguish row and reused-patch seeds."""
+def test_seed_debug_array_fixed_parameters_omit_unconsumed_seed() -> None:
+    """Fixed-parameter rows do not claim that their sampler seed was consumed."""
+    debug = seed_debug_array(42, [9], [0], shard_id=7, parameter_source="fixed")
+
+    assert json.loads(debug[0].as_py()) == {
+        "master_seed": 42,
+        "sample_idx": 9,
+        "attempt": 0,
+        "shard_id": 7,
+        "parameter_source": "fixed",
+    }
+
+
+def test_seed_debug_array_reused_patch_omits_unconsumed_row_seed() -> None:
+    """Shard-cadence rows identify the reused patch without claiming a row draw."""
     debug = seed_debug_array(
         42,
         [10],
-        [1],
+        [0],
         shard_id=7,
         parameter_sample_idx=9,
         parameter_attempt=2,
     )
 
     assert json.loads(debug[0].as_py()) == {
-        "seed": seed_for_sample(42, 10, 1),
         "master_seed": 42,
         "sample_idx": 10,
-        "attempt": 1,
+        "attempt": 0,
         "shard_id": 7,
         "parameter_source": "sampled",
         "parameter_seed": seed_for_sample(42, 9, 2),
