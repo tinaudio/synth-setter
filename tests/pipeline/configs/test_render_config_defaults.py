@@ -10,9 +10,11 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 _GENERIC_RENDER_FIELDS = {
+    "audio_dtype",
     "channels",
     "gui_toggle_cadence",
     "max_retries",
+    "mel_spec_dtype",
     "min_loudness",
     "parallel",
     "param_sample_cadence",
@@ -28,6 +30,8 @@ _GENERIC_RENDER_FIELDS = {
 # Each value differs from the VST base default so the assertion distinguishes an
 # applied override from a value that merely matches the default.
 _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
+    "audio_dtype": "float32",
+    "mel_spec_dtype": "float16",
     "samples_per_render_batch": 16,
     "max_retries": 3,
     "parallel": True,
@@ -134,6 +138,8 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     is ``"once"`` — safe on Darwin where ``"render"`` is rejected (#714).
     """
     spec = _spec_from_dataset_overrides([])
+    assert spec.render.audio_dtype == "float16"
+    assert spec.render.mel_spec_dtype == "float32"
     assert spec.render.samples_per_render_batch == 32
     assert spec.render.max_retries == 0
     assert spec.render.parallel is False
@@ -159,6 +165,8 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
     assert spec.render.plugin_path == "torchsynth"
     assert spec.render.plugin_state_path == ""
     assert spec.render.renderer_version == "1.0.2"
+    assert spec.render.audio_dtype == "float16"
+    assert spec.render.mel_spec_dtype == "float32"
     assert spec.render.gui_toggle_cadence == "never"
     # One shared voice per shard: rebuilding it per render would dominate render time.
     assert spec.render.plugin_reload_cadence == "once"

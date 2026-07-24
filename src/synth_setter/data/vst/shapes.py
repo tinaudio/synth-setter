@@ -9,6 +9,7 @@ VST renderer).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -30,10 +31,8 @@ CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 
-# Per-field on-disk dtype, matching what the Lance writer emits. Audio is
-# stored as ``float16`` for compressed storage efficiency; mel and params stay
-# ``float32``. Consumers upcast as needed; this map is the single source of
-# truth the validator enforces against each shard's schema.
+# Backward-compatible storage defaults. ``RenderConfig`` overrides signal
+# storage; parameter arrays retain the default dtype.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
     AUDIO_FIELD: np.dtype("float16"),
     MEL_SPEC_FIELD: np.dtype("float32"),
@@ -150,6 +149,19 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
     :rtype: tuple[int, int]
     """
     return (num_samples, num_params)
+
+
+def dataset_field_dtypes(render: RenderConfig) -> Mapping[str, np.dtype]:
+    """Return the configured physical dtype for each writer-emitted field.
+
+    :param render: Per-shard renderer config supplying signal storage dtypes.
+    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
+    """
+    return {
+        AUDIO_FIELD: np.dtype(render.audio_dtype),
+        MEL_SPEC_FIELD: np.dtype(render.mel_spec_dtype),
+        PARAM_ARRAY_FIELD: DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+    }
 
 
 def dataset_field_shapes(render: RenderConfig, num_params: int) -> dict[str, tuple[int, ...]]:

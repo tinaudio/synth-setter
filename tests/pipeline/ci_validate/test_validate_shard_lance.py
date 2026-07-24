@@ -86,6 +86,20 @@ def test_validate_lance_shard_accepts_split_local_sample_offset(tmp_path: Path) 
     assert validate_shard(shard, spec) == []
 
 
+def test_validate_lance_shard_accepts_configured_signal_dtypes(tmp_path: Path) -> None:
+    """Validation derives expected signal widths from the persisted render config.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    render = base.render.model_copy(update={"audio_dtype": "float32", "mel_spec_dtype": "float16"})
+    spec = build_lance_smoke_spec(render=render)
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+
+    assert validate_shard(shard, spec) == []
+
+
 def test_validate_lance_shard_accepts_valid_file(tmp_path: Path) -> None:
     """A structurally valid Lance shard returns no validation errors.
 

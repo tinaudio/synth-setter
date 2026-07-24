@@ -102,6 +102,32 @@ class TestRenderConfig:
         with pytest.raises(ValidationError):
             RenderConfig(**kwargs)
 
+    def test_storage_dtype_defaults_preserve_existing_dataset_encoding(self) -> None:
+        """Omitted storage dtypes use the RenderConfig defaults."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        assert cfg.audio_dtype == "float16"
+        assert cfg.mel_spec_dtype == "float32"
+
+    @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
+    def test_storage_dtype_accepts_float16_and_float32(self, field: str) -> None:
+        """Each stored signal tensor accepts either supported floating-point width.
+
+        :param field: RenderConfig storage field under test.
+        """
+        for dtype in ("float16", "float32"):
+            cfg = RenderConfig(**(_valid_render_kwargs() | {field: dtype}))
+            assert getattr(cfg, field) == dtype
+
+    @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
+    def test_storage_dtype_rejects_unsupported_dtype(self, field: str) -> None:
+        """Unsupported storage widths fail at the persisted spec boundary.
+
+        :param field: RenderConfig storage field under test.
+        """
+        with pytest.raises(ValidationError):
+            RenderConfig(**(_valid_render_kwargs() | {field: "int16"}))
+
     def test_param_spec_name_serializes_as_string(self) -> None:
         """The domain identifier preserves the registry key's JSON shape."""
         cfg = RenderConfig(**_valid_render_kwargs())

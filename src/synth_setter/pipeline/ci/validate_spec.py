@@ -24,7 +24,10 @@ from synth_setter.pipeline.spec_io import read_spec_text
 _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
 )
-_REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(sorted(RenderConfig.model_fields))
+_BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset({"audio_dtype", "mel_spec_dtype"})
+_REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
+    sorted(set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS)
+)
 
 
 def _parse_output_format(value: Any) -> OutputFormat | None:

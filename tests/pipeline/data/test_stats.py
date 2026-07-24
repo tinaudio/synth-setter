@@ -11,6 +11,7 @@ import pytest
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import stats as _stats_module
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 
 
@@ -357,12 +358,38 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
 
     mean, std = stats_script.stream_stats_lance([shard])
 
-    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
-
     rows = list(iter_lance_column_rows(shard, "mel_spec"))
     expected = np.stack(rows, axis=0)
     np.testing.assert_allclose(mean, expected.mean(axis=0))
     np.testing.assert_allclose(std, expected.std(axis=0))
+
+
+def test_fold_lance_float16_mel_accumulates_in_float32(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Float16 storage does not reduce the precision of Welford state.
+
+    :param stats_script: Imported stats module fixture.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    render = base.render.model_copy(update={"mel_spec_dtype": "float16"})
+    spec = build_lance_smoke_spec(render=render)
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+
+    count, mean, m2 = stats_script.fold_lance_shard_into_welford((0, 0, 0), shard)
+
+    stored_rows = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD))).astype(
+        np.float32
+    )
+    expected_mean = stored_rows.mean(axis=0)
+    expected_m2 = ((stored_rows - expected_mean) ** 2).sum(axis=0)
+    assert count == spec.render.samples_per_shard
+    assert isinstance(mean, np.ndarray) and mean.dtype == np.float32
+    assert isinstance(m2, np.ndarray) and m2.dtype == np.float32
+    np.testing.assert_allclose(mean, expected_mean, rtol=1e-6)
+    np.testing.assert_allclose(m2, expected_m2, rtol=1e-5)
 
 
 def test_stream_stats_lance_rejects_empty_shard_sequence(stats_script: ModuleType) -> None:

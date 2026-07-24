@@ -32,7 +32,11 @@ from synth_setter.data.vst.renderers import (
     PedalboardRenderer,
     TorchSynthRenderer,
 )
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
+from synth_setter.data.vst.shapes import (
+    DATASET_FIELD_NAMES,
+    dataset_field_dtypes,
+    dataset_field_shapes,
+)
 from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -46,7 +50,7 @@ def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
     """
     audio_name, mel_name, param_name = DATASET_FIELD_NAMES
     return {
-        audio_name: np.stack([s.audio.T for s in samples], axis=0).astype(np.float16),
+        audio_name: np.stack([s.audio.T for s in samples], axis=0),
         mel_name: np.stack([s.mel_spec for s in samples], axis=0),
         param_name: np.stack([s.param_array for s in samples], axis=0),
     }
@@ -258,9 +262,10 @@ def make_lance_dataset(
     """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
     Not resumable: any dataset already at ``lance_dir`` is overwritten on each
-    run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
-    ``float32``. The shard metadata is embedded in Arrow schema metadata so
-    validation and finalize recover the sidecar payload at read time. Each
+    run. Audio and mel-spectrogram tensors use their configured physical
+    dtypes; parameter arrays retain their fixed storage dtype. The shard metadata
+    is embedded in Arrow schema metadata so validation and finalize recover the sidecar
+    payload at read time. Each
     render batch becomes one Lance fragment, committed as one dataset at the
     end, then compacted to a single fragment with pre-compaction manifests and
     data files removed.
@@ -296,7 +301,11 @@ def make_lance_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
+    schema = lance_schema(
+        dataset_field_shapes(render_cfg, param_spec.encoded_width),
+        meta,
+        field_dtypes=dataset_field_dtypes(render_cfg),
+    )
     lance_path.parent.mkdir(parents=True, exist_ok=True)
     staging_path = Path(tempfile.mkdtemp(dir=lance_path.parent, prefix=f".{lance_path.name}.tmp-"))
 

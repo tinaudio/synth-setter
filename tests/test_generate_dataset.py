@@ -44,7 +44,9 @@ from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
+from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.finalize_dataset import finalize_lance
@@ -179,6 +181,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         cfg_dataset.output_format = "lance"
         cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float16"
         # Pin r2.prefix so the spec built here for assertions and the one
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
@@ -247,9 +251,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
             f"got files: {sorted(staged_names)}"
         )
         split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
-        assert list(split_data.glob("*.lance")), (
-            f"no fragment data under {split_data} for {shard.filename}"
-        )
+        data_files = list(split_data.glob("*.lance"))
+        assert data_files, f"no fragment data under {split_data} for {shard.filename}"
+        physical_schema = LanceFileReader(str(data_files[0])).metadata().schema
+        assert physical_schema.field("audio").type.value_type == pa.float32()
+        assert physical_schema.field("mel_spec").type.value_type == pa.float16()
 
     renderer_invocations = 0
 

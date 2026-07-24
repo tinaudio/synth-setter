@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-16
+> **Last Updated**: 2026-07-23
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 
@@ -841,7 +841,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 The pipeline's output format is **Lance**. The renderer CLI dispatches on the shard's filename suffix (`.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata and the on-disk format pinned to `data_storage_version="2.2"`.
+Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, while `param_array` stays float32. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
 
 **Why Lance:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU random-access case and the multi-GPU streaming case.
 
@@ -1197,6 +1197,8 @@ class RenderConfig(BaseModel):
     velocity: int
     signal_duration_seconds: float
     min_loudness: float
+    audio_dtype: Literal["float16", "float32"] = "float16"
+    mel_spec_dtype: Literal["float16", "float32"] = "float32"
     samples_per_render_batch: int = 32
     samples_per_shard: int
     sample_offset: int = 0      # split-local index of this shard's first row
@@ -1362,8 +1364,8 @@ precision loss. The `.npz` contains Welford state:
 | Array   | Type      | Meaning                                   |
 | ------- | --------- | ----------------------------------------- |
 | `count` | `int64`   | Number of rows represented                |
-| `mean`  | `float64` | Running mean for normalization statistics |
-| `m2`    | `float64` | Running sum of squared deviations         |
+| `mean`  | `float32` | Running mean for normalization statistics |
+| `m2`    | `float32` | Running sum of squared deviations         |
 
 Finalize reduces only the selected winners' `.shard-stats.npz` files into
 dataset-level `stats.npz`.
