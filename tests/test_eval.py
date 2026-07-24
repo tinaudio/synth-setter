@@ -17,7 +17,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal, NamedTuple, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -841,6 +841,8 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
         "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
         copy_stats,
     )
+    ensure_r2 = MagicMock(side_effect=AssertionError("R2 preflight called"))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", ensure_r2)
     cfg = _compose_fake_oracle_eval_cfg(
         tmp_path,
         destination,
@@ -855,6 +857,7 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = evaluate(cfg)
 
+    ensure_r2.assert_not_called()
     assert torch.isfinite(metric_dict["test/param_mse"])
     datamodule = object_dict["datamodule"]
     datamodule.setup("test")

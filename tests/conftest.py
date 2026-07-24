@@ -22,6 +22,7 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
@@ -111,9 +112,7 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
     return scaled_timeout(num_samples, overhead_seconds=300.0, per_sample_seconds=60.0)
 
 
-# Probed from the env var, no network hit — AGENTS.md's `rclone lsd r2:` is for
-# interactive verification, not the skip criterion. VST presence lives in tests._vst.
-_R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
+_R2_AVAILABLE = r2_io.is_r2_reachable()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -125,10 +124,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
-    skip_r2 = pytest.mark.skip(
-        reason="R2 credentials absent (RCLONE_CONFIG_R2_ACCESS_KEY_ID not set); "
-        "run `rclone lsd r2:` to verify"
-    )
+    skip_r2 = pytest.mark.skip(reason="R2 remote is not reachable; run `rclone lsd r2:` to verify")
     for item in items:
         if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)

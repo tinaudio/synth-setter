@@ -11,7 +11,14 @@ import pyarrow as pa
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES, DEBUG_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_MP3_FIELD,
+    AUDIO_MP3_FIELD_METADATA,
+    AUDIO_UUID_FIELD,
+    DATASET_FIELD_DTYPES,
+    DATASET_FIELD_NAMES,
+    DEBUG_FIELD,
+)
 from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
@@ -28,6 +35,17 @@ LANCE_DATA_STORAGE_VERSION = "2.2"
 # Refs https://github.com/tinaudio/synth-setter/issues/1775: keep one data file
 # below S3's 10k multipart-part ceiling even at 5 MiB parts.
 LANCE_MAX_BYTES_PER_FILE = 32 * 1024**3
+PREVIEW_SCHEMA = pa.schema(
+    [
+        pa.field(
+            AUDIO_MP3_FIELD,
+            pa.binary(),
+            nullable=False,
+            metadata=AUDIO_MP3_FIELD_METADATA,
+        ),
+        pa.field(AUDIO_UUID_FIELD, pa.string(), nullable=False),
+    ]
+)
 
 
 def lance_schema(
@@ -55,6 +73,7 @@ def lance_schema(
         )
         fields.append(pa.field(field, tensor_type, nullable=False))
     fields.append(pa.field(DEBUG_FIELD, DEBUG_JSON_TYPE, nullable=False))
+    fields.extend(PREVIEW_SCHEMA)
     return pa.schema(
         fields,
         metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")},
@@ -120,28 +139,34 @@ def seed_debug_array(
 
 
 def record_batch_from_arrays(
-    arrays: dict[str, np.ndarray],
+    arrays: Mapping[str, np.ndarray | Sequence[bytes] | Sequence[str]],
     schema: pa.Schema,
     *,
     debug: pa.Array | None,
 ) -> pa.RecordBatch:
     """Build a Lance record batch from numpy arrays keyed by dataset field.
 
-    :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
+    :param arrays: Mapping with tensor and preview values keyed by field name.
     :param schema: Schema returned by :func:`lance_schema`.
     :param debug: Row-level seed provenance; ``None`` writes empty documents for fixtures.
     :returns: Arrow record batch for :func:`write_lance_dataset` / :func:`lance_fragment`.
+    :raises TypeError: A tensor field is not backed by a compatible NumPy array.
     """
     columns = []
-    for field in DATASET_FIELD_NAMES:
-        # Read dtype and shape from the schema so an overridden field wins over
-        # the global DATASET_FIELD_DTYPES default and the batch matches the file.
-        tensor_type = schema.field(field).type
-        np_dtype = np.dtype(tensor_type.value_type.to_pandas_dtype())
-        columns.append(tensor_array(arrays[field], np_dtype, tuple(tensor_type.shape)))
-    if debug is None:
-        debug = pa.repeat(pa.scalar("{}", type=DEBUG_JSON_TYPE), len(columns[0]))
-    columns.append(debug)
+    for field in schema:
+        if field.name == DEBUG_FIELD:
+            if debug is None:
+                debug = pa.repeat(pa.scalar("{}", type=DEBUG_JSON_TYPE), len(columns[0]))
+            columns.append(debug)
+            continue
+        values = arrays[field.name]
+        if isinstance(field.type, pa.FixedShapeTensorType):
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"tensor field {field.name!r} requires a numpy array")
+            np_dtype = np.dtype(field.type.value_type.to_pandas_dtype())
+            columns.append(tensor_array(values, np_dtype, tuple(field.type.shape)))
+        else:
+            columns.append(pa.array(values, type=field.type))
     return pa.record_batch(columns, schema=schema)
 
 

@@ -20,10 +20,15 @@ if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import RenderConfig
 
 AUDIO_FIELD: str = "audio"
+AUDIO_MP3_FIELD: str = "audio_mp3"
+AUDIO_UUID_FIELD: str = "audio_uuid"
 DEBUG_FIELD: str = "debug"
 MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+PREVIEW_FIELD_NAMES: tuple[str, ...] = (AUDIO_MP3_FIELD, AUDIO_UUID_FIELD)
+
+AUDIO_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 
 # Optional audio-embedding columns appended post-hoc by the add_embeddings CLI;
 # not in DATASET_FIELD_NAMES because the writers never emit them.

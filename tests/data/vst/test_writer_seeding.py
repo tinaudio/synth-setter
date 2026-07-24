@@ -382,6 +382,7 @@ def test_writer_persists_nonzero_accepted_attempt(
         *,
         warmup: bool = False,
         seed: SampleSeed | None = None,
+        audio_dtype: str = "float16",
     ) -> VSTDataSample:
         sample = original_generate_sample(
             renderer,
@@ -392,6 +393,7 @@ def test_writer_persists_nonzero_accepted_attempt(
             fixed_note_params,
             warmup=warmup,
             seed=seed,
+            audio_dtype=audio_dtype,
         )
         sample.attempt = 2
         sample.sampler_seed = seed_for_sample(_BASE_SEED, 12, 2)

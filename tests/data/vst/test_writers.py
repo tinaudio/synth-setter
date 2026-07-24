@@ -55,6 +55,24 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
 
 
+def test_make_lance_dataset_unsupported_mp3_rate_fails_before_renderer_setup(
+    tmp_path: Path,
+) -> None:
+    """An MP3-incompatible render rate fails before resolving the plugin contract.
+
+    :param tmp_path: Pytest fixture providing a fresh output path.
+    """
+    render_cfg = _smoke_render_cfg(sample_rate=100)
+
+    with (
+        patch("synth_setter.data.vst.writers.resolve_param_spec") as resolve_param_spec,
+        pytest.raises(ValueError, match="MP3 previews require sample_rate"),
+    ):
+        writers.make_lance_dataset(tmp_path / "shard.lance", render_cfg)
+
+    resolve_param_spec.assert_not_called()
+
+
 def test_render_config_shard_metadata_projects_render_provenance_fields() -> None:
     """``RenderConfig.shard_metadata`` returns a strict ``ShardMetadata`` with renderer values."""
     render_cfg = _smoke_render_cfg(

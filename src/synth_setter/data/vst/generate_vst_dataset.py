@@ -8,6 +8,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
+from synth_setter.data.vst.audio_preview import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
+)
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
@@ -63,6 +68,9 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
+    audio_dtype: str = "float16"
+    audio_mp3: bytes = field(init=False)
+    audio_uuid: str = field(init=False)
     param_array: np.ndarray = field(init=False)
     # Concrete sampler seed consumed for this row; fully fixed renders consume none.
     sampler_seed: int | None = None
@@ -73,6 +81,13 @@ class VSTDataSample:
     silent_rejections: int = 0
 
     def __post_init__(self) -> None:
+        persisted_audio = np.ascontiguousarray(self.audio.T, dtype=self.audio_dtype)
+        self.audio_mp3 = encode_audio_to_mp3(
+            persisted_audio,
+            int(self.sample_rate),
+            DEFAULT_MP3_BITRATE_KBPS,
+        )
+        self.audio_uuid = audio_uuid(persisted_audio)
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -101,6 +116,7 @@ def generate_sample(
     *,
     warmup: bool = False,
     seed: SampleSeed | None = None,
+    audio_dtype: str = "float16",
 ) -> VSTDataSample:
     """Render a single VST sample, retrying silent draws up to the attempt budget.
 
@@ -130,6 +146,7 @@ def generate_sample(
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
@@ -207,6 +224,7 @@ def generate_sample(
             sample_rate=renderer.sample_rate,
             channels=renderer.channels,
             param_spec=param_spec,
+            audio_dtype=audio_dtype,
             sampler_seed=sampler_seed,
             attempt=attempt,
             clipped_rejections=clipped_rejections,
