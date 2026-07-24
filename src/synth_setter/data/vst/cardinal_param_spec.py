@@ -1,4 +1,10 @@
-"""Curated host controls for the Cardinal Synth 26.02 baseline patch."""
+"""Curated host controls for the Cardinal Synth 26.02 baseline patch.
+
+Typical usage::
+
+    synth_params, note_params = CARDINAL_PARAM_SPEC.sample()
+    frequency_target = CARDINAL_HOST_PARAMETER_TARGETS["parameter_1_v"]
+"""
 
 from collections.abc import Mapping
 from types import MappingProxyType

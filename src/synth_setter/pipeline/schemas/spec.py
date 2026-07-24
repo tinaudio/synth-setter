@@ -39,7 +39,11 @@ from synth_setter.pipeline.schemas.shard_metadata import (
     DEFAULT_ATTEMPTS_PER_SAMPLE,
     ShardMetadata,
 )
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME, RendererBackend
+from synth_setter.renderer_backend import (
+    TORCHSYNTH_PLUGIN_NAME,
+    PluginProcessResetMode,
+    RendererBackend,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -326,11 +330,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "local disk scales with pool size."
         ),
     )
-    reset_plugin_before_process: bool = Field(
-        default=True,
+    process_reset_mode: PluginProcessResetMode = Field(
+        default="reset",
         description=(
-            "Whether pedalboard resets plugin state before each process call. Disable for "
-            "plugins whose host-parameter automation is cleared by pedalboard's reset."
+            "Whether pedalboard resets or preserves plugin state before each process call. "
+            'Use ``"preserve"`` when reset clears host-parameter automation.'
         ),
     )
     plugin_reload_cadence: _PluginReloadCadence = Field(

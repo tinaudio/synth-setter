@@ -100,7 +100,7 @@ def test_cardinal_smoke_experiment_covers_every_split_with_real_plugin_state() -
     spec = _compose_dataset_spec("generate_dataset/cardinal-smoke")
 
     assert spec.render.param_spec_name == "cardinal"
-    assert spec.render.reset_plugin_before_process is False
+    assert spec.render.process_reset_mode == "preserve"
     assert spec.render.samples_per_shard == 2
     assert spec.render.samples_per_render_batch == 2
     assert spec.train_val_test_sizes == (2, 2, 2)

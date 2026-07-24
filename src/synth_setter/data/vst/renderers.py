@@ -28,6 +28,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     KEYBOARD_DURATION_BOUNDS,
     PARAM_INDEX,
 )
+from synth_setter.renderer_backend import PluginProcessResetMode
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -178,13 +179,13 @@ class PedalboardRenderer(AudioRenderer):
 
        Optional preloaded pedalboard plugin instance.
 
-    .. attribute :: reset_plugin_before_process
+    .. attribute :: process_reset_mode
 
-       Whether pedalboard resets plugin state before each process call.
+       Whether pedalboard resets or preserves plugin state for each process call.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
-    reset_plugin_before_process: bool = True
+    process_reset_mode: PluginProcessResetMode = "reset"
 
     def render(
         self,
@@ -219,7 +220,7 @@ class PedalboardRenderer(AudioRenderer):
                 plugin_state_path=self.plugin_state_path,
                 plugin=self.plugin,
                 warmup=warmup,
-                reset_plugin_before_process=self.reset_plugin_before_process,
+                process_reset_mode=self.process_reset_mode,
             ),
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),

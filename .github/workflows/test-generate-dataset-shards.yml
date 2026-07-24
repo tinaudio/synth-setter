@@ -1,11 +1,6 @@
 name: Test Generate Dataset Shards (Real R2 + VST)
 
-# Runs the `integration_r2`-gated end-to-end test in
-# `tests/test_generate_dataset.py` against real Cloudflare R2 inside
-# the `tinaudio/synth-setter:dev-snapshot` Docker image so the real VST render
-# paths (Xvfb + xsettingsd + dbus) run against the live R2 bucket.
-# Mirrors `test-local-launcher-roundtrip.yml`'s R2 secrets + fork-PR gate
-# and `test-vst-slow.yml`'s Docker + headless-X11 wrapper.
+# Exercises real VST rendering and R2 shard I/O in the CI container.
 
 on:
   workflow_dispatch:

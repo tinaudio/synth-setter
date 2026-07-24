@@ -1349,6 +1349,80 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
 
+def _run_cardinal_hydra_workers(cfg: DictConfig) -> None:
+    """Run each Cardinal worker rank and surface bounded failure diagnostics.
+
+    :param cfg: Cardinal smoke configuration with pinned R2 and run identity.
+    """
+    worker_entrypoint = Path(sys.executable).parent / "synth-setter-generate-dataset-from-hydra"
+    assert worker_entrypoint.is_file(), f"worker entrypoint missing: {worker_entrypoint}"
+    worker_root = Path(cfg.paths.output_dir) / "cardinal-workers"
+    num_workers = int(cfg.skypilot_launch.num_workers)
+    for rank in range(num_workers):
+        worker_dir = worker_root / f"rank-{rank}"
+        env = {
+            **os.environ,
+            "SYNTH_SETTER_WORKER_RANK": str(rank),
+            "SYNTH_SETTER_NUM_WORKERS": str(num_workers),
+        }
+        result = subprocess.run(  # noqa: S603 — fixed Hydra worker entrypoint and overrides
+            [
+                str(worker_entrypoint),
+                "experiment=generate_dataset/cardinal-smoke",
+                f"+r2.prefix={cfg.r2.prefix}",
+                f"run_id={cfg.run_id}",
+                f"+created_at={cfg.created_at}",
+                "~logger",
+                f"hydra.run.dir={worker_dir}",
+            ],
+            cwd=_REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+        assert result.returncode == 0, (
+            f"Cardinal Hydra worker rank {rank} exited {result.returncode}\n"
+            f"--- STDOUT (tail) ---\n{result.stdout[-3000:]}\n"
+            f"--- STDERR (tail) ---\n{result.stderr[-3000:]}"
+        )
+
+
+def _assert_cardinal_finalized_split(spec: DatasetSpec, split: Split) -> None:
+    """Assert one finalized Cardinal split is readable with its full row contract.
+
+    :param spec: Finalized Cardinal dataset specification.
+    :param split: Dataset split to validate.
+    """
+    split_uri, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
+    dataset = lance.dataset(split_uri, storage_options=storage_options)
+    assert dataset.count_rows() == 2
+    assert {AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD}.issubset(dataset.schema.names)
+
+    audio_rows = iter_lance_column_rows(split_uri, AUDIO_FIELD, storage_options=storage_options)
+    mel_rows = iter_lance_column_rows(split_uri, MEL_SPEC_FIELD, storage_options=storage_options)
+    param_rows = iter_lance_column_rows(
+        split_uri, PARAM_ARRAY_FIELD, storage_options=storage_options
+    )
+    for audio, mel, params in zip(audio_rows, mel_rows, param_rows, strict=True):
+        assert audio.shape == (2, 176_400)
+        assert mel.shape == (2, 128, 401)
+        assert params.shape == (13,)
+        assert audio.dtype == np.float16
+        assert mel.dtype == np.float32
+        assert params.dtype == np.float32
+        assert np.isfinite(audio).all()
+        assert np.isfinite(mel).all()
+        assert np.isfinite(params).all()
+        assert np.max(np.abs(audio)) <= 1.0
+        assert np.sqrt(np.mean(np.square(audio.astype(np.float32)))) > 0.001
+
+        synth, note = param_specs["cardinal"].decode(params.astype(np.float32))
+        assert set(synth) == set(param_specs["cardinal"].synth_param_names)
+        assert set(note) == set(param_specs["cardinal"].note_param_names)
+
+
 @pytest.mark.integration_r2
 @pytest.mark.r2
 @pytest.mark.requires_vst
@@ -1377,42 +1451,10 @@ def test_cardinal_smoke_generates_and_finalizes_real_r2_dataset(
     if not plugin_bundle.exists():
         pytest.skip(f"Cardinal bundle not found at {plugin_bundle}")
 
-    worker_entrypoint = Path(sys.executable).parent / "synth-setter-generate-dataset-from-hydra"
-    assert worker_entrypoint.is_file(), f"worker entrypoint missing: {worker_entrypoint}"
-    worker_root = Path(cfg_dataset_cardinal.paths.output_dir) / "cardinal-workers"
-    num_workers = int(cfg_dataset_cardinal.skypilot_launch.num_workers)
     r2_io.ensure_r2_env_loaded()
     try:
         upload_spec(spec)
-        for rank in range(num_workers):
-            worker_dir = worker_root / f"rank-{rank}"
-            env = {
-                **os.environ,
-                "SYNTH_SETTER_WORKER_RANK": str(rank),
-                "SYNTH_SETTER_NUM_WORKERS": str(num_workers),
-            }
-            result = subprocess.run(  # noqa: S603 — fixed Hydra worker entrypoint and overrides
-                [
-                    str(worker_entrypoint),
-                    "experiment=generate_dataset/cardinal-smoke",
-                    f"+r2.prefix={unique_prefix}",
-                    f"run_id={run_id}",
-                    f"+created_at={created_at}",
-                    "~logger",
-                    f"hydra.run.dir={worker_dir}",
-                ],
-                cwd=_REPO_ROOT,
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=300,
-            )
-            assert result.returncode == 0, (
-                f"Cardinal Hydra worker rank {rank} exited {result.returncode}\n"
-                f"--- STDOUT (tail) ---\n{result.stdout[-3000:]}\n"
-                f"--- STDERR (tail) ---\n{result.stderr[-3000:]}"
-            )
+        _run_cardinal_hydra_workers(cfg_dataset_cardinal)
 
         for shard in spec.shards:
             assert shard_has_complete_attempt(spec, shard.shard_id)
@@ -1423,36 +1465,7 @@ def test_cardinal_smoke_generates_and_finalizes_real_r2_dataset(
         assert r2_io.object_size(spec.r2.stats_uri()) is not None
         assert r2_io.object_size(spec.r2.dataset_card_uri()) is not None
         for split in ("train", "val", "test"):
-            split_uri, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
-            dataset = lance.dataset(split_uri, storage_options=storage_options)
-            assert dataset.count_rows() == 2
-            assert {AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD}.issubset(dataset.schema.names)
-
-            audio_rows = iter_lance_column_rows(
-                split_uri, AUDIO_FIELD, storage_options=storage_options
-            )
-            mel_rows = iter_lance_column_rows(
-                split_uri, MEL_SPEC_FIELD, storage_options=storage_options
-            )
-            param_rows = iter_lance_column_rows(
-                split_uri, PARAM_ARRAY_FIELD, storage_options=storage_options
-            )
-            for audio, mel, params in zip(audio_rows, mel_rows, param_rows, strict=True):
-                assert audio.shape == (2, 176_400)
-                assert mel.shape == (2, 128, 401)
-                assert params.shape == (13,)
-                assert audio.dtype == np.float16
-                assert mel.dtype == np.float32
-                assert params.dtype == np.float32
-                assert np.isfinite(audio).all()
-                assert np.isfinite(mel).all()
-                assert np.isfinite(params).all()
-                assert np.max(np.abs(audio)) <= 1.0
-                assert np.sqrt(np.mean(np.square(audio.astype(np.float32)))) > 0.001
-
-                synth, note = param_specs["cardinal"].decode(params.astype(np.float32))
-                assert set(synth) == set(param_specs["cardinal"].synth_param_names)
-                assert set(note) == set(param_specs["cardinal"].note_param_names)
+            _assert_cardinal_finalized_split(spec, split)
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 

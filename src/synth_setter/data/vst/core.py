@@ -13,6 +13,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import PluginProcessResetMode
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -205,17 +206,17 @@ def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -
 
 def _flush_plugin(
     plugin: VST3Plugin,
+    *,
     sample_rate: float,
     channels: int,
-    reset_plugin_before_process: bool,
+    process_reset_mode: PluginProcessResetMode,
 ) -> None:
-    """Drain queued audio, then clear the plugin's processing buffers.
+    """Process an event-free flush under the selected reset mode, then reset the plugin.
 
-    :param plugin: Loaded VST3 plugin instance.
-    :param sample_rate: Audio sample rate in Hz.
-    :param channels: Number of output channels.
-    :param reset_plugin_before_process: Whether pedalboard resets plugin state before processing
-        the flush.
+    :param plugin: Loaded instance to clear for deterministic reuse.
+    :param sample_rate: Flush sample rate in Hz.
+    :param channels: Output channels requested from the host.
+    :param process_reset_mode: State policy applied before the event-free process call.
     """
     plugin.process(
         [],
@@ -223,7 +224,7 @@ def _flush_plugin(
         sample_rate,
         channels,
         _PROCESS_BLOCK_SIZE,
-        reset_plugin_before_process,
+        process_reset_mode == "reset",
     )
     plugin.reset()
 
@@ -241,7 +242,7 @@ def render_params(
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
-    reset_plugin_before_process: bool = True,
+    process_reset_mode: PluginProcessResetMode = "reset",
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
@@ -262,8 +263,7 @@ def render_params(
     :param plugin_state_path: Optional pedalboard plugin-state file to load.
     :param plugin: Existing plugin instance to reuse.
     :param warmup: Whether to run the plugin warm-up sequence.
-    :param reset_plugin_before_process: Whether each pedalboard process call starts
-        by resetting plugin state.
+    :param process_reset_mode: Whether each process call resets or preserves plugin state.
     :returns: Rendered audio as a channel-first NumPy array.
     """
     if plugin is None:
@@ -275,13 +275,23 @@ def render_params(
         warmup_plugin(plugin)
 
     logger.debug("post-load flush")
-    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
+    _flush_plugin(
+        plugin,
+        sample_rate=sample_rate,
+        channels=channels,
+        process_reset_mode=process_reset_mode,
+    )
 
     logger.debug("setting params")
     set_params(plugin, params)
 
     logger.debug("post-param flush")
-    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
+    _flush_plugin(
+        plugin,
+        sample_rate=sample_rate,
+        channels=channels,
+        process_reset_mode=process_reset_mode,
+    )
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
@@ -292,11 +302,16 @@ def render_params(
         sample_rate,
         channels,
         _PROCESS_BLOCK_SIZE,
-        reset_plugin_before_process,
+        process_reset_mode == "reset",
     )
 
     logger.debug("post-render flush")
-    _flush_plugin(plugin, sample_rate, channels, reset_plugin_before_process)
+    _flush_plugin(
+        plugin,
+        sample_rate=sample_rate,
+        channels=channels,
+        process_reset_mode=process_reset_mode,
+    )
 
     return output
 

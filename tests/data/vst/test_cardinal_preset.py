@@ -166,7 +166,7 @@ def cardinal_renderer() -> PedalboardRenderer:
         channels=2,
         signal_duration_seconds=2.0,
         plugin=plugin,
-        reset_plugin_before_process=False,
+        process_reset_mode="preserve",
     )
 
 
@@ -176,12 +176,34 @@ def _render(cardinal_renderer: PedalboardRenderer, **overrides: float) -> np.nda
 
 
 def _rms(audio: np.ndarray) -> float:
-    """Return the root-mean-square amplitude.
+    """Compute RMS for finite floating-point stereo audio shaped ``(2, samples)``.
 
-    :param audio: Audio samples.
-    :returns: Root-mean-square amplitude.
+    :param audio: Non-empty channel-first stereo samples.
+    :returns: One amplitude value reduced across channels and samples.
     """
+    assert audio.ndim == 2 and audio.shape[0] == 2 and audio.shape[1] > 0
+    assert np.issubdtype(audio.dtype, np.floating)
+    assert np.isfinite(audio).all()
     return float(np.sqrt(np.mean(np.square(audio))))
+
+
+@pytest.mark.parametrize(
+    "audio",
+    [
+        np.zeros(8, dtype=np.float32),
+        np.zeros((8, 2), dtype=np.float32),
+        np.empty((2, 0), dtype=np.float32),
+        np.zeros((2, 8), dtype=np.int16),
+        np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32),
+    ],
+)
+def test_rms_malformed_audio_raises(audio: np.ndarray) -> None:
+    """Malformed audio cannot produce a plausible control-effect metric.
+
+    :param audio: Invalid audio representation under test.
+    """
+    with pytest.raises(AssertionError):
+        _rms(audio)
 
 
 def test_cardinal_preset_renders_finite_non_silent_stereo(

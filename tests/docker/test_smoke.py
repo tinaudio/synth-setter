@@ -31,10 +31,7 @@ skip_no_pedalboard = pytest.mark.skipif(
     reason="pedalboard not installed (run inside Docker image)",
 )
 
-# Synths baked in by the Dockerfile's vst3-synths-fetch stage;
-# the second element pins the plugin to instantiate in multi-plugin bundles.
-# Absent bundles skip rather than fail — the Dockerfile's build-time
-# validation is the hard gate that the image itself has them.
+# Bundled synth smoke cases; absent bundles skip because image validation is authoritative.
 EXTRA_SYNTH_VST3S = (
     ("/usr/lib/vst3/CardinalSynth.vst3", None),
     ("/usr/lib/vst3/Dexed.vst3", None),
