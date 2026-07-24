@@ -391,9 +391,8 @@ class LanceVSTDataModule(VSTDataModule):
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
-        materialize_columns: bool = False,
-        dataset_txids: dict[str, str] | None = None,
-        subset_rows: int | None = None,
+        download_dataset_txids: dict[str, str] | None = None,
+        download_dataset_row_limit: int | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -412,11 +411,10 @@ class LanceVSTDataModule(VSTDataModule):
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
-        :param materialize_columns: Whether hydration rematerializes each split
-            as a txid-pinned column/row subset instead of copying the whole root.
-        :param dataset_txids: Per-split transaction uuids pinning the source
-            snapshots; required when ``materialize_columns`` is set.
-        :param subset_rows: First-N rows per split at materialization time.
+        :param download_dataset_txids: Per-split transaction uuids pinning the
+            source snapshots; present selects the materialize path.
+        :param download_dataset_row_limit: First-N rows per split at materialization
+            time.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -431,9 +429,8 @@ class LanceVSTDataModule(VSTDataModule):
             conditioning=conditioning,
             pin_memory=pin_memory,
             param_spec_name=param_spec_name,
-            materialize_columns=materialize_columns,
-            dataset_txids=dataset_txids,
-            subset_rows=subset_rows,
+            download_dataset_txids=download_dataset_txids,
+            download_dataset_row_limit=download_dataset_row_limit,
         )
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor

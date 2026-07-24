@@ -309,7 +309,7 @@ Behavior:
 
 - Local-only by default
 - If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
-- If `materialize_columns` is set, each split is instead rematerialized locally as a txid-pinned, projected/row-limited copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); only non-Lance sidecars still download via `download_dir_no_overwrite`
+- If `download_dataset_txids` is set, each split is instead rematerialized locally as a txid-pinned, projected/row-limited copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); only non-Lance sidecars still download via `download_dir_no_overwrite`
 - No hidden default R2 fetch
 
 ### 6.2 Checkpoint Durability via R2

@@ -128,7 +128,7 @@ def test_materialize_splits_builds_projected_capped_splits_per_txid(
         dest_root,
         txids=txids,
         columns_for=columns_for,
-        subset_rows=2,
+        row_limit=2,
         shard_suffix=".lance",
     )
 
@@ -159,7 +159,7 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
         dest_root,
         txids={},
         columns_for=lambda _split: (),
-        subset_rows=None,
+        row_limit=None,
         shard_suffix=".lance",
     )
 

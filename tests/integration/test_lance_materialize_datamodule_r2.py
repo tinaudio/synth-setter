@@ -60,9 +60,8 @@ def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
     module = LanceVSTDataModule(
         dataset_root=destination,
         download_dataset_root_uri=_ROOT_URI,
-        materialize_columns=True,
-        dataset_txids=txids,
-        subset_rows=_SUBSET_ROWS,
+        download_dataset_txids=txids,
+        download_dataset_row_limit=_SUBSET_ROWS,
         batch_size=_BATCH_SIZE,
         num_workers=0,
         pin_memory=False,

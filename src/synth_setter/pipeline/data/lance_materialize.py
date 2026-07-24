@@ -284,7 +284,7 @@ def materialize_splits(
     *,
     txids: dict[str, str],
     columns_for: Callable[[str], Sequence[str]],
-    subset_rows: int | None,
+    row_limit: int | None,
     shard_suffix: str,
 ) -> None:
     """Materialize each pinned split under a root, then rclone non-Lance sidecars.
@@ -295,7 +295,7 @@ def materialize_splits(
         ``dest_root / f"{split}{shard_suffix}"``.
     :param txids: Per-split transaction uuids pinning each split's source snapshot.
     :param columns_for: Callback returning the columns to project for a given split name.
-    :param subset_rows: First-N row cap per split, or ``None`` for all rows.
+    :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
     for split, txid in txids.items():
@@ -305,7 +305,7 @@ def materialize_splits(
             dest_root / name,
             txid=txid,
             columns=columns_for(split),
-            limit=subset_rows,
+            limit=row_limit,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
     # split datasets and pipeline-internal metadata/ never feed the loaders.

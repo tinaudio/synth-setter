@@ -12,14 +12,11 @@ persistent_workers: true
 # Null delegates prefetch depth to PyTorch; in-process loading ignores it.
 prefetch_factor: null
 predict_file: null
-# Hydrate splits via txid-pinned projected rematerialization instead of the
-# whole-dir rclone copy (#2353); columns are derived from the loader read set.
-materialize_columns: false
-# Per-split {train/val/test: transaction-uuid} pins; required when
-# materialize_columns is true — each split has its own transaction history.
-dataset_txids: null
-# First-N rows per split at materialization time; null keeps all rows.
-subset_rows: null
+# Per-split {train/val/test: transaction-uuid} pins; present selects txid-pinned
+# projected rematerialization instead of a whole-dir copy.
+download_dataset_txids: null
+# First-N rows per split at materialization time; requires txids, null keeps all rows.
+download_dataset_row_limit: null
 # Mandatory: each concrete config declares its synth's spec — a default here
 # would silently pair the wrong spec with the dataset.
 param_spec_name: ???
