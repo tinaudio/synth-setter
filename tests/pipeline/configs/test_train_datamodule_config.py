@@ -62,16 +62,3 @@ def test_train_datamodule_prefetch_factor_override_composes() -> None:
     """A prefetch-factor launch override reaches the datamodule."""
     datamodule = _instantiate_train_datamodule("datamodule.prefetch_factor=4")
     assert datamodule.prefetch_factor == 4
-
-
-def test_train_datamodule_fragment_sampler_defaults_off() -> None:
-    """Without an override the datamodule keeps the map-style train path."""
-    module = _instantiate_train_datamodule()
-    assert module.use_fragment_sampler is False
-    assert module.batch_readahead == 8
-
-
-def test_train_override_use_fragment_sampler_true_composes() -> None:
-    """``datamodule.use_fragment_sampler=true`` composes and reaches the datamodule."""
-    module = _instantiate_train_datamodule("datamodule.use_fragment_sampler=true")
-    assert module.use_fragment_sampler is True

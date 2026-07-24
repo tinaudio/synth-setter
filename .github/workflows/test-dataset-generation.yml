@@ -6,7 +6,7 @@ name: Test Dataset Generation
 #   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
 #     `local: true, num_workers: '1'` to provision a kind cluster on the
 #     runner, load dev-snapshot into kind, and launch against
-#     `src/synth_setter/configs/compute/local-template.yaml`. Hourly schedule default —
+#     the `local/kind` compute option. Hourly schedule default —
 #     exercises the same launcher / cred-bootstrap path as the cloud providers,
 #     closing the #806 unification gap. No billable capacity.
 #   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the

@@ -112,8 +112,8 @@ jobs:
             '
 
       # Run the operator CLI end-to-end inside the dev-snapshot image:
-      #   * ``compute_template`` stays unset (src/synth_setter/configs/skypilot_launch/default.yaml
-      #     keeps it null), so ``main()`` runs ``generate(spec)`` inline rather than
+      #   * the compute group stays unselected (src/synth_setter/configs/skypilot_launch/default.yaml
+      #     defaults it to null), so ``main()`` runs ``generate(spec)`` inline rather than
       #     dispatching via SkyPilot — exercises ``_dispatch_shards_parallel``
       #     directly on this runner.
       #   * Partition env intentionally unset — exercises the

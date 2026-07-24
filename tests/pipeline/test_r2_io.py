@@ -20,9 +20,9 @@ from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.compute_task import load_compute_script
 from synth_setter.pipeline.schemas.object_storage import (
     STORAGE_REQUIRED_ENV_KEYS,
 )
@@ -65,22 +65,17 @@ def _assert_redacted_rclone_failure(
     assert expected_context in logs
 
 
-def _run_debug_template(
-    template_name: str, sentinel_name: str, rclone_env: dict[str, str]
+def _run_debug_script(
+    script_name: str, sentinel_name: str, rclone_env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
-    """Execute one repository-owned rclone canary run block.
+    """Execute one repository-owned rclone canary run script.
 
-    :param template_name: Repository task template to execute.
+    :param script_name: Packaged compute run script to execute.
     :param sentinel_name: Task-created file removed after execution.
     :param rclone_env: Isolated credentials and endpoint.
     :returns: Captured task process result.
     """
-    template_path = (
-        Path(__file__).parents[2] / "src" / "synth_setter" / "configs" / "compute" / template_name
-    )
-    document = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-    run_script = document["run"]
-    assert isinstance(run_script, str)
+    run_script = load_compute_script(script_name)
     env = {
         **os.environ,
         **rclone_env,
@@ -177,27 +172,25 @@ class TestRcloneDebugTemplates:
     """Tests for SkyPilot rclone canary task logging."""
 
     @pytest.mark.parametrize(
-        ("template_name", "sentinel_name"),
+        ("script_name", "sentinel_name"),
         [
-            ("local-debug-rclone-template.yaml", "skypilot-local-debug-sentinel.txt"),
-            ("runpod-debug-rclone-template.yaml", "skypilot-debug-rclone-sentinel.txt"),
+            ("local-debug-rclone.sh", "skypilot-local-debug-sentinel.txt"),
+            ("debug-rclone.sh", "skypilot-debug-rclone-sentinel.txt"),
         ],
     )
     def test_run_failure_redacts_credentials_and_keeps_error_context(
         self,
-        template_name: str,
+        script_name: str,
         sentinel_name: str,
         synthetic_unreachable_rclone_env: dict[str, str],
     ) -> None:
         """A real task run omits credentials while retaining its failure cause.
 
-        :param template_name: Repository task template to execute.
+        :param script_name: Packaged compute run script to execute.
         :param sentinel_name: Task-created file removed after execution.
         :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
         """
-        result = _run_debug_template(
-            template_name, sentinel_name, synthetic_unreachable_rclone_env
-        )
+        result = _run_debug_script(script_name, sentinel_name, synthetic_unreachable_rclone_env)
         logs = f"{result.stdout}\n{result.stderr}"
         assert result.returncode != 0
         _assert_redacted_rclone_failure(logs, synthetic_unreachable_rclone_env, "safe-test-bucket")
@@ -498,6 +491,30 @@ class TestDownloadDirNoOverwrite:
         args = mock_call.call_args[0][0]
         assert str(source) in args
         assert str(destination) in args
+
+    def test_exclude_glob_skips_matching_subtree(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """An exclude glob copies the sidecars while skipping the split subtrees.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        prefix = fake_r2_remote / "bucket" / "dataset"
+        (prefix / "train.lance").mkdir(parents=True)
+        (prefix / "train.lance" / "fragment.bin").write_text("rows")
+        (prefix / "metadata" / "workers").mkdir(parents=True)
+        (prefix / "metadata" / "workers" / "report.json").write_text("{}")
+        (prefix / "stats.npz").write_text("stats")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite(
+            "r2://bucket/dataset", dest, exclude="{*.lance/**,metadata/**}"
+        )
+
+        assert (dest / "stats.npz").read_text() == "stats"
+        assert not (dest / "train.lance").exists()
+        assert not (dest / "metadata").exists()
 
     def test_rejects_unsupported_source_uri(self, tmp_path: Path) -> None:
         """A source outside the R2 and local-file contracts is rejected.

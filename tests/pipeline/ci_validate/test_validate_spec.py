@@ -44,6 +44,8 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
+            "audio_dtype": "float16",
+            "mel_spec_dtype": "float32",
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
             "max_retries": 0,
@@ -85,6 +87,14 @@ class TestValidateStructure:
     def test_valid_spec_returns_no_errors(self) -> None:
         """Valid spec with all required fields passes validation."""
         spec = _make_valid_spec()
+        assert validate_structure(spec) == []
+
+    def test_defaulted_storage_dtypes_may_be_omitted(self) -> None:
+        """Specs may omit fields supplied by RenderConfig defaults."""
+        spec = _make_valid_spec()
+        del spec["render"]["audio_dtype"]
+        del spec["render"]["mel_spec_dtype"]
+
         assert validate_structure(spec) == []
 
     def test_missing_field_returns_error(self) -> None:
@@ -136,8 +146,20 @@ class TestValidateStructure:
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
-        """Required render set is derived from RenderConfig, not hand-mirrored."""
-        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields)
+        """Only backward-compatible storage fields may be omitted."""
+        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
+            "audio_dtype",
+            "mel_spec_dtype",
+        }
+
+    def test_other_defaulted_render_field_remains_required(self) -> None:
+        """Platform-dependent defaults must be materialized in persisted specs."""
+        spec = _make_valid_spec()
+        del spec["render"]["gui_toggle_cadence"]
+
+        errors = validate_structure(spec)
+
+        assert any("gui_toggle_cadence" in error for error in errors)
 
 
 class TestValidateTestValues:

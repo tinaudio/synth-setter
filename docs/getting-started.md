@@ -370,7 +370,8 @@ RUNPOD_API_KEY=<your-api-key>
 
 [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) is wired up as a
 second SkyPilot target alongside RunPod for the `generate_dataset` smoke
-pipeline (CPU-only Flex shapes via `src/synth_setter/configs/compute/oci-cpu-template.yaml`).
+pipeline (CPU-only Flex shapes via the `oci/cpu` compute option under
+`src/synth_setter/configs/skypilot_launch/compute/`).
 **You do not need OCI for local development or training.**
 
 If you are exercising the OCI target:

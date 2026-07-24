@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from agent._shared.pi_review_routing import (
     provenance_for_model,
     report_is_parseable,
     report_repair_prompt,
+    resolve_checklist_path,
     stream_host_events,
     transcript_stats,
 )
@@ -35,13 +37,11 @@ openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
 openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
 """
 
-# Fixed ordered second-pass pool. Its first model is a non-OpenRouter provider,
-# so routing and provenance must not assume every non-Codex candidate is OpenRouter.
-FREE_POOL_MODELS = (
-    "kimi-coding/k3",
+OPENROUTER_FREE_MODELS = (
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/tencent/hy3:free",
 )
+SMART_FREE_POOL_MODELS = ("kimi-coding/k3", *OPENROUTER_FREE_MODELS)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -56,32 +56,87 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     }
 
 
-def test_build_review_plan_allocates_deep_and_mechanical_passes() -> None:
-    """Allocate two providers per skill with risk-sensitive thinking."""
-    plan = build_review_plan(
-        ["correctness-review", "comment-hygiene"],
+def test_build_review_plan_allocates_fixed_smart_model_tier() -> None:
+    """Reserve Sol and K3 for semantic checklists regardless of diff risk."""
+    codex_pass, free_pool_pass = build_review_plan(
+        ["correctness-review"],
         changed_lines=120,
         risk_reasons=(),
         available_models=parse_available_models(AVAILABLE_MODELS),
     )
 
-    assert [(item.skill, item.pass_name, item.thinking) for item in plan] == [
-        ("correctness-review", "codex", "high"),
-        ("correctness-review", "free-pool", "high"),
-        ("comment-hygiene", "codex", "low"),
-        ("comment-hygiene", "free-pool", "low"),
-    ]
-    assert all(item.max_turns == 12 for item in plan)
-    assert plan[1].candidates == FREE_POOL_MODELS
-    assert plan[3].candidates == FREE_POOL_MODELS
-    assert all(
-        model.startswith("openai-codex/") for item in plan[::2] for model in item.candidates
+    assert (codex_pass.model_tier, codex_pass.candidates) == (
+        "smart",
+        (
+            "openai-codex/gpt-5.6-sol",
+            "openai-codex/gpt-5.6-terra",
+        ),
     )
-    assert all(
-        model.startswith("openai-codex/")
-        for item in plan[1::2]
-        for model in item.fallback_candidates
+    assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
+        "smart",
+        SMART_FREE_POOL_MODELS,
     )
+    assert free_pool_pass.fallback_candidates == (
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
+    )
+    assert codex_pass.thinking == free_pool_pass.thinking == "high"
+    assert codex_pass.max_turns == free_pool_pass.max_turns == 12
+
+
+def test_build_review_plan_allocates_fixed_mechanical_model_tier() -> None:
+    """Keep mechanical checklists on Terra and free OpenRouter models."""
+    codex_pass, free_pool_pass = build_review_plan(
+        ["comment-hygiene"],
+        changed_lines=120,
+        risk_reasons=(),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert (codex_pass.model_tier, codex_pass.candidates) == (
+        "mechanical",
+        ("openai-codex/gpt-5.6-terra",),
+    )
+    assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
+        "mechanical",
+        OPENROUTER_FREE_MODELS,
+    )
+    assert free_pool_pass.fallback_candidates == ("openai-codex/gpt-5.6-terra",)
+    assert codex_pass.thinking == free_pool_pass.thinking == "low"
+    assert codex_pass.max_turns == free_pool_pass.max_turns == 12
+
+
+@pytest.mark.parametrize(
+    ("skill", "expected_tier"),
+    [
+        ("code-health", "mechanical"),
+        ("comment-hygiene", "mechanical"),
+        ("correctness-review", "smart"),
+        ("gha-workflow-validator", "mechanical"),
+        ("lance-review", "smart"),
+        ("ml-data-pipeline", "smart"),
+        ("ml-test", "smart"),
+        ("python-style", "mechanical"),
+        ("shell-style", "mechanical"),
+        ("synth-setter-project-standards", "smart"),
+        ("tdd-implementation", "mechanical"),
+        ("tdd-refactor", "mechanical"),
+    ],
+)
+def test_build_review_plan_uses_fixed_tier_for_every_skill(skill: str, expected_tier: str) -> None:
+    """Keep every supported checklist in its explicitly approved model tier.
+
+    :param skill: Checklist being routed.
+    :param expected_tier: Fixed smart or mechanical model tier.
+    """
+    plan = build_review_plan(
+        [skill],
+        changed_lines=50,
+        risk_reasons=("concurrency",),
+        available_models=parse_available_models(AVAILABLE_MODELS),
+    )
+
+    assert [item.model_tier for item in plan] == [expected_tier, expected_tier]
 
 
 def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> None:
@@ -97,8 +152,8 @@ def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> No
     assert all(item.reason == "mechanical checklist on diff of 200+ lines" for item in plan)
 
 
-def test_build_review_plan_promotes_risky_standard_passes() -> None:
-    """Promote standard passes when the diff carries a named risk."""
+def test_build_review_plan_risky_mechanical_skill_keeps_lower_model_tier() -> None:
+    """Raise thinking without promoting a fixed mechanical route to Sol or K3."""
     plan = build_review_plan(
         ["code-health"],
         changed_lines=40,
@@ -108,6 +163,9 @@ def test_build_review_plan_promotes_risky_standard_passes() -> None:
 
     assert [item.thinking for item in plan] == ["high", "high"]
     assert [item.reason for item in plan] == ["risk: concurrency", "risk: concurrency"]
+    assert [item.model_tier for item in plan] == ["mechanical", "mechanical"]
+    assert plan[0].candidates == ("openai-codex/gpt-5.6-terra",)
+    assert plan[1].candidates == OPENROUTER_FREE_MODELS
 
 
 @pytest.mark.parametrize(
@@ -138,30 +196,44 @@ def test_build_review_plan_pins_line_count_boundaries(
     assert [item.thinking for item in plan] == [expected_thinking, expected_thinking]
 
 
-def test_build_review_plan_uses_remaining_codex_candidate_as_free_pool_fallback() -> None:
-    """Preserve paired fallback behavior when one Codex model is unavailable."""
+def test_build_review_plan_smart_codex_pass_falls_back_to_terra() -> None:
+    """Retain Terra as the bounded availability fallback for smart reviews."""
     available = parse_available_models(AVAILABLE_MODELS)
-    available.remove("openai-codex/gpt-5.6-terra")
+    available.remove("openai-codex/gpt-5.6-sol")
 
     codex_pass, free_pool_pass = build_review_plan(
-        ["code-health"],
+        ["correctness-review"],
         changed_lines=300,
         risk_reasons=(),
         available_models=available,
     )
 
-    assert codex_pass.candidates == ("openai-codex/gpt-5.6-sol",)
+    assert codex_pass.candidates == ("openai-codex/gpt-5.6-terra",)
     assert free_pool_pass.fallback_candidates == codex_pass.candidates
 
 
-def test_build_review_plan_skips_unavailable_free_pool_candidates() -> None:
-    """Drop retired free-pool models while preserving the fixed attempt order."""
+def test_build_review_plan_mechanical_codex_pass_does_not_fall_back_to_sol() -> None:
+    """Fail closed instead of spending Sol on a mechanical checklist."""
+    available = parse_available_models(AVAILABLE_MODELS)
+    available.remove("openai-codex/gpt-5.6-terra")
+
+    with pytest.raises(ValueError, match=r"code-health/codex"):
+        build_review_plan(
+            ["code-health"],
+            changed_lines=300,
+            risk_reasons=(),
+            available_models=available,
+        )
+
+
+def test_build_review_plan_smart_pool_skips_unavailable_k3() -> None:
+    """Fall back from unavailable K3 to the pinned OpenRouter models."""
     available = parse_available_models(AVAILABLE_MODELS)
     available.remove("kimi-coding/k3")
     available.remove("openrouter/tencent/hy3:free")
 
     plan = build_review_plan(
-        ["code-health"],
+        ["correctness-review"],
         changed_lines=300,
         risk_reasons=(),
         available_models=available,
@@ -200,6 +272,26 @@ def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
             risk_reasons=(),
             available_models=available,
         )
+
+
+def test_build_review_plan_mechanical_pool_requires_openrouter() -> None:
+    """Do not substitute K3 when a mechanical checklist lacks free OpenRouter models."""
+    available = {
+        model
+        for model in parse_available_models(AVAILABLE_MODELS)
+        if not model.startswith("openrouter/")
+    }
+
+    with pytest.raises(ValueError, match=r"free-pool.*code-health") as error:
+        build_review_plan(
+            ["code-health"],
+            changed_lines=300,
+            risk_reasons=(),
+            available_models=available,
+        )
+
+    assert "/login openrouter" in str(error.value)
+    assert "kimi-coding" not in str(error.value)
 
 
 def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
@@ -722,10 +814,105 @@ def test_report_repair_prompt_preserves_analysis_and_includes_diagnostic() -> No
     assert report in prompt
 
 
-def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplication() -> None:
-    """Generate the complete worker packet outside the host LLM."""
+def test_resolve_checklist_path_repo_local_uses_current_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a repo-owned checklist from the assignment-generation checkout.
+
+    :param tmp_path: Temporary repository containing a real checklist file.
+    :param monkeypatch: Changes the assignment-generation working directory.
+    """
+    repo_root = tmp_path / "repo"
+    checklist = repo_root / "agent/skills/correctness-review/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Correctness review\n")
+    monkeypatch.chdir(repo_root)
+
+    assert resolve_checklist_path("correctness-review") == checklist.resolve()
+
+
+def test_resolve_checklist_path_plugin_uses_environment_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Honor an explicit plugin checklist installation root.
+
+    :param tmp_path: Temporary plugin installation containing a real checklist file.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "installed-skills"
+    checklist = skills_root / "code-health/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Code health\n")
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+
+    assert resolve_checklist_path("code-health") == checklist.resolve()
+
+
+def test_resolve_checklist_path_plugin_defaults_to_user_agents_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the user's standard plugin installation when no override is set.
+
+    :param tmp_path: Temporary home directory containing a real checklist file.
+    :param monkeypatch: Replaces HOME and removes the plugin-root override.
+    """
+    home = tmp_path / "home"
+    checklist = home / ".agents/skills/python-style/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Python style\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PI_REVIEW_SKILLS_ROOT", raising=False)
+
+    assert resolve_checklist_path("python-style") == checklist.resolve()
+
+
+def test_build_worker_prompt_missing_checklist_raises_actionable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail assignment generation at the exact absent checklist path.
+
+    :param tmp_path: Empty plugin installation root.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "missing-skills"
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+    expected_path = skills_root / "code-health/SKILL.md"
+
+    with pytest.raises(
+        ValueError,
+        match=rf"code-health.*{re.escape(str(expected_path))}.*PI_REVIEW_SKILLS_ROOT",
+    ):
+        build_worker_prompt(
+            skill="code-health",
+            target="PR #2174",
+            repo="tinaudio/synth-setter",
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            changed_paths=("agent/_shared/pi_review_routing.py",),
+        )
+
+
+def test_build_worker_prompt_contains_absolute_checklist_without_skill_tool_language(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin workers to one validated checklist without unsupported tool guidance.
+
+    :param tmp_path: Temporary plugin installation containing a real checklist file.
+    :param monkeypatch: Sets the plugin-root environment override.
+    """
+    skills_root = tmp_path / "installed-skills"
+    checklist = skills_root / "code-health/SKILL.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("# Code health\n")
+    monkeypatch.setenv("PI_REVIEW_SKILLS_ROOT", str(skills_root))
+
     prompt = build_worker_prompt(
-        skill="correctness-review",
+        skill="code-health",
         target="PR #2174",
         repo="tinaudio/synth-setter",
         base_sha="a" * 40,
@@ -733,8 +920,11 @@ def test_build_worker_prompt_contains_bounded_assignment_without_diff_duplicatio
         changed_paths=("agent/_shared/pi_review_routing.py", "tests/infra/test.py"),
     )
 
+    assert f"Read the checklist at `{checklist.resolve()}` and execute it." in prompt
+    assert "Do not search for skill files anywhere else." in prompt
+    assert "Skill tool" not in prompt
+    assert "tinaudio-synth-setter-skills:" not in prompt
     assert "PR #2174" in prompt
-    assert "correctness-review" in prompt
     assert "git diff " + "a" * 40 + ".." + "b" * 40 in prompt
     assert "agent/_shared/pi_review_routing.py" in prompt
     assert "exactly one JSON object" in prompt
@@ -882,4 +1072,5 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"] == list(FREE_POOL_MODELS)
+    assert payload[1]["candidates"] == list(OPENROUTER_FREE_MODELS)
+    assert payload[1]["model_tier"] == "mechanical"

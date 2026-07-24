@@ -424,7 +424,9 @@ def from_s3_uri(s3_uri: str) -> str:
     return R2_URI_SCHEME + s3_uri[len("s3://") :]
 
 
-def download_dir_no_overwrite(source_uri: str, dest_path: Path) -> None:
+def download_dir_no_overwrite(
+    source_uri: str, dest_path: Path, exclude: str | None = None
+) -> None:
     """Copy an R2 or mounted-file directory into local storage without clobbering.
 
     Unlike :func:`download_to_path` (single object → file), this is a directory
@@ -435,6 +437,8 @@ def download_dir_no_overwrite(source_uri: str, dest_path: Path) -> None:
 
     :param source_uri: ``r2://`` prefix or absolute ``file://`` directory URI.
     :param dest_path: Local destination directory, created by rclone if absent.
+    :param exclude: Optional rclone ``--exclude`` glob; lets materializing
+        hydration copy only the non-Lance sidecars of a dataset root.
     :raises ValueError: If ``source_uri`` uses neither supported scheme.
     """
     if is_r2_uri(source_uri):
@@ -443,7 +447,8 @@ def download_dir_no_overwrite(source_uri: str, dest_path: Path) -> None:
         source_path = str(file_uri_to_path(source_uri))
     else:
         raise ValueError(f"dataset source must use r2:// or file://, got {source_uri!r}")
-    args = _rclone_argv("copy", "--immutable", source_path, str(dest_path))
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    args = _rclone_argv("copy", "--immutable", *operands, source_path, str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 

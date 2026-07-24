@@ -11,7 +11,7 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -44,6 +44,26 @@ _MAX_UPLOAD_ATTEMPTS = 3
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
 _CheckpointRevision = tuple[str, float, int, int | None]
+
+
+def batch_sample_count(batch: object) -> int:
+    """Return the number of samples in a model batch.
+
+    Reads the leading dimension of the batch's first tensor (mapping batches
+    key on ``params``/``noise``; sequence batches take element zero), so a
+    ragged final batch is counted accurately. Used as ``ThroughputMonitor``'s
+    ``batch_size_fn`` for the loader-throughput sweep (#2320).
+
+    :param batch: A training batch (mapping of tensors or a tensor sequence).
+    :returns: Leading-dimension size of the first tensor, or ``0`` when none is found.
+    """
+    candidates = batch.values() if isinstance(batch, Mapping) else batch
+    if isinstance(candidates, torch.Tensor):
+        candidates = [candidates]
+    for value in candidates:
+        if isinstance(value, torch.Tensor) and value.ndim >= 1:
+            return int(value.shape[0])
+    return 0
 
 
 def _stderr_tail(exc: BaseException) -> str:

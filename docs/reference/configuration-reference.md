@@ -11,7 +11,7 @@ ______________________________________________________________________
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Experiment config             | Hydra YAML composition                                                                                                                                                                                                                                                                                              | Deferred — class constructors at `hydra.utils.instantiate()`                                                                                                                                                              | git (`src/synth_setter/configs/experiment/`)                                                                                       | `src/synth_setter/configs/experiment/surge/flow_simple.yaml`                      |
 | Pipeline input + runtime spec | Pydantic `BaseModel(strict=True, frozen=True, extra="forbid")` — `DatasetSpec` unifies the prior config + materialized-spec split. All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) are strict; JSON round-trip coercions (`list→tuple`, `str→datetime`) are handled by explicit per-field validators. | Parse-time — Hydra `compose` → `spec_from_cfg()` (#887, #912, #917 unified the prior `DatasetConfig` + `DatasetPipelineSpec` split into one model that is both the validated input *and* the materialized artifact on R2) | git (`src/synth_setter/configs/experiment/generate_dataset/`) for input; R2 (`{r2.prefix}input_spec.json`) for the serialized JSON | `src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` |
-| Cloud infrastructure          | SkyPilot Task YAML                                                                                                                                                                                                                                                                                                  | Launcher script (not Hydra)                                                                                                                                                                                               | git (`src/synth_setter/configs/compute/`)                                                                                          | `src/synth_setter/configs/compute/runpod-template.yaml`                           |
+| Cloud infrastructure          | Hydra compute option → pydantic `ComputeConfig`                                                                                                                                                                                                                                                                     | Parse-time — Hydra compose → `ComputeConfig` (strict pydantic)                                                                                                                                                            | git (`src/synth_setter/configs/skypilot_launch/compute/`)                                                                          | `src/synth_setter/configs/skypilot_launch/compute/runpod/smoke.yaml`              |
 | Secrets / credentials         | Environment variables                                                                                                                                                                                                                                                                                               | Runtime                                                                                                                                                                                                                   | `.env` (local), CI secrets                                                                                                         | `WANDB_API_KEY`                                                                   |
 
 ### Why These Boundaries
@@ -36,7 +36,7 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
         → <hydra_output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
     → r2_io.ensure_r2_env_loaded(sky_cfg.env_file)   (dotenv + auth ping)
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
-    → branch on sky_cfg.compute_template:
+    → branch on sky_cfg.compute:
         ├─ None: generate(spec, Path(cfg.paths.output_dir), loggers) — renders + uploads shards
         └─ set:  dispatch_via_skypilot — injects spec.r2.input_spec_uri() as WORKER_SPEC_URI;
                  worker pod runs generate(spec, work_dir, loggers) which renders + uploads shards (no spec re-upload)
@@ -117,15 +117,15 @@ Reference: `eval-pipeline.md` §4–5
 `dispatch_via_skypilot` is the single entry point a `synth-setter-*` CLI takes
 to dispatch onto SkyPilot. Each console script that supports compute carries
 a `skypilot_launch` sub-config (today: `synth-setter-generate-dataset`; more
-entrypoints are expected to follow). Setting
-`skypilot_launch.compute_template=<path>` flips the command from "run
+entrypoints are expected to follow). Selecting a compute option via
+`skypilot_launch/compute=<option>` flips the command from "run
 in-process" to "materialize the spec, then dispatch via SkyPilot" — no
 separate launcher invocation is involved.
 
 #### Dispatch flow
 
 ```
-synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
+synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smoke
   → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, Path(cfg.paths.output_dir))
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
@@ -147,8 +147,9 @@ synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=sr
   Hydra overrides the operator composed with, and the `from_hydra` entrypoint
   on the worker rebuilds the spec from those — so worker re-execution is
   deterministic regardless of operator argv.
-- The canonical `WORKER_SPEC_URI` is forwarded via `task.update_envs(...)`
-  primarily for downstream validate-time consumers (validate-spec /
+- The canonical `WORKER_SPEC_URI` is merged into each rank's env with
+  `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`, primarily
+  for downstream validate-time consumers (validate-spec /
   validate-shard CI jobs read it off the workflow output). The worker itself
   doesn't fetch the JSON. `task.update_file_mounts` is avoided because
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
@@ -189,37 +190,36 @@ ______________________________________________________________________
 
 ### Config Shape
 
-The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
+Compute options are Hydra configs under
+`src/synth_setter/configs/skypilot_launch/compute/`, validated by the strict
+pydantic `ComputeConfig` model. `build_task_doc` produces the native task-YAML
+mapping consumed by `sky.Task.from_yaml_config`.
 
-**RunPod** (`src/synth_setter/configs/compute/runpod-template.yaml`) — landed. Abridged
-shape (see the file for the full template):
+**RunPod** (`skypilot_launch/compute/runpod/smoke.yaml`) — abridged shape
+(see the file for the full option):
 
-The launcher injects `image_id` per-launch via `sky_cfg.worker_image_tag` (default `"dev-snapshot"`) for non-OCI backends, so the template omits a literal `image_id:` entry and relies on the per-launch injection:
+The builder pins `image_id: docker:<image>` per-launch from
+`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for non-OCI
+backends, so the option carries no literal image pin. Worker env
+(`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `WORKER_GIT_REF`, per-rank
+`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) rides in the task
+env at construction — no placeholder `envs:` block is needed.
 
 ```yaml
+name: runpod-smoke
 resources:
-  cloud: runpod
-  accelerators: RTXA4000:1
-  use_spot: false
-  disk_size: 50
-
-envs:
-  RCLONE_CONFIG_R2_TYPE: ""           # the 5 RCLONE_CONFIG_R2_* keys + WANDB_API_KEY
-  RCLONE_CONFIG_R2_PROVIDER: ""       # are injected at launch time from
-  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""  # .env or process env (see _WORKER_ENV_KEYS).
-  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
-  RCLONE_CONFIG_R2_ENDPOINT: ""
-  WANDB_API_KEY: ""
-  WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
-  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized per-rank by _launch_one_rank_from_doc)
-  SYNTH_SETTER_NUM_WORKERS: ""
-
-# No `run:` block — the launcher's `_build_worker_cmd` constructs the cd +
-# sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra
-# <pinned hydra overrides>` one-liner and injects it via the Task's `run`
-# field at dispatch time. Adding a `run:` block here is rejected by
-# `_load_compute_template_with_cmd`.
+  - cloud: runpod
+    accelerators:
+      RTXA4000: 1
+    use_spot: false
+    disk_size: 50
 ```
+
+The option declares no run block — the launcher's `_build_worker_cmd`
+constructs the cd + sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>` one-liner
+and `build_task_doc` sets it as the task's `run`. An option carrying a
+`run_script:` (debug canaries) rejects an injected cmd instead of silently
+dropping it.
 
 The canonical spec is uploaded to R2 by `cli/generate_dataset.py`'s `main()`
 (via `spec_io.upload_spec`) before dispatch; `task.update_file_mounts(...)`
@@ -230,7 +230,8 @@ validate-shard jobs, which read it via the workflow output rather than off
 the pod); the worker process itself re-builds the spec via Hydra compose on
 the injected overrides rather than fetching the JSON at boot.
 
-**Vast.ai** (`src/synth_setter/configs/compute/vast-template.yaml`) — planned, not implemented:
+**Vast.ai** (`skypilot_launch/compute/vast/smoke.yaml`) — landed; an
+earlier plan sketched a raw Vast API shape that was never used:
 
 ```yaml
 provider: vast
@@ -304,15 +305,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.5 Cloud Infrastructure
 
-| Input                               | Type               | What's Needed                                                                                                                                                                                                                                                                                              | Reference                                                                                     |
-| ----------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| RunPod config                       | SkyPilot Task YAML | Smoke, training, and persistent network-volume templates live under `src/synth_setter/configs/compute/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
-| Vast.ai config                      | SkyPilot Task YAML | Planned — `src/synth_setter/configs/compute/vast-template.yaml` not yet authored                                                                                                                                                                                                                           | new provider                                                                                  |
-| `src/synth_setter/configs/compute/` | directory          | SkyPilot Task templates for the data pipeline launcher (RunPod landed; Vast.ai planned)                                                                                                                                                                                                                    | —                                                                                             |
-| `make train`                        | Makefile target    | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                     | training-pipeline.md §2                                                                       |
-| `make docker-train`                 | Makefile target    | Docker training shorthand                                                                                                                                                                                                                                                                                  | training-pipeline.md §2                                                                       |
-| `make runpod-train`                 | Makefile target    | RunPod launcher shorthand                                                                                                                                                                                                                                                                                  | training-pipeline.md §2                                                                       |
-| `make resume`                       | Makefile target    | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
+| Input                                               | Type                 | What's Needed                                                                                                                                                                                                                                                                                                                   | Reference                                                                                     |
+| --------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
+| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                                                       | new provider                                                                                  |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast, OCI, local kind)                                                                                                                                                                                                                                                  | —                                                                                             |
+| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
+| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
+| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
+| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                                                                                                                                                               | training-pipeline.md §2                                                                       |
 
 ### 5.6 Other
 

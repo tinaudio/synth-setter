@@ -1,0 +1,30 @@
+# Local Kubernetes (kind) backend. Provisioning expects a `sky local up`-
+# managed kind cluster ("skypilot" kubectl context) already running.
+#
+# The launcher detects the local provider and SKIPS its cred bootstrap — kind
+# needs no compute creds. When `SYNTH_SETTER_CI_MODE` is truthy the launcher
+# writes a managed-jobs controller shrink to ~/.sky/config.yaml so the
+# controller fits on GHA's kind (#876).
+#
+# Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
+# cluster via `kind load docker-image` ahead of launch.
+#
+# pod_config is task-scoped (not ~/.sky/config.yaml): a global override
+# blocks the SkyPilot jobs controller, whose image lives on GAR and is not
+# `kind load`-ed. The name-less container merges into the pod's first
+# container via SkyPilot's patch-merge legacy. See #1255.
+#
+# Resource floor: cpus shrunk to fit kind's allocatable headroom after
+# kube-system + sky-jobs-controller; disk_size omitted because the k8s
+# backend rejects the field — see PR #876.
+name: local-kind
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - imagePullPolicy: Never
+resources:
+  - cloud: kubernetes
+    cpus: 1+
+    memory: 4+

@@ -1,6 +1,6 @@
 """Real-weights e2e tests for :func:`load_same_audio_encoder` (SAME-S).
 
-Unlike the stub-driven suite in ``test_add_same_embeddings.py``, these tests
+Unlike the stub-driven registry suite in ``test_add_embeddings.py``, these tests
 download the public ``stabilityai/SAME-S`` checkpoint (~433 MB, no credentials)
 through ``huggingface_hub``'s default cache and run the real encoder on CPU, so
 they carry ``same_e2e`` and run in their own GHA workflow, not the fast lane.

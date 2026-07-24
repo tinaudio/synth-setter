@@ -13,7 +13,7 @@
 # `git rev-parse HEAD` records the dispatched SHA; the launcher injects
 # IMAGE_TAG into every rank's env.
 
-compute_template: src/synth_setter/configs/compute/runpod-template.yaml
+compute: runpod/smoke
 worker_image_tag: devcontainer-tools
 env_file: .env
 # tail=false detaches after submission; follow with `sky jobs logs --name <job>`.

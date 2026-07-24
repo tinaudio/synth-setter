@@ -317,7 +317,10 @@ class TestLanceMapDataModuleSetup:
 
     def test_constructor_has_no_loader_switch(self) -> None:
         """The public datamodule API has one Lance loading strategy."""
-        assert "loader" not in inspect.signature(LanceVSTDataModule).parameters
+        params = inspect.signature(LanceVSTDataModule).parameters
+        assert "loader" not in params
+        assert "use_fragment_sampler" not in params
+        assert "batch_readahead" not in params
 
     def test_prepare_data_hydrates_dataset_root_from_r2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

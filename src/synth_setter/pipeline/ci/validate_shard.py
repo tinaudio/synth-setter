@@ -36,9 +36,9 @@ if TYPE_CHECKING:
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
-    DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     PARAM_ARRAY_FIELD,
+    dataset_field_dtypes,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -213,13 +213,21 @@ def _validate_lance_dataset(
         errors.append(f"dataset has {num_rows} rows, expected {spec.render.samples_per_shard}")
 
     expected_shapes = _expected_dataset_shapes(spec)
+    expected_dtypes = dataset_field_dtypes(spec.render)
     schema_errors: list[str] = []
     for name in DATASET_FIELD_NAMES:
         field = schema.field(name) if name in schema.names else None
         if field is None:
             schema_errors.append(f"missing column: {name!r}")
             continue
-        schema_errors.extend(_validate_lance_field(name, field, expected_shapes[name]))
+        schema_errors.extend(
+            _validate_lance_field(
+                name,
+                field,
+                expected_shapes[name],
+                expected_dtype=expected_dtypes[name],
+            )
+        )
     errors.extend(schema_errors)
     if not schema_errors:
         errors.extend(_validate_lance_values(dataset))
@@ -246,12 +254,19 @@ def _validate_lance_values(dataset: lance.LanceDataset) -> list[str]:
     return sorted(errors)
 
 
-def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, ...]) -> list[str]:
+def _validate_lance_field(
+    name: str,
+    field: object,
+    expected_shape: tuple[int, ...],
+    *,
+    expected_dtype: np.dtype,
+) -> list[str]:
     """Validate one Lance fixed-shape tensor field against the writer contract.
 
     :param name: Column name being checked.
     :param field: Arrow schema field read from the Lance file.
     :param expected_shape: Full expected shape including leading row axis.
+    :param expected_dtype: Physical scalar dtype required by the dataset spec.
     :returns: List of error strings for this field.
     :rtype: list[str]
     """
@@ -269,10 +284,11 @@ def _validate_lance_field(name: str, field: object, expected_shape: tuple[int, .
         errors.append(
             f"column {name!r} has inner shape {tuple(field_type.shape)}, expected {expected_inner}"
         )
-    expected_dtype = pa.from_numpy_dtype(DATASET_FIELD_DTYPES[name])
-    if field_type.value_type != expected_dtype:
+    expected_arrow_dtype = pa.from_numpy_dtype(expected_dtype)
+    if field_type.value_type != expected_arrow_dtype:
         errors.append(
-            f"column {name!r} has value type {field_type.value_type}, expected {expected_dtype}"
+            f"column {name!r} has value type {field_type.value_type}, "
+            f"expected {expected_arrow_dtype}"
         )
     return errors
 

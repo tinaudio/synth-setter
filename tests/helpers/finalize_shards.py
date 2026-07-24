@@ -21,9 +21,9 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
-    DATASET_FIELD_DTYPES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
+    dataset_field_dtypes,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -161,16 +161,20 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
     shapes = dataset_field_shapes(render, spec.num_params)
     if num_rows is not None:
         shapes = {field: (num_rows, *shape[1:]) for field, shape in shapes.items()}
-    schema = lance_schema(shapes, smoke_shard_metadata(render))
+    field_dtypes = dataset_field_dtypes(render)
+    schema = lance_schema(
+        shapes,
+        smoke_shard_metadata(render),
+        field_dtypes=field_dtypes,
+    )
     arrays = {
-        AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
-        MEL_SPEC_FIELD: np.arange(
-            np.prod(shapes[MEL_SPEC_FIELD]),
-            dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD],
-        ).reshape(shapes[MEL_SPEC_FIELD]),
+        AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=field_dtypes[AUDIO_FIELD]),
+        MEL_SPEC_FIELD: (np.arange(np.prod(shapes[MEL_SPEC_FIELD]), dtype=np.float32) % 100)
+        .astype(field_dtypes[MEL_SPEC_FIELD])
+        .reshape(shapes[MEL_SPEC_FIELD]),
         PARAM_ARRAY_FIELD: np.zeros(
             shapes[PARAM_ARRAY_FIELD],
-            dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+            dtype=field_dtypes[PARAM_ARRAY_FIELD],
         ),
     }
     # record_batch_from_arrays rejects empty batches, so a zero-row shard is

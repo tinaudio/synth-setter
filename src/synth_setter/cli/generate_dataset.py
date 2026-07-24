@@ -4,7 +4,7 @@ Two console-script surfaces:
 
 - ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
   spec in-process or dispatches it to SkyPilot based on
-  ``cfg.skypilot_launch.compute_template``.
+  ``cfg.skypilot_launch.compute``.
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
   entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
 
@@ -980,8 +980,8 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so spaces/metachars survive bash
-    interpretation. ``sync_worker_checkout.sh`` runs between cd and exec for
-    the PR-CI bake-lag bypass (see #735 / #841).
+    interpretation. ``sync_worker_checkout.sh`` applies the launcher's pinned
+    worker commit between cd and exec.
 
     ``spec.created_at`` is pinned as a Hydra override so the worker's
     re-compose lands on the same ``r2.prefix`` as the launcher (the
@@ -1070,10 +1070,10 @@ def main(cfg: DictConfig) -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    if sky_cfg.compute_template is None:
+    if sky_cfg.compute is None:
         ensure_dawdreamer_runtime(spec.render.renderer_backend)
 
-    if sky_cfg.compute_template is None and cfg.oracle_eval_inline:
+    if sky_cfg.compute is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:
             raise ValueError(
                 "oracle_eval_inline=true requires finalize_inline=true; "
@@ -1109,7 +1109,7 @@ def main(cfg: DictConfig) -> None:
             num_shards=spec.num_shards,
         )
 
-    if sky_cfg.compute_template is None:
+    if sky_cfg.compute is None:
         loggers = _loggers_pinned_to_spec(cfg, spec)
         # finalize runs outside the wandb-tracked region — see #1289.
         generate(spec, Path(cfg.paths.output_dir), loggers)
@@ -1143,7 +1143,7 @@ def main(cfg: DictConfig) -> None:
         logger.info(
             f"finalize_inline={cfg.finalize_inline}, "
             f"oracle_eval_inline={cfg.oracle_eval_inline} ignored: "
-            f"skypilot_launch.compute_template={sky_cfg.compute_template!r} "
+            f"skypilot_launch.compute={sky_cfg.compute.name!r} "
             "dispatches to a worker; finalize runs out-of-band via the "
             "finalize-dataset workflow."
         )

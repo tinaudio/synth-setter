@@ -1,0 +1,8 @@
+# DEBUG variant: Python + pedalboard + X interpreter-shutdown canary — the
+# closest-to-production worker shape without rclone or the dataset
+# entrypoint; canary for #735 bug #3 (interpreter shutdown hang).
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-pedalboard
+run_script: debug-pedalboard.sh

@@ -27,7 +27,11 @@ import numpy as np
 import structlog
 from pydantic import ValidationError
 
-from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
+from synth_setter.data.vst.shapes import (
+    MEL_SPEC_FIELD,
+    dataset_field_dtypes,
+    dataset_field_shapes,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     ATTEMPT_VALID_SUFFIX,
@@ -348,7 +352,11 @@ def _shard_schema(spec: DatasetSpec, shard_id: int) -> pa.Schema:
     :returns: Spec-derived physical Arrow schema for the shard.
     """
     render = spec.render_for_shard(spec.shards[shard_id])
-    return lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
+    return lance_schema(
+        dataset_field_shapes(render, spec.num_params),
+        render.shard_metadata(),
+        field_dtypes=dataset_field_dtypes(render),
+    )
 
 
 def _split_schema(spec: DatasetSpec, first_shard_id: int) -> pa.Schema:

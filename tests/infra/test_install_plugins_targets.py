@@ -27,6 +27,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker" / "ubuntu22_04" / "Dockerfile"
+APT_REFRESH_SCRIPT = PROJECT_ROOT / "scripts" / "docker" / "run_after_apt_update.sh"
 
 pytestmark = pytest.mark.infra
 
@@ -135,6 +136,87 @@ def _run_make(
     )
 
 
+def _docker_executable_or_skip() -> str:
+    """Return the Docker executable when its daemon is reachable.
+
+    :returns: Absolute Docker executable path.
+    """
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker binary not available")
+    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [docker, "info"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if info.returncode != 0:
+        pytest.skip("Docker daemon unavailable")
+    return docker
+
+
+def _run_clean_docker_build(
+    target: str, platform_name: str, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Build one Dockerfile target without reusing cached layers.
+
+    :param target: Dockerfile stage to build.
+    :param platform_name: BuildKit platform such as ``linux/amd64``.
+    :param timeout: Maximum build duration in seconds.
+    :returns: Completed build process with captured output.
+    """
+    docker = _docker_executable_or_skip()
+    return subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [
+            docker,
+            "buildx",
+            "build",
+            "--no-cache",
+            "--platform",
+            platform_name,
+            "--target",
+            target,
+            "--build-arg",
+            "BUILD_MODE=prebuilt",
+            "-f",
+            str(DOCKERFILE),
+            ".",
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _fake_apt_environment(tmp_path: Path, update_exit_code: int) -> tuple[dict[str, str], Path]:
+    """Create a PATH-prefixed fake apt-get and return its environment and call log.
+
+    :param tmp_path: Scratch directory containing the fake executable and log.
+    :param update_exit_code: Exit code returned for ``apt-get update``.
+    :returns: Subprocess environment and path recording apt-get arguments.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "apt-calls"
+    apt_get = fake_bin / "apt-get"
+    apt_get.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "${APT_CALLS}"\n'
+        'if [[ "${1}" == update ]]; then exit "${APT_UPDATE_EXIT}"; fi\n'
+    )
+    apt_get.chmod(0o755)
+    env = {
+        **os.environ,
+        "APT_CALLS": str(calls),
+        "APT_UPDATE_EXIT": str(update_exit_code),
+        "PATH": f"{fake_bin}:{os.defpath}",
+    }
+    return env, calls
+
+
 def _zip_containing(inner_dir: str) -> bytes:
     """Build an in-memory .zip whose payload lives under ``inner_dir``.
 
@@ -222,6 +304,65 @@ def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
     assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
 
 
+def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> None:
+    """The runtime package transaction stops before install when index refresh fails.
+
+    :param tmp_path: Scratch directory containing the fake apt boundary and call log.
+    """
+    env, calls = _fake_apt_environment(tmp_path, update_exit_code=42)
+    install_marker = tmp_path / "install-ran"
+
+    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
+        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=_TIMEOUT_S,
+        check=False,
+    )
+
+    assert result.returncode == 42
+    assert calls.read_text().splitlines() == ["update --error-on=any"]
+    assert not install_marker.exists()
+
+
+def test_runtime_apt_update_success_runs_package_install(tmp_path: Path) -> None:
+    """The runtime package transaction runs install after index refresh succeeds.
+
+    :param tmp_path: Scratch directory containing the fake apt boundary and marker.
+    """
+    env, calls = _fake_apt_environment(tmp_path, update_exit_code=0)
+    install_marker = tmp_path / "install-ran"
+
+    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
+        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=_TIMEOUT_S,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text().splitlines() == ["update --error-on=any"]
+    assert install_marker.exists()
+
+
+def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
+    """Independent base-image stages switch to the Azure-local Ubuntu mirror before apt update."""
+    mirror_rewrite = (
+        "sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' "
+        "/etc/apt/sources.list"
+    )
+    for stage_name in ("builder-base", "vst3-synths-fetch"):
+        stage = _dockerfile_stage_text(stage_name)
+        replace_index = stage.index(mirror_rewrite)
+        update_index = stage.index("apt-get update --error-on=any")
+        assert replace_index < update_index
+
+
 def test_runtime_image_validates_surge_with_standalone_loader() -> None:
     """The pre-install Surge check does not import the unavailable project package."""
     stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
@@ -258,44 +399,27 @@ def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("target", ("builder-base", "vst3-synths-fetch"))
+def test_base_stage_resolves_apt_packages_from_azure_mirror(target: str) -> None:
+    """A clean BuildKit run completes each independent base-stage package installation.
+
+    :param target: Independent Dockerfile stage whose Ubuntu mirror is rewritten.
+    """
+    result = _run_clean_docker_build(target, "linux/amd64", 300)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.slow
+def test_runtime_dependency_stage_runs_apt_refresh_wrapper() -> None:
+    """A clean runtime dependency build executes the guarded apt transaction."""
+    result = _run_clean_docker_build("builder-install-synth-setter-deps", "linux/amd64", 1800)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.slow
 def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
     """BuildKit can execute the arm64 KR-106 stage without source-build deps."""
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("docker binary not available")
-    assert docker is not None
-    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [docker, "info"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if info.returncode != 0:
-        pytest.skip(
-            "Docker daemon unavailable for: docker buildx build --platform linux/arm64 "
-            "--target builder-build-ultramaster-kr106 -f docker/ubuntu22_04/Dockerfile ."
-        )
-    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [
-            docker,
-            "buildx",
-            "build",
-            "--platform",
-            "linux/arm64",
-            "--target",
-            "builder-build-ultramaster-kr106",
-            "-f",
-            str(DOCKERFILE),
-            ".",
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=900,
-        check=False,
-    )
+    result = _run_clean_docker_build("builder-build-ultramaster-kr106", "linux/arm64", 900)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import lance
@@ -34,18 +34,22 @@ LANCE_MAX_BYTES_PER_FILE = 32 * 1024**3
 def lance_schema(
     field_shapes: dict[str, tuple[int, ...]],
     metadata: ShardMetadata,
+    *,
+    field_dtypes: Mapping[str, np.dtype] | None = None,
 ) -> pa.Schema:
     """Build the Arrow schema used by one Lance shard file.
 
     :param field_shapes: Full writer shapes including the leading row axis.
     :param metadata: Per-shard render metadata to embed in schema metadata.
+    :param field_dtypes: Physical scalar dtype for each dataset field.
     :returns: Arrow schema with fixed-shape tensor columns and shard metadata.
     """
+    field_dtypes = DATASET_FIELD_DTYPES if field_dtypes is None else field_dtypes
     fields = []
     # DuckDB scans reserve STANDARD_VECTOR_SIZE (2048 rows) x flattened width for every
     # fixed-shape-tensor column; audio and mel_spec can OOM SmooSense's 3 GB memory_limit (#1704).
     for field in DATASET_FIELD_NAMES:
-        dtype = DATASET_FIELD_DTYPES[field]
+        dtype = field_dtypes[field]
         tensor_type = pa.fixed_shape_tensor(
             pa.from_numpy_dtype(dtype),
             field_shapes[field][1:],
