@@ -391,6 +391,25 @@ def test_materialize_stamps_cloned_from_txn_transaction_property(
     assert txn.transaction_properties["cloned_from_txn"] == txid
 
 
+def test_materialize_tampered_sidecar_resolved_txid_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A pinned sidecar cannot claim a different resolved transaction.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    payload["resolved_txid"] = "different-transaction"
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+
 def test_materialize_tampered_sidecar_hash_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:

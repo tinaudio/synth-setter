@@ -134,6 +134,21 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     )
 
 
+def _open_source(source_uri: str) -> lance.LanceDataset:
+    """Open a local, file-URI, or R2 Lance source.
+
+    :param source_uri: Source dataset location.
+    :returns: Open source dataset at its current version.
+    """
+    if r2_io.is_r2_uri(source_uri):
+        open_uri, storage_options = r2_io.lance_target(source_uri)
+    elif is_file_uri(source_uri):
+        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
+    else:
+        open_uri, storage_options = source_uri, None
+    return lance.dataset(open_uri, storage_options=storage_options)
+
+
 def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
     """Return the transaction uuid identifying a source version.
 
@@ -165,6 +180,7 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
 
 def _reuse_or_raise(
     dest_path: Path,
+    *,
     source_uri: str,
     txid: str | None,
     columns: tuple[str, ...],
@@ -208,7 +224,8 @@ def _reuse_or_raise(
         manifest.resolved_version if resolved_version is None else resolved_version
     )
     requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    source_changed = txid is None and manifest.resolved_txid != resolved_txid
+    expected_resolved_txid = txid if txid is not None else resolved_txid
+    source_changed = manifest.resolved_txid != expected_resolved_txid
     if (
         manifest.request_hash != stored_hash
         or manifest.request_hash != requested_hash
@@ -226,6 +243,54 @@ def _reuse_or_raise(
         dest_path=str(dest_path),
         txid=txid,
         resolved_version=manifest.resolved_version,
+    )
+    return dest_path
+
+
+def _write_materialized_snapshot(
+    snapshot: lance.LanceDataset,
+    *,
+    dest_path: Path,
+    manifest: MaterializeManifest,
+    batch_size: int,
+) -> Path:
+    """Write one selected source snapshot and its cache manifest.
+
+    :param snapshot: Selected source dataset snapshot.
+    :param dest_path: Local destination dataset directory.
+    :param manifest: Validated request and source identity to persist.
+    :param batch_size: Scan batch size in rows.
+    :returns: ``dest_path``.
+    """
+    scanner = snapshot.scanner(
+        columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
+    )
+    logger.info(
+        "lance_materialize.start",
+        source_uri=manifest.source_uri,
+        dest_path=str(dest_path),
+        txid=manifest.txid,
+        resolved_version=manifest.resolved_version,
+        columns=manifest.columns,
+        limit=manifest.limit,
+    )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    transaction_properties = (
+        {"cloned_from_txn": manifest.txid}
+        if manifest.txid is not None
+        else {"cloned_from_version": str(manifest.resolved_version)}
+    )
+    written = lance.write_dataset(
+        scanner.to_batches(),
+        str(dest_path),
+        schema=scanner.projected_schema,
+        transaction_properties=transaction_properties,
+    )
+    sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
+    logger.info(
+        "lance_materialize.done",
+        dest_path=str(dest_path),
+        rows=written.count_rows(),
     )
     return dest_path
 
@@ -263,51 +328,27 @@ def materialize_lance_subset(  # noqa: DOC502
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
     if dest_path.exists() and txid is not None:
-        return _reuse_or_raise(dest_path, source_uri, txid, requested_columns, limit)
-    if r2_io.is_r2_uri(source_uri):
-        open_uri, storage_options = r2_io.lance_target(source_uri)
-    elif is_file_uri(source_uri):
-        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
-    else:
-        open_uri, storage_options = source_uri, None
-    ds = lance.dataset(open_uri, storage_options=storage_options)
+        return _reuse_or_raise(
+            dest_path,
+            source_uri=source_uri,
+            txid=txid,
+            columns=requested_columns,
+            limit=limit,
+        )
+    ds = _open_source(source_uri)
     resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
     resolved_txid = _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,
-            source_uri,
-            txid,
-            requested_columns,
-            limit,
-            resolved_version,
-            resolved_txid,
+            source_uri=source_uri,
+            txid=txid,
+            columns=requested_columns,
+            limit=limit,
+            resolved_version=resolved_version,
+            resolved_txid=resolved_txid,
         )
     snapshot = ds.checkout_version(resolved_version)
-    scanner = snapshot.scanner(
-        columns=list(requested_columns), limit=limit, batch_size=batch_size
-    )
-    logger.info(
-        "lance_materialize.start",
-        source_uri=source_uri,
-        dest_path=str(dest_path),
-        txid=txid,
-        resolved_version=resolved_version,
-        columns=requested_columns,
-        limit=limit,
-    )
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    transaction_properties = (
-        {"cloned_from_txn": txid}
-        if txid is not None
-        else {"cloned_from_version": str(resolved_version)}
-    )
-    written = lance.write_dataset(
-        scanner.to_batches(),
-        str(dest_path),
-        schema=scanner.projected_schema,
-        transaction_properties=transaction_properties,
-    )
     manifest = MaterializeManifest(
         source_uri=source_uri,
         txid=txid,
@@ -317,13 +358,12 @@ def materialize_lance_subset(  # noqa: DOC502
         limit=limit,
         request_hash=request_hash(source_uri, txid, resolved_version, requested_columns, limit),
     )
-    sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
-    logger.info(
-        "lance_materialize.done",
-        dest_path=str(dest_path),
-        rows=written.count_rows(),
+    return _write_materialized_snapshot(
+        snapshot,
+        dest_path=dest_path,
+        manifest=manifest,
+        batch_size=batch_size,
     )
-    return dest_path
 
 
 def materialize_splits(
