@@ -1,6 +1,497 @@
 # CHANGELOG
 
 
+## v10.6.1 (2026-07-24)
+
+### Bug Fixes
+
+- **data-pipeline**: Isolate synthetic dataset sample seeds
+  ([#2366](https://github.com/tinaudio/synth-setter/pull/2366),
+  [`9eba535`](https://github.com/tinaudio/synth-setter/commit/9eba5351a2fc91ac9125bf6ec0eaa8f400ab5eea))
+
+### Chores
+
+- **training**: Remove the Lance fragment (iterable) sampler
+  ([#2354](https://github.com/tinaudio/synth-setter/pull/2354),
+  [`15e6833`](https://github.com/tinaudio/synth-setter/commit/15e6833fb85846cf9dc9757ea800e84128f3d738))
+
+The B200 loader-throughput sweep (#2320) settled that map-style num_workers=24 beats every fragment
+  config and that fragment reads are not the bottleneck, so the unused, slower single-process
+  iterable path is not worth carrying.
+
+Remove _FragmentSampledIterable, _fragment_sampled_train_dataloader, and the use_fragment_sampler /
+  batch_readahead datamodule params (plus their config keys, guards, and now-unused
+  ShardedFragmentSampler / LanceDataset imports); train_dataloader now unconditionally returns the
+  map-style loader. Drop the fragment W&B sweep and fragment-specific tests, and retarget the JP
+  launch config to map-style num_workers=24.
+
+Closes #2350
+
+### Internal-Feat
+
+- **ci-automation**: Pi reviews model tiers (pt.2)
+  ([#2358](https://github.com/tinaudio/synth-setter/pull/2358),
+  [`3ce82ef`](https://github.com/tinaudio/synth-setter/commit/3ce82efc301d6dfe01f58194eb267c1b8557c748))
+
+* internal-feat(ci-automation): route reviews through fixed model tiers
+
+* internal-fix(ci-automation): clarify review tier policies
+
+* internal-fix(ci-automation): supervise deferred review aftercare
+
+* internal-fix(ci-automation): fail closed on live review owners
+
+* internal-fix(ci-automation): align aftercare ownership contract
+
+* internal-fix(ci-automation): preserve adopted aftercare statuses
+
+- **ci-automation**: Route Pi reviews through fixed model tiers
+  ([#2327](https://github.com/tinaudio/synth-setter/pull/2327),
+  [`60dc579`](https://github.com/tinaudio/synth-setter/commit/60dc579c25d96c1d4d38e29f89cca6c9a58ca78a))
+
+* internal-feat(ci-automation): route reviews through fixed model tiers
+
+* internal-fix(ci-automation): clarify review tier policies
+
+- **data**: Store row seed debug metadata
+  ([#2349](https://github.com/tinaudio/synth-setter/pull/2349),
+  [`e71d3c4`](https://github.com/tinaudio/synth-setter/commit/e71d3c41f993bca243e3693646759b654b388000))
+
+* internal-feat(data): store row seed debug metadata
+
+* internal-feat(data): type seed debug documents
+
+* internal-fix(data): omit unconsumed row seeds
+
+* internal-fix(data): simplify row seed provenance
+
+- **data**: Txid-pinned Lance subset materialization core
+  ([#2357](https://github.com/tinaudio/synth-setter/pull/2357),
+  [`b81d69a`](https://github.com/tinaudio/synth-setter/commit/b81d69a472b1c021ed9770ceb5410a6a102766e3))
+
+* internal-feat(data): txid-pinned Lance subset materialization core
+
+Add lance_materialize.py: stream a projected, row-limited scan of a transaction-uuid-pinned Lance
+  snapshot into a local dataset, so training hydration can transfer only the columns and rows a run
+  reads instead of the whole dataset directory (rclone copy of every column and row).
+
+- MaterializeManifest (strict pydantic) sidecar records source URI, txid, resolved version, columns,
+  limit, and a sha256 request hash; reruns reuse the cache only on a hash match and fail loudly on
+  any drift. - resolve_txid_version linear-scans live versions and raises LookupError for cleaned-up
+  or unknown txids. - Provenance is also stamped in the output's transaction properties
+  (cloned_from_txn) via pylance 7.0.0 transaction_properties. - Unit tests cover projection, limit,
+  snapshot pinning across appends, cache hit, hash mismatch, and sidecar damage on local fixtures; a
+  live integration_r2 test materializes a subset of a real R2 dataset over the production
+  lance_target() credentials path.
+
+Refs #2353
+
+* docs(data): map lance_materialize in doc-map and data-pipeline design
+
+Registers the new module under the data-pipeline design doc's sources, adds a discovery pointer next
+  to the other pipeline/data stage prose, and rewords the class-4 integration-test enumeration in
+  doc-map from an exhaustive file list to a marker-based pointer so future real-R2 tests don't go
+  stale.
+
+- **data-pipeline**: Configure signal quantization
+  ([#2364](https://github.com/tinaudio/synth-setter/pull/2364),
+  [`837c3e6`](https://github.com/tinaudio/synth-setter/commit/837c3e6560d04645b488407c9a51935af296fa83))
+
+* internal-feat(data-pipeline): configure signal quantization
+
+* test(data-pipeline): cover quantized entrypoint output
+
+* test(data-pipeline): verify quantized stats values
+
+* refactor(data-pipeline): clarify dtype validation contract
+
+* internal-fix(data-pipeline): accept defaulted spec fields
+
+* internal-fix(data-pipeline): limit legacy spec omissions
+
+* refactor(data-pipeline): expose dtype mapping contract
+
+- **pipeline**: Canonicalize embedding model caches
+  ([#2374](https://github.com/tinaudio/synth-setter/pull/2374),
+  [`6273953`](https://github.com/tinaudio/synth-setter/commit/6273953441dadbc0c3f79f4369665bae61847cc1))
+
+- **pipeline**: Fold SkyPilot compute configs into Hydra
+  ([#2347](https://github.com/tinaudio/synth-setter/pull/2347),
+  [`e219149`](https://github.com/tinaudio/synth-setter/commit/e21914959d7c8311df98b91556ae22144b7aa237))
+
+* internal-feat(pipeline): fold compute YAML into Hydra schema+builder
+
+Introduces the pydantic compute-option model, the programmatic sky.Task builder (constructors, not
+  from_yaml_config on a raw file), packaged setup/run scripts, and the nested
+  skypilot_launch/compute config group with a provider hierarchy. Debug options inherit the
+  runpod/smoke pool via a defaults list; a compose test pins the pools equal.
+
+* internal-feat(pipeline): launcher builds sky.Task from ComputeConfig
+
+Replaces the YAML dict-surgery path (_load_compute_template_with_cmd, _inject_network_volume,
+  _override_image_id, _detect_provider_from_doc) with build_sky_task on
+  SkypilotLaunchConfig.compute; launch configs and Hydra overrides now select
+  skypilot_launch/compute options. Test suites adapted to assert on the real constructed sky.Task
+  handed to sky.jobs.launch.
+
+* internal-feat(pipeline): drop legacy compute templates; migrate uses
+
+Removes src/synth_setter/configs/compute/ (17 raw SkyPilot YAMLs). The 5 consuming workflows switch
+  to skypilot_launch/compute group overrides (inline probes build tasks via build_sky_task), the
+  no-yaml-run-comments hook re-scopes to the new directory, and AGENTS.md/CLAUDE.md gates plus docs
+  and doc-map patterns follow. Compute scripts ship as package data (configs/**/*.sh).
+
+* internal-feat(pipeline): simplify per-entry image pin resolution
+
+* internal-fix(ci): retrigger title check after PR title edit
+
+* internal-fix(pipeline): env prose reflects construction-time flow
+
+Four spots still described the removed post-construction task.update_envs mechanism; envs now enter
+  at sky.Task construction via build_sky_task. Doc-drift advisory on PR #2347.
+
+* internal-fix(ci): oci-image-bake builds its task from the compute option
+
+The bake job fed the compute file straight to sky.Task.from_yaml, which rejects ComputeConfig
+  fields. Install the lite package + hydra-core and build via load_compute_option/build_sky_task;
+  the source_template input becomes compute_option (default oci/cpu).
+
+* internal-feat(pipeline): use native SkyPilot task loading
+
+* internal-fix(ci): load native SkyPilot task documents
+
+- **pipeline**: Unify embedding writers behind a spec registry
+  ([#2341](https://github.com/tinaudio/synth-setter/pull/2341),
+  [`1ea7d07`](https://github.com/tinaudio/synth-setter/commit/1ea7d07d0ef2db07ebea4869ae6a68c36738592b))
+
+* internal-feat(pipeline): unify embedding writers behind registry
+
+* docs(data-pipeline): registry-driven embedding selection in docs
+
+* chore(ci): retrigger title check
+
+* test(pipeline): cover all embeddings in real training e2e
+
+- **training**: Config-driven add_embeddings for m2l + clap
+  ([#2295](https://github.com/tinaudio/synth-setter/pull/2295),
+  [`041ddde`](https://github.com/tinaudio/synth-setter/commit/041ddde4517cfb19e1b8dfc0cb25ce62dbabe357))
+
+* refactor(pipeline): config-driven add_embeddings Hydra endpoint
+
+Replace the click CLI with a @hydra.main endpoint validated into a strict AddEmbeddingsConfig
+  (from_hydra_cfg mirrors DatasetSpec). The public add_embeddings(config) loads real m2l+clap
+  encoders and delegates the write to a private injectable _write_embeddings seam. SAME CLI dispatch
+  is removed pending #2319; SAME helpers stay in-module, unwired.
+
+Refs #2318
+
+* internal-fix(config): m2l conditioning reads the m2l Lance column
+
+Add conditioning=clap (vector_projection over the 512-d clap column) and conditioning=m2l (embedpool
+  over the (128,42) m2l column). The m2l profile reads the m2l column the add_embeddings endpoint
+  writes, so it no longer mismatches the legacy music2latent column.
+
+Fixes #2312 Refs #2318
+
+* test(training): real clap/m2l conditioning e2e (no mocks)
+
+Add requires_vst/slow/network e2e in test_train.py + test_eval.py parametrized over [m2l, clap]:
+  render a Surge XT dataset, augment it with real music2latent + CLAP columns via the add_embeddings
+  endpoint, then train one step (finite train loss) and train->checkpoint->validate (finite
+  val/param_mse). Shared conftest helpers augment the splits and build the conditioning train cfg.
+
+* internal-fix(pipeline): bootstrap PROJECT_ROOT for add_embeddings CLI
+
+The @hydra.main add_embeddings endpoint composed paths referencing PROJECT_ROOT which is unset for a
+  standalone console run, so the CLI failed at hydra.run.dir resolution. Publish PROJECT_ROOT at
+  import like finalize/generate. Update the r2 integration test to Hydra-override CLI args and
+  refresh stale flag docstrings.
+
+* internal-fix(config): coerce resume_cache Hydra string to Path
+
+strict=True rejected the documented resume_cache=<path> Hydra override (str vs Path). A mode=before
+  validator coerces str to Path so the CLI override works while the model stays strict. Flagged by 5
+  review skills on round 1.
+
+* internal-fix(config): address PR #2295 round-1 review
+
+- num_sub_vectors validator (divides the clap dim) fails a bad index knob at config time, not after
+  the render+encode - fail-fast on already-present m2l/clap columns before the encoder downloads -
+  comment-hygiene across conditioning profiles, add_embeddings.yaml, doc-map, and endpoint
+  docstrings; module usage example; helper return annotation
+
+* internal-fix(test): drop SAME CLI tests gone with the click endpoint
+
+The Hydra refactor removed the --same click dispatch (SAME CLI returns in #2319), so four
+  test_add_same_embeddings CLI tests exercised removed behavior and failed run_tests_conda. Remove
+  them and now-unused imports; the add_same_embeddings function-level tests stay.
+
+* internal-fix(config): positivity guards + hygiene from PR #2295 round 2
+
+- ge=1 on num_partitions and num_sub_vectors so 0/negative index knobs are rejected at config time
+  (0 also avoided a divide-by-zero in the PQ validator) - tighten doc-map covers entries and the
+  m2l/PROJECT_ROOT comments - note the e2e val/test clone is an intentional plumbing smoke
+
+* internal-fix(config): metric guard + kw-only helper from round 3
+
+- validate metric against Lance's accepted set (cosine/l2/dot) - make param_spec_name/conditioning
+  keyword-only on the e2e cfg helper so the two interchangeable strings can't be swapped - add
+  validator coverage (resume_cache, num_sub_vectors, partitions, metric) - tuple-ize the profile
+  parametrize constants; tighten remaining narration
+
+- **training**: Loader-throughput sweep (map-style vs fragment)
+  ([#2355](https://github.com/tinaudio/synth-setter/pull/2355),
+  [`9fcc4ad`](https://github.com/tinaudio/synth-setter/commit/9fcc4ad94af0277fefa05c9ff18ba8c5f42236a1))
+
+* internal-feat(training): loader-throughput sweep for fragment regression
+
+Two W&B grid sweeps (map-style vs fragment) measure train/samples_per_sec across
+  batch_size/num_workers/batch_readahead/ot to answer whether the fragment sampler's slowdown
+  (#2320) is the O(n^3) OT solve. Enables the metric via Lightning's built-in ThroughputMonitor +
+  DeviceStatsMonitor (callbacks=throughput) with a batch_size_fn shim; trials read a pre-hydrated
+  local dataset_root over short max_steps runs so the 509 GiB dataset is fetched once per pod, not
+  per trial.
+
+Refs #2320, #2231
+
+* internal-fix(training): use ThroughputMonitor's real metric key
+
+ThroughputMonitor logs train/device/samples_per_sec on single-device runs, not the plain
+  train/samples_per_sec the sweeps declared, so the grid sweeps' best-run summary and metric goal
+  were inert. Point both at the emitted key.
+
+- **training**: Same-s/same-l live e2e conditioning
+  ([#2311](https://github.com/tinaudio/synth-setter/pull/2311),
+  [`3f2477c`](https://github.com/tinaudio/synth-setter/commit/3f2477cdc92e18af74bcf07de2b3ba2ce594a291))
+
+* internal-feat(training): SAME conditioning in add_embeddings + live e2e
+
+Extend the config-driven add_embeddings endpoint to the SAME encoders and add live same_s/same_l
+  conditioning e2e tests, mirroring the m2l/clap shape from #2295.
+
+Endpoint + config: - AddEmbeddingsConfig gains same_variants (tuple of "s"/"l"), same_s_checkpoint,
+  and same_l_checkpoint (defaults = the R2-mirror consts). A before-validator coerces a Hydra list
+  to a tuple and rejects unknown/duplicate variants so a bad token fails at config time, before the
+  multi-GB weights download. - add_embeddings dispatches on same_variants: a non-empty tuple runs
+  the SAME path (load one encoder per variant -> add_same_embeddings, no index), otherwise the
+  m2l+clap path is unchanged. The old sys.exit-based _run_same_mode becomes the raise-based
+  _add_same_embeddings; main() maps failures to exit 1 as before. - add_embeddings.yaml exposes
+  same_variants + the two checkpoints.
+
+Tests: - Config layer: SAME defaults, list->tuple coercion via from_hydra_cfg, unknown/duplicate
+  rejection, and a live main() SAME-mode run (fake encoder) asserting both columns land and m2l/clap
+  do not. - Live e2e (markers requires_vst + slow + network + same_e2e, gated by
+  pytest.importorskip("stable_audio_tools")): render Surge XT -> add_embeddings SAME mode (real
+  encoder, public HF checkpoint) -> real train (test_train.py) and train->validate (test_eval.py),
+  parametrized over same_s/same_l. Reuses the existing build_surge_xt_embedding_train_cfg (generic
+  over conditioning).
+
+The conditioning-e2e CI lane (adds uv sync --extra same + SAME weight caching) cannot be pushed with
+  this token; its contents are posted on the PR. The same_e2e tests skip in every other lane, so CI
+  stays green without it.
+
+Fixes #2319
+
+* internal-fix(training): address review round 1 on SAME conditioning e2e
+
+- Extract the shared train->validate flow into _assert_conditioning_train_validate_finite so the
+  clap/m2l and SAME eval e2e tests no longer duplicate the 30-line compose/mutate/evaluate block
+  (code-health). - Add a single-variant endpoint test asserting only the requested SAME column lands
+  and that its stub fill matches the routed checkpoint, so a dispatch that ignored same_variants or
+  mis-routed a checkpoint is caught (tdd). - Tighten the SAME-checkpoint comment in conftest to one
+  line (comment-hygiene).
+
+* internal-fix(pipeline): honor debug + log versions on SAME embed path
+
+Address review round 2: - add_same_embeddings gains log_every_batch (default False);
+  _add_same_embeddings passes config.debug so SAME mode honors the debug knob's per-batch logging,
+  as the m2l+clap path already does (correctness). - add_same_embeddings brackets the write with
+  same_embedding_write_started (source_version) and wrote_same_embeddings (committed_version), so a
+  SAME run's logs pin the exact input/output Lance versions (ml-pipeline). - Lock both with a
+  per-batch + version-ordering log-capture test.
+
+* internal-fix(pipeline): load SAME variants sequentially
+
+Address review round 3: - _add_same_embeddings loads, writes, and releases one SAME encoder per
+  variant instead of holding both in a comprehension, so same_variants=[s,l] never keeps SAME-S and
+  SAME-L (~3.8 GB together) resident at once. Each variant is its own add_same_embeddings commit;
+  _variant_resume_cache suffixes the resume cache per column so the two UDF passes never share one
+  checkpoint file. - Type the test _run_udf_in_process udf param as Callable[[pa.RecordBatch],
+  pa.RecordBatch] instead of Any (P2).
+
+The held-out-validation-splits limitation (val/test are identical copytree clones of train in the
+  shared surge_xt_smoke_datasets fixture) is tracked in #2321; fixing it means changing shared
+  VST-suite infra, out of scope here.
+
+- **training**: Txid-pinned subset hydration in datamodule
+  ([#2360](https://github.com/tinaudio/synth-setter/pull/2360),
+  [`c724f6c`](https://github.com/tinaudio/synth-setter/commit/c724f6c7ffa6788b77cff8b894f3f0bddb70fa67))
+
+* internal-feat(training): txid-pinned subset hydration in datamodule
+
+materialize_columns=True switches VSTDataModule.prepare_data() from the whole-dir rclone copy to
+  per-split materialize_lance_subset calls: each train/val/test split is rematerialized locally from
+  a transaction-uuid-pinned snapshot, projected to the loader-derived columns (param_array +
+  conditioning column, + audio for the split serving predict) and capped at subset_rows. Non-Lance
+  sidecars (stats.npz, dataset.json) still hydrate via download_dir_no_overwrite, which gains an
+  exclude glob so split data and pipeline-internal metadata/ do not ride along.
+
+dataset_txids is a per-split {train/val/test: txid} mapping because each split is its own Lance
+  dataset with its own transaction history; all inconsistent combinations fail loudly in __init__,
+  and the deprecated fragment-sampler path rejects the new mode.
+
+Refs #2353
+
+* docs(training): note materialize_columns hydration mode in design docs
+
+Adds the txid-pinned materializing-hydration bullet to the training pipeline's dataset-access
+  behavior list (pointing at data-pipeline.md for mechanics) and generalizes the doc-map class-4
+  integration-test examples to the test_lance_materialize*_r2.py pattern so the list needs no
+  per-file upkeep.
+
+* refactor(data): extract split materialization into pipeline layer
+
+Move the txid-pinned split-materialization orchestration out of the Lightning module and into the
+  pipeline layer, so VSTDataModule is a thin caller instead of owning URI joining, the split loop,
+  and sidecar rclone.
+
+- lance_materialize.py: materialize_lance_subset now accepts file:// source URIs (normalized via
+  file_uri helpers); new public materialize_splits() owns the per-split loop, URI join, and sidecar
+  download. - vst_datamodule.py: delete _join_source_uri and its file_uri imports;
+  _materialize_splits collapses to a guard plus a delegating call. The datamodule keeps only its own
+  read-set projection and construction-time config validation.
+
+Behavior-identical: the prepare_data end-to-end datamodule tests pass
+
+unchanged. Adds a file:// contract test and two materialize_splits tests (projection, row cap,
+  per-txid pinning, sidecar exclude glob).
+
+* refactor(training): unify hydration config under download_dataset_* args
+
+Full-directory download and txid-pinned subset materialization are the same operation — full
+  download is just materializing everything — so the materialize_columns mode flag was redundant and
+  could contradict the other fields. Drop it and infer the mode from txid presence.
+
+- Remove materialize_columns; rename dataset_txids -> download_dataset_txids and subset_rows ->
+  download_dataset_row_limit, grouping the hydration knobs under the download_dataset_* prefix
+  alongside download_dataset_root_uri. - prepare_data() selects the materialize path when
+  download_dataset_txids is set, else the whole-dir download. Validation now rejects a row limit
+  without txids (a full download cannot cap rows), keeping the source and split-completeness checks.
+  - Rename materialize_splits(subset_rows=) -> row_limit= for pipeline-layer coherence with
+  materialize_lance_subset(limit=). - Add a hydra.utils.instantiate round-trip test: txids written
+  as a config mapping arrive as an OmegaConf DictConfig and convert to a plain dict at the
+  constructor boundary, then prepare_data() materializes end-to-end.
+
+No shipped config enables the feature yet, so the rename carries no migration.
+
+### Internal-Fix
+
+- **ci**: Pr-title-guard hook reserves release-triggering types
+  ([#2310](https://github.com/tinaudio/synth-setter/pull/2310),
+  [`3a516aa`](https://github.com/tinaudio/synth-setter/commit/3a516aa37a7075739c999344259ea6c1af36aec1))
+
+* internal-fix(ci): reserve release-triggering PR-title types
+
+Adds pr-title-guard (PreToolUse hook on gh pr create/edit) enforcing the .gitlint type vocabulary
+  pre-creation and reserving release-triggering types (feat/fix/perf/revert, read from
+  semantic-release tags) behind an explicit RELEASE_INTENT=1 signal, plus a native commit-msg
+  pre-commit hook (release-type-guard) and the commit-msg install stage so gitlint fires locally.
+
+Refs #2291
+
+* internal-fix(ci): apply review cleanups to pr-title-guard
+
+Defer config loads until a gated title is found, drop the unread vocabulary load at commit-msg
+  stage, and interleave assignment/prefix skipping so 'env RELEASE_INTENT=1 gh pr create' signals
+  intent.
+
+* internal-fix(ci): drop racy pre-commit-machinery test
+
+The TestNativeCommitMsgHook cases shelled out to 'pre-commit run' against the shared repo .git,
+  racing other xdist workers on .git/index.lock (pre-commit runs git write-tree internally). The
+  commit-msg entrypoint is already driven directly by TestCommitMsgMode; replace the racy layer with
+  a config-wiring assertion.
+
+- **ci-automation**: Pin Pi review checklist paths
+  ([#2361](https://github.com/tinaudio/synth-setter/pull/2361),
+  [`8ce78a0`](https://github.com/tinaudio/synth-setter/commit/8ce78a0c7574bacb6f21552a5a5bef7d1da8c4b6))
+
+* internal-feat(ci-automation): route reviews through fixed model tiers
+
+* internal-fix(ci-automation): clarify review tier policies
+
+* internal-fix(ci-automation): supervise deferred review aftercare
+
+* internal-fix(ci-automation): fail closed on live review owners
+
+* internal-fix(ci-automation): align aftercare ownership contract
+
+* internal-fix(ci-automation): preserve adopted aftercare statuses
+
+* internal-fix(ci-automation): pin review checklist paths
+
+- **ci-automation**: Remove stale review prompt assignment
+  ([#2371](https://github.com/tinaudio/synth-setter/pull/2371),
+  [`ac5dbae`](https://github.com/tinaudio/synth-setter/commit/ac5dbaea0c07f37a598fa8215109827aca6a0d2f))
+
+- **ci-automation**: Stabilize Docker apt index refresh
+  ([#2338](https://github.com/tinaudio/synth-setter/pull/2338),
+  [`02682d2`](https://github.com/tinaudio/synth-setter/commit/02682d2dedeac6096089a3d42e46c52d9ab81170))
+
+* internal-fix(ci-automation): stabilize Docker apt indexes
+
+* test(ci-automation): exercise Docker apt mirror
+
+* test(ci-automation): cover Docker apt failure paths
+
+* internal-fix(ci-automation): reject partial apt refreshes
+
+* test(ci-automation): cover successful apt transaction
+
+* internal-fix(ci-automation): enforce strict apt refreshes
+
+* test(ci-automation): pin apt mirror rewrite
+
+* internal-fix(ci-automation): simulate unreadable SSH key
+
+* internal-fix(ci-automation): accept fd alias banner
+
+- **data-pipeline**: Trust -displayfd when xdpyinfo unavailable
+  ([#2307](https://github.com/tinaudio/synth-setter/pull/2307),
+  [`c825984`](https://github.com/tinaudio/synth-setter/commit/c825984a7f1059001c42468659f5209ed9368f56))
+
+* internal-fix(data-pipeline): trust -displayfd when xdpyinfo unavailable
+
+The headless VST wrapper starts `Xvfb -displayfd 3`, which publishes the display number only once
+  the X server is listening and ready to accept connections. The wrapper then re-verified readiness
+  by shelling out to `xdpyinfo`, treating a probe miss as a hard failure that reaped the server and
+  retried until the budget was exhausted.
+
+On the bare `ubuntu-latest` cpu-slow runner `x11-utils` is not installed, so `xdpyinfo` is absent
+  and the probe can never succeed: every attempt lands on `:0`, exhausts the retry budget, and fails
+  deterministically ("Xvfb did not become ready on :0") even though the server is up. Under
+  concurrent Docker renders the same probe is transiently refused, flaking the VST slow leg.
+
+Treat `-displayfd` as the authoritative readiness signal: skip the probe when `xdpyinfo` is absent,
+  and downgrade a probe miss on a still-alive server to a logged, non-fatal fallback. A genuinely
+  dead server is still detected via `kill -0` and retried, preserving the display-lock-race retry
+  from #2063.
+
+Fixes #2306 Refs #2213
+
+* chore: re-trigger PR title check after title edit
+
+* chore: re-run PR title gate against corrected title
+
+- **testing**: Preserve fragment sampler baseline signal
+  ([#2314](https://github.com/tinaudio/synth-setter/pull/2314),
+  [`1f57fe6`](https://github.com/tinaudio/synth-setter/commit/1f57fe67a63b23f1cd24c0ebe73e4d3a3f87a954))
+
+- **training**: Pin worker checkout before SkyPilot launch
+  ([#2335](https://github.com/tinaudio/synth-setter/pull/2335),
+  [`e22b666`](https://github.com/tinaudio/synth-setter/commit/e22b666794d6a372451f0e11c3623d655a016f6f))
+
+
 ## v10.6.0 (2026-07-22)
 
 ### Build System
