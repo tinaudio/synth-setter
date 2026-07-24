@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import traceback
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import lance
 import pyarrow as pa
 import pytest
+from structlog.testing import capture_logs
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
@@ -49,6 +52,102 @@ def test_resolve_txid_version_known_txid_returns_matching_version(
     assert resolve_txid_version(ds, txid) == 1
 
 
+def test_resolve_txid_version_transient_version_list_retries_without_leaking(
+    two_version_source: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient version-list read retries without logging exception details.
+
+    :param two_version_source: Local two-version source dataset and version-1 txid.
+    :param monkeypatch: Fixture injecting the transient version-list failure.
+    """
+    source, txid = two_version_source
+    dataset = lance.dataset(source)
+    real_versions = dataset.versions
+    attempts = 0
+
+    def flaky_versions() -> Sequence[Mapping[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError(
+                "LanceError(IO): Generic S3 error: 502 Bad Gateway; token top-secret"
+            )
+        return real_versions()
+
+    monkeypatch.setattr(dataset, "versions", flaky_versions)
+    with capture_logs() as logs:
+        resolved_version = resolve_txid_version(dataset, txid)
+
+    assert resolved_version == 1
+    assert attempts == 2
+    retry_logs = [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+    assert [(log["operation"], log["attempt"], log["max_attempts"]) for log in retry_logs] == [
+        ("version_list", 1, 3)
+    ]
+    assert "top-secret" not in repr(logs)
+
+
+def test_resolve_txid_version_transient_transaction_read_retries_without_leaking(
+    two_version_source: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient transaction read retries without logging exception details.
+
+    :param two_version_source: Local two-version source dataset and version-1 txid.
+    :param monkeypatch: Fixture injecting the transient transaction-read failure.
+    """
+    source, txid = two_version_source
+    dataset = lance.dataset(source)
+    real_read_transaction = dataset.read_transaction
+    attempts = 0
+
+    def flaky_read_transaction(version: int) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError(
+                "LanceError(IO): Generic S3 error: HTTP status server error "
+                "(503 Service Unavailable); credential top-secret"
+            )
+        return real_read_transaction(version)
+
+    monkeypatch.setattr(dataset, "read_transaction", flaky_read_transaction)
+    with capture_logs() as logs:
+        resolved_version = resolve_txid_version(dataset, txid)
+
+    assert resolved_version == 1
+    assert attempts == 2
+    retry_logs = [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+    assert [(log["operation"], log["attempt"], log["max_attempts"]) for log in retry_logs] == [
+        ("transaction_read", 1, 3)
+    ]
+    assert "top-secret" not in repr(logs)
+
+
+def test_resolve_txid_version_schema_error_does_not_retry(
+    two_version_source: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanent transaction schema error propagates on its first attempt.
+
+    :param two_version_source: Local two-version source dataset and version-1 txid.
+    :param monkeypatch: Fixture injecting the permanent transaction-read failure.
+    """
+    source, txid = two_version_source
+    dataset = lance.dataset(source)
+    attempts = 0
+
+    def invalid_transaction_schema(_version: int) -> object:
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("Schema mismatch: transaction field is invalid")
+
+    monkeypatch.setattr(dataset, "read_transaction", invalid_transaction_schema)
+    with capture_logs() as logs, pytest.raises(ValueError, match="Schema mismatch"):
+        resolve_txid_version(dataset, txid)
+
+    assert attempts == 1
+    assert not [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+
+
 def test_resolve_txid_version_unknown_txid_raises_lookup_error(
     two_version_source: tuple[str, str],
 ) -> None:
@@ -60,6 +159,113 @@ def test_resolve_txid_version_unknown_txid_raises_lookup_error(
     ds = lance.dataset(source)
     with pytest.raises(LookupError, match="no-such-txid"):
         resolve_txid_version(ds, "no-such-txid")
+
+
+def test_materialize_source_open_transient_object_store_error_retries_without_leaking(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient source-open failure retries without logging exception details.
+
+    :param two_version_source: Local source used after the injected object-store failure.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting the transient ``lance.dataset`` failure.
+    """
+    source, txid = two_version_source
+    real_dataset = lance.dataset
+    attempts = 0
+
+    def flaky_dataset(
+        uri: str, *, storage_options: dict[str, str] | None = None
+    ) -> lance.LanceDataset:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError(
+                "LanceError(IO): Generic S3 error: HTTP error: error sending request "
+                "with token top-secret"
+            )
+        return real_dataset(uri, storage_options=storage_options)
+
+    monkeypatch.setattr(lance, "dataset", flaky_dataset)
+    destination = tmp_path / "out" / "train.lance"
+    with capture_logs() as logs:
+        materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert real_dataset(str(destination)).to_table().column("a").to_pylist() == [1, 2, 3]
+    assert attempts == 2
+    retry_logs = [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+    assert [(log["operation"], log["attempt"], log["max_attempts"]) for log in retry_logs] == [
+        ("source_open", 1, 3)
+    ]
+    assert "top-secret" not in repr(logs)
+
+
+def test_materialize_source_open_auth_error_does_not_retry(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permanent object-store auth error propagates on its first attempt.
+
+    :param two_version_source: Local source whose txid forms the materialization request.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting the permanent source-open failure.
+    """
+    source, txid = two_version_source
+    attempts = 0
+
+    def denied_dataset(*_args: object, **_kwargs: object) -> lance.LanceDataset:
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("LanceError(IO): 403 Forbidden: AccessDenied")
+
+    monkeypatch.setattr(lance, "dataset", denied_dataset)
+    destination = tmp_path / "out" / "train.lance"
+    with capture_logs() as logs, pytest.raises(ValueError, match="AccessDenied"):
+        materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert attempts == 1
+    assert not [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+
+
+def test_materialize_source_open_transient_exhaustion_fails_closed(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient source-open failure re-raises after the bounded attempt budget.
+
+    :param two_version_source: Local source whose txid forms the materialization request.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting persistent transient source-open failures.
+    """
+    source, txid = two_version_source
+    failure = ValueError(
+        "LanceError(IO): Generic S3 error: HTTP error: error sending request "
+        "with token top-secret"
+    )
+    attempts = 0
+
+    def unavailable_dataset(*_args: object, **_kwargs: object) -> lance.LanceDataset:
+        nonlocal attempts
+        attempts += 1
+        raise failure
+
+    monkeypatch.setattr(lance, "dataset", unavailable_dataset)
+    destination = tmp_path / "out" / "train.lance"
+    with capture_logs() as logs, pytest.raises(
+        RuntimeError, match="source_open failed after 3 transient attempts"
+    ) as exc_info:
+        materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert attempts == 3
+    retry_logs = [log for log in logs if log.get("event") == "lance_read_attempt_failed"]
+    assert [log["attempt"] for log in retry_logs] == [1, 2, 3]
+    assert "top-secret" not in repr(logs)
+    assert "top-secret" not in "".join(traceback.format_exception(exc_info.value))
+    assert not destination.exists()
 
 
 def test_materialize_column_projection_subset_columns_only_requested_schema(

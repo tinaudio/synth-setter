@@ -17,6 +17,14 @@ from pathlib import Path
 import lance
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
+from tenacity import (
+    RetryCallState,
+    RetryError,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
@@ -24,6 +32,76 @@ from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 logger = structlog.get_logger(__name__)
 
 _SIDECAR_SUFFIX = ".materialize.json"
+_MAX_LANCE_READ_ATTEMPTS = 3
+_LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
+_LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
+_RETRYABLE_LANCE_IO_MARKERS = (
+    "408 request timeout",
+    "429 too many requests",
+    "500 internal server error",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "connection closed",
+    "connection refused",
+    "connection reset",
+    "error sending request",
+    "request timeout",
+    "temporarily unavailable",
+    "timed out",
+)
+
+
+def _is_retryable_lance_read_error(error: BaseException) -> bool:
+    """Return whether a Lance read failed on transient object-store transport.
+
+    :param error: Exception raised by ``lance.dataset`` or ``read_transaction``.
+    :returns: Whether retrying the same idempotent metadata read is safe.
+    """
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    # pylance 7.0 exposes object-store failures as ValueError without structured status fields.
+    message = str(error).casefold()
+    return "lanceerror(io)" in message and any(
+        marker in message for marker in _RETRYABLE_LANCE_IO_MARKERS
+    )
+
+
+def _retry_lance_read[ReadResult](
+    operation_name: str, read: Callable[[], ReadResult]
+) -> ReadResult:
+    """Run one idempotent Lance metadata read under the bounded retry policy.
+
+    :param operation_name: Secret-free operation label included in retry logs.
+    :param read: Zero-argument Lance read operation.
+    :returns: The successful read result.
+    :raises RuntimeError: All transient attempts failed; third-party details are suppressed.
+    """
+
+    def log_failed_attempt(retry_state: RetryCallState) -> None:
+        logger.warning(
+            "lance_read_attempt_failed",
+            operation=operation_name,
+            attempt=retry_state.attempt_number,
+            max_attempts=_MAX_LANCE_READ_ATTEMPTS,
+        )
+
+    retrying = Retrying(
+        after=log_failed_attempt,
+        retry=retry_if_exception(_is_retryable_lance_read_error),
+        stop=stop_after_attempt(_MAX_LANCE_READ_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=_LANCE_READ_BACKOFF_INITIAL_SECONDS,
+            max=_LANCE_READ_BACKOFF_MAX_SECONDS,
+        ),
+    )
+    try:
+        return retrying(read)
+    except RetryError:
+        raise RuntimeError(
+            f"Lance {operation_name} failed after "
+            f"{_MAX_LANCE_READ_ATTEMPTS} transient attempts"
+        ) from None
 
 
 class MaterializeManifest(BaseModel):
@@ -119,10 +197,14 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     :raises LookupError: No live version's transaction matches ``txid`` — the
         pin was cleaned up by ``cleanup_old_versions()`` or never existed.
     """
-    for entry in ds.versions():
-        transaction = ds.read_transaction(entry["version"])
+    versions = _retry_lance_read("version_list", ds.versions)
+    for entry in versions:
+        version = entry["version"]
+        transaction = _retry_lance_read(
+            "transaction_read", lambda: ds.read_transaction(version)
+        )
         if transaction is not None and transaction.uuid == txid:
-            return entry["version"]
+            return version
     raise LookupError(
         f"txid {txid!r} matches no live version of {ds.uri} — the pinned "
         "version was cleaned up or the txid never existed"
@@ -226,6 +308,7 @@ def materialize_lance_subset(  # noqa: DOC502
     :param batch_size: Scan batch size in rows — the streaming memory unit.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
+    :raises RuntimeError: A transient source read exhausts the retry budget.
     :raises ValueError: ``dest_path`` exists with a missing/unparsable
         sidecar or a sidecar whose request hash differs from this request.
     """
@@ -239,7 +322,9 @@ def materialize_lance_subset(  # noqa: DOC502
         open_uri, storage_options = str(file_uri_to_path(source_uri)), None
     else:
         open_uri, storage_options = source_uri, None
-    ds = lance.dataset(open_uri, storage_options=storage_options)
+    ds = _retry_lance_read(
+        "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
+    )
     resolved_version = resolve_txid_version(ds, txid)
     snapshot = ds.checkout_version(resolved_version)
     scanner = snapshot.scanner(
