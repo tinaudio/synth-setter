@@ -48,6 +48,16 @@ def test_dataset_same_index_deterministic_different_index_distinct() -> None:
     assert not torch.equal(params_a, params_c)
 
 
+def test_dataset_affine_collision_pair_produces_distinct_params() -> None:
+    """Keep crafted base/index collision pairs in distinct parameter streams."""
+    first_params = TorchSynthDataset(1, 0, **_RENDER_KWARGS)[0][1]
+    second_params = TorchSynthDataset(
+        2, 7_682_673_210_995_763_517, **_RENDER_KWARGS
+    )[1][1]
+
+    assert not torch.equal(first_params, second_params)
+
+
 def test_dataset_item_has_normalized_float32_params_and_audio() -> None:
     """Online rows expose renderable labels and finite normalized audio."""
     dataset = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
