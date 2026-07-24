@@ -23,24 +23,25 @@ def dataset_artifact_ref(
     """Return the immutable W&B dataset artifact declared by a finalized root.
 
     :param dataset_root: Optional local finalized dataset directory.
-    :param download_dataset_root_uri: Optional R2 dataset root; preferred over
+    :param download_dataset_root_uri: Optional hydration dataset root; preferred over
         ``dataset_root`` so lineage discovery does not hydrate a Lightning datamodule.
     :returns: Canonical ``(artifact_name, immutable_run_id)`` pair, or ``None``
         when no root has a readable frozen spec.
     """
     if download_dataset_root_uri is not None:
-        try:
-            r2_io.ensure_r2_env_loaded()
-        except RuntimeError as exc:
-            log.warning(
-                "dataset_lineage_remote_unavailable",
-                dataset_root=download_dataset_root_uri,
-                error=str(exc),
-            )
-        else:
-            remote_ref = _artifact_ref_from_root(download_dataset_root_uri)
-            if remote_ref is not None:
-                return remote_ref
+        if r2_io.is_r2_uri(download_dataset_root_uri):
+            try:
+                r2_io.ensure_r2_env_loaded()
+            except RuntimeError as exc:
+                log.warning(
+                    "dataset_lineage_remote_unavailable",
+                    dataset_root=download_dataset_root_uri,
+                    error=str(exc),
+                )
+                return _artifact_ref_from_root(dataset_root)
+        download_ref = _artifact_ref_from_root(download_dataset_root_uri)
+        if download_ref is not None:
+            return download_ref
     return _artifact_ref_from_root(dataset_root)
 
 

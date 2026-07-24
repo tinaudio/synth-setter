@@ -822,15 +822,27 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
     cfg_train_lance: DictConfig,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """The eval entrypoint consumes latest-snapshot row-limited hydration.
+    """The eval entrypoint consumes row-limited hydration and records its lineage.
 
     :param cfg_train_lance: Composed Lance config supplying the source dataset.
     :param tmp_path: Parent of the fresh local hydration destination.
     :param monkeypatch: Replaces only the separately tested rclone sidecar boundary.
+    :param dataset_spec_factory: Factory producing the source's frozen lineage spec.
     """
     source = Path(cfg_train_lance.datamodule.dataset_root)
     destination = tmp_path / "row-limited-data"
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="file-uri-eval-lineage",
+            run_id="file-uri-eval-lineage-20260724T100000000Z",
+            train_val_test_sizes=[4, 4, 4],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        source / "input_spec.json",
+    )
 
     def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
         del _source_uri, exclude
@@ -853,9 +865,14 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
         cfg.datamodule.download_dataset_row_limit = 2
 
     HydraConfig().set_config(cfg)
-    metric_dict, object_dict = evaluate(cfg)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.eval.instantiate_loggers", return_value=[logger]):
+        metric_dict, object_dict = evaluate(cfg)
 
     assert torch.isfinite(metric_dict["test/param_mse"])
+    assert logger.used_artifacts == [
+        "data-file-uri-eval-lineage:file-uri-eval-lineage-20260724T100000000Z"
+    ]
     datamodule = object_dict["datamodule"]
     datamodule.setup("test")
     try:
