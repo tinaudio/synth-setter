@@ -279,7 +279,12 @@ class TestMaterializePrepareData:
         finally:
             module.teardown()
 
-        assert lance.dataset(str(destination / "train.lance")).count_rows() == 4
+        for split in ("train", "val", "test"):
+            source = lance.dataset(str(source_root / f"{split}.lance"))
+            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            expected_params = source.scanner(columns=["param_array"], limit=4).to_table()
+            actual_params = materialized.scanner(columns=["param_array"]).to_table()
+            assert actual_params.equals(expected_params)
         assert batch["params"].shape == (2, NUM_PARAMS)
         assert batch["mel_spec"] is not None
 

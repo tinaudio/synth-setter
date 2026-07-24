@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -277,6 +278,9 @@ def _write_materialized_snapshot(
         limit=manifest.limit,
     )
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = dest_path.parent / f".{dest_path.name}.partial"
+    if staging_path.exists():
+        shutil.rmtree(staging_path)
     transaction_properties = (
         {"cloned_from_txn": manifest.txid}
         if manifest.txid is not None
@@ -284,15 +288,17 @@ def _write_materialized_snapshot(
     )
     written = lance.write_dataset(
         scanner.to_batches(),
-        str(dest_path),
+        str(staging_path),
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
     )
+    row_count = written.count_rows()
     sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
+    staging_path.replace(dest_path)
     logger.info(
         "lance_materialize.done",
         dest_path=str(dest_path),
-        rows=written.count_rows(),
+        rows=row_count,
     )
     return dest_path
 
@@ -388,11 +394,10 @@ def materialize_splits(
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
-    split_txids = (
-        txids.items()
-        if txids is not None
-        else ((split, None) for split in ("train", "val", "test"))
-    )
+    if txids is None:
+        split_txids = ((split, None) for split in ("train", "val", "test"))
+    else:
+        split_txids = txids.items()
     for split, txid in split_txids:
         name = f"{split}{shard_suffix}"
         materialize_lance_subset(

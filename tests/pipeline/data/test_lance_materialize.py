@@ -342,6 +342,46 @@ def test_materialize_rerun_different_columns_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
 
 
+def test_materialize_interrupted_publish_rerun_recovers(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sidecar write interruption leaves no destination and is restartable.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Pytest fixture injecting the interrupted sidecar write.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    partial = dest.parent / f".{dest.name}.partial"
+    original_write_text = Path.write_text
+
+    def interrupt_sidecar_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == sidecar_path(dest):
+            raise OSError("injected sidecar write interruption")
+        return original_write_text(
+            path, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "write_text", interrupt_sidecar_write)
+        with pytest.raises(OSError, match="injected"):
+            materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+    assert not dest.exists()
+    assert partial.exists()
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+    assert not partial.exists()
+
+
 def test_materialize_dest_without_sidecar_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
