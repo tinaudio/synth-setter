@@ -839,14 +839,12 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
 ) -> None:
     """The generate-dataset CLI carries env-file auth through real dispatch.
 
-    :param tmp_path: Hosts the compute template, dotenv source, and Hydra output.
+    :param tmp_path: Hosts the dotenv source and Hydra output.
     :param monkeypatch: Isolates storage and external SkyPilot service boundaries.
     """
     import synth_setter.cli.generate_dataset as generate_dataset_cli
     import synth_setter.pipeline.skypilot_launch as skypilot_launch
 
-    template = tmp_path / "compute.yaml"
-    template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     env_file = tmp_path / "launcher.env"
     env_file.write_text(
         "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
@@ -883,7 +881,8 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
 
     fake_sky.jobs.launch.side_effect = assert_env_file_endpoint_is_active
     fake_sky.stream_and_get.return_value = ([1], MagicMock())
-    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -891,25 +890,26 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={_TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template}",
+            "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
         ],
     )
 
     cast("Callable[[], None]", generate_dataset_cli.main)()
 
-    task_doc = fake_sky.Task.from_yaml_config.call_args.args[0]
-    assert f"skypilot_launch.env_file={env_file}" in task_doc["run"]
+    submitted_task = fake_sky.jobs.launch.call_args.args[0]
+    assert submitted_task.run is not None
+    assert f"skypilot_launch.env_file={env_file}" in submitted_task.run
     fake_sky.jobs.launch.assert_called_once()
 
 
 @pytest.fixture()
 def remote_worker_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Callable[[Path, Path, Path], tuple[subprocess.CompletedProcess[str], Path]]:
+) -> Callable[[Path, Path, Path], subprocess.CompletedProcess[str]]:
     """Build a launcher that executes its generated worker command locally.
 
-    :param tmp_path: Scratch paths for the compute template and generated command.
+    :param tmp_path: Scratch paths for the generated command.
     :param monkeypatch: Redirects storage and SkyPilot boundaries.
     :returns: Callable accepting worker root, worker venv, and fake runtime directory.
     """
@@ -918,9 +918,7 @@ def remote_worker_dispatch(
 
     def _dispatch(
         worker_root: Path, worker_venv: Path, fake_bin: Path
-    ) -> tuple[subprocess.CompletedProcess[str], Path]:
-        compute_template = tmp_path / "compute.yaml"
-        compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+    ) -> subprocess.CompletedProcess[str]:
         monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
         monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
@@ -969,14 +967,14 @@ def remote_worker_dispatch(
                 "synth-setter-generate-dataset",
                 "experiment=generate_dataset/smoke-shard",
                 f"render.plugin_path={_TEST_PLUGIN_VST3}",
-                f"skypilot_launch.compute_template={compute_template}",
+                "skypilot_launch/compute=runpod/smoke",
             ],
         )
 
         cast("Callable[[], None]", generate_dataset_cli.main)()
 
         assert len(completed) == 1
-        return completed[0], compute_template
+        return completed[0]
 
     return _dispatch
 
@@ -1016,7 +1014,8 @@ def _patch_remote_dispatch_boundaries(
     monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
     monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
     fake_sky = MagicMock()
-    monkeypatch.setattr(skypilot_launch, "sky", fake_sky)
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
     return fake_sky
 
 
@@ -1038,8 +1037,6 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
 
     fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
     monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
-    compute_template = tmp_path / "compute.yaml"
-    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1047,7 +1044,7 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={_TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={compute_template}",
+            "skypilot_launch/compute=runpod/smoke",
         ],
     )
 
@@ -1078,13 +1075,8 @@ def test_main_remote_dispatch_defaults_worker_ref_before_submission(
 
     monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", resolve_default)
     monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 100.0)
-    fake_task = MagicMock()
-    fake_task.resources = []
-    fake_sky.Task.from_yaml_config.return_value = fake_task
     fake_sky.jobs.launch.return_value = "launch-request"
     fake_sky.stream_and_get.return_value = ([1], MagicMock())
-    compute_template = tmp_path / "compute.yaml"
-    compute_template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1092,22 +1084,20 @@ def test_main_remote_dispatch_defaults_worker_ref_before_submission(
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={_TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={compute_template}",
+            "skypilot_launch/compute=runpod/smoke",
         ],
     )
 
     cast("Callable[[], None]", generate_dataset_cli.main)()
 
-    worker_env = fake_task.update_envs.call_args.args[0]
+    worker_env = fake_sky.jobs.launch.call_args.args[0].envs
     assert worker_env["WORKER_GIT_REF"] == expected_ref
     fake_sky.jobs.launch.assert_called_once()
 
 
 def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_executes(
     tmp_path: Path,
-    remote_worker_dispatch: Callable[
-        [Path, Path, Path], tuple[subprocess.CompletedProcess[str], Path]
-    ],
+    remote_worker_dispatch: Callable[[Path, Path, Path], subprocess.CompletedProcess[str]],
 ) -> None:
     """An unpinned stale worker repairs Python before executing the entrypoint.
 
@@ -1121,7 +1111,7 @@ def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_execute
     _write_executable(stale_python, "#!/bin/bash\nexit 1\n")
     trace = tmp_path / "worker-trace.log"
     fake_bin = _make_fake_worker_runtime(tmp_path, trace)
-    result, compute_template = remote_worker_dispatch(worker_root, worker_venv, fake_bin)
+    result = remote_worker_dispatch(worker_root, worker_venv, fake_bin)
     assert result.returncode == 0, result.stdout + result.stderr
     repaired_version = subprocess.run(  # noqa: S603 -- controlled executable in tmp_path
         [worker_venv / "bin/python", "-c", "import sys; print(sys.version_info[:3])"],
@@ -1134,7 +1124,7 @@ def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_execute
     assert install == "install:pip install --group runtime -e ."
     assert invocation.startswith("exec:experiment=generate_dataset/smoke-shard ")
     assert f"render.plugin_path={_TEST_PLUGIN_VST3}" in invocation
-    assert f"skypilot_launch.compute_template={compute_template}" in invocation
+    assert "skypilot_launch/compute=runpod/smoke" in invocation
     assert "+created_at=" in invocation
 
 

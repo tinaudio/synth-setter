@@ -44,7 +44,7 @@ use_shard_queue: false
 
 # Run synth-setter-finalize-dataset inline after generate completes.
 # Local-run path only; ignored (with an INFO log) when
-# skypilot_launch.compute_template is set.
+# a skypilot_launch/compute option is selected.
 finalize_inline: false
 
 # Run surge/fake_oracle inline (subprocess) after finalize. Requires

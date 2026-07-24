@@ -13,7 +13,7 @@ Input format on stdin:
       "review_body": "Top-level review summary (markdown).",
       "findings": [
         {
-          "path": "configs/compute/oci-cpu-template.yaml",
+          "path": "configs/skypilot_launch/compute/oci/cpu.yaml",
           "line": 147,
           "body": "**[code-health:block]** ..."
         },

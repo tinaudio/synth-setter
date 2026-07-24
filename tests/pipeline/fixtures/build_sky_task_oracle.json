@@ -1,0 +1,19 @@
+{
+  "local/debug-rclone": "112f2d564062c5f916ba93bb199087c17410e1ea3fe2ba8034c3ce5c9f43bf74",
+  "local/kind": "fbe280cc9920422dc4e7657cf41629d2ee227393256088a5c9061f855cc2178a",
+  "oci/cpu": "f60637725a180d8039467146d9d4880fcdfc45d7cdf428b6a537a3002e13dd67",
+  "runpod/debug/headless": "281a6c42f3fa26fa866fa1bb65dc59957720b78f0c9e073aaf5abf60c525193f",
+  "runpod/debug/headless-rclone": "5cf470f7e990add507efaaf4f2aa96da9b8167b1928ee38892261376373c1c70",
+  "runpod/debug/image-pull": "d520dc437f3d16c0d5ed8268ef118f186474434ade86e23512045fece74b946b",
+  "runpod/debug/launcher-minimal": "78a2c4975c7b633ad6a6f651269140ea27bdcda6ec3271d19a437dd863b8d783",
+  "runpod/debug/noop": "856212c42223c3247d4d7f20356bb07e6b65f0a01e36206c41a7a3eba35897cb",
+  "runpod/debug/pedalboard": "e1321e603666020cd2c84c20ceaedfce8db47ecd66754e2b0656d09471ff2b84",
+  "runpod/debug/rclone": "14383f4e6f3d95522ebbc7b53fc95506497f77c0fb6a0343a6336be4991b9607",
+  "runpod/debug/spec-mount": "40c7799232258d62f2c98ce952019a11efefc3533887b72b5f3ba43cfac9482c",
+  "runpod/network-volume/staging": "86c1ae6427ea444d128828f6dc58def58e0d2493e556ba39d4555a4e826ea5cd",
+  "runpod/network-volume/training": "455b6004f66bc42b8bab499cb02ce1a4c651f6a449ec93c7b93d322b749ace5e",
+  "runpod/network-volume/training-hclass": "e532f6afa97d200fd0abf4f7b05ec2fe59b8b902c2eafde58767a2ec52d907d8",
+  "runpod/smoke": "18daf2b2be2956b103d49b4cc1819deedf8652ac962e3949138107c1aafc15f7",
+  "runpod/training": "7b6b3db98d58a95b0ffbe105cf5457a5da1b890892441b09c51830efebd4b415",
+  "vast/smoke": "58847483dd2ee91f8ac510b7537fbd0df2c04bd79c25d23793ba162728dec9c6"
+}

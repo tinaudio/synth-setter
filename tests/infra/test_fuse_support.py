@@ -65,21 +65,28 @@ def test_every_devcontainer_run_args_grant_fuse_device_and_sys_admin(
 
 
 @pytest.mark.infra
-def test_oci_compute_template_nested_docker_run_stays_privileged(
+def test_oci_compute_run_wrapper_nested_docker_run_stays_privileged(
     project_root: Path,
 ) -> None:
-    """The OCI template keeps --privileged, the superset grant FUSE relies on.
+    """The OCI run wrapper keeps --privileged, the superset grant FUSE relies on.
 
-    :param project_root: Repo checkout whose compute template is checked (pydoclint requires this
-        field for fixture params).
+    :param project_root: Repo checkout whose compute run wrapper is checked (pydoclint requires
+        this field for fixture params).
     """
-    template = (
-        project_root / "src" / "synth_setter" / "configs" / "compute" / "oci-cpu-template.yaml"
+    wrapper = (
+        project_root
+        / "src"
+        / "synth_setter"
+        / "configs"
+        / "skypilot_launch"
+        / "compute"
+        / "scripts"
+        / "oci-docker-run.sh"
     )
     # Anchor to the docker run argument line — the flag also appears in an
     # explanatory comment, which must not satisfy this check.
-    privileged_arg = re.search(r"^\s+--privileged \\$", template.read_text(), re.MULTILINE)
+    privileged_arg = re.search(r"^\s+--privileged \\$", wrapper.read_text(), re.MULTILINE)
     assert privileged_arg, (
-        f"{template}: nested docker run lost --privileged; FUSE mounts on OCI "
+        f"{wrapper}: nested docker run lost --privileged; FUSE mounts on OCI "
         f"workers need it (or explicit --device=/dev/fuse --cap-add=SYS_ADMIN)"
     )

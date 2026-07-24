@@ -5,7 +5,7 @@
 # The surge/ffn_simple_smoke experiment owns the dataset pin and smoke caps
 # (#2196); the cmd carries only experiment selection and operational flags.
 
-compute_template: src/synth_setter/configs/compute/runpod-template.yaml
+compute: runpod/smoke
 worker_image_tag: devcontainer-tools
 env_file: .env
 # tail=true keeps the dispatcher attached so the Actions job reflects the

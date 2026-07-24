@@ -5,8 +5,8 @@ from R2. Staging copies a finalized dataset from R2 once; training mounts that
 cache and hydrates the pod's local disk before loading Lance.
 
 Because a volume is pinned to one data center, the mounted volume decides where
-the attached task runs. The compute template mounts `${NETWORK_VOLUME}`, and
-each launch config (or a `--network-volume` CLI override) names the volume —
+the attached task runs. The compute option declares `mount_network_volume`,
+and each launch config (or a `--network-volume` CLI override) names the volume —
 so the volume name is effectively the region selector.
 
 ## One registry: volumes live in the API server that applied them
@@ -67,7 +67,7 @@ safe to rerun after an interrupted transfer.
 The SkyPilot templates explicitly mount the volume at
 `/workspace/network-volume`. This is independent of RunPod's default
 `/workspace` mount convention. Staging uses a small-disk template
-(`runpod-network-volume-staging-template.yaml`): the copy writes straight to
+(the `runpod/network-volume/staging` compute option): the copy writes straight to
 the mounted volume, and hosts with small container disks are far easier to
 schedule than the 750 GB-disk hosts training needs.
 

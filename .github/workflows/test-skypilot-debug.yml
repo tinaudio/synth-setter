@@ -148,73 +148,73 @@ jobs:
         include:
           - variant: noop
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-template.yaml
+            compute_option: runpod/debug/noop
             cluster_prefix: synth-setter-debug
             cluster_suffix: noop
             config: ""
           - variant: image-pull
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-image-pull-template.yaml
+            compute_option: runpod/debug/image-pull
             cluster_prefix: synth-setter-debug
             cluster_suffix: image-pull
             config: ""
           - variant: spec-mount
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-spec-mount-template.yaml
+            compute_option: runpod/debug/spec-mount
             cluster_prefix: synth-setter-debug
             cluster_suffix: spec-mount
             config: ""
           - variant: headless
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-headless-template.yaml
+            compute_option: runpod/debug/headless
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless
             config: ""
           - variant: rclone
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-rclone-template.yaml
+            compute_option: runpod/debug/rclone
             cluster_prefix: synth-setter-debug
             cluster_suffix: rclone
             config: ""
           - variant: headless-rclone
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-headless-rclone-template.yaml
+            compute_option: runpod/debug/headless-rclone
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless-rclone
             config: ""
           - variant: pedalboard-load
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-pedalboard-template.yaml
+            compute_option: runpod/debug/pedalboard
             cluster_prefix: synth-setter-debug
             cluster_suffix: pedalboard
             config: ""
           - variant: stickiness-probe
             mode: inline-sky
-            template: src/synth_setter/configs/compute/runpod-debug-template.yaml
+            compute_option: runpod/debug/noop
             cluster_prefix: synth-setter-smoke
             cluster_suffix: stickiness
             config: ""
           - variant: launcher
             mode: launcher-runner
-            template: src/synth_setter/configs/compute/runpod-debug-launcher-minimal-template.yaml
+            compute_option: runpod/debug/launcher-minimal
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
             config: generate_dataset/smoke-shard
           - variant: launcher-in-docker
             mode: launcher-docker
-            template: src/synth_setter/configs/compute/runpod-debug-launcher-minimal-template.yaml
+            compute_option: runpod/debug/launcher-minimal
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
             config: generate_dataset/smoke-shard
           - variant: generate-tiny
             mode: launcher-runner
-            template: src/synth_setter/configs/compute/runpod-template.yaml
+            compute_option: runpod/smoke
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
             config: generate_dataset/smoke-shard
           - variant: generate-tiny-in-docker
             mode: launcher-docker
-            template: src/synth_setter/configs/compute/runpod-template.yaml
+            compute_option: runpod/smoke
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
             config: generate_dataset/smoke-shard
@@ -252,15 +252,6 @@ jobs:
         if: matrix.mode == 'inline-sky'
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
-      - name: Pin image tag in debug template
-        env:
-          TEMPLATE: ${{ matrix.template }}
-        run: |
-          sed -i \
-            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
-            "$TEMPLATE"
-          grep image_id "$TEMPLATE"
-
       # Inline-Python probe contract:
       #   - task.workdir = os.getcwd() syncs the GH-actions checkout to the
       #     worker as ~/sky_workdir, so the worker exercises the in-repo
@@ -268,9 +259,8 @@ jobs:
       #     of whatever is baked into the image — wrapper/template iterations
       #     don't require a docker rebuild between dispatches.
       #   - task.update_envs(...) injects R2 creds + a unique R2_DEBUG_PREFIX
-      #     for the rclone variants. Other variants ignore the keys; each
-      #     template's `envs:` block lists only the ones it actually consumes
-      #     (so SkyPilot doesn't error on unset placeholders).
+      #     for the rclone variants. Other variants ignore the keys; the SDK
+      #     needs no pre-declared env placeholders.
       - name: Run inline SkyPilot probe
         if: matrix.mode == 'inline-sky'
         env:
@@ -281,7 +271,7 @@ jobs:
           R2_BUCKET: intermediate-data
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
-          TEMPLATE: ${{ matrix.template }}
+          COMPUTE_OPTION: ${{ matrix.compute_option }}
           VARIANT: ${{ matrix.variant }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
@@ -296,13 +286,19 @@ jobs:
           import os, time
           import sky
 
+          from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
+          from synth_setter.pipeline.skypilot_launch import _override_image_id
+
           cluster = os.environ["CLUSTER_NAME"]
           deadline_seconds = int(os.environ["DEADLINE"])
-          template_path = os.environ["TEMPLATE"]
+          compute_option = os.environ["COMPUTE_OPTION"]
           variant = os.environ["VARIANT"]
 
           print(f"[probe] launching cluster={cluster} variant={variant}")
-          task = sky.Task.from_yaml(template_path)
+          task = sky.Task.from_yaml_config(
+              build_task_doc(load_compute_option(compute_option), cmd=None)
+          )
+          _override_image_id(task, f"tinaudio/synth-setter:{os.environ['IMAGE_TAG']}")
           task.workdir = os.getcwd()
           print(f"[probe] workdir set to {task.workdir}")
           task.update_envs(
@@ -387,14 +383,14 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
-          TEMPLATE: ${{ matrix.template }}
+          COMPUTE_OPTION: ${{ matrix.compute_option }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
           HYDRA_FULL_ERROR: "1"
         run: |
           set -euo pipefail
           uv run synth-setter-generate-dataset \
             "experiment=$CONFIG_PATH" \
-            "skypilot_launch.compute_template=$TEMPLATE" \
+            "skypilot_launch/compute=$COMPUTE_OPTION" \
             "skypilot_launch.job_name=$CLUSTER_NAME" \
             skypilot_launch.tail=true \
             2>&1 | tee "$LOG_PATH"
@@ -408,7 +404,7 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
-          TEMPLATE: ${{ matrix.template }}
+          COMPUTE_OPTION: ${{ matrix.compute_option }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
           HYDRA_FULL_ERROR: "1"
         run: |
@@ -420,7 +416,7 @@ jobs:
             -e RUNPOD_API_KEY \
             -e CLUSTER_NAME \
             -e CONFIG_PATH \
-            -e TEMPLATE \
+            -e COMPUTE_OPTION \
             -e SYNTH_SETTER_STORAGE_PROVIDER \
             -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
             -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
@@ -438,7 +434,7 @@ jobs:
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               synth-setter-generate-dataset \
                 "experiment=$CONFIG_PATH" \
-                "skypilot_launch.compute_template=$TEMPLATE" \
+                "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 skypilot_launch.tail=true
             ' \

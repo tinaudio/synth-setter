@@ -4,7 +4,7 @@
 # scientific knob (#2196); the cmd carries only experiment selection and
 # operational flags.
 
-compute_template: src/synth_setter/configs/compute/runpod-training-template.yaml
+compute: runpod/training
 worker_image_tag: devcontainer-tools
 env_file: .env
 # Detach after SkyPilot accepts the launch so GitHub Actions does not wait for training.

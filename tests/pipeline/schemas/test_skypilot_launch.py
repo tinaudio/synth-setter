@@ -19,9 +19,9 @@ from synth_setter.pipeline.schemas.skypilot_launch import (
 class TestDefaults:
     """All fields default to safe local-only values when no input is given."""
 
-    def test_default_compute_template_is_none(self) -> None:
-        """Compute template defaults to None — the "don't dispatch" sentinel."""
-        assert SkypilotLaunchConfig().compute_template is None
+    def test_default_compute_is_none(self) -> None:
+        """Compute defaults to None — the "don't dispatch" sentinel."""
+        assert SkypilotLaunchConfig().compute is None
 
     def test_default_cmd_is_none(self) -> None:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
@@ -97,7 +97,7 @@ class TestValidation:
         """Trust-boundary models are frozen so dispatch can't mutate the config mid-launch."""
         cfg = SkypilotLaunchConfig()
         with pytest.raises(ValidationError):
-            cfg.compute_template = "anything.yaml"  # type: ignore[misc]
+            cfg.job_name = "anything"  # type: ignore[misc]
 
 
 class TestSkypilotClientSettings:
@@ -209,10 +209,10 @@ class TestModelCopy:
 
     def test_model_copy_with_cmd_yields_new_instance(self) -> None:
         """Frozen + model_copy(update=…) is the only way to set cmd post-construction."""
-        original = SkypilotLaunchConfig(compute_template="x.yaml")
+        original = SkypilotLaunchConfig(job_name="stem-x")
         with_cmd = original.model_copy(update={"cmd": "echo hi"})
         assert with_cmd.cmd == "echo hi"
-        assert with_cmd.compute_template == "x.yaml"
+        assert with_cmd.job_name == "stem-x"
         # Original is untouched (frozen invariant).
         assert original.cmd is None
 

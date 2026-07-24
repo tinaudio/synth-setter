@@ -29,7 +29,8 @@ on:
     paths:
       - .github/workflows/oci-image-bake.yaml
       - .github/workflows/test-oci-image-bake.yml
-      - src/synth_setter/configs/compute/oci-cpu-template.yaml
+      - src/synth_setter/configs/skypilot_launch/compute/oci/cpu.yaml
+      - src/synth_setter/configs/skypilot_launch/compute/scripts/oci-*.sh
 
 concurrency:
   group: test-oci-image-bake-${{ github.event.pull_request.number }}

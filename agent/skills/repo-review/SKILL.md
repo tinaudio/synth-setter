@@ -89,7 +89,7 @@ Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hy
 
 BLOCK items (hard AGENTS.md rules — always flag):
 
-- [comment-hygiene C1] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash.
+- [comment-hygiene C1] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/skypilot_launch/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash.
 - [comment-hygiene C2] No comment restates a literal constant value next to its assignment (`num = 6  # 6 items`).
 - [comment-hygiene C3] No comment enumerates list contents in prose (`THINGS = [...]  # a, b, c`). The list IS the source of truth.
 - [comment-hygiene C4] No baked-in counts the code already reports (`# 29 comments triaged`, `# 5 metric series`) — belongs in the PR description, not in source.
@@ -116,7 +116,7 @@ WARN items (bloat patterns — flag when the diff adds them):
 - [python] `structlog` for logging in pipeline code; Python's `logging` module elsewhere.
 - [python] No `print()` statements in production code. CLI helpers + tests excepted (and exempted in `pyproject.toml` per-file-ignores). (P29)
 
-**Shell (plugin `shell-style` BLOCK items — applies to `.sh` files AND bash inside YAML `run:` / `setup:` block-scalars in `.github/workflows/*.{yml,yaml}` and `configs/compute/*.yaml`)**
+**Shell (plugin `shell-style` BLOCK items — applies to `.sh` files AND bash inside YAML `run:` / `setup:` block-scalars in `.github/workflows/*.{yml,yaml}` and `configs/skypilot_launch/compute/*.yaml`)**
 
 - [shell] `set -euo pipefail` at the top of every shell script and every YAML `run: |` / `setup: |` block-scalar. Inner `bash -c '...'` shells get their own `set -euo pipefail`. (SH1)
 - [shell] All variable expansions are double-quoted: `"${VAR}"` not `$VAR`. Exceptions: integers and `$?`. (SH2)

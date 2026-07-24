@@ -1,13 +1,13 @@
 name: Bake OCI Custom Image
 
-# Provisions a one-shot SkyPilot OCI cluster against a chosen task template,
+# Provisions a one-shot SkyPilot OCI cluster against a chosen compute option,
 # lets its `setup:` block run (which bakes the worker image + docker.io into
 # the boot volume), then calls `oci compute image create` on the underlying
 # OCI instance to produce a reusable custom image. The cluster is torn down
 # at the end of the job whether the bake succeeded or not.
 #
 # Why this exists: today every fresh OCI worker re-runs the apt-install +
-# `docker pull tinaudio/synth-setter:<tag>` dance from oci-cpu-template.yaml's
+# `docker pull tinaudio/synth-setter:<tag>` dance from the oci/cpu option's
 # setup: block (~5–10 min depending on image size). Refs #921 — a baked OCI
 # boot image lets the launcher skip that setup and saves ~5–10 min of
 # wall-clock per OCI worker bring-up.
@@ -30,7 +30,7 @@ name: Bake OCI Custom Image
 # Required secrets:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT                                         — R2 (placeholders in the
-#                                                                       template's `envs:` block).
+#                                                                       worker pod env).
 #   R2_ACCOUNT_ID                                                     — required by
 #                                                                       `scripts/skypilot/write_provider_creds.sh`
 #                                                                       when materializing R2 creds.
@@ -42,12 +42,12 @@ name: Bake OCI Custom Image
 on:
   workflow_dispatch:
     inputs:
-      source_template:
-        description: "SkyPilot task template to provision and bake. Defaults to the production OCI CPU worker template."
+      compute_option:
+        description: "skypilot_launch/compute option to provision and bake. Defaults to the production OCI CPU worker option."
         required: false
-        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
+        default: "oci/cpu"
       worker_image_tag:
-        description: "Docker tag injected as WORKER_IMAGE into the template's setup. Whatever the template pre-pulls will be baked into the resulting OCI image."
+        description: "Docker tag injected as WORKER_IMAGE into the option's setup. Whatever the setup pre-pulls will be baked into the resulting OCI image."
         required: false
         default: "dev-snapshot"
       image_display_name:
@@ -68,10 +68,10 @@ on:
         default: "1800"
   workflow_call:
     inputs:
-      source_template:
+      compute_option:
         type: string
         required: false
-        default: "src/synth_setter/configs/compute/oci-cpu-template.yaml"
+        default: "oci/cpu"
       worker_image_tag:
         type: string
         required: false
@@ -116,7 +116,7 @@ jobs:
       image_ocid: ${{ steps.image.outputs.image_ocid }}
       image_display_name: ${{ steps.image_name.outputs.display_name }}
     env:
-      SOURCE_TEMPLATE: ${{ inputs.source_template }}
+      COMPUTE_OPTION: ${{ inputs.compute_option }}
       WORKER_IMAGE: tinaudio/synth-setter:${{ inputs.worker_image_tag }}
       LAUNCH_DEADLINE_SECONDS: ${{ inputs.launch_deadline_seconds }}
       IMAGE_CREATE_TIMEOUT_SECONDS: ${{ inputs.image_create_timeout_seconds }}
@@ -149,6 +149,7 @@ jobs:
           set -euo pipefail
           pip install "skypilot[oci]==0.12.0"
           pip install "oci-cli==3.81.1"
+          pip install -e . "hydra-core==1.3.2"
 
       # Bootstrap ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
       # from repo secrets, same as test-skypilot-debug.yml. Both SkyPilot and
@@ -207,7 +208,7 @@ jobs:
         id: launch
         env:
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
-          TEMPLATE: ${{ env.SOURCE_TEMPLATE }}
+          COMPUTE_OPTION: ${{ env.COMPUTE_OPTION }}
           DEADLINE: ${{ env.LAUNCH_DEADLINE_SECONDS }}
         run: |
           set -euo pipefail
@@ -215,11 +216,15 @@ jobs:
           import json, os, pathlib, time
           import sky
 
+          from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
+
           cluster = os.environ["CLUSTER_NAME"]
-          template = os.environ["TEMPLATE"]
+          compute_option = os.environ["COMPUTE_OPTION"]
           deadline_seconds = int(os.environ["DEADLINE"])
 
-          task = sky.Task.from_yaml(template)
+          task = sky.Task.from_yaml_config(
+              build_task_doc(load_compute_option(compute_option), cmd="true")
+          )
           task.workdir = os.getcwd()
           task.update_envs(
               {
@@ -236,7 +241,7 @@ jobs:
               }
           )
 
-          print(f"[bake] launching cluster={cluster} template={template}")
+          print(f"[bake] launching cluster={cluster} compute_option={compute_option}")
           launch_req = sky.launch(
               task,
               cluster_name=cluster,
@@ -310,14 +315,14 @@ jobs:
       #
       # Single-node only: this workflow snapshots one boot volume per bake, so
       # the resolution requires exactly one RUNNING instance under the cluster
-      # tag. Multi-node templates fail fast here with an explicit error rather
+      # tag. Multi-node options fail fast here with an explicit error rather
       # than silently picking a node — see #921 follow-up if multi-node bakes
       # become a need.
       - name: Resolve OCI instance OCID
         id: instance
         env:
           NAME_ON_CLOUD: ${{ steps.launch.outputs.name_on_cloud }}
-          SOURCE_TEMPLATE: ${{ env.SOURCE_TEMPLATE }}
+          COMPUTE_OPTION: ${{ env.COMPUTE_OPTION }}
         run: |
           set -euo pipefail
           QUERY="query instance resources where (freeformTags.key = 'ray-cluster-name' && freeformTags.value = '${NAME_ON_CLOUD}')"
@@ -326,7 +331,7 @@ jobs:
           echo "${RESULT}" | python -m json.tool
           INSTANCE_OCID="$(echo "${RESULT}" | python -c "
           import json, os, sys
-          template = os.environ.get('SOURCE_TEMPLATE', '<unknown>')
+          compute_option = os.environ.get('COMPUTE_OPTION', '<unknown>')
           data = json.load(sys.stdin).get('data', {}).get('items') or []
           running = [i for i in data if i.get('lifecycle-state') == 'RUNNING']
           if not running:
@@ -335,7 +340,7 @@ jobs:
           if len(running) != 1:
               print(
                   f'::error::expected exactly 1 RUNNING instance for single-node bake, '
-                  f'got {len(running)} from template {template!r}; multi-node templates '
+                  f'got {len(running)} from option {compute_option!r}; multi-node options '
                   'are not supported by this workflow',
                   file=sys.stderr,
               )

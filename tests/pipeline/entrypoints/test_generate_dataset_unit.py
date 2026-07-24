@@ -2263,11 +2263,11 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("synth_setter.cli.generate_dataset.upload_spec", upload_mock)
         monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
 
-    def test_compute_template_null_calls_run_locally(
+    def test_compute_null_calls_run_locally(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``compute_template=null`` calls ``generate(spec, work_dir, loggers)`` inline.
+        """No selected compute option calls ``generate(spec, work_dir, loggers)`` inline.
 
         Dispatch (``dispatch_via_skypilot``) is never reached on this branch.
 
@@ -2427,14 +2427,11 @@ class TestMainDispatchBranches:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
-
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template}",
+            "skypilot_launch/compute=runpod/smoke",
             "use_shard_queue=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -2460,12 +2457,12 @@ class TestMainDispatchBranches:
             drained += 1
         assert drained == uploaded_spec.num_shards - 1
 
-    def test_compute_template_set_calls_dispatch_via_skypilot(
+    def test_compute_option_set_calls_dispatch_via_skypilot(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """compute_template=<path> routes through dispatch_via_skypilot with cmd populated.
+        """A selected compute option routes through dispatch_via_skypilot with cmd populated.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -2473,9 +2470,6 @@ class TestMainDispatchBranches:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        # A bare-minimum compute YAML the loader will accept (resources + envs, no run:).
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
         env_file = tmp_path / "launcher.env"
         env_file.write_text(
             "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
@@ -2488,7 +2482,7 @@ class TestMainDispatchBranches:
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template}",
+            "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -2496,7 +2490,8 @@ class TestMainDispatchBranches:
         fake_sky = MagicMock()
         fake_sky.jobs.launch.return_value = "launch-req"
         fake_sky.stream_and_get.return_value = ([1], MagicMock())
-        monkeypatch.setattr(sl, "sky", fake_sky)
+        monkeypatch.setattr(sl.sky.jobs, "launch", fake_sky.jobs.launch)
+        monkeypatch.setattr(sl.sky, "stream_and_get", fake_sky.stream_and_get)
         monkeypatch.setattr(sl, "_resolve_worker_git_ref", lambda _env: "a" * 40)
 
         def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
@@ -2506,8 +2501,9 @@ class TestMainDispatchBranches:
 
         _call_hydra_main(gd.main)
 
-        task_doc = fake_sky.Task.from_yaml_config.call_args.args[0]
-        worker_cmd = task_doc["run"]
+        submitted_task = fake_sky.jobs.launch.call_args.args[0]
+        worker_cmd = submitted_task.run
+        assert worker_cmd is not None
         for override in argv[1:]:
             assert override in worker_cmd, (
                 f"override {override!r} missing from worker cmd: {worker_cmd!r}"
@@ -2527,15 +2523,13 @@ class TestMainDispatchBranches:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
         monkeypatch.setattr(
             "sys.argv",
             [
                 "synth-setter-generate-dataset",
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
                 f"render.plugin_path={TEST_PLUGIN_VST3}",
-                f"skypilot_launch.compute_template={template}",
+                "skypilot_launch/compute=runpod/smoke",
             ],
         )
         runtime_mock = MagicMock(side_effect=AssertionError("launcher runtime was validated"))
@@ -2682,13 +2676,11 @@ class TestMainDispatchBranches:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template}",
+            "skypilot_launch/compute=runpod/smoke",
             "finalize_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -3193,13 +3185,11 @@ class TestMainDispatchBranches:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template}",
+            "skypilot_launch/compute=runpod/smoke",
             "oracle_eval_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -3275,30 +3265,17 @@ class TestMainSpecPersistence:
         monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", MagicMock(return_value=None))
 
     @staticmethod
-    def _dispatch_argv(template_path: Path) -> list[str]:
+    def _dispatch_argv() -> list[str]:
         """Build argv that triggers the dispatch branch of ``main()``.
 
-        :param template_path: Path to a minimal SkyPilot compute template the
-            ``skypilot_launch`` cfg loader will accept.
-        :return: ``sys.argv`` overrides setting ``compute_template``.
+        :return: ``sys.argv`` overrides selecting a compute option.
         """
         return [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
             f"render.plugin_path={TEST_PLUGIN_VST3}",
-            f"skypilot_launch.compute_template={template_path}",
+            "skypilot_launch/compute=runpod/smoke",
         ]
-
-    @staticmethod
-    def _write_minimal_template(tmp_path: Path) -> Path:
-        """Write the bare-minimum compute template YAML the loader accepts.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :return: Path to the written template.
-        """
-        template = tmp_path / "template.yaml"
-        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
-        return template
 
     def test_main_writes_local_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``main()`` calls ``write_spec_locally`` with ``Path(cfg.paths.output_dir)``.
@@ -3363,8 +3340,7 @@ class TestMainSpecPersistence:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = self._write_minimal_template(tmp_path)
-        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+        monkeypatch.setattr("sys.argv", self._dispatch_argv())
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
         _call_hydra_main(gd.main)
@@ -3432,8 +3408,7 @@ class TestMainSpecPersistence:
         import synth_setter.pipeline.skypilot_launch as sl
         from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 
-        template = self._write_minimal_template(tmp_path)
-        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+        monkeypatch.setattr("sys.argv", self._dispatch_argv())
 
         recorded: dict[str, object] = {}
 
@@ -3466,8 +3441,7 @@ class TestMainSpecPersistence:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = self._write_minimal_template(tmp_path)
-        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+        monkeypatch.setattr("sys.argv", self._dispatch_argv())
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
 
         _call_hydra_main(gd.main)
@@ -3491,8 +3465,7 @@ class TestMainSpecPersistence:
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl
 
-        template = self._write_minimal_template(tmp_path)
-        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+        monkeypatch.setattr("sys.argv", self._dispatch_argv())
 
         recorded: dict[str, object] = {}
 

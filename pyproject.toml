@@ -348,6 +348,7 @@ namespaces = true
 "synth_setter" = [
   "configs/**/*.yaml",
   "configs/**/*.yml",
+  "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
 ]
