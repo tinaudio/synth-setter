@@ -87,6 +87,35 @@ def test_dataset_artifact_ref_remote_root_returns_frozen_run_id(
     )
 
 
+def test_dataset_artifact_ref_file_uri_skips_r2_preflight(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mounted source URI resolves lineage without requiring rclone.
+
+    :param tmp_path: Local source root containing its persisted input spec.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    :param monkeypatch: Fails the test if the R2 preflight is called.
+    """
+    spec = dataset_spec_factory(
+        task_name="mounted-lineage",
+        run_id="mounted-lineage-20260724T000000000Z",
+        train_val_test_sizes=[4, 4, 0],
+        r2={"bucket": "intermediate-data"},
+        render={"samples_per_shard": 4},
+    )
+    write_spec_to_path(spec, tmp_path / "input_spec.json")
+    ensure_r2 = MagicMock(side_effect=AssertionError("R2 preflight called"))
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", ensure_r2)
+
+    assert dataset_artifact_ref(None, tmp_path.as_uri()) == (
+        "data-mounted-lineage",
+        "mounted-lineage-20260724T000000000Z",
+    )
+    ensure_r2.assert_not_called()
+
+
 def test_dataset_artifact_ref_remote_root_precedes_conflicting_local_spec(
     tmp_path: Path,
     fake_r2_remote: Path,
