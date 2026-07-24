@@ -254,7 +254,7 @@ def _all_compute_option_names() -> list[str]:
         for path in root.rglob("*.yaml")
         if path.parent.name != "scripts"
     ]
-    assert len(names) == 17
+    assert len(names) == 18
     return sorted(names)
 
 

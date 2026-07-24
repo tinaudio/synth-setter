@@ -1,0 +1,13 @@
+# @package _global_
+
+# Dedicated m2l conditioning run on the finalized 440k Surge Simple dataset.
+defaults:
+  - /experiment/surge/flow_simple_440k
+  - override /conditioning: m2l
+  - _self_
+
+run_name: flow_440k_m2l_100k
+
+trainer:
+  min_steps: 100_000
+  max_steps: 100_000
