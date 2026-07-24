@@ -47,7 +47,7 @@ jobs:
   generate-dataset-shards:
     name: Generate dataset shards -> real R2 (Docker + VST)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Fork PRs can't see repo secrets; the rclone auth ping would fail and
     # burn runner minutes. Same gating pattern as test-local-launcher-roundtrip.yml.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
