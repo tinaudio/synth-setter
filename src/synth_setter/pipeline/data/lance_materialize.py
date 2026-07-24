@@ -1,8 +1,8 @@
-"""Txid-pinned rematerialization of a Lance column/row subset to local disk.
+"""Rematerialize a Lance column/row subset to local disk.
 
-Streams a projected scan of one pinned source snapshot into a fresh local
-Lance dataset, so hydration transfers only the columns and rows a training
-run reads instead of the whole dataset directory. A sidecar manifest beside
+Streams a projected scan of one source snapshot into a fresh local Lance
+dataset, so hydration transfers only the columns and rows a training run
+reads instead of the whole dataset directory. A sidecar manifest beside
 the destination records the request and gates cache reuse: a rerun with the
 same request reuses the local copy; any drift fails loudly.
 """
@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+import shutil
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import lance
@@ -117,11 +118,15 @@ class MaterializeManifest(BaseModel):
 
     .. attribute :: txid
 
-        Transaction uuid pinning the source snapshot.
+        Transaction uuid pinning the source snapshot, or ``None`` for latest.
 
     .. attribute :: resolved_version
 
-        Source dataset version the txid resolved to at materialization time.
+        Source dataset version selected at materialization time.
+
+    .. attribute :: resolved_txid
+
+        Transaction uuid identifying the selected source snapshot when recorded.
 
     .. attribute :: columns
 
@@ -139,8 +144,9 @@ class MaterializeManifest(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True)
 
     source_uri: str
-    txid: str
+    txid: str | None
     resolved_version: int
+    resolved_txid: str | None = None
     columns: tuple[str, ...]
     limit: int | None
     request_hash: str
@@ -148,7 +154,7 @@ class MaterializeManifest(BaseModel):
 
 def request_hash(
     source_uri: str,
-    txid: str,
+    txid: str | None,
     resolved_version: int,
     columns: tuple[str, ...],
     limit: int | None,
@@ -156,8 +162,8 @@ def request_hash(
     """Hash one materialization request for sidecar-gated cache reuse.
 
     :param source_uri: Source dataset URI as the caller passed it.
-    :param txid: Transaction uuid pinning the source snapshot.
-    :param resolved_version: Source version the txid resolved to.
+    :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
+    :param resolved_version: Source version selected for materialization.
     :param columns: Projected column names, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
     :returns: sha256 hex digest over the canonical JSON encoding of the fields.
@@ -211,6 +217,39 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     )
 
 
+def _open_source(source_uri: str) -> lance.LanceDataset:
+    """Open a local, file-URI, or R2 Lance source.
+
+    :param source_uri: Source dataset location.
+    :returns: Open source dataset at its current version.
+    """
+    if r2_io.is_r2_uri(source_uri):
+        open_uri, storage_options = r2_io.lance_target(source_uri)
+    elif is_file_uri(source_uri):
+        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
+    else:
+        open_uri, storage_options = source_uri, None
+    return _retry_lance_read(
+        "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
+    )
+
+
+def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
+    """Return the transaction uuid identifying a source version.
+
+    :param ds: Open source dataset.
+    :param version: Source version to identify.
+    :returns: Transaction uuid for ``version``.
+    :raises ValueError: The source version has no transaction record.
+    """
+    transaction = _retry_lance_read(
+        "transaction_read", lambda: ds.read_transaction(version)
+    )
+    if transaction is None:
+        raise ValueError(f"source version {version} has no transaction record")
+    return transaction.uuid
+
+
 def _read_manifest(manifest_path: Path) -> MaterializeManifest:
     """Parse an existing sidecar manifest, failing loudly on any damage.
 
@@ -226,24 +265,59 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
         raise ValueError(f"unparsable materialize sidecar {manifest_path}: {exc}") from exc
 
 
+def _manifest_matches_request(
+    manifest: MaterializeManifest,
+    requested_hash: str,
+    resolved_txid: str | None,
+) -> bool:
+    """Return whether a sidecar covers the request and selected source identity.
+
+    :param manifest: Parsed sidecar manifest.
+    :param requested_hash: Hash of the current materialization request.
+    :param resolved_txid: Current source transaction for an unpinned request.
+    :returns: Whether the manifest is internally sound and current.
+    """
+    stored_hash = request_hash(
+        manifest.source_uri,
+        manifest.txid,
+        manifest.resolved_version,
+        manifest.columns,
+        manifest.limit,
+    )
+    if manifest.txid is not None:
+        source_matches = manifest.resolved_txid in (None, manifest.txid)
+    else:
+        source_matches = manifest.resolved_txid == resolved_txid
+    return (
+        manifest.request_hash == stored_hash
+        and manifest.request_hash == requested_hash
+        and source_matches
+    )
+
+
 def _reuse_or_raise(
     dest_path: Path,
+    *,
     source_uri: str,
-    txid: str,
+    txid: str | None,
     columns: tuple[str, ...],
     limit: int | None,
+    resolved_version: int | None = None,
+    resolved_txid: str | None = None,
 ) -> Path:
     """Validate an existing destination against the current request.
 
-    Trusts the sidecar's ``resolved_version`` only through the hash: the hash
-    is recomputed from the current arguments plus that stored version, so any
-    drift in source, txid, columns, or limit fails the comparison.
+    Recomputes the hash from the current request. Pinned requests retain the
+    stored resolved version; unpinned requests include the source's current
+    version so an advanced source rejects the stale cache.
 
     :param dest_path: Existing materialized dataset directory.
     :param source_uri: Current request's source URI.
-    :param txid: Current request's transaction uuid.
+    :param txid: Current request's transaction uuid, or ``None`` for latest.
     :param columns: Current request's projected columns.
     :param limit: Current request's row cap.
+    :param resolved_version: Current latest version for an unpinned request.
+    :param resolved_txid: Current source transaction uuid for an unpinned request.
     :returns: ``dest_path`` on a cache hit.
     :raises ValueError: The sidecar is missing/unparsable, its stored hash
         does not cover its own fields, or the request diverges from it —
@@ -256,15 +330,11 @@ def _reuse_or_raise(
             f"({manifest_path}); delete the dataset and re-materialize"
         )
     manifest = _read_manifest(manifest_path)
-    stored_hash = request_hash(
-        manifest.source_uri,
-        manifest.txid,
-        manifest.resolved_version,
-        manifest.columns,
-        manifest.limit,
+    requested_version = (
+        manifest.resolved_version if resolved_version is None else resolved_version
     )
-    requested_hash = request_hash(source_uri, txid, manifest.resolved_version, columns, limit)
-    if manifest.request_hash != stored_hash or manifest.request_hash != requested_hash:
+    requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
+    if not _manifest_matches_request(manifest, requested_hash, resolved_txid):
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
             f"for source={manifest.source_uri!r} txid={manifest.txid!r} "
@@ -281,28 +351,81 @@ def _reuse_or_raise(
     return dest_path
 
 
+def _write_materialized_snapshot(
+    snapshot: lance.LanceDataset,
+    *,
+    dest_path: Path,
+    manifest: MaterializeManifest,
+    batch_size: int,
+) -> Path:
+    """Write one selected source snapshot and its cache manifest.
+
+    :param snapshot: Selected source dataset snapshot.
+    :param dest_path: Local destination dataset directory.
+    :param manifest: Validated request and source identity to persist.
+    :param batch_size: Scan batch size in rows.
+    :returns: ``dest_path``.
+    """
+    scanner = snapshot.scanner(
+        columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
+    )
+    logger.info(
+        "lance_materialize.start",
+        source_uri=manifest.source_uri,
+        dest_path=str(dest_path),
+        txid=manifest.txid,
+        resolved_version=manifest.resolved_version,
+        columns=manifest.columns,
+        limit=manifest.limit,
+    )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = dest_path.parent / f".{dest_path.name}.partial"
+    if staging_path.exists():
+        shutil.rmtree(staging_path)
+    transaction_properties = (
+        {"cloned_from_txn": manifest.txid}
+        if manifest.txid is not None
+        else {"cloned_from_version": str(manifest.resolved_version)}
+    )
+    written = lance.write_dataset(
+        scanner.to_batches(),
+        str(staging_path),
+        schema=scanner.projected_schema,
+        transaction_properties=transaction_properties,
+    )
+    row_count = written.count_rows()
+    sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
+    staging_path.replace(dest_path)
+    logger.info(
+        "lance_materialize.done",
+        dest_path=str(dest_path),
+        rows=row_count,
+    )
+    return dest_path
+
+
 # DOC502: the documented LookupError/ValueError propagate from
-# resolve_txid_version and _reuse_or_raise.
+# resolve_txid_version, _reuse_or_raise, and _transaction_uuid.
 def materialize_lance_subset(  # noqa: DOC502
     source_uri: str,
     dest_path: Path,
     *,
-    txid: str,
+    txid: str | None,
     columns: Sequence[str],
     limit: int | None = None,
     batch_size: int = 512,
 ) -> Path:
-    """Stream a projected scan of a txid-pinned Lance snapshot into ``dest_path``.
+    """Stream a projected source snapshot scan into ``dest_path``.
 
     Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. Provenance is stamped both in the destination's transaction
-    properties (``cloned_from_txn``) and in the sidecar manifest.
+    the source. A txid pins the source snapshot when supplied; otherwise the
+    latest version at hydration time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
     :param dest_path: Local destination dataset directory; must not hold an
         unrelated dataset.
-    :param txid: Transaction uuid pinning the source snapshot (required).
+    :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
     :param batch_size: Scan batch size in rows — the streaming memory unit.
@@ -314,76 +437,70 @@ def materialize_lance_subset(  # noqa: DOC502
     """
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
+    if dest_path.exists() and txid is not None:
+        return _reuse_or_raise(
+            dest_path,
+            source_uri=source_uri,
+            txid=txid,
+            columns=requested_columns,
+            limit=limit,
+        )
+    ds = _open_source(source_uri)
+    resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
+    resolved_txid = _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
-        return _reuse_or_raise(dest_path, source_uri, txid, requested_columns, limit)
-    if r2_io.is_r2_uri(source_uri):
-        open_uri, storage_options = r2_io.lance_target(source_uri)
-    elif is_file_uri(source_uri):
-        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
-    else:
-        open_uri, storage_options = source_uri, None
-    ds = _retry_lance_read(
-        "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
-    )
-    resolved_version = resolve_txid_version(ds, txid)
+        return _reuse_or_raise(
+            dest_path,
+            source_uri=source_uri,
+            txid=txid,
+            columns=requested_columns,
+            limit=limit,
+            resolved_version=resolved_version,
+            resolved_txid=resolved_txid,
+        )
     snapshot = ds.checkout_version(resolved_version)
-    scanner = snapshot.scanner(
-        columns=list(requested_columns), limit=limit, batch_size=batch_size
-    )
-    logger.info(
-        "lance_materialize.start",
-        source_uri=source_uri,
-        dest_path=str(dest_path),
-        txid=txid,
-        resolved_version=resolved_version,
-        columns=requested_columns,
-        limit=limit,
-    )
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    written = lance.write_dataset(
-        scanner.to_batches(),
-        str(dest_path),
-        schema=scanner.projected_schema,
-        transaction_properties={"cloned_from_txn": txid},
-    )
     manifest = MaterializeManifest(
         source_uri=source_uri,
         txid=txid,
         resolved_version=resolved_version,
+        resolved_txid=resolved_txid,
         columns=requested_columns,
         limit=limit,
         request_hash=request_hash(source_uri, txid, resolved_version, requested_columns, limit),
     )
-    sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
-    logger.info(
-        "lance_materialize.done",
-        dest_path=str(dest_path),
-        rows=written.count_rows(),
+    return _write_materialized_snapshot(
+        snapshot,
+        dest_path=dest_path,
+        manifest=manifest,
+        batch_size=batch_size,
     )
-    return dest_path
 
 
 def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
-    txids: dict[str, str],
+    txids: Mapping[str, str] | None,
     columns_for: Callable[[str], Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
 ) -> None:
-    """Materialize each pinned split under a root, then rclone non-Lance sidecars.
+    """Materialize each split under a root, then rclone non-Lance sidecars.
 
     :param source_root_uri: Hydration root (``r2://``, ``file://``, or local path)
         holding the split datasets.
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
-    :param txids: Per-split transaction uuids pinning each split's source snapshot.
+    :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
     :param columns_for: Callback returning the columns to project for a given split name.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
-    for split, txid in txids.items():
+    if txids is None:
+        split_txids = ((split, None) for split in ("train", "val", "test"))
+    else:
+        split_txids = txids.items()
+    for split, txid in split_txids:
         name = f"{split}{shard_suffix}"
         materialize_lance_subset(
             f"{source_root_uri.rstrip('/')}/{name}",

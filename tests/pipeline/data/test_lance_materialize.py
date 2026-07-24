@@ -1,8 +1,9 @@
-"""Behavior tests for txid-pinned Lance subset materialization."""
+"""Behavior tests for Lance subset materialization."""
 
 from __future__ import annotations
 
 import json
+import shutil
 import traceback
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -372,6 +373,126 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
     assert calls == [(source_root, dest_root, "{*.lance/**,metadata/**}")]
 
 
+def test_materialize_latest_snapshot_transient_identity_read_retries(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Latest-snapshot hydration retries its transaction identity read.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting the transient identity-read failure.
+    """
+    source, _ = two_version_source
+    real_dataset = lance.dataset
+    source_dataset = real_dataset(source)
+    real_read_transaction = source_dataset.read_transaction
+    attempts = 0
+
+    def flaky_read_transaction(version: int) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError(
+                "LanceError(IO): Generic S3 error: 504 Gateway Timeout"
+            )
+        return real_read_transaction(version)
+
+    def open_dataset(
+        uri: str, *, storage_options: dict[str, str] | None = None
+    ) -> lance.LanceDataset:
+        if uri == source:
+            return source_dataset
+        return real_dataset(uri, storage_options=storage_options)
+
+    monkeypatch.setattr(source_dataset, "read_transaction", flaky_read_transaction)
+    monkeypatch.setattr(lance, "dataset", open_dataset)
+    destination = tmp_path / "out" / "train.lance"
+
+    materialize_lance_subset(source, destination, txid=None, columns=("a",), limit=4)
+
+    assert attempts == 2
+    assert real_dataset(str(destination)).to_table().column("a").to_pylist() == [1, 2, 3, 4]
+
+
+def test_materialize_without_txid_uses_latest_version(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned materialization reads the source's latest snapshot.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+    out = lance.dataset(str(dest))
+    assert out.to_table().column("a").to_pylist() == [1, 2, 3, 4]
+    manifest = MaterializeManifest.model_validate_json(
+        sidecar_path(dest).read_text(encoding="utf-8")
+    )
+    assert manifest.txid is None
+    assert manifest.resolved_version == 2
+
+
+def test_materialize_without_txid_unchanged_source_reuses_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned rerun reuses its cache while the source snapshot is unchanged.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    version_after_first = lance.dataset(str(dest)).version
+
+    result = materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+    assert result == dest
+    assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_without_txid_replaced_source_rejects_stale_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned cache rejects a different dataset at the same URI and version.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    shutil.rmtree(source)
+    lance.write_dataset(pa.table({"a": [10], "b": ["new"]}), source)
+    lance.write_dataset(pa.table({"a": [11], "b": ["newer"]}), source, mode="append")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+
+def test_materialize_without_txid_source_advance_rejects_stale_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned cache cannot masquerade as latest after the source advances.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    lance.write_dataset(pa.table({"a": [6], "b": ["r"]}), source, mode="append")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+
 def test_materialize_row_limit_limit_two_row_count_matches(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -470,6 +591,46 @@ def test_materialize_rerun_different_columns_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
 
 
+def test_materialize_interrupted_publish_rerun_recovers(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sidecar write interruption leaves no destination and is restartable.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Pytest fixture injecting the interrupted sidecar write.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    partial = dest.parent / f".{dest.name}.partial"
+    original_write_text = Path.write_text
+
+    def interrupt_sidecar_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == sidecar_path(dest):
+            raise OSError("injected sidecar write interruption")
+        return original_write_text(
+            path, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "write_text", interrupt_sidecar_write)
+        with pytest.raises(OSError, match="injected"):
+            materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+    assert not dest.exists()
+    assert partial.exists()
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+    assert not partial.exists()
+
+
 def test_materialize_dest_without_sidecar_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -517,6 +678,43 @@ def test_materialize_stamps_cloned_from_txn_transaction_property(
     txn = out.read_transaction(out.version)
     assert txn is not None and txn.transaction_properties is not None
     assert txn.transaction_properties["cloned_from_txn"] == txid
+
+
+def test_materialize_legacy_pinned_sidecar_without_resolved_txid_reuses_cache(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A pinned cache remains valid when its legacy sidecar lacks resolved_txid.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    del payload["resolved_txid"]
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+
+
+def test_materialize_tampered_sidecar_resolved_txid_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A pinned sidecar cannot claim a different resolved transaction.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    payload["resolved_txid"] = "different-transaction"
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
 
 def test_materialize_tampered_sidecar_hash_raises(
