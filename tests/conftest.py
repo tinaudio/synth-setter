@@ -1,6 +1,7 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -115,11 +116,25 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
 _R2_AVAILABLE = r2_io.is_r2_reachable()
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-skip requires_vst / integration_r2 tests when resources are absent.
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Validate selected SAME e2e prerequisites and apply resource skip markers.
 
-    :param items: mutated in-place to insert skip markers for missing resources.
+    :param config: Active pytest configuration containing the marker expression.
+    :param items: Mutated in place to insert skip markers for missing resources.
+    :raises pytest.UsageError: If an explicitly selected SAME lane lacks a prerequisite.
     """
+    if "same_e2e" in config.getoption("-m"):
+        missing = []
+        if importlib.util.find_spec("stable_audio_tools") is None:
+            missing.append("stable_audio_tools (install with `uv sync --extra same`)")
+        if not VST_AVAILABLE:
+            missing.append(
+                f"VST plugin at {PLUGIN_PATH!r} "
+                "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
+            )
+        if missing:
+            raise pytest.UsageError("same_e2e missing prerequisites:\n- " + "\n- ".join(missing))
+
     skip_vst = pytest.mark.skip(
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
