@@ -11,7 +11,6 @@ import pyarrow as pa
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
-from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES, DEBUG_FIELD
 from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -86,10 +85,9 @@ def seed_debug_array(
     master_seed: int,
     sample_indices: Sequence[int],
     attempts: Sequence[int],
+    sampler_seeds: Sequence[int | None],
     *,
     shard_id: int | None,
-    parameter_sample_idx: int | None = None,
-    parameter_attempt: int | None = None,
     parameter_source: ParameterSource = "sampled",
 ) -> pa.Array:
     """Build row-level seed provenance as Arrow JSON documents.
@@ -97,38 +95,25 @@ def seed_debug_array(
     :param master_seed: Dataset or split master seed shared by these rows.
     :param sample_indices: Stable logical row indices within the seed stream.
     :param attempts: Accepted loudness-gate attempt for each row.
+    :param sampler_seeds: Concrete sampler seed consumed by each row, or ``None``.
     :param shard_id: Logical shard number, or ``None`` for an ad hoc render.
-    :param parameter_sample_idx: Seed-stream row that supplied a shard-cadence patch; other
-        rows reused that patch without consuming their row seed.
-    :param parameter_attempt: Accepted attempt that supplied a shard-cadence patch.
     :param parameter_source: Whether parameters were sampled, fixed, or mixed.
     :returns: JSON documents containing consumed seeds and their derivation inputs.
     :raises ValueError: Input lengths differ or a debug document violates its schema.
     """
-    if len(sample_indices) != len(attempts):
-        raise ValueError(
-            f"sample_indices has length {len(sample_indices)}, attempts has length {len(attempts)}"
-        )
-    parameter_seed = (
-        seed_for_sample(master_seed, parameter_sample_idx, parameter_attempt)
-        if parameter_sample_idx is not None and parameter_attempt is not None
-        else None
-    )
+    if len({len(sample_indices), len(attempts), len(sampler_seeds)}) != 1:
+        raise ValueError("sample_indices, attempts, and sampler_seeds must have equal lengths")
     documents = []
-    for sample_idx, attempt in zip(sample_indices, attempts, strict=True):
-        row_consumed_seed = parameter_source != "fixed" and (
-            parameter_sample_idx is None or sample_idx == parameter_sample_idx
-        )
+    for sample_idx, attempt, sampler_seed in zip(
+        sample_indices, attempts, sampler_seeds, strict=True
+    ):
         document = SeedDebugDocument(
-            seed=seed_for_sample(master_seed, sample_idx, attempt) if row_consumed_seed else None,
+            seed=sampler_seed,
             master_seed=master_seed,
             sample_idx=sample_idx,
             attempt=attempt,
             shard_id=shard_id,
             parameter_source=parameter_source,
-            parameter_seed=parameter_seed,
-            parameter_sample_idx=parameter_sample_idx,
-            parameter_attempt=parameter_attempt,
         )
         documents.append(document.model_dump_json(exclude_none=True))
     return pa.array(documents, type=DEBUG_JSON_TYPE)

@@ -16,7 +16,6 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
@@ -111,7 +110,7 @@ def test_lance_schema_exposes_native_json_debug_column() -> None:
 
 def test_seed_debug_array_serializes_seed_and_derivation_inputs() -> None:
     """Seed debug documents retain dynamic JSON typing and accepted attempts."""
-    debug = seed_debug_array(42, [9], [2], shard_id=7)
+    debug = seed_debug_array(42, [9], [2], [2728252728602953181], shard_id=7)
 
     assert debug.type == pa.json_()
     assert json.loads(debug[0].as_py()) == {
@@ -126,7 +125,7 @@ def test_seed_debug_array_serializes_seed_and_derivation_inputs() -> None:
 
 def test_seed_debug_array_fixed_parameters_omit_unconsumed_seed() -> None:
     """Fixed-parameter rows do not claim that their sampler seed was consumed."""
-    debug = seed_debug_array(42, [9], [0], shard_id=7, parameter_source="fixed")
+    debug = seed_debug_array(42, [9], [0], [None], shard_id=7, parameter_source="fixed")
 
     assert json.loads(debug[0].as_py()) == {
         "master_seed": 42,
@@ -138,15 +137,8 @@ def test_seed_debug_array_fixed_parameters_omit_unconsumed_seed() -> None:
 
 
 def test_seed_debug_array_reused_patch_omits_unconsumed_row_seed() -> None:
-    """Shard-cadence rows identify the reused patch without claiming a row draw."""
-    debug = seed_debug_array(
-        42,
-        [10],
-        [0],
-        shard_id=7,
-        parameter_sample_idx=9,
-        parameter_attempt=2,
-    )
+    """Shard-cadence rows omit a seed when parameter sampling was bypassed."""
+    debug = seed_debug_array(42, [10], [0], [None], shard_id=7)
 
     assert json.loads(debug[0].as_py()) == {
         "master_seed": 42,
@@ -154,22 +146,16 @@ def test_seed_debug_array_reused_patch_omits_unconsumed_row_seed() -> None:
         "attempt": 0,
         "shard_id": 7,
         "parameter_source": "sampled",
-        "parameter_seed": seed_for_sample(42, 9, 2),
-        "parameter_sample_idx": 9,
-        "parameter_attempt": 2,
     }
 
 
 def test_seed_debug_array_mismatched_lengths_raises_value_error() -> None:
-    """Each debug document requires one sample index and accepted attempt."""
-    with pytest.raises(ValueError, match="sample_indices has length 2, attempts has length 1"):
-        seed_debug_array(42, [9, 10], [2], shard_id=7)
-
-
-def test_seed_debug_array_partial_parameter_provenance_raises_value_error() -> None:
-    """The Arrow serializer enforces the typed document's provenance invariant."""
-    with pytest.raises(ValueError, match="must be provided together"):
-        seed_debug_array(42, [9], [2], shard_id=7, parameter_sample_idx=9)
+    """Each debug document requires aligned index, attempt, and seed values."""
+    with pytest.raises(
+        ValueError,
+        match="sample_indices, attempts, and sampler_seeds must have equal lengths",
+    ):
+        seed_debug_array(42, [9, 10], [2], [17], shard_id=7)
 
 
 def test_fragment_schema_matches_does_not_mask_debug_nullability_mismatch() -> None:

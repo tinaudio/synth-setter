@@ -309,7 +309,6 @@ def test_writer_marks_external_fixed_parameter_provenance(
     row = _read_debug_rows(out)[0]
     assert row.parameter_source == "fixed"
     assert row.seed is None
-    assert row.parameter_seed is None
 
 
 @pytest.mark.fake_vst
@@ -331,10 +330,10 @@ def test_writer_marks_mixed_parameter_provenance(
 
 
 @pytest.mark.fake_vst
-def test_writer_persists_shard_cadence_parameter_seed_across_batches(
+def test_writer_omits_reused_shard_cadence_seeds_across_batches(
     tmp_path: Path, install_fake_plugin: FakeVST3Plugin
 ) -> None:
-    """Every shard-cadence row identifies the first row's reused patch seed.
+    """Only the shard-cadence row that samples the patch records a seed.
 
     :param tmp_path: Pytest fixture providing the destination path.
     :param install_fake_plugin: Swaps the VST loader for a deterministic fake plugin.
@@ -353,12 +352,8 @@ def test_writer_persists_shard_cadence_parameter_seed_across_batches(
 
     rows = _read_debug_rows(out)
     assert [row.seed for row in rows] == [seed_for_sample(_BASE_SEED, 12, 0), None, None]
-    for sample_idx, row in enumerate(rows, start=12):
-        assert row.sample_idx == sample_idx
-        assert row.parameter_seed == seed_for_sample(_BASE_SEED, 12, 0)
-        assert row.parameter_sample_idx == 12
-        assert row.parameter_attempt == 0
-        assert row.parameter_source == "sampled"
+    assert [row.sample_idx for row in rows] == [12, 13, 14]
+    assert [row.parameter_source for row in rows] == ["sampled", "sampled", "sampled"]
 
 
 @pytest.mark.fake_vst
@@ -399,6 +394,7 @@ def test_writer_persists_nonzero_accepted_attempt(
             seed=seed,
         )
         sample.attempt = 2
+        sample.sampler_seed = seed_for_sample(_BASE_SEED, 12, 2)
         return sample
 
     monkeypatch.setattr(writers, "generate_sample", _generate_after_retries)

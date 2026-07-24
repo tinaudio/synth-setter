@@ -314,7 +314,6 @@ def make_lance_dataset(
 
     try:
         fragments: list[lance.fragment.FragmentMetadata] = []
-        shard_parameter_attempt: int | None = None
         fixed_synth = fixed_synth_params_list is not None
         fixed_note = fixed_note_params_list is not None
         parameter_source = (
@@ -322,23 +321,15 @@ def make_lance_dataset(
         )
 
         def _flush(batch: list[VSTDataSample], batch_start: int) -> None:
-            nonlocal shard_parameter_attempt
             sample_indices = [
                 render_cfg.sample_offset + batch_start + row for row in range(len(batch))
             ]
-            sampled_shard_parameters = (
-                render_cfg.param_sample_cadence == "shard" and parameter_source != "fixed"
-            )
-            if sampled_shard_parameters and shard_parameter_attempt is None:
-                shard_parameter_attempt = batch[0].attempt
-            parameter_sample_idx = render_cfg.sample_offset if sampled_shard_parameters else None
             debug = seed_debug_array(
                 render_cfg.base_seed,
                 sample_indices,
                 [sample.attempt for sample in batch],
+                [sample.sampler_seed for sample in batch],
                 shard_id=shard_id,
-                parameter_sample_idx=parameter_sample_idx,
-                parameter_attempt=shard_parameter_attempt,
                 parameter_source=parameter_source,
             )
             record_batch = record_batch_from_arrays(
