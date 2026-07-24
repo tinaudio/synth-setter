@@ -1133,7 +1133,10 @@ latent columns are also selectable via `embeddings=` (multi-GB encoders, each
 loaded and written in its own sequential pass); the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`. An optional
 `resume_cache=<path>` caches per-batch encoder outputs so an interrupted run can
-resume without re-encoding already-processed rows (see `add_embeddings.py`).
+resume without re-encoding already-processed rows (see `add_embeddings.py`). The
+default CLAP and SAME sources hydrate under
+`${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
+`checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
 `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
 

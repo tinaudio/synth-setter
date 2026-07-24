@@ -139,6 +139,8 @@ docs:
         covers: "Finalize-side reconciliation and commit of staged Lance fragments"
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
+      - pattern: "src/synth_setter/model_cache.py"
+        covers: "XDG-aware shared cache paths for embedding model artifacts."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "Post-finalize registry-driven Lance column augmentation (EMBEDDING_REGISTRY keys: clap/m2l/same_s/same_l) via the `add_embeddings(config)` endpoint."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"

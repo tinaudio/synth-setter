@@ -33,6 +33,7 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
 )
+from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.workspace import operator_workspace
 
@@ -49,6 +50,10 @@ DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 DEFAULT_M2L_CHECKPOINT: str = ""
 DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
 DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
+_DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
+    DEFAULT_SAME_L_CHECKPOINT: "same-l",
+    DEFAULT_SAME_S_CHECKPOINT: "same-s",
+}
 CLAP_SAMPLE_RATE: int = 48000
 CLAP_EMBEDDING_DIM: int = 512
 M2L_ENCODE_MAX_BATCH: int = 64
@@ -737,6 +742,24 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     return encode
 
 
+def _resolve_clap_checkpoint(checkpoint: str) -> str:
+    """Resolve a local or HuggingFace CLAP checkpoint directory.
+
+    :param checkpoint: Local directory or HuggingFace model id.
+    :returns: Local directory accepted by the Transformers loaders.
+    """
+    local = Path(checkpoint).expanduser()
+    if local.is_dir():
+        return str(local)
+
+    from huggingface_hub import snapshot_download
+
+    if checkpoint == DEFAULT_CLAP_CHECKPOINT:
+        cache_dir = embedding_model_dir("clap-htsat-unfused")
+        return snapshot_download(checkpoint, local_dir=str(cache_dir))
+    return snapshot_download(checkpoint)
+
+
 def load_clap_audio_encoder(
     checkpoint: str = DEFAULT_CLAP_CHECKPOINT,
     device: str | None = None,
@@ -758,8 +781,9 @@ def load_clap_audio_encoder(
         checkpoint=checkpoint,
         device=resolved_device,
     )
-    model = ClapModel.from_pretrained(checkpoint).to(resolved_device).eval()  # pyright: ignore
-    processor = ClapProcessor.from_pretrained(checkpoint)
+    checkpoint_dir = _resolve_clap_checkpoint(checkpoint)
+    model = ClapModel.from_pretrained(checkpoint_dir).to(resolved_device).eval()  # pyright: ignore
+    processor = ClapProcessor.from_pretrained(checkpoint_dir)
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -793,8 +817,12 @@ def _resolve_same_checkpoint_dir(checkpoint: str) -> Path:
     :returns: Local directory containing SAME model files.
     """
     if r2_io.is_r2_uri(checkpoint):
-        cache_key = checkpoint.removeprefix("r2://").strip("/")
-        cache_dir = Path.home() / ".cache" / "synth-setter" / "models" / cache_key
+        cache_name = _DEFAULT_SAME_CACHE_NAMES.get(checkpoint)
+        if cache_name is None:
+            cache_key = checkpoint.removeprefix("r2://").strip("/")
+            cache_dir = synth_setter_cache_dir() / "models" / cache_key
+        else:
+            cache_dir = embedding_model_dir(cache_name)
         r2_io.ensure_r2_env_loaded()
         r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
         return cache_dir

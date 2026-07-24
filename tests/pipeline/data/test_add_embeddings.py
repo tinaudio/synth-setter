@@ -49,6 +49,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _configure_lance_logging,
     _downmix_to_mono,
     _require_extras,
+    _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
     add_embeddings,
@@ -1359,6 +1360,10 @@ def test_load_clap_audio_encoder_with_mps_available_selects_mps(
     )
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: True)
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda *_args, **_kwargs: "/cache/clap",
+    )
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
     load_clap_audio_encoder()
@@ -1374,6 +1379,7 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
     :param monkeypatch: Fixture replacing transformers checkpoint loading.
     """
     checkpoints: list[str] = []
+    downloads: list[str] = []
 
     class Model:
         def to(self, device: str) -> Model:
@@ -1391,13 +1397,87 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
 
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda checkpoint: downloads.append(checkpoint) or "/cache/custom-clap",
+    )
     monkeypatch.setitem(
         sys.modules,
         "transformers",
         type("Transformers", (), {"ClapModel": Loader, "ClapProcessor": Loader}),
     )
     load_clap_audio_encoder("custom/clap", "cpu")
-    assert checkpoints == ["custom/clap", "custom/clap"]
+
+    assert downloads == ["custom/clap"]
+    assert checkpoints == ["/cache/custom-clap", "/cache/custom-clap"]
+
+
+def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
+    tmp_path: Path,
+) -> None:
+    """An existing local CLAP directory needs no snapshot download.
+
+    :param tmp_path: Existing local checkpoint directory.
+    """
+    assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
+
+
+def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Hydrate the default CLAP snapshot into its stable model directory.
+
+    :param monkeypatch: Fixture isolating cache location and snapshot download.
+    :param tmp_path: XDG cache root for the assertion.
+    """
+    downloads: list[tuple[str, str | None]] = []
+    expected = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda repo_id, *, local_dir=None: downloads.append((repo_id, local_dir)) or str(expected),
+    )
+
+    resolved = _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
+
+    assert resolved == str(expected)
+    assert downloads == [(DEFAULT_CLAP_CHECKPOINT, str(expected))]
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "model_name"),
+    [
+        (DEFAULT_SAME_S_CHECKPOINT, "same-s"),
+        (DEFAULT_SAME_L_CHECKPOINT, "same-l"),
+    ],
+)
+def test_resolve_same_checkpoint_dir_with_default_r2_source_uses_canonical_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    checkpoint: str,
+    model_name: str,
+) -> None:
+    """Hydrate each default SAME source into its stable model directory.
+
+    :param monkeypatch: Fixture isolating cache location and R2 download.
+    :param tmp_path: XDG cache root for the assertion.
+    :param checkpoint: Default SAME R2 source under test.
+    :param model_name: Canonical local directory name.
+    """
+    downloads: list[tuple[str, Path]] = []
+    expected = tmp_path / "synth-setter/models/embeddings" / model_name
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: downloads.append((uri, destination)),
+    )
+
+    resolved = _resolve_same_checkpoint_dir(checkpoint)
+
+    assert resolved == expected
+    assert downloads == [(checkpoint, expected)]
 
 
 def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
