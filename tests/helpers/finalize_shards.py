@@ -28,17 +28,18 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from tests.helpers.lance_fixtures import with_preview_columns
 
-# sample_rate=100 keeps the mel front end at its minimum hop so shards stay tiny.
+# The shortest MP3-supported rate and duration keep preview-bearing shards tiny.
 _LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
     "plugin_path": "/fake/Plugin.vst3",
     "plugin_state_path": "presets/surge-base.vstpreset",
     "param_spec_name": "surge_simple",
     "renderer_version": "1.0.0-test",
-    "sample_rate": 100,
+    "sample_rate": 8000,
     "channels": 2,
     "velocity": 100,
-    "signal_duration_seconds": 1.0,
+    "signal_duration_seconds": 0.01,
     "min_loudness": -55.0,
     "samples_per_render_batch": 4,
     "samples_per_shard": 4,
@@ -107,10 +108,10 @@ def build_multishard_lance_smoke_spec(
             "plugin_state_path": "presets/surge-base.vstpreset",
             "param_spec_name": "surge_simple",
             "renderer_version": "1.0.0-test",
-            "sample_rate": 100,
+            "sample_rate": 8000,
             "channels": 2,
             "velocity": 100,
-            "signal_duration_seconds": 1.0,
+            "signal_duration_seconds": 0.01,
             "min_loudness": -55.0,
             "samples_per_render_batch": samples_per_shard,
             "samples_per_shard": samples_per_shard,
@@ -182,7 +183,13 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
     batches = (
         []
         if shapes[MEL_SPEC_FIELD][0] == 0
-        else [record_batch_from_arrays(arrays, schema, debug=None)]
+        else [
+            record_batch_from_arrays(
+                with_preview_columns(arrays, render.sample_rate),
+                schema,
+                debug=None,
+            )
+        ]
     )
     write_lance_dataset(dest, schema, batches)
 

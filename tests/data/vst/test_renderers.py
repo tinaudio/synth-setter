@@ -9,7 +9,7 @@ from typing import cast
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.generate_vst_dataset import generate_sample
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid, generate_sample
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -130,6 +130,9 @@ def test_generate_sample_uses_common_renderer_backend() -> None:
     )
 
     assert sample.audio.shape == (44100, 2)
+    persisted_audio = np.asarray(sample.audio.T, dtype=np.float16)
+    assert sample.audio_uuid == audio_uuid(persisted_audio)
+    assert sample.audio_mp3
 
 
 def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.MonkeyPatch) -> None:

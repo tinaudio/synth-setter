@@ -588,7 +588,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 
 Current implementation:
 
-- **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`)
+- **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`, `audio_mp3`, `audio_uuid`)
 - **Row count**: Matches spec's expected shard size
 - **Schema**: the written fragment's physical schema matches the spec-derived schema — see `lance_fragment` in `pipeline/data/lance_shard.py`; Lance's append-mode writer otherwise silently inherits an existing committed dataset's schema ([#2084](https://github.com/tinaudio/synth-setter/issues/2084))
 
@@ -841,7 +841,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 The pipeline's output format is **Lance**. The renderer CLI dispatches on the shard's filename suffix (`.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, while `param_array` stays float32. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
+Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg`, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
 
 **Why Lance:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU random-access case and the multi-GPU streaming case.
 
@@ -1138,7 +1138,7 @@ default CLAP and SAME sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
-`synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
+Current generation writes `audio_mp3` and `audio_uuid` in the initial Lance fragment. `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) remains a manual utility for legacy Lance audio shards that lack those columns; there is no automated migration or compatibility path for existing datasets.
 
 Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory; a sidecar manifest gates cache reuse by request hash.
 

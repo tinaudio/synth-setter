@@ -1,9 +1,12 @@
+import io
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import librosa
 import numpy as np
 from loguru import logger
+from pedalboard.io import AudioFile
 from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
@@ -27,6 +30,44 @@ from synth_setter.pipeline.schemas.spec import (
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
 DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
+DEFAULT_MP3_BITRATE_KBPS = 128
+
+_AUDIO_UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "synth-setter.com")
+
+
+def encode_audio_to_mp3(audio: np.ndarray, sample_rate: int, bitrate_kbps: int) -> bytes:
+    """Encode one ``(channels, time)`` audio tensor to a CBR MP3 byte string.
+
+    :param audio: Float audio shaped ``(channels, time_samples)`` with non-empty axes.
+    :param sample_rate: Playback rate in Hz.
+    :param bitrate_kbps: Constant bitrate in kbps.
+    :returns: Complete MP3 bitstream.
+    :raises ValueError: If ``audio`` is not a non-empty two-dimensional tensor.
+    """
+    if audio.ndim != 2 or 0 in audio.shape:
+        raise ValueError(
+            f"audio must be 2-D (channels, time) with non-empty axes, got shape {audio.shape}"
+        )
+    buffer = io.BytesIO()
+    with AudioFile(
+        buffer,
+        "w",
+        samplerate=sample_rate,
+        num_channels=audio.shape[0],
+        format="mp3",
+        quality=str(bitrate_kbps),
+    ) as output:
+        output.write(np.ascontiguousarray(audio, dtype=np.float32))
+    return buffer.getvalue()
+
+
+def audio_uuid(audio: np.ndarray) -> str:
+    """Return the deterministic UUIDv5 fingerprint of C-ordered audio bytes.
+
+    :param audio: Audio tensor whose element bytes form the UUID name.
+    :returns: Canonical UUIDv5 string under the ``synth-setter.com`` namespace.
+    """
+    return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes(order="C").hex()))
 
 
 @dataclass(frozen=True)
@@ -63,6 +104,9 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
+    audio_dtype: str = "float16"
+    audio_mp3: bytes = field(init=False)
+    audio_uuid: str = field(init=False)
     param_array: np.ndarray = field(init=False)
     # Concrete sampler seed consumed for this row; fully fixed renders consume none.
     sampler_seed: int | None = None
@@ -73,6 +117,13 @@ class VSTDataSample:
     silent_rejections: int = 0
 
     def __post_init__(self) -> None:
+        persisted_audio = np.ascontiguousarray(self.audio.T, dtype=self.audio_dtype)
+        self.audio_mp3 = encode_audio_to_mp3(
+            persisted_audio,
+            int(self.sample_rate),
+            DEFAULT_MP3_BITRATE_KBPS,
+        )
+        self.audio_uuid = audio_uuid(persisted_audio)
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -101,6 +152,7 @@ def generate_sample(
     *,
     warmup: bool = False,
     seed: SampleSeed | None = None,
+    audio_dtype: str = "float16",
 ) -> VSTDataSample:
     """Render a single VST sample, retrying silent draws up to the attempt budget.
 
@@ -130,6 +182,7 @@ def generate_sample(
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
@@ -207,6 +260,7 @@ def generate_sample(
             sample_rate=renderer.sample_rate,
             channels=renderer.channels,
             param_spec=param_spec,
+            audio_dtype=audio_dtype,
             sampler_seed=sampler_seed,
             attempt=attempt,
             clipped_rejections=clipped_rejections,

@@ -1,11 +1,17 @@
 """Shared writers and column builders for Lance shard test fixtures."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 
+from synth_setter.data.vst.generate_vst_dataset import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
+)
+from synth_setter.data.vst.shapes import AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD
 from synth_setter.pipeline.data.lance_shard import tensor_array, write_lance_dataset
 
 # Tiny per-row shapes shared by the datamodule test fixtures: large enough to
@@ -20,6 +26,26 @@ M2L_DIM_2 = 7
 NUM_PARAMS = 11
 
 MEL_SHAPE = (MEL_CHANNELS, MEL_N_MELS, MEL_N_FRAMES)
+
+
+def with_preview_columns(
+    columns: Mapping[str, np.ndarray],
+    sample_rate: int,
+) -> dict[str, np.ndarray | Sequence[bytes] | Sequence[str]]:
+    """Add MP3 and UUID values derived from the persisted audio rows.
+
+    :param columns: Tensor columns containing ``audio`` shaped ``(rows, channels, time)``.
+    :param sample_rate: Playback rate used for MP3 encoding.
+    :returns: A new mapping with the two canonical preview columns.
+    """
+    audio_rows = columns[AUDIO_FIELD]
+    return {
+        **columns,
+        AUDIO_MP3_FIELD: [
+            encode_audio_to_mp3(row, sample_rate, DEFAULT_MP3_BITRATE_KBPS) for row in audio_rows
+        ],
+        AUDIO_UUID_FIELD: [audio_uuid(row) for row in audio_rows],
+    }
 
 
 def make_shard_columns(

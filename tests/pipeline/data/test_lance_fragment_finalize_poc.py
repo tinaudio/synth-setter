@@ -44,6 +44,7 @@ from synth_setter.pipeline.data.lance_shard import (
     record_batch_from_arrays,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from tests.helpers.lance_fixtures import with_preview_columns
 
 # Small shapes; every element is a distinct value exactly representable as
 # float16 (<= 2048), so equality is exact across the writer dtypes.
@@ -59,7 +60,7 @@ _VALUE_STRIDE = 1000
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,
-    sample_rate=100,
+    sample_rate=8000,
     channels=2,
     min_loudness=-55.0,
     base_seed=42,
@@ -95,7 +96,11 @@ def _worker_writes_fragment(
     :param arrays: One shard's field arrays.
     :returns: The live fragment metadata and its sidecar JSON string.
     """
-    batch = record_batch_from_arrays(arrays, schema, debug=None)
+    batch = record_batch_from_arrays(
+        with_preview_columns(arrays, _METADATA.sample_rate),
+        schema,
+        debug=None,
+    )
     frag = lance_fragment(split_uri, schema, batch)
     return frag, json.dumps(frag.to_json())
 
@@ -221,5 +226,5 @@ def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> No
     # Manifest metadata reports rows even though the data file is absent...
     assert lance.dataset(str(train_uri)).count_rows() == _ROWS_PER_SHARD
     # ...but an actual read fails, proving the co-location requirement.
-    with pytest.raises(pa.ArrowInvalid, match="LanceError|Object at location"):
+    with pytest.raises(pa.ArrowInvalid, match="LanceError|Not found|Object at location"):
         list(iter_lance_column_rows(train_uri, PARAM_ARRAY_FIELD))

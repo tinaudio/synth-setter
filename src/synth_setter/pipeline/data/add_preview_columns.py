@@ -1,8 +1,8 @@
 """Add ``audio_mp3`` and ``audio_uuid`` preview columns to a Lance dataset.
 
-Backfills two derived columns onto a dataset written by
-``synth-setter-generate-dataset`` or ``synth-setter-finalize-dataset``, in a
-single Lance ``add_columns`` transaction:
+Backfills two derived columns onto a legacy dataset that predates initial-write
+previews, in a single Lance ``add_columns`` transaction. Current
+``synth-setter-generate-dataset`` output already carries both columns:
 
 - ``audio_mp3`` — each row's ``audio`` tensor encoded to a CBR MP3 (pedalboard),
   stored as an Arrow binary column tagged ``mime_type: audio/mpeg`` so viewers
@@ -15,81 +15,27 @@ Neither column is a training input; the ``audio`` tensor stays the source of tru
 
 from __future__ import annotations
 
-import io
-import uuid
 from pathlib import Path
 
 import click
 import lance
-import numpy as np
 import pyarrow as pa
 import structlog
-from pedalboard.io import AudioFile
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD
+from synth_setter.data.vst.generate_vst_dataset import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
+)
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+)
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+from synth_setter.pipeline.data.lance_shard import PREVIEW_SCHEMA, read_shard_metadata
 
 logger = structlog.get_logger(__name__)
-
-AUDIO_MP3_FIELD = "audio_mp3"
-AUDIO_UUID_FIELD = "audio_uuid"
-
-DEFAULT_MP3_BITRATE_KBPS = 128
-
-# Viewer hint for Lance UIs — a repo convention, not a Lance-defined contract.
-_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
-
-# DNS-derived namespace so the constant is reproducible; a fixed namespace makes
-# audio_uuid a pure function of the audio bytes (same input -> same id).
-_AUDIO_UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "synth-setter.tinaudio.com")
-
-
-def encode_audio_to_mp3(audio: np.ndarray, sample_rate: int, bitrate_kbps: int) -> bytes:
-    """Encode one ``(channels, time)`` audio tensor to a CBR MP3 byte string.
-
-    :param audio: One row of audio shaped ``(channels, time_samples)``; any
-        float dtype (on-disk ``float16`` is upcast to ``float32`` for the
-        encoder). Values outside ``[-1.0, 1.0]`` are clipped by the encoder.
-    :param sample_rate: Playback rate in Hz the stream is encoded at.
-    :param bitrate_kbps: Constant bitrate in kbps (pedalboard's ``quality``).
-    :returns: The complete CBR MP3 bitstream encoded at ``bitrate_kbps``.
-    :raises ValueError: ``audio`` is not 2-D ``(channels, time)`` with both axes non-empty.
-    """
-    if audio.ndim != 2 or 0 in audio.shape:
-        raise ValueError(
-            f"audio must be 2-D (channels, time) with non-empty axes, got shape {audio.shape}"
-        )
-    buffer = io.BytesIO()
-    with AudioFile(
-        buffer,
-        "w",
-        samplerate=sample_rate,
-        num_channels=audio.shape[0],
-        format="mp3",
-        quality=str(bitrate_kbps),
-    ) as out:
-        # ascontiguousarray is a no-op when audio is already float32 and
-        # C-contiguous, avoiding a redundant copy in that common case.
-        out.write(np.ascontiguousarray(audio, dtype=np.float32))
-    return buffer.getvalue()
-
-
-def audio_uuid(audio: np.ndarray) -> str:
-    """Compute the deterministic UUIDv5 fingerprint of one audio tensor.
-
-    The id is a pure function of the row's element bytes in C order (so dtype
-    and value count matter, but not array shape), so the same rendered waveform
-    always yields the same uuid; a different render — even one sample — differs.
-
-    :param audio: One ``(channels, time)`` row; hashed by its C-ordered bytes.
-    :returns: The canonical hyphenated UUIDv5 string under the project namespace.
-    """
-    # hex() losslessly encodes the C-ordered bytes as a str, the name type uuid5
-    # requires on Python 3.11 (bytes names are accepted only on 3.12+). Changing
-    # this input would shift every id, so it is part of the on-disk contract.
-    return str(uuid.uuid5(_AUDIO_UUID_NAMESPACE, audio.tobytes(order="C").hex()))
-
 
 def _encode_preview_columns(
     batch: pa.RecordBatch, sample_rate: int, bitrate_kbps: int
@@ -123,7 +69,7 @@ def _encode_preview_columns(
         uuids.append(audio_uuid(row))
     return pa.record_batch(
         [pa.array(mp3_payloads, type=pa.binary()), pa.array(uuids, type=pa.string())],
-        names=[AUDIO_MP3_FIELD, AUDIO_UUID_FIELD],
+        schema=PREVIEW_SCHEMA,
     )
 
 
@@ -154,16 +100,9 @@ def add_preview_columns(
     if existing:
         raise ValueError(f"dataset at {uri} already has preview column(s): {existing}")
     sample_rate = read_shard_metadata(dataset.schema).sample_rate
-    preview_schema = pa.schema(
-        [
-            pa.field(AUDIO_MP3_FIELD, pa.binary()).with_metadata(_MP3_FIELD_METADATA),
-            pa.field(AUDIO_UUID_FIELD, pa.string()),
-        ]
-    )
-
     # output_schema skips Lance's first-batch inference probe (avoids a double
     # encode) and carries the binary type + mime metadata onto the new columns.
-    @lance.batch_udf(output_schema=preview_schema)
+    @lance.batch_udf(output_schema=PREVIEW_SCHEMA)
     def _to_preview(batch: pa.RecordBatch) -> pa.RecordBatch:
         return _encode_preview_columns(batch, sample_rate, bitrate_kbps)
 

@@ -23,6 +23,11 @@ on:
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/data/vst/generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/pipeline/ci/validate_shard.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 

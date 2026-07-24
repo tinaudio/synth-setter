@@ -17,7 +17,13 @@ import numpy as np
 import pytest
 
 from synth_setter.data.vst import core
-from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    PARAM_ARRAY_FIELD,
+)
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
@@ -200,7 +206,13 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
     )
 
     assert validate_shard(out, spec) == []
-    meta = read_shard_metadata(lance.dataset(str(out)).schema)
+    dataset = lance.dataset(str(out))
+    table = dataset.to_table(columns=[AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD])
+    audio_rows = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    assert table.column(AUDIO_UUID_FIELD).to_pylist() == [audio_uuid(row) for row in audio_rows]
+    assert all(table.column(AUDIO_MP3_FIELD).to_pylist())
+    assert dataset.schema.field(AUDIO_MP3_FIELD).metadata == {b"mime_type": b"audio/mpeg"}
+    meta = read_shard_metadata(dataset.schema)
     # Whole-model equality: a new ShardMetadata field fails construction here,
     # forcing this round-trip pin to cover it.
     assert meta == ShardMetadata(

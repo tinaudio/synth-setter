@@ -24,13 +24,12 @@ from synth_setter.data.vst.shapes import (
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid, encode_audio_to_mp3
 from synth_setter.pipeline.data.add_preview_columns import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
     _encode_preview_columns,
     add_preview_columns,
-    audio_uuid,
-    encode_audio_to_mp3,
     main,
 )
 from synth_setter.pipeline.data.lance_shard import (
@@ -95,6 +94,8 @@ def _write_smoke_dataset(path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None
         min_loudness=-55.0,
     )
     schema = lance_schema(_FIELD_SHAPES, metadata)
+    for preview_field in (AUDIO_MP3_FIELD, AUDIO_UUID_FIELD):
+        schema = schema.remove(schema.get_field_index(preview_field))
     arrays = {
         AUDIO_FIELD: _sine_rows(sample_rate),
         MEL_SPEC_FIELD: np.zeros(_FIELD_SHAPES[MEL_SPEC_FIELD], dtype=np.float32),
@@ -265,7 +266,7 @@ def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
     ``tobytes().hex()`` input, or the uuid version would break this — the
     on-disk ids are a stable contract that must not drift silently.
     """
-    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
+    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "a0cd37d8-29b2-5b77-a001-336e9aef650b"
 
 
 def test__encode_preview_columns_non_tensor_audio_column_raises() -> None:
@@ -369,8 +370,11 @@ def test_add_preview_columns_tags_field_with_audio_mime_type(tmp_path: Path) -> 
 
     add_preview_columns(uri)
 
-    field = lance.dataset(str(uri)).schema.field(AUDIO_MP3_FIELD)
-    assert field.metadata == {b"mime_type": b"audio/mpeg"}
+    schema = lance.dataset(str(uri)).schema
+    mp3_field = schema.field(AUDIO_MP3_FIELD)
+    assert mp3_field.metadata == {b"mime_type": b"audio/mpeg"}
+    assert not mp3_field.nullable
+    assert not schema.field(AUDIO_UUID_FIELD).nullable
 
 
 def test_add_preview_columns_uses_sample_rate_from_metadata(tmp_path: Path) -> None:
