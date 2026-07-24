@@ -46,7 +46,7 @@ XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 # blows its budget fails even when every test passes, so degraded hosts and
 # slow-test regressions surface in the run itself instead of silently crawling.
 test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
+	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
 # GPU/MPS tests run serially because accelerators need exclusive access.
