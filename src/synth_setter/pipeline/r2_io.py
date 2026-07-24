@@ -82,6 +82,20 @@ _RCLONE_CONFIG_READ_TIMEOUT_SECONDS = 10
 _UPLOAD_DIR_TIMEOUT = "3h"
 
 
+def _strip_rclone_config_framing(config_text: str) -> str:
+    """Remove the boundary lines emitted around named remotes by rclone 1.53.
+
+    :param config_text: Raw ``rclone config show`` output.
+    :returns: INI text without optional leading and trailing all-dash lines.
+    """
+    config_lines = config_text.splitlines()
+    if config_lines and set(config_lines[0]) == {"-"}:
+        config_lines.pop(0)
+    if config_lines and set(config_lines[-1]) == {"-"}:
+        config_lines.pop()
+    return "\n".join(config_lines)
+
+
 def _storage_config_from_rclone() -> StorageConfig:
     """Load the ``r2`` remote through rclone's standard config resolution.
 
@@ -96,14 +110,22 @@ def _storage_config_from_rclone() -> StorageConfig:
             check=False,
             timeout=_RCLONE_CONFIG_READ_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("rclone configuration is unavailable") from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "rclone executable was not found while reading r2 configuration"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"rclone configuration read timed out after {_RCLONE_CONFIG_READ_TIMEOUT_SECONDS}s"
+        ) from exc
     if result.returncode != 0:
-        raise RuntimeError("rclone configuration is unavailable")
+        raise RuntimeError(
+            f"rclone config show {RCLONE_REMOTE} failed with exit code {result.returncode}"
+        )
 
     parser = configparser.RawConfigParser()
     try:
-        parser.read_string(result.stdout)
+        parser.read_string(_strip_rclone_config_framing(result.stdout))
         remote = parser[RCLONE_REMOTE]
         return StorageConfig(
             access_key_id=SecretStr(remote.get("access_key_id", "")),
@@ -126,14 +148,14 @@ def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
     resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
     try:
         return storage_settings_from_sources(resolved_env_file).to_config()
-    except ValidationError as exc:
+    except ValidationError:
         try:
             return _storage_config_from_rclone()
-        except RuntimeError:
+        except RuntimeError as fallback_error:
             raise RuntimeError(
                 f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
                 f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)} or a configured r2 remote."
-            ) from exc
+            ) from fallback_error
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
