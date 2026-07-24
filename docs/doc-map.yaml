@@ -152,7 +152,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "Adds music2latent embeddings to Lance datasets"
       - pattern: "src/synth_setter/pipeline/data/lance_materialize.py"
-        covers: "materialize_lance_subset — txid-pinned, projected/row-limited Lance subset materialization for training hydration, with MaterializeManifest sidecar-gated cache reuse"
+        covers: "materialize_lance_subset — projected/row-limited Lance hydration from pinned or latest snapshots, with MaterializeManifest sidecar-gated cache reuse"
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md

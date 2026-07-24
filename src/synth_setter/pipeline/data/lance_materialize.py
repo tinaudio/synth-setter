@@ -1,8 +1,8 @@
-"""Txid-pinned rematerialization of a Lance column/row subset to local disk.
+"""Rematerialize a Lance column/row subset to local disk.
 
-Streams a projected scan of one pinned source snapshot into a fresh local
-Lance dataset, so hydration transfers only the columns and rows a training
-run reads instead of the whole dataset directory. A sidecar manifest beside
+Streams a projected scan of one source snapshot into a fresh local Lance
+dataset, so hydration transfers only the columns and rows a training run
+reads instead of the whole dataset directory. A sidecar manifest beside
 the destination records the request and gates cache reuse: a rerun with the
 same request reuses the local copy; any drift fails loudly.
 """
@@ -39,7 +39,7 @@ class MaterializeManifest(BaseModel):
 
     .. attribute :: txid
 
-        Transaction uuid pinning the source snapshot.
+        Transaction uuid pinning the source snapshot, or ``None`` for latest.
 
     .. attribute :: resolved_version
 
@@ -61,7 +61,7 @@ class MaterializeManifest(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True)
 
     source_uri: str
-    txid: str
+    txid: str | None
     resolved_version: int
     columns: tuple[str, ...]
     limit: int | None
@@ -70,7 +70,7 @@ class MaterializeManifest(BaseModel):
 
 def request_hash(
     source_uri: str,
-    txid: str,
+    txid: str | None,
     resolved_version: int,
     columns: tuple[str, ...],
     limit: int | None,
@@ -78,8 +78,8 @@ def request_hash(
     """Hash one materialization request for sidecar-gated cache reuse.
 
     :param source_uri: Source dataset URI as the caller passed it.
-    :param txid: Transaction uuid pinning the source snapshot.
-    :param resolved_version: Source version the txid resolved to.
+    :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
+    :param resolved_version: Source version selected for materialization.
     :param columns: Projected column names, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
     :returns: sha256 hex digest over the canonical JSON encoding of the fields.
@@ -147,7 +147,7 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
 def _reuse_or_raise(
     dest_path: Path,
     source_uri: str,
-    txid: str,
+    txid: str | None,
     columns: tuple[str, ...],
     limit: int | None,
 ) -> Path:
@@ -159,7 +159,7 @@ def _reuse_or_raise(
 
     :param dest_path: Existing materialized dataset directory.
     :param source_uri: Current request's source URI.
-    :param txid: Current request's transaction uuid.
+    :param txid: Current request's transaction uuid, or ``None`` for latest.
     :param columns: Current request's projected columns.
     :param limit: Current request's row cap.
     :returns: ``dest_path`` on a cache hit.
@@ -205,22 +205,22 @@ def materialize_lance_subset(  # noqa: DOC502
     source_uri: str,
     dest_path: Path,
     *,
-    txid: str,
+    txid: str | None,
     columns: Sequence[str],
     limit: int | None = None,
     batch_size: int = 512,
 ) -> Path:
-    """Stream a projected scan of a txid-pinned Lance snapshot into ``dest_path``.
+    """Stream a projected source snapshot scan into ``dest_path``.
 
     Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. Provenance is stamped both in the destination's transaction
-    properties (``cloned_from_txn``) and in the sidecar manifest.
+    the source. A txid pins the source snapshot when supplied; otherwise the
+    latest version at hydration time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
     :param dest_path: Local destination dataset directory; must not hold an
         unrelated dataset.
-    :param txid: Transaction uuid pinning the source snapshot (required).
+    :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
     :param batch_size: Scan batch size in rows — the streaming memory unit.
@@ -240,7 +240,7 @@ def materialize_lance_subset(  # noqa: DOC502
     else:
         open_uri, storage_options = source_uri, None
     ds = lance.dataset(open_uri, storage_options=storage_options)
-    resolved_version = resolve_txid_version(ds, txid)
+    resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
     snapshot = ds.checkout_version(resolved_version)
     scanner = snapshot.scanner(
         columns=list(requested_columns), limit=limit, batch_size=batch_size
@@ -255,11 +255,16 @@ def materialize_lance_subset(  # noqa: DOC502
         limit=limit,
     )
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    transaction_properties = (
+        {"cloned_from_txn": txid}
+        if txid is not None
+        else {"cloned_from_version": str(resolved_version)}
+    )
     written = lance.write_dataset(
         scanner.to_batches(),
         str(dest_path),
         schema=scanner.projected_schema,
-        transaction_properties={"cloned_from_txn": txid},
+        transaction_properties=transaction_properties,
     )
     manifest = MaterializeManifest(
         source_uri=source_uri,
@@ -282,23 +287,28 @@ def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
-    txids: dict[str, str],
+    txids: dict[str, str] | None,
     columns_for: Callable[[str], Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
 ) -> None:
-    """Materialize each pinned split under a root, then rclone non-Lance sidecars.
+    """Materialize each split under a root, then rclone non-Lance sidecars.
 
     :param source_root_uri: Hydration root (``r2://``, ``file://``, or local path)
         holding the split datasets.
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
-    :param txids: Per-split transaction uuids pinning each split's source snapshot.
+    :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
     :param columns_for: Callback returning the columns to project for a given split name.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
-    for split, txid in txids.items():
+    split_txids = (
+        txids.items()
+        if txids is not None
+        else ((split, None) for split in ("train", "val", "test"))
+    )
+    for split, txid in split_txids:
         name = f"{split}{shard_suffix}"
         materialize_lance_subset(
             f"{source_root_uri.rstrip('/')}/{name}",

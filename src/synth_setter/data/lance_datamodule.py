@@ -412,9 +412,9 @@ class LanceVSTDataModule(VSTDataModule):
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
         :param download_dataset_txids: Per-split transaction uuids pinning the
-            source snapshots; present selects the materialize path.
+            source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
-            time.
+            time. Without txids, the latest source snapshots are used.
         """
         super().__init__(
             dataset_root=dataset_root,

@@ -1,4 +1,4 @@
-"""Behavioral tests for txid-pinned materializing hydration in ``LanceVSTDataModule``.
+"""Behavioral tests for projected hydration in ``LanceVSTDataModule``.
 
 Sources are real local Lance datasets written through the pipeline writer, so
 ``prepare_data()`` drives the real ``materialize_lance_subset`` path; only the
@@ -131,17 +131,29 @@ class TestMaterializeInitValidation:
                 param_spec_name=_PARAM_SPEC,
             )
 
-    def test_init_row_limit_without_txids_raises(self, tmp_path: Path) -> None:
-        """A row cap without txids is rejected: a full download cannot cap rows.
+    def test_init_row_limit_without_download_uri_raises(self, tmp_path: Path) -> None:
+        """A row cap without a hydration source is rejected.
 
         :param tmp_path: Local dataset root.
         """
-        with pytest.raises(ValueError, match="download_dataset_row_limit"):
+        with pytest.raises(ValueError, match="download_dataset_root_uri"):
             LanceVSTDataModule(
                 dataset_root=tmp_path,
                 download_dataset_row_limit=100,
                 param_spec_name=_PARAM_SPEC,
             )
+
+    def test_init_row_limit_without_txids_succeeds(self, tmp_path: Path) -> None:
+        """A row cap may select projected materialization from the latest snapshots.
+
+        :param tmp_path: Local dataset root.
+        """
+        LanceVSTDataModule(
+            dataset_root=tmp_path,
+            download_dataset_root_uri="r2://experiments/data/ds",
+            download_dataset_row_limit=100,
+            param_spec_name=_PARAM_SPEC,
+        )
 
 
 class TestMaterializePrepareData:
@@ -228,6 +240,41 @@ class TestMaterializePrepareData:
         for split in ("train", "val", "test"):
             materialized = lance.dataset(str(dest_root / f"{split}.lance"))
             assert materialized.count_rows() == 4
+
+    def test_prepare_data_row_limit_without_txids_feeds_train_dataloader(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Latest split subsets hydrate and feed the normal training data flow.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_row_limit=4,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+        module.setup("fit")
+        try:
+            batch = next(iter(module.train_dataloader()))
+        finally:
+            module.teardown()
+
+        assert lance.dataset(str(destination / "train.lance")).count_rows() == 4
+        assert batch["params"].shape == (2, NUM_PARAMS)
+        assert batch["mel_spec"] is not None
 
     def test_prepare_data_materialized_root_feeds_train_dataloader(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

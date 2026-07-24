@@ -1,4 +1,4 @@
-"""Behavior tests for txid-pinned Lance subset materialization."""
+"""Behavior tests for Lance subset materialization."""
 
 from __future__ import annotations
 
@@ -164,6 +164,28 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
     )
 
     assert calls == [(source_root, dest_root, "{*.lance/**,metadata/**}")]
+
+
+def test_materialize_without_txid_uses_latest_version(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """An unpinned materialization reads the source's latest snapshot.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+
+    out = lance.dataset(str(dest))
+    assert out.to_table().column("a").to_pylist() == [1, 2, 3, 4]
+    manifest = MaterializeManifest.model_validate_json(
+        sidecar_path(dest).read_text(encoding="utf-8")
+    )
+    assert manifest.txid is None
+    assert manifest.resolved_version == 2
 
 
 def test_materialize_row_limit_limit_two_row_count_matches(

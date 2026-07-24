@@ -227,10 +227,9 @@ class VSTDataModule(LightningDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
-            source snapshots; present selects the materialize path, and each split
-            is its own Lance dataset with independent transaction history.
+            source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
-            time, or ``None`` for all rows.
+            time. Without txids, the latest source snapshots are used.
         :raises ValueError: If the materialization settings are inconsistent —
             fail at construction, never silently hydrate the wrong data.
         """
@@ -289,19 +288,19 @@ class VSTDataModule(LightningDataModule):
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
             r2_io.ensure_r2_env_loaded()
-        if self.download_dataset_txids is not None:
+        if (
+            self.download_dataset_txids is not None
+            or self.download_dataset_row_limit is not None
+        ):
             self._materialize_splits(self.download_dataset_root_uri)
             return
         r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
 
     def _materialize_splits(self, source_root_uri: str) -> None:
-        """Rematerialize each pinned split locally, then rclone the sidecars.
+        """Rematerialize each split locally, then rclone the sidecars.
 
         :param source_root_uri: Hydration source holding the split datasets.
-        :raises ValueError: If ``download_dataset_txids`` was cleared after construction.
         """
-        if self.download_dataset_txids is None:
-            raise ValueError("materialization requires download_dataset_txids")
         materialize_splits(
             source_root_uri,
             self.dataset_root,
@@ -334,22 +333,22 @@ def _validate_materialize_config(
 ) -> None:
     """Reject inconsistent hydration settings at construction time.
 
-    :param download_dataset_txids: Per-split transaction uuids selecting the
-        materialize path, or ``None`` for a full-directory download.
+    :param download_dataset_txids: Optional per-split transaction uuids.
     :param download_dataset_row_limit: First-N row cap, or ``None``.
     :param download_dataset_root_uri: Hydration source URI, or ``None``.
-    :raises ValueError: If a row cap is set without txids, txids lack a source,
-        or the txid split keys are incomplete or unknown.
+    :raises ValueError: If materialization lacks a source or the txid split keys
+        are incomplete or unknown.
     """
+    materialize = (
+        download_dataset_txids is not None or download_dataset_row_limit is not None
+    )
+    if materialize and not download_dataset_root_uri:
+        raise ValueError(
+            "download_dataset_txids and download_dataset_row_limit require "
+            "download_dataset_root_uri"
+        )
     if download_dataset_txids is None:
-        if download_dataset_row_limit is not None:
-            raise ValueError(
-                "download_dataset_row_limit requires download_dataset_txids; "
-                "a full-directory download cannot cap rows"
-            )
         return
-    if not download_dataset_root_uri:
-        raise ValueError("download_dataset_txids requires download_dataset_root_uri")
     missing = [split for split in _MATERIALIZE_SPLITS if split not in download_dataset_txids]
     if missing:
         raise ValueError(f"download_dataset_txids is missing txids for splits: {missing}")
