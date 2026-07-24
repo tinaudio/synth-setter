@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from synth_setter.pipeline.schemas.compute import ComputeConfig
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier
 
 ENV_SKYPILOT_API_SERVER_ENDPOINT: Final = "SKYPILOT_API_SERVER_ENDPOINT"
 ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
@@ -194,6 +195,10 @@ class SkypilotLaunchConfig(BaseModel):
         ``mount_network_volume`` path; the volume's data center decides
         where the task runs.
 
+    .. attribute :: tier
+
+        Maximum cumulative GPU class allowed in the selected compute pool.
+
     .. attribute :: extra_envs
 
         Caller-supplied env vars merged into every rank's worker env after
@@ -216,6 +221,7 @@ class SkypilotLaunchConfig(BaseModel):
     api_server: str | None = None
     local: bool = False
     network_volume: str | None = None
+    tier: GpuTier = Field(default=GpuTier.ANY, strict=False)
     extra_envs: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("num_workers")

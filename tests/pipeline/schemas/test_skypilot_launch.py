@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
     ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
@@ -46,6 +47,14 @@ class TestDefaults:
     def test_default_network_volume_is_none(self) -> None:
         """Network volume defaults to None — templates without the sentinel need no value."""
         assert SkypilotLaunchConfig().network_volume is None
+
+    def test_default_tier_is_any(self) -> None:
+        """GPU filtering defaults to passthrough for existing launches."""
+        assert SkypilotLaunchConfig().tier is GpuTier.ANY
+
+    def test_string_tier_is_coerced_at_config_boundary(self) -> None:
+        """Hydra and YAML tier tokens validate into the domain enum."""
+        assert SkypilotLaunchConfig(tier="low").tier is GpuTier.LOW  # type: ignore[arg-type]
 
 
 class TestValidation:

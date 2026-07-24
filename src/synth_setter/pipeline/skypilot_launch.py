@@ -66,6 +66,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.compute_task import (
+    apply_tier_filter,
     build_task_doc,
     load_compute_option,
     resolve_run_block,
@@ -681,7 +682,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     if sky_cfg.api_server is not None and sky_cfg.local:
         raise ValueError("api_server and local are mutually exclusive")
 
-    compute = sky_cfg.compute
+    compute = apply_tier_filter(sky_cfg.compute, sky_cfg.tier)
     # Fail on cmd/run_script conflicts and volume mismatches before any side effect.
     resolve_run_block(compute, sky_cfg.cmd)
     resolve_volumes(compute, sky_cfg.network_volume)
