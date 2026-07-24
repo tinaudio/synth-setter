@@ -21,6 +21,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
+from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
@@ -49,9 +50,9 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
 _EMBEDDING_E2E_CHECKPOINTS = {
-    "clap": Path.home() / ".cache/synth-setter/encoders/clap-htsat-unfused",
-    "same_s": Path.home() / ".cache/synth-setter/encoders/same-s",
-    "same_l": Path.home() / ".cache/synth-setter/encoders/same-l",
+    "clap": embedding_model_dir("clap-htsat-unfused"),
+    "same_l": embedding_model_dir("same-l"),
+    "same_s": embedding_model_dir("same-s"),
 }
 
 
