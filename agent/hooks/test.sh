@@ -2030,11 +2030,45 @@ T_probe_loop_mode_stops_on_missing_pr() {
 it "probe: --loop stops polling when the PR number is missing" \
   T_probe_loop_mode_stops_on_missing_pr
 
+# Import the real extension so runtime selection proves the required behavior.
+node_imports_pi_readiness_extension() {
+  EXTENSION_PATH="$REPO_ROOT/.pi/extensions/pr-readiness-stop.ts" \
+    "$1" --experimental-strip-types --input-type=module \
+    >/dev/null 2>&1 <<'NODE'
+import { pathToFileURL } from "node:url";
+
+await import(pathToFileURL(process.env.EXTENSION_PATH).href);
+NODE
+}
+
+# Select the first candidate that can execute the Pi readiness adapter.
+select_pi_node() {
+  local candidate node_dir
+  local -a node_dirs
+  IFS=: read -r -a node_dirs <<<"${HOOK_TEST_NODE_PATH:-${PATH}}"
+  for node_dir in "${node_dirs[@]}"; do
+    [[ -n "${node_dir}" ]] || node_dir="."
+    candidate="${node_dir}/node"
+    [[ -x "${candidate}" ]] || continue
+    if node_imports_pi_readiness_extension "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s\n' \
+    'ERROR: no compatible Node found. Install Node with --experimental-strip-types support' \
+    'or set HOOK_TEST_NODE_PATH to a PATH-style list containing one.' >&2
+  return 1
+}
+
+PI_NODE="$(select_pi_node)"
+readonly PI_NODE
+
 run_pi_readiness_adapter() {
   local executions="$1" mode="${2:-tui}"
   EXTENSION_PATH="$REPO_ROOT/.pi/extensions/pr-readiness-stop.ts" \
     EXECUTIONS="$executions" PI_MODE="$mode" \
-    node --experimental-strip-types --input-type=module <<'NODE'
+    "${PI_NODE}" --experimental-strip-types --input-type=module <<'NODE'
 import { pathToFileURL } from "node:url";
 
 const extension = (await import(pathToFileURL(process.env.EXTENSION_PATH).href)).default;
@@ -2092,19 +2126,16 @@ T_pi_readiness_uses_repo_absolute_hook_path() {
   [[ "$(jq '.calls[0].args[0] | startswith("/") and endswith("/agent/hooks/pr-readiness-stop.sh")' <<<"$out")" == "true" ]]
 }
 
-# Pi ships with Node; Python-only CI images omit it.
-if command -v node >/dev/null 2>&1; then
-  it "Pi readiness: settled blocking report re-prompts once" \
-    T_pi_readiness_reprompts_once_per_report
-  it "Pi readiness: passing result re-arms future nudge" \
-    T_pi_readiness_pass_rearms_nudge
-  it "Pi readiness: print mode does not re-prompt" \
-    T_pi_readiness_print_mode_does_not_reprompt
-  it "Pi readiness: warn mode displays an advisory" \
-    T_pi_readiness_warn_mode_notifies_without_reprompt
-  it "Pi readiness: hook path is repository-absolute" \
-    T_pi_readiness_uses_repo_absolute_hook_path
-fi
+it "Pi readiness: settled blocking report re-prompts once" \
+  T_pi_readiness_reprompts_once_per_report
+it "Pi readiness: passing result re-arms future nudge" \
+  T_pi_readiness_pass_rearms_nudge
+it "Pi readiness: print mode does not re-prompt" \
+  T_pi_readiness_print_mode_does_not_reprompt
+it "Pi readiness: warn mode displays an advisory" \
+  T_pi_readiness_warn_mode_notifies_without_reprompt
+it "Pi readiness: hook path is repository-absolute" \
+  T_pi_readiness_uses_repo_absolute_hook_path
 
 T_codex_readiness_notify_uses_shared_hook() {
   grep -Fxq 'notify = ["bash", "agent/hooks/pr-readiness-stop.sh"]' \
