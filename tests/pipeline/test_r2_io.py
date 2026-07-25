@@ -356,6 +356,45 @@ class TestR2StorageOptions:
             "region": "auto",
         }
 
+    def test_separator_framed_rclone_output_builds_storage_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Credentials resolve against rclone builds that frame `config show` in dashes.
+
+        rclone before 1.56 — including the 1.53 apt build in the Ubuntu 22.04 image — wraps the
+        remote in `--------------------` lines (#2428).
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = tmp_path / "old-rclone-bin"
+        bin_dir.mkdir()
+        rclone = bin_dir / "rclone"
+        rclone.write_text(
+            "#!/bin/bash\n"
+            "cat <<'EOF'\n"
+            "--------------------\n"
+            "[r2]\n"
+            "type = s3\n"
+            "provider = Cloudflare\n"
+            "access_key_id = old-access-key\n"
+            "secret_access_key = old-secret-key\n"
+            "endpoint = https://old.r2.cloudflarestorage.com\n"
+            "--------------------\n"
+            "EOF\n",
+            encoding="utf-8",
+        )
+        rclone.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "old-access-key",
+            "secret_access_key": "old-secret-key",
+            "endpoint": "https://old.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://old.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
     def test_rclone_config_output_builds_storage_options(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

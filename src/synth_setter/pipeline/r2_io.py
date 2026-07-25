@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -78,8 +79,24 @@ _DEFAULT_ENV_FILE = _default_env_file()
 _AUTH_PING_TIMEOUT_SECONDS = 45
 _RCLONE_CONFIG_READ_TIMEOUT_SECONDS = 10
 
+_RCLONE_RULE_RE = re.compile(r"^-{2,}$")
+
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
+
+
+def _strip_rclone_rules(config_output: str) -> str:
+    """Drop the horizontal rules rclone before 1.56 wraps around `config show` output.
+
+    The Ubuntu 22.04 image ships that build, and configparser rejects the rules
+    as a missing section header.
+
+    :param config_output: Raw stdout from ``rclone config show <remote>``.
+    :returns: INI-parsable text with rule lines removed.
+    """
+    return "\n".join(
+        line for line in config_output.splitlines() if not _RCLONE_RULE_RE.match(line)
+    )
 
 
 def _storage_config_from_rclone() -> StorageConfig:
@@ -103,7 +120,7 @@ def _storage_config_from_rclone() -> StorageConfig:
 
     parser = configparser.RawConfigParser()
     try:
-        parser.read_string(result.stdout)
+        parser.read_string(_strip_rclone_rules(result.stdout))
         remote = parser[RCLONE_REMOTE]
         return StorageConfig(
             access_key_id=SecretStr(remote.get("access_key_id", "")),
