@@ -447,6 +447,35 @@ class TestR2StorageOptions:
         with pytest.raises(RuntimeError, match="exit code 3"):
             r2_io.r2_storage_options()
 
+    def test_unresolved_error_reports_a_missing_rclone_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A host without rclone is told so, rather than that its config is malformed.
+
+        :param tmp_path: Pytest tmp dir used as an rclone-free PATH.
+        :param monkeypatch: Pytest fixture used to replace PATH.
+        """
+        empty_bin = tmp_path / "empty-bin"
+        empty_bin.mkdir()
+        monkeypatch.setenv("PATH", str(empty_bin))
+
+        with pytest.raises(RuntimeError, match="rclone is not installed"):
+            r2_io.r2_storage_options()
+
+    def test_unresolved_error_reports_unparsable_dump_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-JSON on stdout is named as such, so a future format change is self-diagnosing.
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "chatty-rclone-bin", "echo 'not json at all'\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="unparsable JSON"):
+            r2_io.r2_storage_options()
+
     def test_unresolved_error_names_the_absent_remote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
