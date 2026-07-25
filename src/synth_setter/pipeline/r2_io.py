@@ -8,9 +8,8 @@ validation code can share one implementation. The application reads
 
 from __future__ import annotations
 
-import configparser
+import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -79,49 +78,46 @@ _DEFAULT_ENV_FILE = _default_env_file()
 _AUTH_PING_TIMEOUT_SECONDS = 45
 _RCLONE_CONFIG_READ_TIMEOUT_SECONDS = 10
 
-_RCLONE_RULE_RE = re.compile(r"^-{2,}$")
-
 # IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
 
 
-def _strip_rclone_rules(config_output: str) -> str:
-    """Drop the horizontal rules rclone before 1.56 wraps around `config show` output.
-
-    The Ubuntu 22.04 image ships that build, and configparser rejects the rules
-    as a missing section header.
-
-    :param config_output: Raw stdout from ``rclone config show <remote>``.
-    :returns: INI-parsable text with rule lines removed.
-    """
-    return "\n".join(
-        line for line in config_output.splitlines() if not _RCLONE_RULE_RE.match(line)
-    )
-
-
 def _storage_config_from_rclone() -> StorageConfig:
-    """Load the ``r2`` remote through rclone's standard config resolution.
+    """Load the ``r2`` remote from rclone's own resolved configuration.
+
+    Reads ``config dump`` (stable JSON across builds) rather than ``config show``,
+    whose pretty-printed framing differs by version (#2432). Failure messages name
+    the specific cause and never echo credential values.
 
     :returns: Strict storage config parsed from rclone's resolved remote.
     :raises RuntimeError: The config cannot be read or lacks required S3 fields.
     """
     try:
         result = subprocess.run(  # noqa: S603 — args are literal strings
-            ["rclone", "config", "show", RCLONE_REMOTE],  # noqa: S607
+            ["rclone", "config", "dump"],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
             timeout=_RCLONE_CONFIG_READ_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("rclone configuration is unavailable") from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError("rclone is not installed") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"rclone config dump timed out after {_RCLONE_CONFIG_READ_TIMEOUT_SECONDS}s"
+        ) from exc
     if result.returncode != 0:
-        raise RuntimeError("rclone configuration is unavailable")
+        raise RuntimeError(f"rclone config dump failed with exit code {result.returncode}")
 
-    parser = configparser.RawConfigParser()
     try:
-        parser.read_string(_strip_rclone_rules(result.stdout))
-        remote = parser[RCLONE_REMOTE]
+        remotes = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("rclone config dump returned unparsable JSON") from exc
+    if RCLONE_REMOTE not in remotes:
+        raise RuntimeError(f"rclone has no '{RCLONE_REMOTE}' remote configured")
+
+    remote = remotes[RCLONE_REMOTE]
+    try:
         return StorageConfig(
             access_key_id=SecretStr(remote.get("access_key_id", "")),
             secret_access_key=SecretStr(remote.get("secret_access_key", "")),
@@ -129,8 +125,10 @@ def _storage_config_from_rclone() -> StorageConfig:
             region=remote.get("region", "auto"),
             rclone_type=remote.get("type", "s3"),
         )
-    except (configparser.Error, KeyError, ValidationError) as exc:
-        raise RuntimeError("rclone configuration is incomplete") from exc
+    except (AttributeError, ValidationError) as exc:
+        raise RuntimeError(
+            f"rclone remote '{RCLONE_REMOTE}' is missing required S3 fields"
+        ) from exc
 
 
 def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
@@ -143,14 +141,17 @@ def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
     resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
     try:
         return storage_settings_from_sources(resolved_env_file).to_config()
-    except ValidationError as exc:
+    except ValidationError:
         try:
             return _storage_config_from_rclone()
-        except RuntimeError:
+        except RuntimeError as rclone_exc:
+            # Chain the rclone failure, not the env one: it is the reason a caller with a
+            # configured remote lands here, and `raise ... from` hides whichever it drops.
             raise RuntimeError(
                 f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
-                f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)} or a configured r2 remote."
-            ) from exc
+                f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)} or a configured r2 remote. "
+                f"The rclone fallback failed: {rclone_exc}"
+            ) from rclone_exc
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:

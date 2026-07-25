@@ -231,6 +231,58 @@ class TestFromS3Uri:
             r2_io.from_s3_uri("r2://bucket/not-s3.ckpt")
 
 
+def _write_stub_rclone(bin_dir: Path, script_body: str) -> Path:
+    """Create a stand-in rclone executable so tests drive the real subprocess boundary.
+
+    :param bin_dir: New directory that will contain the stand-in.
+    :param script_body: Bash body appended to the shebang.
+    :returns: The directory to prepend to PATH.
+    """
+    bin_dir.mkdir()
+    rclone = bin_dir / "rclone"
+    rclone.write_text(f"#!/bin/bash\n{script_body}", encoding="utf-8")
+    rclone.chmod(0o755)
+    return bin_dir
+
+
+def _write_pre_1_56_rclone(bin_dir: Path) -> Path:
+    """Create a stand-in reproducing rclone v1.53.3's two config interfaces verbatim.
+
+    `config show` frames the remote in rules (the #2428 trap); `config dump` emits the same JSON as
+    current builds.
+
+    :param bin_dir: New directory that will contain the stand-in.
+    :returns: The directory to prepend to PATH.
+    """
+    return _write_stub_rclone(
+        bin_dir,
+        'if [ "$2" = "dump" ]; then\n'
+        "  cat <<'EOF'\n"
+        "{\n"
+        '    "r2": {\n'
+        '        "access_key_id": "old-access-key",\n'
+        '        "endpoint": "https://old.r2.cloudflarestorage.com",\n'
+        '        "provider": "Cloudflare",\n'
+        '        "secret_access_key": "old-secret-key",\n'
+        '        "type": "s3"\n'
+        "    }\n"
+        "}\n"
+        "EOF\n"
+        "else\n"
+        "  cat <<'EOF'\n"
+        "--------------------\n"
+        "[r2]\n"
+        "type = s3\n"
+        "provider = Cloudflare\n"
+        "access_key_id = old-access-key\n"
+        "secret_access_key = old-secret-key\n"
+        "endpoint = https://old.r2.cloudflarestorage.com\n"
+        "--------------------\n"
+        "EOF\n"
+        "fi\n",
+    )
+
+
 class TestR2StorageOptions:
     """Tests for r2_storage_options — Lance config from supported credential sources."""
 
@@ -356,35 +408,18 @@ class TestR2StorageOptions:
             "region": "auto",
         }
 
-    def test_separator_framed_rclone_output_builds_storage_options(
+    def test_pre_1_56_rclone_build_builds_storage_options(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Credentials resolve against rclone builds that frame `config show` in dashes.
+        """Credentials resolve against rclone builds older than 1.56.
 
-        rclone before 1.56 — including the 1.53 apt build in the Ubuntu 22.04 image — wraps the
-        remote in `--------------------` lines (#2428).
+        The stand-in reproduces v1.53.3's real behavior on both config interfaces — dash-framed
+        `config show`, JSON `config dump` — so it holds whichever one the resolver reads (#2428).
 
         :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
         :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
         """
-        bin_dir = tmp_path / "old-rclone-bin"
-        bin_dir.mkdir()
-        rclone = bin_dir / "rclone"
-        rclone.write_text(
-            "#!/bin/bash\n"
-            "cat <<'EOF'\n"
-            "--------------------\n"
-            "[r2]\n"
-            "type = s3\n"
-            "provider = Cloudflare\n"
-            "access_key_id = old-access-key\n"
-            "secret_access_key = old-secret-key\n"
-            "endpoint = https://old.r2.cloudflarestorage.com\n"
-            "--------------------\n"
-            "EOF\n",
-            encoding="utf-8",
-        )
-        rclone.chmod(0o755)
+        bin_dir = _write_pre_1_56_rclone(tmp_path / "old-rclone-bin")
         monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
 
         assert r2_io.r2_storage_options() == {
@@ -395,6 +430,37 @@ class TestR2StorageOptions:
             "region": "auto",
         }
 
+    def test_unresolved_error_names_the_rclone_failure_reason(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The raised error states why the rclone fallback failed, not just that it did.
+
+        Without this the operator is told to configure a remote they already configured, and the
+        fallback's reason is erased from the traceback entirely (#2431).
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "broken-rclone-bin", "exit 3\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="exit code 3"):
+            r2_io.r2_storage_options()
+
+    def test_unresolved_error_names_the_absent_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config without the expected remote says so, rather than reporting a parse failure.
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "empty-rclone-bin", "echo '{}'\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="no 'r2' remote"):
+            r2_io.r2_storage_options()
+
     def test_rclone_config_output_builds_storage_options(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -403,14 +469,15 @@ class TestR2StorageOptions:
         :param monkeypatch: Pytest fixture used to isolate the subprocess boundary.
         """
         config = subprocess.CompletedProcess(
-            args=["rclone", "config", "show", "r2"],
+            args=["rclone", "config", "dump"],
             returncode=0,
             stdout=(
-                "[r2]\n"
-                "type = s3\n"
-                "access_key_id = parsed-access-key\n"
-                "secret_access_key = parsed-secret-key\n"
-                "endpoint = https://parsed.r2.cloudflarestorage.com\n"
+                '{"r2": {'
+                '"type": "s3", '
+                '"access_key_id": "parsed-access-key", '
+                '"secret_access_key": "parsed-secret-key", '
+                '"endpoint": "https://parsed.r2.cloudflarestorage.com"'
+                "}}"
             ),
             stderr="",
         )
