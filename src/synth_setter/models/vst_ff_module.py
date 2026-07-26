@@ -6,6 +6,12 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
+from synth_setter.conditioning import (
+    Conditioning,
+    resolve_embedding_conditioning,
+    select_conditioning,
+)
+
 
 class VSTFeedForwardModule(LightningModule):
     """Feed-forward LightningModule that regresses VST parameters from audio features."""
@@ -17,6 +23,10 @@ class VSTFeedForwardModule(LightningModule):
         scheduler: torch.optim.lr_scheduler,
         compile: bool = False,
         warmup_steps: int = 0,
+        conditioning: Conditioning = "mel",
+        encoder: torch.nn.Module | None = None,
+        encoder_num_heads: int | None = None,
+        encoder_output_dim: int | None = None,
     ):
         """Wire the regression net and persist the optimizer/scheduler hyperparameters.
 
@@ -26,8 +36,20 @@ class VSTFeedForwardModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param compile: Whether to ``torch.compile`` the net during fit setup.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
+        :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param encoder: Profile-selected embedding encoder. When configured, it replaces
+            the legacy mel network for cached conditioning.
+        :param encoder_num_heads: Model-owned attention head count for sequence encoders.
+        :param encoder_output_dim: Configured cached-encoder output width.
+        :raises ValueError: If cached conditioning has no encoder.
         """
         super().__init__()
+
+        self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
+        if self._embedding_conditioning is not None:
+            if encoder is None:
+                raise ValueError("cached conditioning requires an encoder")
+            net = encoder
 
         self.save_hyperparameters(logger=False)
 
@@ -36,13 +58,21 @@ class VSTFeedForwardModule(LightningModule):
     def on_train_start(self):
         pass
 
+    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        return select_conditioning(batch, self._embedding_conditioning)
+
     def model_step(self, batch: dict[str, torch.Tensor]):
         target_params = batch["params"]
-        mel_spec = batch["mel_spec"]
+        conditioning = self._get_conditioning_from_batch(batch)
 
-        pred_params = self.net(mel_spec)
+        pred_params = self.net(conditioning)
+        if self._embedding_conditioning is not None and pred_params.shape != target_params.shape:
+            raise ValueError(
+                f"cached conditioning encoder output shape {tuple(pred_params.shape)} "
+                f"does not match target shape {tuple(target_params.shape)}"
+            )
         loss = torch.nn.functional.mse_loss(pred_params, target_params)
-        return loss, pred_params, target_params, mel_spec
+        return loss, pred_params, target_params, conditioning
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         loss, *_ = self.model_step(batch)
@@ -76,8 +106,8 @@ class VSTFeedForwardModule(LightningModule):
         pass
 
     def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        mel_spec = batch["mel_spec"]
-        preds = self.net(mel_spec)
+        conditioning = self._get_conditioning_from_batch(batch)
+        preds = self.net(conditioning)
         return (
             preds,
             batch,

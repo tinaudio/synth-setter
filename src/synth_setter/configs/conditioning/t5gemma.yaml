@@ -1,6 +1,6 @@
 # @package _global_
 
-# SA3 T5Gemma conditioning from the fixed-shape `t5gemma` Lance column.
+# Frozen offline T5Gemma parameter-text embeddings from the `t5gemma` Lance column.
 defaults:
   - override /model/encoder: embedpool
 

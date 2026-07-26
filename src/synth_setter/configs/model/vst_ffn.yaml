@@ -1,7 +1,12 @@
 defaults:
+  - encoder: null
   - _self_
 
 _target_: synth_setter.models.vst_ff_module.VSTFeedForwardModule
+
+conditioning: mel
+encoder_num_heads: 1
+encoder_output_dim: ${param_spec_width:${datamodule.param_spec_name}}
 
 net:
   _target_: synth_setter.models.components.transformer.ASTWithProjectionHead
