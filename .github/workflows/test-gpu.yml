@@ -1,16 +1,11 @@
 name: GPU Tests
 
-# Runs @pytest.mark.gpu on a cheap RunPod GPU through SkyPilot. The GitHub-hosted
-# job only orchestrates the worker, retrieves coverage, and guarantees teardown.
-# The worker uses the production dev-snapshot image while SkyPilot syncs this
-# branch checkout as its workdir, preserving production CUDA and Surge XT paths.
+# Runs @pytest.mark.gpu on a cheap RunPod GPU through the shared SkyPilot
+# launcher. Every launch knob lives in the checked-in launch config; this job
+# only supplies the run-scoped coverage key, retrieves the artifact, and
+# publishes it. The managed job owns provisioning and teardown.
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
-        required: false
-        default: "dev-snapshot"
   schedule:
     - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
 
@@ -18,10 +13,9 @@ permissions:
   contents: read
 
 env:
-  CLUSTER_NAME: synth-setter-gpu-${{ github.run_id }}-${{ github.run_attempt }}
   COVERAGE_KEY: ci/gpu/${{ github.run_id }}/${{ github.run_attempt }}/coverage.xml
-  IMAGE_TAG: ${{ inputs.image_tag || 'dev-snapshot' }}
-  JOB_DEADLINE_SECONDS: "5400"
+  LAUNCH_CONFIG: src/synth_setter/configs/launch/gpu-tests-runpod.yaml
+  R2_BUCKET: intermediate-data
 
 jobs:
   run_tests:
@@ -54,150 +48,33 @@ jobs:
       - name: Install SkyPilot dependencies
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
-      - name: Configure RunPod credentials and check balance
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-            bash scripts/skypilot/write_provider_creds.sh --provider runpod
-          else
-            echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider credentials"
-          fi
-          uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"
-
-      # The worker uploads coverage to R2 from an EXIT trap, so partial coverage
-      # survives pytest failure and cluster teardown. The 90-minute poll deadline
-      # includes provisioning; the step/job timeouts bound SDK calls around it.
-      - name: Launch GPU tests on RunPod
+      # The launcher runs cred bootstrap and the RunPod balance preflight itself,
+      # then tails the managed job so this step's exit code is the worker's.
+      - name: Dispatch GPU tests via SkyPilot
         id: launch
         timeout-minutes: 105
         env:
           LOG_PATH: ${{ runner.temp }}/gpu-runpod.log
-          R2_BUCKET: intermediate-data
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          WORKER_GIT_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
-          uv run python - <<'PY' 2>&1 | tee "$LOG_PATH"
-          import os
-          import shutil
-          import time
+          uv run python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG" \
+            --extra-env COVERAGE_KEY "$COVERAGE_KEY" \
+            --extra-env R2_BUCKET "$R2_BUCKET" 2>&1 | tee "$LOG_PATH"
 
-          import sky
-
-          from synth_setter.pipeline.compute_task import (
-              apply_tier_filter,
-              build_task_doc,
-              load_compute_option,
-          )
-          from synth_setter.pipeline.schemas.gpu_tier import GpuTier
-          from synth_setter.pipeline.skypilot_launch import _override_image_id
-
-          cluster = os.environ["CLUSTER_NAME"]
-          deadline = time.monotonic() + int(os.environ["JOB_DEADLINE_SECONDS"])
-          compute = apply_tier_filter(load_compute_option("runpod/smoke"), GpuTier.LOW)
-          rclone_path = shutil.which("rclone")
-          if rclone_path is None:
-              raise SystemExit("setup-r2 did not install rclone")
-          worker_rclone = "/tmp/synth-setter-tools/rclone"
-          worker_command = r"""
-          set -euo pipefail
-          cd ~/sky_workdir
-          chmod u+x /tmp/synth-setter-tools/rclone
-          chmod u+x src/synth_setter/scripts/run-linux-vst-headless.sh
-          export PATH="/tmp/synth-setter-tools:$PATH"
-          export PYTHONPATH="$PWD/src"
-          export SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge\ XT.vst3
-          upload_coverage() {
-            rc=$?
-            trap - EXIT
-            if [[ -s coverage.xml ]]; then
-              rclone copyto coverage.xml "r2:${R2_BUCKET}/${COVERAGE_KEY}" --checksum || rc=$?
-            fi
-            exit "$rc"
-          }
-          trap upload_coverage EXIT
-          rclone version
-          bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-          nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
-          python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; assert torch.cuda.device_count() > 0; print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())'
-          bash src/synth_setter/scripts/run-linux-vst-headless.sh python -X faulthandler -c 'from synth_setter.data.vst.core import load_plugin; plugin = load_plugin("/usr/lib/vst3/Surge XT.vst3"); assert plugin is not None; print("Surge XT loaded")'
-          bash src/synth_setter/scripts/run-linux-vst-headless.sh pytest -vv -s -m gpu --cov=src --cov-branch --cov-report=xml --cov-report=term
-          test -s coverage.xml
-          """
-          task = sky.Task.from_yaml_config(build_task_doc(compute, cmd=worker_command))
-          _override_image_id(
-              task,
-              f"tinaudio/synth-setter:{os.environ['IMAGE_TAG']}",
-          )
-          task.workdir = os.getcwd()
-          task.update_file_mounts({worker_rclone: rclone_path})
-          task.update_envs(
-              {
-                  "COVERAGE_KEY": os.environ["COVERAGE_KEY"],
-                  "R2_BUCKET": os.environ["R2_BUCKET"],
-                  "RCLONE_CONFIG_R2_TYPE": "s3",
-                  "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ[
-                      "RCLONE_CONFIG_R2_ACCESS_KEY_ID"
-                  ],
-                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ[
-                      "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"
-                  ],
-                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ[
-                      "RCLONE_CONFIG_R2_ENDPOINT"
-                  ],
-              }
-          )
-          print(f"[gpu] launching cluster={cluster} image={os.environ['IMAGE_TAG']}")
-          launch_request = sky.launch(
-              task,
-              cluster_name=cluster,
-              idle_minutes_to_autostop=5,
-              down=True,
-          )
-          job_id, _ = sky.stream_and_get(launch_request)
-          if job_id is None:
-              raise SystemExit("SkyPilot launch returned no job ID")
-          terminal = {
-              sky.JobStatus.SUCCEEDED,
-              sky.JobStatus.FAILED,
-              sky.JobStatus.FAILED_SETUP,
-              sky.JobStatus.FAILED_DRIVER,
-              sky.JobStatus.CANCELLED,
-          }
-          final = None
-          while time.monotonic() < deadline:
-              statuses = sky.stream_and_get(sky.job_status(cluster, [job_id])) or {}
-              status = statuses.get(job_id)
-              print(f"[gpu] status={status.name if status else 'UNKNOWN'}")
-              if status in terminal:
-                  final = status
-                  break
-              time.sleep(10)
-          try:
-              sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=False)
-          except Exception as exc:
-              print(f"[gpu] tail_logs failed: {exc}")
-          if final != sky.JobStatus.SUCCEEDED:
-              raise SystemExit(
-                  f"GPU worker did not succeed within the polling deadline: {final}"
-              )
-          print("[gpu] worker completed successfully")
-          PY
-
-      - name: Download remote coverage
+      # moveto, not copyto: retrieving the run-scoped object also cleans it up,
+      # so a skipped cleanup step can never leak coverage blobs into R2.
+      - name: Retrieve remote coverage
         if: always()
         env:
           LAUNCH_OUTCOME: ${{ steps.launch.outcome }}
-          R2_BUCKET: intermediate-data
         run: |
           set -euo pipefail
           remote="r2:${R2_BUCKET}/${COVERAGE_KEY}"
-          if rclone copyto "$remote" coverage.xml --checksum && [[ -s coverage.xml ]]; then
-            echo "Downloaded remote coverage.xml"
+          if rclone moveto "$remote" coverage.xml --checksum && [[ -s coverage.xml ]]; then
+            echo "Retrieved remote coverage.xml"
           elif [[ "$LAUNCH_OUTCOME" == "success" ]]; then
             echo "::error::GPU worker succeeded without a retrievable coverage.xml"
             exit 1
@@ -205,48 +82,12 @@ jobs:
             echo "No partial coverage artifact was produced before the worker failed"
           fi
 
-      - name: Tear down RunPod worker
-        if: always()
-        timeout-minutes: 10
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          uv run python - <<'PY'
-          import os
-
-          import sky
-
-          cluster = os.environ["CLUSTER_NAME"]
-          print(f"[gpu] tearing down cluster={cluster}")
-          try:
-              sky.stream_and_get(sky.down(cluster))
-          except Exception as exc:
-              print(f"[gpu] down reported: {exc}")
-          statuses = sky.stream_and_get(
-              sky.status(cluster_names=[cluster], refresh=sky.StatusRefreshMode.FORCE)
-          ) or []
-          remaining = [entry for entry in statuses if getattr(entry, "name", None) == cluster]
-          if remaining:
-              raise SystemExit(f"RunPod cluster still present after teardown: {cluster}")
-          print(f"[gpu] teardown verified for {cluster}")
-          PY
-
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
           flags: unit-gpu
           token: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Delete remote coverage object
-        if: always()
-        env:
-          R2_BUCKET: intermediate-data
-        run: |
-          set -euo pipefail
-          rclone deletefile "r2:${R2_BUCKET}/${COVERAGE_KEY}" --checksum 2>/dev/null || true
 
       - name: Upload run metadata
         if: always()
