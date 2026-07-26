@@ -22,8 +22,10 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig
+from pydantic import ValidationError
 from structlog.testing import capture_logs
 
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -31,7 +33,9 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    T5GEMMA_FIELD,
 )
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
@@ -46,7 +50,9 @@ from synth_setter.pipeline.data.add_embeddings import (
     EmbeddingSpec,
     Encoder,
     IndexSpec,
+    ParamTextEncodeFn,
     _configure_lance_logging,
+    _load_t5gemma_spec_encoder,
     _downmix_to_mono,
     _require_extras,
     _resolve_clap_checkpoint,
@@ -153,8 +159,8 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
     :returns: Spec using a fake encoder and no optional-extra gate.
     """
 
-    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
-        del checkpoint, device
+    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
+        del checkpoint, config
         if events is not None:
             events.append(f"load:{name}")
         return _encoder_for(name)
@@ -263,7 +269,7 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l"}
+    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
@@ -274,12 +280,16 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].index == IndexSpec(
         pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
     )
+    assert EMBEDDING_REGISTRY["t5gemma"].index is None
+    assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
+    assert EMBEDDING_REGISTRY["t5gemma"].requires_extra == "sa3"
     assert EMBEDDING_REGISTRY["same_s"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["same_l"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
+    assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -543,8 +553,8 @@ def test_write_columns_with_mean_pool_writes_float32_companion_from_sequence(
     audio = _audio_dataset(uri, rows=4)
     base = _fake_spec("m2l")
 
-    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
-        del checkpoint, device
+    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
+        del checkpoint, config
         return _temporal_m2l
 
     _write_columns(
@@ -1006,8 +1016,8 @@ def test_add_embeddings_with_checkpoint_override_threads_selected_source(
     seen: list[tuple[str, str | None]] = []
     spec = _fake_spec("same_s")
 
-    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
-        seen.append((checkpoint, device))
+    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
+        seen.append((checkpoint, config.device))
         return _fake_same(0.25)
 
     monkeypatch.setitem(EMBEDDING_REGISTRY, "same_s", replace(spec, load_encoder=load))
@@ -1308,8 +1318,8 @@ def test_m2l_exact_then_ann_search_with_stored_vector_returns_queried_row(
     _audio_dataset(uri, rows=300)
     base = _fake_spec("m2l")
 
-    def load(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
-        del checkpoint, device
+    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
+        del checkpoint, config
         return _temporal_m2l
 
     spec = replace(base, load_encoder=load)
@@ -1811,10 +1821,10 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
         spec = _fake_spec(name)
 
         def load(
-            checkpoint: str, device: str | None, *, registry_name: str = name
+            checkpoint: str, config: AddEmbeddingsConfig, *, registry_name: str = name
         ) -> Callable[..., np.ndarray]:
             del checkpoint
-            selected.append((registry_name, device))
+            selected.append((registry_name, config.device))
             return _encoder_for(registry_name)
 
         monkeypatch.setitem(EMBEDDING_REGISTRY, name, replace(spec, load_encoder=load))
@@ -2016,9 +2026,9 @@ def test_add_embeddings_main_with_registry_mode_writes_exact_columns(
         spec = _fake_spec(name)
 
         def load(
-            checkpoint: str, device: str | None, *, registry_name: str = name
+            checkpoint: str, config: AddEmbeddingsConfig, *, registry_name: str = name
         ) -> Callable[..., np.ndarray]:
-            del device
+            del config
             seen_checkpoints.append((registry_name, checkpoint))
             return _encoder_for(registry_name)
 
@@ -2110,3 +2120,200 @@ def test_registry_default_checkpoints_match_public_sources() -> None:
     assert EMBEDDING_REGISTRY["clap"].default_checkpoint == DEFAULT_CLAP_CHECKPOINT
     assert EMBEDDING_REGISTRY["same_s"].default_checkpoint == DEFAULT_SAME_S_CHECKPOINT
     assert EMBEDDING_REGISTRY["same_l"].default_checkpoint == DEFAULT_SAME_L_CHECKPOINT
+
+
+def _install_fake_t5gemma(
+    monkeypatch: pytest.MonkeyPatch, seen: list[np.ndarray] | None = None
+) -> None:
+    """Install a dependency-free t5gemma entry recording its encoder input.
+
+    :param monkeypatch: Fixture restoring the registry entry after the test.
+    :param seen: Optional list receiving each encoded param batch.
+    """
+
+    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
+        del checkpoint, config
+
+        def encode(rows: np.ndarray) -> np.ndarray:
+            if seen is not None:
+                seen.append(rows)
+            return np.zeros((len(rows), 4, 5), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "t5gemma",
+        replace(EMBEDDING_REGISTRY["t5gemma"], requires_extra=None, load_encoder=load),
+    )
+
+
+def test_require_extras_with_missing_sa3_dependency_names_uv_sync_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sa3 extra gates on the stable_audio_3 import name, not the extra name.
+
+    :param monkeypatch: Fixture hiding the SA3 dependency.
+    """
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name: str) -> object:
+        return None if name == "stable_audio_3" else real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+    with pytest.raises(ImportError, match="uv sync --extra sa3"):
+        _require_extras([EMBEDDING_REGISTRY["t5gemma"]])
+
+
+def test_add_embeddings_with_param_array_spec_feeds_encoder_param_rows_not_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A param-sourced embedding reads param_array, leaving audio untouched.
+
+    :param tmp_path: Scratch directory for the shard.
+    :param monkeypatch: Fixture installing the dependency-free t5gemma entry.
+    """
+    uri = tmp_path / "t5gemma.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    seen: list[np.ndarray] = []
+    _install_fake_t5gemma(monkeypatch, seen)
+
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("t5gemma",),
+            build_index=False,
+            param_spec_name="surge_simple",
+        )
+    )
+
+    expected = (
+        lance.dataset(str(uri))
+        .to_table(columns=[PARAM_ARRAY_FIELD])
+        .column(PARAM_ARRAY_FIELD)
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    np.testing.assert_array_equal(seen[-1], expected)
+
+
+def test_add_embeddings_with_param_array_spec_writes_fixed_shape_tensor_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The param-sourced embedding lands as a fixed-shape tensor column.
+
+    :param tmp_path: Scratch directory for the shard.
+    :param monkeypatch: Fixture installing the dependency-free t5gemma entry.
+    """
+    uri = tmp_path / "t5gemma.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_t5gemma(monkeypatch)
+
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("t5gemma",),
+            build_index=False,
+            param_spec_name="surge_simple",
+        )
+    )
+
+    column_type = lance.dataset(str(uri)).schema.field(T5GEMMA_FIELD).type
+    assert isinstance(column_type, pa.FixedShapeTensorType)
+    assert column_type.shape == [4, 5]
+
+
+def test_t5gemma_encoder_with_param_rows_wider_than_its_spec_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A param spec that does not describe the dataset fails instead of mislabeling it.
+
+    :param monkeypatch: Fixture replacing the heavyweight text-model load.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder",
+        lambda checkpoint, device: (lambda prompts: np.zeros((len(prompts), 4, 5), np.float32)),
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
+    )
+    encode = cast("ParamTextEncodeFn", _load_t5gemma_spec_encoder("unused-checkpoint", config))
+    surge_4_width = resolve_param_spec(ParamSpecName("surge_4")).encoded_width
+
+    with pytest.raises(ValueError, match="encoded width"):
+        encode(np.zeros((2, surge_4_width + 1), dtype=np.float32))
+
+
+def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Correctly shaped param rows become one prompt per row.
+
+    :param monkeypatch: Fixture replacing the heavyweight text-model load.
+    """
+    seen: list[list[str]] = []
+
+    def fake_load(checkpoint: str, device: str) -> Callable[[list[str]], np.ndarray]:
+        del checkpoint, device
+
+        def encode_text(prompts: list[str]) -> np.ndarray:
+            seen.append(prompts)
+            return np.zeros((len(prompts), 4, 5), dtype=np.float32)
+
+        return encode_text
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
+    )
+    spec = resolve_param_spec(ParamSpecName("surge_4"))
+    encode = cast("ParamTextEncodeFn", _load_t5gemma_spec_encoder("unused-checkpoint", config))
+
+    encode(np.zeros((3, spec.encoded_width), dtype=np.float32))
+
+    assert seen == [[", ".join(spec.names)] * 3]
+
+
+def test_add_embeddings_config_with_t5gemma_and_no_param_spec_raises() -> None:
+    """A param-sourced embedding cannot run without knowing its parameter space."""
+    with pytest.raises(ValidationError, match="require param_spec_name"):
+        AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("t5gemma",))
+
+
+def test_add_embeddings_config_with_audio_embeddings_needs_no_param_spec() -> None:
+    """Audio-sourced embeddings are unaffected by the param-spec requirement."""
+    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
+
+    assert config.param_spec_name is None
+
+
+def test_add_embeddings_config_with_unknown_param_spec_name_raises() -> None:
+    """An unregistered param spec is rejected at config time."""
+    with pytest.raises(ValidationError, match="param_spec_name"):
+        AddEmbeddingsConfig(
+            lance_uri="x.lance", embeddings=("t5gemma",), param_spec_name="not_a_synth"
+        )
+
+
+def test_add_embeddings_config_with_unknown_text_normalizer_raises() -> None:
+    """An unregistered text normalizer is rejected at config time."""
+    with pytest.raises(ValidationError, match="param_text_normalizer"):
+        AddEmbeddingsConfig(
+            lance_uri="x.lance",
+            embeddings=("t5gemma",),
+            param_spec_name="surge_4",
+            param_text_normalizer="not_a_strategy",
+        )
+
+
+def test_add_embeddings_config_composition_defaults_the_text_normalizer() -> None:
+    """The shipped Hydra config exposes the param-text defaults."""
+    cfg = _compose_add_embeddings()
+    try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert (config.param_spec_name, config.param_text_normalizer) == (None, "param_names")
