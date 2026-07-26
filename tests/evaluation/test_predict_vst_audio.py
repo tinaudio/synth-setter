@@ -10,6 +10,7 @@ file shape and finiteness.
 from __future__ import annotations
 
 import os
+import sys
 
 # Pin the headless backend before ``predict_vst_audio`` triggers ``pyplot`` import.
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -376,7 +377,14 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     [
         ("never", [False, False]),
         ("once", [True, False]),
-        ("render", [True, True]),
+        pytest.param(
+            "render",
+            [True, True],
+            marks=pytest.mark.skipif(
+                sys.platform == "darwin",
+                reason='gui_toggle_cadence="render" is unsupported on Darwin',
+            ),
+        ),
     ],
 )
 def test_main_forwards_gui_warmup_cadence_to_renderer(
