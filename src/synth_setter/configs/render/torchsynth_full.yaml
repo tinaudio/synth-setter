@@ -3,8 +3,6 @@
 defaults:
   - synth: torchsynth_full
   - _self_
-
-renderer_version: "1.0.2"
 renderer_backend: torchsynth
 sample_rate: 44100
 channels: 2

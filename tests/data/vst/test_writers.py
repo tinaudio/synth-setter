@@ -38,10 +38,13 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:
     :return: A ``RenderConfig`` ready for the writer tests.
     """
     kwargs: dict[str, object] = {
-        "plugin_path": "plugins/Surge XT.vst3",
-        "plugin_state_path": "presets/surge-base.vstpreset",
-        "param_spec_name": "surge_simple",
-        "renderer_version": "1.3.4",
+        "synth": {
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-base.vstpreset",
+            "synth_version": "1.3.4",
+        },
         "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
@@ -152,10 +155,9 @@ def _cli_argv(data_file: str) -> list[str]:
                 "param_spec_name": "surge_simple",
                 "plugin_path": "plugins/Surge XT.vst3",
                 "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
             }
         ),
-        "--renderer_version",
-        "1.3.4",
         "--sample_rate",
         "44100",
         "--channels",

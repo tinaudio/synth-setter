@@ -1,8 +1,7 @@
-"""Tests for ``RenderConfig``'s nested synth identity and its legacy-shape bridge.
+"""Tests for ``RenderConfig``'s nested synth identity.
 
-Identity moved from three flat fields onto a nested ``SynthSpec``. Read access is
-preserved by properties, and already-serialized specs (which carry the flat keys)
-must still parse, so both shapes are exercised here.
+Identity fields are nested under ``SynthSpec`` while flat read properties preserve
+access to the plugin and parameter-spec fields used throughout rendering.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
 
 _KNOBS: dict[str, Any] = {
-    "renderer_version": "1.3.4",
     "sample_rate": 44100,
     "channels": 2,
     "velocity": 100,
@@ -28,23 +26,12 @@ _KNOBS: dict[str, Any] = {
 }
 
 
-def _legacy_payload(**overrides: Any) -> dict[str, Any]:
-    r"""Build a render payload in the pre-nesting flat shape.
-
-    :param \*\*overrides: Fields replacing the Surge XT defaults.
-    :returns: A render mapping using flat identity keys.
-    """
-    return {
-        **_KNOBS,
-        "param_spec_name": "surge_xt",
-        "plugin_path": "plugins/Surge XT.vst3",
-        "plugin_state_path": "presets/surge-base.vstpreset",
-        **overrides,
-    }
-
-
 class TestNestedIdentity:
     """Construction through the nested field and the properties that read it."""
+
+    def test_renderer_version_is_not_a_render_config_field(self) -> None:
+        """Artifact versioning belongs to synth identity, not render mechanics."""
+        assert "renderer_version" not in RenderConfig.model_fields
 
     def test_nested_synth_is_readable_through_the_flat_properties(self) -> None:
         """The three former fields still read, now delegating to the nested identity."""
@@ -61,6 +48,7 @@ class TestNestedIdentity:
             param_spec_name=ParamSpecName("obxf"),
             plugin_path="plugins/OB-Xf.vst3",
             plugin_state_path="presets/obxf-bright.vstpreset",
+            synth_version="1.0.3",
         )
 
         cfg = RenderConfig(synth=variant, **_KNOBS)
@@ -78,32 +66,30 @@ class TestNestedIdentity:
             )
 
 
-class TestLegacySpecCompatibility:
-    """Already-serialized specs on R2 carry flat identity keys and must still parse."""
+class TestBreakingVersionMigration:
+    """The removed render-level version cannot satisfy synth identity."""
 
-    def test_flat_identity_keys_lift_into_the_nested_field(self) -> None:
-        """A pre-nesting payload parses, with identity hoisted onto ``synth``."""
-        cfg = RenderConfig(**_legacy_payload())
+    def test_old_renderer_version_cannot_supply_missing_synth_version(self) -> None:
+        """The removed render-level pin is ignored rather than promoted."""
+        synth = SYNTHS[SynthName("surge_xt")].model_dump(exclude={"synth_version"})
 
-        assert cfg.synth.param_spec_name == "surge_xt"
-        assert cfg.synth.plugin_state_path == "presets/surge-base.vstpreset"
+        with pytest.raises(ValidationError, match="synth_version"):
+            RenderConfig(
+                synth=synth,  # type: ignore[arg-type]
+                renderer_version="1.3.4",  # type: ignore[call-arg]
+                **_KNOBS,
+            )
 
-    def test_lifted_entry_name_mirrors_the_param_spec_name(self) -> None:
-        """Flat payloads name no synth separately, so the key mirrors the spec."""
-        cfg = RenderConfig(**_legacy_payload())
+    def test_old_renderer_version_is_ignored_when_synth_version_is_present(self) -> None:
+        """A stale render-level pin cannot override the canonical synth identity."""
+        cfg = RenderConfig(
+            synth=SYNTHS[SynthName("obxf")],
+            renderer_version="9.9.9",  # type: ignore[call-arg]
+            **_KNOBS,
+        )
 
-        assert cfg.synth.name == "surge_xt"
-
-    def test_a_stub_plugin_path_survives_the_lift(self) -> None:
-        """Per-run plugin overrides in old specs are preserved, not replaced by defaults."""
-        cfg = RenderConfig(**_legacy_payload(plugin_path="plugins/TestPlugin.vst3"))
-
-        assert cfg.plugin_path == "plugins/TestPlugin.vst3"
-
-    def test_mixing_both_shapes_is_rejected(self) -> None:
-        """A payload carrying both shapes is ambiguous rather than silently preferring one."""
-        with pytest.raises(ValidationError):
-            RenderConfig(synth=SYNTHS[SynthName("obxf")], **_legacy_payload())
+        assert cfg.synth.synth_version == "1.0.3"
+        assert "renderer_version" not in cfg.model_dump()
 
     def test_round_trip_through_json_preserves_identity(self) -> None:
         """A dumped config reparses, so spec upload and re-read stay lossless."""

@@ -45,10 +45,13 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
         "base_seed": 42,
         "r2": {"bucket": "intermediate-data"},
         "render": {
-            "plugin_path": plugin_path,
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": plugin_path,
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

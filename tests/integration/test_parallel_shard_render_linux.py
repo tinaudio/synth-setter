@@ -126,8 +126,8 @@ def _build_real_surge_spec(
         shards, and ``_SAMPLES_PER_SHARD`` samples per shard.
     """
     # Resolve the version at runtime because fallback plugin loading requires Xvfb.
-    renderer_version = os.environ.get("SYNTH_SETTER_RENDERER_VERSION") or (
-        extract_renderer_version(Path(PLUGIN_PATH))
+    synth_version = os.environ.get("SYNTH_SETTER_SYNTH_VERSION") or extract_renderer_version(
+        Path(PLUGIN_PATH)
     )
     task_name = f"parallel-xvfb-stress-{gui_toggle_cadence}-{plugin_reload_cadence}"
     run_id = f"{task_name}-20260520T000000000Z"
@@ -145,10 +145,13 @@ def _build_real_surge_spec(
             "prefix": f"data/{task_name}/{run_id}/",
         },
         "render": {
-            "plugin_path": PLUGIN_PATH,
-            "plugin_state_path": PRESET_PATH,
-            "param_spec_name": "surge_simple",
-            "renderer_version": renderer_version,
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": PLUGIN_PATH,
+                "plugin_state_path": PRESET_PATH,
+                "synth_version": synth_version,
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

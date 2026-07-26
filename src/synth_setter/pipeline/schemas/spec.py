@@ -213,10 +213,6 @@ class ShardSpec(BaseModel):
     )
 
 
-# Identity keys as pre-nesting specs on R2 spell them, hoisted onto ``RenderConfig.synth``.
-_LEGACY_IDENTITY_KEYS = ("param_spec_name", "plugin_path", "plugin_state_path")
-
-
 class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
@@ -246,14 +242,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     synth: SynthSpec = Field(
-        description=(
-            "Synth identity: param spec, plugin bundle, and baseline preset. Accepts the "
-            "pre-nesting flat keys, which are lifted onto this field so specs already "
-            "written to R2 still parse."
-        )
-    )
-    renderer_version: str = Field(
-        description="Renderer code-path version stamp recorded in shard provenance."
+        description="Synth identity: param spec, artifact version, plugin, and baseline preset."
     )
     renderer_backend: RendererBackend = Field(
         default="pedalboard",
@@ -362,36 +351,17 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="before")
     @classmethod
-    def _lift_legacy_synth_identity(cls, data: Any) -> Any:
-        """Hoist pre-nesting flat identity keys onto ``synth``.
+    def _ignore_removed_renderer_version(cls, data: Any) -> Any:
+        """Discard the removed render-level version without promoting it.
 
-        Specs already written to R2 carry ``param_spec_name`` / ``plugin_path`` /
-        ``plugin_state_path`` at the top level. They must be popped, not copied:
-        ``extra="forbid"`` rejects whatever is left over.
-
-        :param data: Raw input, mapping-shaped for a legacy payload.
-        :returns: The input with flat identity keys folded into ``synth``.
-        :raises ValueError: Both shapes are present, so identity is ambiguous.
+        :param data: Raw render input.
+        :returns: A copy without ``renderer_version``, or a non-mapping input unchanged.
         """
         if not isinstance(data, dict):
             return data
-        legacy = {k: data.pop(k) for k in _LEGACY_IDENTITY_KEYS if k in data}
-        if not legacy:
-            return data
-        if "synth" in data:
-            raise ValueError(
-                "render carries both a nested 'synth' and legacy flat identity keys "
-                f"({sorted(legacy)}); provide exactly one"
-            )
-        param_spec_name = legacy.get("param_spec_name")
-        data["synth"] = {
-            # Flat payloads name no synth separately, so the key mirrors the spec.
-            "name": param_spec_name,
-            "param_spec_name": param_spec_name,
-            "plugin_path": legacy.get("plugin_path", ""),
-            "plugin_state_path": legacy.get("plugin_state_path", ""),
-        }
-        return data
+        normalized = data.copy()
+        normalized.pop("renderer_version", None)
+        return normalized
 
     @property
     def param_spec_name(self) -> ValidatedParamSpecName:
@@ -432,8 +402,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError("samples_per_render_batch must be positive")
         if self.samples_per_shard <= 0:
             raise ValueError("samples_per_shard must be positive")
-        if not self.renderer_version.strip():
-            raise ValueError("renderer_version must not be blank")
         return self
 
     @model_validator(mode="after")

@@ -59,10 +59,13 @@ def tiny_lance_spec(
             "base_seed": 42,
             "r2": {"bucket": "intermediate-data"},
             "render": {
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "param_spec_name": "surge_simple",
-                "renderer_version": "1.3.4",
+                "synth": {
+                    "name": "surge_simple",
+                    "param_spec_name": "surge_simple",
+                    "plugin_path": "plugins/Surge XT.vst3",
+                    "plugin_state_path": "presets/surge-base.vstpreset",
+                    "synth_version": "1.3.4",
+                },
                 "sample_rate": 8000,
                 "channels": 2,
                 "velocity": 100,

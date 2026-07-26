@@ -3,5 +3,3 @@ defaults:
   - vst
   - synth: obxf
   - _self_
-
-renderer_version: "1.0.3"

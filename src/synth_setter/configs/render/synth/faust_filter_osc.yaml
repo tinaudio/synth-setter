@@ -3,3 +3,4 @@ name: faust_filter_osc
 param_spec_name: faust_filter_osc
 plugin_path: faust
 plugin_state_path: ""
+synth_version: "0.8.3"

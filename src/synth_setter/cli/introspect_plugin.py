@@ -70,7 +70,7 @@ class _RegisterTarget:
 
     .. attribute :: synth_source
 
-       The identity-table source with the synth's row already added.
+       Identity-table source to extend once the plugin version is known.
 
     .. attribute :: recorded_plugin_path
 
@@ -249,6 +249,8 @@ def main(
 
     drafted, skipped = draft_synth_params(plugin)
     version = _plugin_version(plugin_path)
+    if target is not None:
+        synth_source = _register_synth_source(target, spec_name, version)
     source = render_param_spec_module(
         spec_name,
         plugin_name=plugin.name,
@@ -273,7 +275,7 @@ def main(
     click.echo(f"Baseline    : {preset_dest}")
     click.echo(f"Param table : {csv_dest}")
     if target is not None:
-        _write_register_wiring(target, spec_name, plugin_path, version)
+        _write_register_wiring(target, spec_name, version, synth_source=synth_source)
         if verify:
             _run_verification(target, spec_name, plugin)
     else:
@@ -331,49 +333,67 @@ def _resolve_register_target(
     try:
         paths = registration_paths(root, spec_name)
         updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
-        synth_updated = synths_with_spec(
-            paths.synth_module.read_text(encoding="utf-8"), spec_name, plugin_path=recorded_path
-        )
+        synth_source = paths.synth_module.read_text(encoding="utf-8")
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
     return _RegisterTarget(
         root=root,
         paths=paths,
         registry_source=updated,
-        synth_source=synth_updated,
+        synth_source=synth_source,
         recorded_plugin_path=recorded_path,
     )
 
 
+def _register_synth_source(target: _RegisterTarget, spec_name: str, version: str) -> str:
+    """Validate and render the identity-table update before writing artifacts.
+
+    :param target: Pre-computed checkout wiring.
+    :param spec_name: Registry key for the synth.
+    :param version: Plugin version pinned in synth identity.
+    :returns: Updated identity-table source.
+    :raises click.UsageError: Existing identity wiring conflicts with the plugin.
+    """
+    try:
+        return synths_with_spec(
+            target.synth_source,
+            spec_name,
+            plugin_path=target.recorded_plugin_path,
+            synth_version=version,
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+
 def _write_register_wiring(
-    target: _RegisterTarget, spec_name: str, plugin_path: str, version: str
+    target: _RegisterTarget, spec_name: str, version: str, *, synth_source: str
 ) -> None:
     """Write the render config + registry entries and echo the run instructions.
 
     :param target: Pre-computed checkout wiring.
     :param spec_name: Registry key for the synth.
-    :param plugin_path: Plugin path as given on the CLI; recorded relative to the checkout when it
-        sits inside it.
-    :param version: Plugin version pinned in the render config.
+    :param version: Plugin version pinned in synth identity.
+    :param synth_source: Prevalidated identity-table source to write.
     """
     render_config = target.paths.render_config
     render_config.parent.mkdir(parents=True, exist_ok=True)
-    render_config.write_text(
-        render_config_yaml(spec_name, renderer_version=version), encoding="utf-8"
-    )
+    render_config.write_text(render_config_yaml(spec_name), encoding="utf-8")
     synth_config = target.paths.synth_config
     synth_config.parent.mkdir(parents=True, exist_ok=True)
     synth_config.write_text(
-        synth_group_yaml(spec_name, plugin_path=target.recorded_plugin_path), encoding="utf-8"
+        synth_group_yaml(
+            spec_name, plugin_path=target.recorded_plugin_path, synth_version=version
+        ),
+        encoding="utf-8",
     )
-    target.paths.synth_module.write_text(target.synth_source, encoding="utf-8")
+    target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
     click.echo(f"Render cfg  : {render_config}")
     click.echo(f"Synth cfg   : {synth_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(
-            f"WARNING: renderer_version is 'unknown' — edit {render_config} to pin the "
+            f"WARNING: synth_version is 'unknown' — edit {synth_config} to pin the "
             "real plugin version before generating; generate_dataset cross-checks it "
             "against the loaded plugin.",
             err=True,

@@ -52,7 +52,7 @@ from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_RENDERER_VERSION,
+    TEST_SYNTH_VERSION,
     VST_SUBPROCESS_TIMEOUT_SECONDS,
 )
 
@@ -117,10 +117,13 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
         "mask_degenerate_bins": True,
         "r2": {"bucket": "intermediate-data", "prefix": prefix},
         "render": {
-            "plugin_path": PLUGIN_PATH,
-            "plugin_state_path": TEST_PRESET_PATH,
-            "param_spec_name": TEST_PARAM_SPEC_NAME,
-            "renderer_version": TEST_RENDERER_VERSION,
+            "synth": {
+                "name": TEST_PARAM_SPEC_NAME,
+                "param_spec_name": TEST_PARAM_SPEC_NAME,
+                "plugin_path": PLUGIN_PATH,
+                "plugin_state_path": TEST_PRESET_PATH,
+                "synth_version": TEST_SYNTH_VERSION,
+            },
             "sample_rate": _SAMPLE_RATE,
             "channels": _CHANNELS,
             "velocity": 100,

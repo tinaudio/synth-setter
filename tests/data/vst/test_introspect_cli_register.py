@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 
 import synth_setter
 from synth_setter.cli.introspect_plugin import main
+from synth_setter.data.vst.registration import synths_with_spec
 from synth_setter.data.vst.verification import VerificationReport
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests.data.vst._introspect_fakes import (
@@ -141,15 +142,17 @@ def test_register_adds_spec_to_the_registry_module(
     assert_ruff_format_clean(registry)
 
     synths = (checkout / "src/synth_setter/synth_spec.py").read_text()
-    assert '"fake_synth": ("fake_synth", "plugins/fake.vst3",' in synths
+    assert '"fake_synth": (' in synths
+    assert '        "plugins/fake.vst3",' in synths
     assert "presets/fake_synth-base.vstpreset" in synths
+    assert '        "9.9.9",' in synths
     assert_ruff_format_clean(synths)
 
 
-def test_register_render_config_pins_relative_plugin_path_and_version(
+def test_register_synth_config_pins_relative_plugin_path_and_version(
     checkout: Path, fake_plugin: IntrospectFakePlugin
 ) -> None:
-    """The render config records the checkout-relative plugin path and bundle version.
+    """The synth config records the checkout-relative plugin path and bundle version.
 
     :param checkout: Skeleton checkout fixture.
     :param fake_plugin: Patches the plugin-load boundary.
@@ -158,7 +161,8 @@ def test_register_render_config_pins_relative_plugin_path_and_version(
 
     cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
     synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
-    assert cfg.renderer_version == "9.9.9"
+    assert cfg.defaults == ["vst", {"synth": "fake_synth"}, "_self_"]
+    assert synth.synth_version == "9.9.9"
     assert synth.plugin_path == "plugins/fake.vst3"
     assert synth.param_spec_name == "fake_synth"
     assert synth.plugin_state_path == "presets/fake_synth-base.vstpreset"
@@ -177,12 +181,12 @@ def test_register_reports_the_generate_dataset_next_step(
     assert "render=fake_synth" in result.output
 
 
-def test_register_warns_when_renderer_version_is_unknown(
+def test_register_warns_when_synth_version_is_unknown(
     checkout: Path, fake_plugin: IntrospectFakePlugin
 ) -> None:
     """A bundle without version metadata still registers, but warns about the pin.
 
-    ``generate_dataset`` cross-checks ``renderer_version`` against the loaded
+    ``generate_dataset`` cross-checks ``synth_version`` against the loaded
     plugin, so an ``"unknown"`` pin must be surfaced for hand-editing.
 
     :param checkout: Skeleton checkout fixture.
@@ -206,9 +210,9 @@ def test_register_warns_when_renderer_version_is_unknown(
     )
 
     assert result.exit_code == 0, result.output
-    assert "WARNING: renderer_version" in result.output
-    cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
-    assert cfg.renderer_version == "unknown"
+    assert "WARNING: synth_version" in result.output
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
+    assert synth.synth_version == "unknown"
 
 
 def test_register_refuses_existing_spec_module_without_force(checkout: Path) -> None:
@@ -248,6 +252,33 @@ def test_register_force_rerun_converges_on_the_same_registry(
     assert second.exit_code == 0, second.output
     registry_twice = (checkout / "src/synth_setter/data/vst/param_spec_registry.py").read_text()
     assert registry_twice == registry_once
+
+
+def test_register_conflicting_synth_identity_fails_before_artifact_writes(
+    checkout: Path, fake_plugin: IntrospectFakePlugin
+) -> None:
+    """A version conflict is a usage error and leaves draft artifacts absent.
+
+    :param checkout: Skeleton checkout fixture.
+    :param fake_plugin: Patches the plugin-load boundary.
+    """
+    synth_path = checkout / "src/synth_setter/synth_spec.py"
+    synth_path.write_text(
+        synths_with_spec(
+            synth_path.read_text(),
+            "fake_synth",
+            plugin_path="plugins/fake.vst3",
+            synth_version="1.0.0",
+        )
+    )
+
+    result = _register(checkout, "--force")
+
+    assert result.exit_code != 0
+    assert "already registered" in result.output
+    assert not (checkout / "src/synth_setter/data/vst/fake_synth_param_spec.py").exists()
+    assert not (checkout / "presets/fake_synth-base.vstpreset").exists()
+    assert not (checkout / "fake_synth_params.csv").exists()
 
 
 def test_register_conflicting_spec_name_fails_before_plugin_load(checkout: Path) -> None:
@@ -420,7 +451,7 @@ def test_verify_writes_report_and_echoes_verdict(
         ``test_verification.py`` and the full-copy e2e below.
     """
     report = VerificationReport("fake_synth")
-    report.warn("renderer_version is 'unknown' — pin it by hand")
+    report.warn("synth_version is 'unknown' — pin it by hand")
     monkeypatch.setattr(
         "synth_setter.cli.introspect_plugin.verify_registration",
         lambda *_args, **_kwargs: report,
@@ -537,4 +568,4 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     assert render.param_spec_name == "fake_synth"
     assert render.plugin_path == "plugins/fake.vst3"
     assert render.plugin_state_path == "presets/fake_synth-base.vstpreset"
-    assert render.renderer_version == "9.9.9"
+    assert render.synth.synth_version == "9.9.9"

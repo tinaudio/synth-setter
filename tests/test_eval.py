@@ -839,10 +839,13 @@ def _compose_fake_oracle_eval_cfg(
         # Render group is null on fake_oracle; set it inline to the dataset's spec.
         cfg.render = RenderConfig.model_validate(
             {
-                "param_spec_name": param_spec_name,
-                "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-                "plugin_path": "plugins/fake.vst3",
-                "renderer_version": "1.3.4",
+                "synth": {
+                    "name": param_spec_name,
+                    "param_spec_name": param_spec_name,
+                    "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                    "plugin_path": "plugins/fake.vst3",
+                    "synth_version": "1.3.4",
+                },
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,

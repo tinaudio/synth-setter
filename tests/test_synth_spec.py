@@ -33,6 +33,7 @@ class TestSynthSpecValidation:
                 param_spec_name=ParamSpecName("torchsynth_full"),
                 plugin_path=TORCHSYNTH_PLUGIN_NAME,
                 plugin_state_path="presets/nope.vstpreset",
+                synth_version="1.0.2",
             )
 
     def test_a_vst_plugin_accepts_a_preset_path(self) -> None:
@@ -42,9 +43,45 @@ class TestSynthSpecValidation:
             param_spec_name=ParamSpecName("obxf"),
             plugin_path="plugins/OB-Xf.vst3",
             plugin_state_path="presets/obxf-base.vstpreset",
+            synth_version="1.0.3",
         )
 
         assert spec.plugin_state_path == "presets/obxf-base.vstpreset"
+
+    def test_missing_synth_version_is_rejected(self) -> None:
+        """A synth identity without an artifact version is incomplete."""
+        with pytest.raises(ValidationError, match="synth_version"):
+            SynthSpec(  # type: ignore[call-arg]
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_path="plugins/OB-Xf.vst3",
+                plugin_state_path="presets/obxf-base.vstpreset",
+            )
+
+    def test_blank_synth_version_is_rejected(self) -> None:
+        """Whitespace cannot stand in for an artifact version."""
+        with pytest.raises(ValidationError, match="synth_version must not be blank"):
+            SynthSpec(
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_path="plugins/OB-Xf.vst3",
+                plugin_state_path="presets/obxf-base.vstpreset",
+                synth_version="  ",
+            )
+
+    def test_misspelled_synth_version_is_rejected(self) -> None:
+        """A misspelled field cannot satisfy the required canonical field."""
+        with pytest.raises(ValidationError) as exc_info:
+            SynthSpec(
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_path="plugins/OB-Xf.vst3",
+                plugin_state_path="presets/obxf-base.vstpreset",
+                synth_verion="1.0.3",  # type: ignore[call-arg]
+            )
+
+        error_types = {error["type"] for error in exc_info.value.errors()}
+        assert error_types == {"extra_forbidden", "missing"}
 
     def test_identity_is_frozen(self) -> None:
         """Identity cannot be mutated after construction."""

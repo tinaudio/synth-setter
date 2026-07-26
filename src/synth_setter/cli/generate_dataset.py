@@ -174,7 +174,7 @@ def _run_oracle_eval_subprocess(
         f"+render.synth.param_spec_name={render.param_spec_name}",
         f"+render.synth.plugin_state_path={render.plugin_state_path}",
         f"+render.synth.plugin_path={render.plugin_path}",
-        f"+render.renderer_version={render.renderer_version}",
+        f"+render.synth.synth_version={render.synth.synth_version}",
         f"render.renderer_backend={render.renderer_backend}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
@@ -289,7 +289,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
     ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
-    the plugin and pinned ``renderer_version`` agree.
+    the plugin and pinned ``synth_version`` agree.
 
     The spec is pushed to every logger as hyperparameters and, when a
     ``WandbLogger`` is present in ``loggers``, uploaded as a
@@ -299,7 +299,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     both success and failure.
 
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
-        across worker pods, and ``spec.render.renderer_version`` is cross-checked
+        across worker pods, and ``spec.render.synth.synth_version`` is cross-checked
         against the loaded plugin.
     :param work_dir: Hydra per-run output dir supplied by the caller; created
         if missing. Shards are written here before the rclone upload.
@@ -307,7 +307,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
     :raises RuntimeError: If DawDreamer is unavailable on this worker or the
-        plugin version disagrees with ``spec.render.renderer_version``.
+        plugin version disagrees with ``spec.render.synth.synth_version``.
     """
     ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
@@ -324,16 +324,18 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         render = spec.render
-        actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
-        if actual_renderer_version != render.renderer_version:
+        actual_synth_version = extract_renderer_version(Path(render.plugin_path))
+        if actual_synth_version != render.synth.synth_version:
             raise RuntimeError(
-                f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
-                f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
+                f"Synth version mismatch: spec pins {render.synth.synth_version!r} but "
+                f"plugin at {render.plugin_path} reports {actual_synth_version!r}. "
                 "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-                "renderer_version in the dataset config that produced this spec."
+                "synth_version in the synth config that produced this spec."
             )
         logger.info(
-            f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
+            "synth_version OK: plugin at {} == {}",
+            render.plugin_path,
+            render.synth.synth_version,
         )
 
         work_dir.mkdir(parents=True, exist_ok=True)
