@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib import import_module
 from typing import Protocol, TypedDict, cast
 
 import numpy as np
 import pytest
 
+from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.faust_sources import FaustDsp, faust_dsps, resolve_faust_dsp
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    ContinuousParameter,
+    DiscreteLiteralParameter,
+    NoteDurationParameter,
+    Parameter,
+    decode_model_output,
+)
 from synth_setter.param_spec_name import ParamSpecName
 
 _SAMPLE_RATE = 44100
@@ -84,9 +94,24 @@ class _ParameterDescription(TypedDict):
     .. attribute :: name
 
        Exact compiled parameter address.
+
+    .. attribute :: min
+
+       Native control minimum.
+
+    .. attribute :: max
+
+       Native control maximum.
+
+    .. attribute :: isDiscrete
+
+       Whether the native control has discrete states.
     """
 
     name: str
+    min: float
+    max: float
+    isDiscrete: bool
 
 
 class _FaustProcessor(Protocol):
@@ -195,6 +220,21 @@ class _DawDreamerModule(Protocol):
         ...
 
 
+def _expected_parameter_domain(parameter: Parameter) -> tuple[float, float, bool]:
+    """Return the native domain represented by one Faust parameter.
+
+    :param parameter: Exact-address Faust parameter.
+    :returns: Native minimum, maximum, and discreteness.
+    :raises TypeError: The parameter type cannot represent a Faust UI control.
+    """
+    if isinstance(parameter, ContinuousParameter):
+        return parameter.min, parameter.max, False
+    if isinstance(parameter, CategoricalParameter):
+        raw_values = [float(value) for value in parameter.raw_values]
+        return min(raw_values), max(raw_values), True
+    raise TypeError(f"unsupported Faust parameter type {type(parameter).__name__}")
+
+
 def _compile_faust(
     dd: _DawDreamerModule,
     param_spec_name: str,
@@ -233,6 +273,174 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         resolve_faust_dsp(ParamSpecName("missing"))
 
 
+@pytest.mark.parametrize(
+    ("param_spec_name", "encoded_width"),
+    [
+        ("faust_bright_organ", 13),
+        ("faust_bubble", 10),
+        ("faust_church_organ", 16),
+        ("faust_filter_osc", 6),
+    ],
+)
+def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
+    param_spec_name: str,
+    encoded_width: int,
+) -> None:
+    """Each source identity resolves to exact addresses and model width.
+
+    :param param_spec_name: Faust source and parameter-spec registry key.
+    :param encoded_width: Expected synth-and-note model width.
+    """
+    spec = resolve_faust_param_spec(ParamSpecName(param_spec_name))
+
+    assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
+    assert spec.encoded_width == encoded_width
+
+
+@pytest.mark.parametrize(
+    "param_spec_name",
+    ["faust_bubble", "faust_church_organ"],
+)
+def test_faust_trigger_controls_use_discrete_onehot_domain(param_spec_name: str) -> None:
+    """Monophonic trigger controls encode only their two native states.
+
+    :param param_spec_name: Faust parameter spec whose final control is a trigger.
+    """
+    trigger = resolve_faust_param_spec(ParamSpecName(param_spec_name)).synth_params[-1]
+
+    assert isinstance(trigger, CategoricalParameter)
+    assert trigger.raw_values == [0.0, 1.0]
+    assert trigger.encoding == "onehot"
+    assert trigger.encode(0.0) == pytest.approx(np.array([1.0, 0.0]))
+    assert trigger.encode(1.0) == pytest.approx(np.array([0.0, 1.0]))
+    assert trigger.decode(np.array([1.0, 0.0])) == 0.0
+    assert trigger.decode(np.array([0.0, 1.0])) == 1.0
+
+
+@dataclass(frozen=True)
+class _NativeDomainCase:
+    """One exact-address native-domain expectation.
+
+    .. attribute :: param_spec_name
+
+       Faust parameter-spec identity.
+
+    .. attribute :: address
+
+       Exact compiled parameter address.
+
+    .. attribute :: minimum
+
+       Native minimum.
+
+    .. attribute :: maximum
+
+       Native maximum.
+    """
+
+    param_spec_name: str
+    address: str
+    minimum: float
+    maximum: float
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        _NativeDomainCase("faust_bubble", "/bubble/bubble/freq", 150.0, 2000.0),
+        _NativeDomainCase(
+            "faust_church_organ", "/churchOrgan/Zita_Light/Dry/Wet_Mix", -1.0, 1.0
+        ),
+        _NativeDomainCase(
+            "faust_church_organ", "/churchOrgan/Zita_Light/Level", -70.0, 40.0
+        ),
+        _NativeDomainCase("faust_church_organ", "/churchOrgan/freq", 50.0, 1000.0),
+        _NativeDomainCase(
+            "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude", -120.0, 10.0
+        ),
+        _NativeDomainCase(
+            "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Frequency", 1.0, 88.0
+        ),
+        _NativeDomainCase(
+            "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Portamento", 0.001, 10.0
+        ),
+    ],
+)
+def test_faust_continuous_controls_encode_complete_native_bounds(
+    case: _NativeDomainCase,
+) -> None:
+    """Every non-unit Faust range round-trips through the model domain.
+
+    :param case: Exact identity, address, and native bounds under test.
+    """
+    spec = resolve_faust_param_spec(ParamSpecName(case.param_spec_name))
+    parameters = {parameter.name: parameter for parameter in spec.synth_params}
+    parameter = parameters[case.address]
+
+    assert isinstance(parameter, ContinuousParameter)
+    assert (parameter.min, parameter.max) == (case.minimum, case.maximum)
+    assert parameter.encode(case.minimum) == pytest.approx(np.array([0.0]))
+    assert parameter.encode(case.maximum) == pytest.approx(np.array([1.0]))
+    assert parameter.decode(np.array([0.0])) == pytest.approx(case.minimum)
+    assert parameter.decode(np.array([1.0])) == pytest.approx(case.maximum)
+
+
+def test_faust_model_output_decodes_exact_native_addresses() -> None:
+    """Model-domain midpoints decode under exact Faust renderer addresses."""
+    spec = resolve_faust_param_spec(ParamSpecName("faust_filter_osc"))
+
+    synth_params, _ = decode_model_output(
+        np.zeros(spec.encoded_width, dtype=np.float32), spec
+    )
+
+    assert synth_params == pytest.approx(
+        {
+            "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude": -55.0,
+            "/SINE_WAVE_OSCILLATOR_oscrs/Frequency": 44.5,
+            "/SINE_WAVE_OSCILLATOR_oscrs/Portamento": 5.0005,
+        }
+    )
+
+
+@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+def test_faust_note_conditioning_contract_is_identity_stable(param_spec_name: str) -> None:
+    """Every Faust identity pins pitch and note-window label domains.
+
+    :param param_spec_name: Faust parameter-spec identity under test.
+    """
+    pitch, note_window = resolve_faust_param_spec(
+        ParamSpecName(param_spec_name)
+    ).note_params
+
+    assert isinstance(pitch, DiscreteLiteralParameter)
+    assert (pitch.name, pitch.min, pitch.max) == ("pitch", 48, 72)
+    assert pitch.decode(np.array([0.0])) == 48
+    assert pitch.decode(np.array([1.0])) == 72
+    assert isinstance(note_window, NoteDurationParameter)
+    assert note_window.name == "note_start_and_end"
+    assert note_window.max_note_duration_seconds == 4.0
+    assert note_window.decode(np.array([0.0, 1.0])) == pytest.approx((0.0, 4.0))
+
+
+def test_faust_param_spec_resolution_returns_fresh_specs() -> None:
+    """Caller mutation cannot alter subsequently resolved identity contracts."""
+    changed = resolve_faust_param_spec(ParamSpecName("faust_bubble"))
+    changed.synth_params[0].name = "changed"
+
+    resolved_again = resolve_faust_param_spec(ParamSpecName("faust_bubble"))
+
+    assert (
+        resolved_again.synth_params[0].name
+        == _EXPECTED_PARAMETER_ADDRESSES["faust_bubble"][0]
+    )
+
+
+def test_faust_param_spec_resolution_rejects_unknown_identity() -> None:
+    """Unknown spec identities fail without synthesizing a fallback."""
+    with pytest.raises(KeyError, match="missing"):
+        resolve_faust_param_spec(ParamSpecName("missing"))
+
+
 def test_bright_organ_source_uses_one_polyphonic_voice_and_stereo_effect() -> None:
     """MIDI owns brightOrgan frequency/gate while its effect keeps stereo output."""
     dsp = resolve_faust_dsp(ParamSpecName("faust_bright_organ"))
@@ -262,6 +470,26 @@ def test_faust_source_compiles_with_exact_parameter_addresses(
     assert [item["name"] for item in descriptions] == _EXPECTED_PARAMETER_ADDRESSES[
         param_spec_name
     ]
+
+
+@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+def test_faust_compiled_parameter_domains_match_specs(param_spec_name: str) -> None:
+    """Real Faust metadata matches every modeled native domain.
+
+    :param param_spec_name: Faust source and parameter-spec identity.
+    """
+    dd = cast(_DawDreamerModule, import_module("dawdreamer"))
+    _, _, processor = _compile_faust(dd, param_spec_name)
+    descriptions = processor.get_parameters_description()
+    parameters = resolve_faust_param_spec(ParamSpecName(param_spec_name)).synth_params
+
+    assert len(descriptions) == len(parameters)
+    for description, parameter in zip(descriptions, parameters, strict=True):
+        minimum, maximum, is_discrete = _expected_parameter_domain(parameter)
+        assert description["name"] == parameter.name
+        assert description["min"] == pytest.approx(minimum)
+        assert description["max"] == pytest.approx(maximum)
+        assert description["isDiscrete"] is is_discrete
 
 
 @pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
