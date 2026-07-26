@@ -52,6 +52,10 @@ from synth_setter.pipeline.data.add_embeddings import (
     IndexSpec,
     ParamTextEncodeFn,
     _configure_lance_logging,
+    _encode_t5gemma_column,
+    _load_clap_spec_encoder,
+    _load_m2l_spec_encoder,
+    _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
     _downmix_to_mono,
     _require_extras,
@@ -2317,3 +2321,85 @@ def test_add_embeddings_config_composition_defaults_the_text_normalizer() -> Non
         GlobalHydra.instance().clear()
 
     assert (config.param_spec_name, config.param_text_normalizer) == (None, "param_names")
+
+
+def test_load_m2l_spec_encoder_passes_the_configured_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry adapter threads the run config's device to the m2l loader.
+
+    :param monkeypatch: Fixture replacing the heavyweight encoder load.
+    """
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
+        lambda device: seen.append(device) or (lambda audio: audio),
+    )
+
+    _load_m2l_spec_encoder("ignored", AddEmbeddingsConfig(lance_uri="x.lance", device="mps"))
+
+    assert seen == ["mps"]
+
+
+def test_load_clap_spec_encoder_passes_the_checkpoint_and_configured_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry adapter threads both checkpoint and device to the CLAP loader.
+
+    :param monkeypatch: Fixture replacing the heavyweight encoder load.
+    """
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device: seen.append((checkpoint, device))
+        or (lambda audio, rate: audio),
+    )
+
+    _load_clap_spec_encoder("custom/clap", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
+
+    assert seen == [("custom/clap", "cpu")]
+
+
+def test_load_same_spec_encoder_passes_the_checkpoint_and_configured_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry adapter threads both checkpoint and device to the SAME loader.
+
+    :param monkeypatch: Fixture replacing the heavyweight encoder load.
+    """
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
+        lambda checkpoint, device: seen.append((checkpoint, device)) or (lambda audio: audio),
+    )
+
+    _load_same_spec_encoder("custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
+
+    assert seen == [("custom/same-s", "cpu")]
+
+
+def test_load_t5gemma_spec_encoder_without_a_param_spec_raises() -> None:
+    """Calling the loader outside config validation still refuses to guess a param spec."""
+    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
+
+    with pytest.raises(ValueError, match="require param_spec_name"):
+        _load_t5gemma_spec_encoder("unused-checkpoint", config)
+
+
+@pytest.mark.parametrize(
+    ("shape", "reason"),
+    [((2, 4), "rank"), ((1, 4, 5), "row count")],
+)
+def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
+    shape: tuple[int, ...], reason: str
+) -> None:
+    """A conditioner returning the wrong rank or row count fails before the Arrow write.
+
+    :param shape: Malformed encoder output shape.
+    :param reason: What the shape gets wrong, named for readability.
+    """
+    del reason
+    params = np.zeros((2, 7), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="expected 2 rows"):
+        _encode_t5gemma_column(params, 44100, lambda _: np.zeros(shape, dtype=np.float32))

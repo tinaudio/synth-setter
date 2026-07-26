@@ -1,6 +1,7 @@
 """Checkpoint resolution, config parsing, and real-weight behavior of the SA3 T5Gemma encoder."""
 
 import json
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,8 @@ from synth_setter.pipeline.data.t5gemma import (
     DEFAULT_T5GEMMA_CHECKPOINT,
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
+    T5GEMMA_ENCODE_MAX_BATCH,
+    _PADDING_EMBEDDING_KEY,
     _load_padding_embedding,
     _read_conditioner_config,
     _resolve_t5gemma_checkpoint_dir,
@@ -234,7 +237,9 @@ def test_encode_matches_upstream_conditioner_in_float32(t5gemma_encoder: TextEnc
 
     from synth_setter.pipeline.data.t5gemma import (
         _T5GEMMA_MODEL_NAME,
-        _load_padding_embedding,
+        T5GEMMA_ENCODE_MAX_BATCH,
+    _PADDING_EMBEDDING_KEY,
+    _load_padding_embedding,
         _read_conditioner_config,
     )
 
@@ -293,3 +298,211 @@ def test_param_names_caption_retains_only_its_leading_names_after_truncation(
     ]
 
     assert (len(names), max(fits)) == (total_names, retained_names)
+
+
+class _FakeConditioner(torch.nn.Module):
+    """Stand-in for SA3's conditioner that records the prompt batches it receives."""
+
+    def __init__(
+        self,
+        *,
+        output_dim: int,
+        max_length: int,
+        model_name: str,
+        padding_mode: str,
+        model_path: str,
+        subfolder: str,
+    ) -> None:
+        """Accept the real conditioner's keyword contract.
+
+        :param output_dim: Embedding width.
+        :param max_length: Token budget.
+        :param model_name: Encoder identifier the real class asserts on.
+        :param padding_mode: Padding strategy.
+        :param model_path: Local checkpoint directory.
+        :param subfolder: Checkpoint-relative encoder directory.
+        """
+        super().__init__()
+        self.padding_embedding = torch.nn.Parameter(torch.zeros(output_dim))
+        self.model = torch.nn.Linear(1, 1)
+        self.output_dim = output_dim
+        self.max_length = max_length
+        self.init_kwargs = (model_name, padding_mode, model_path, subfolder)
+        self.batches: list[list[str]] = []
+
+    def forward(self, prompts: list[str], device: str) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return deterministic sequence embeddings for one prompt batch.
+
+        :param prompts: Prompt batch.
+        :param device: Ignored torch device.
+        :returns: ``(embeddings, attention_mask)`` as the real conditioner does.
+        """
+        del device
+        self.batches.append(list(prompts))
+        rows = len(prompts)
+        size = rows * self.max_length * self.output_dim
+        embeddings = torch.arange(size, dtype=torch.float32).reshape(
+            rows, self.max_length, self.output_dim
+        )
+        return embeddings, torch.ones(rows, self.max_length, dtype=torch.bool)
+
+
+def _fake_checkpoint(directory: Path, *, cond_dim: int = 4, max_length: int = 3) -> torch.Tensor:
+    """Write a config and safetensors carrying a learned padding embedding.
+
+    :param directory: Checkpoint directory to populate.
+    :param cond_dim: Embedding width recorded in the config.
+    :param max_length: Token budget recorded in the config.
+    :returns: The padding embedding written to the checkpoint.
+    """
+    from safetensors.torch import save_file
+
+    config = {
+        "model": {
+            "conditioning": {
+                "configs": [
+                    {
+                        "id": "prompt",
+                        "config": {
+                            "max_length": max_length,
+                            "padding_mode": "learned",
+                            "subfolder": "t5gemma-b-b-ul2",
+                        },
+                    }
+                ],
+                "cond_dim": cond_dim,
+            }
+        }
+    }
+    (directory / "model_config.json").write_text(json.dumps(config))
+    padding = torch.arange(cond_dim, dtype=torch.float32) + 0.5
+    save_file({_PADDING_EMBEDDING_KEY: padding}, str(directory / "model.safetensors"))
+    return padding
+
+
+def test_load_padding_embedding_returns_the_checkpoint_tensor(tmp_path: Path) -> None:
+    """The learned padding embedding is read straight from the checkpoint.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    expected = _fake_checkpoint(tmp_path)
+
+    torch.testing.assert_close(_load_padding_embedding(tmp_path, "cpu"), expected)
+
+
+def test_load_padding_embedding_without_the_key_raises(tmp_path: Path) -> None:
+    """A checkpoint lacking the learned padding embedding cannot be substituted.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    from safetensors.torch import save_file
+
+    _fake_checkpoint(tmp_path)
+    save_file({"unrelated": torch.zeros(2)}, str(tmp_path / "model.safetensors"))
+
+    with pytest.raises(ValueError, match="padding_embedding"):
+        _load_padding_embedding(tmp_path, "cpu")
+
+
+def test_load_t5gemma_text_encoder_chunks_prompts_and_returns_dim_major(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prompts encode in bounded chunks and come back dim-major for Lance.
+
+    :param tmp_path: Checkpoint directory.
+    :param monkeypatch: Fixture installing a stand-in conditioner class.
+    """
+    _fake_checkpoint(tmp_path, cond_dim=4, max_length=3)
+    built: list[_FakeConditioner] = []
+
+    def factory(**kwargs: str | int) -> _FakeConditioner:
+        conditioner = _FakeConditioner(**kwargs)  # type: ignore[arg-type]
+        built.append(conditioner)
+        return conditioner
+
+    monkeypatch.setattr(
+        "stable_audio_3.models.conditioners.T5GemmaConditioner", factory, raising=True
+    )
+    prompts = [f"prompt {index}" for index in range(T5GEMMA_ENCODE_MAX_BATCH + 4)]
+
+    embeddings = load_t5gemma_text_encoder(str(tmp_path), "cpu")(prompts)
+
+    assert embeddings.shape == (len(prompts), 4, 3)
+    assert [len(batch) for batch in built[0].batches] == [T5GEMMA_ENCODE_MAX_BATCH, 4]
+
+
+def test_load_t5gemma_text_encoder_substitutes_the_checkpoint_padding_embedding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The conditioner runs with the checkpoint's learned padding, not its random init.
+
+    :param tmp_path: Checkpoint directory.
+    :param monkeypatch: Fixture installing a stand-in conditioner class.
+    """
+    expected = _fake_checkpoint(tmp_path)
+    built: list[_FakeConditioner] = []
+
+    def factory(**kwargs: str | int) -> _FakeConditioner:
+        conditioner = _FakeConditioner(**kwargs)  # type: ignore[arg-type]
+        built.append(conditioner)
+        return conditioner
+
+    monkeypatch.setattr(
+        "stable_audio_3.models.conditioners.T5GemmaConditioner", factory, raising=True
+    )
+
+    load_t5gemma_text_encoder(str(tmp_path), "cpu")(["a"])
+
+    torch.testing.assert_close(built[0].padding_embedding.detach(), expected)
+
+
+def test_load_t5gemma_text_encoder_without_the_sa3_extra_names_its_install_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing optional dependency fails with the command that installs it.
+
+    :param tmp_path: Checkpoint directory.
+    :param monkeypatch: Fixture hiding the SA3 conditioner module.
+    """
+    _fake_checkpoint(tmp_path)
+    monkeypatch.setitem(sys.modules, "stable_audio_3.models.conditioners", None)
+
+    with pytest.raises(ImportError, match="uv sync --extra sa3"):
+        load_t5gemma_text_encoder(str(tmp_path), "cpu")
+
+
+def test_resolve_t5gemma_checkpoint_dir_with_non_default_r2_prefix_uses_a_distinct_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 mirrors outside the default keep their own cache directories.
+
+    :param monkeypatch: Fixture replacing credential loading and download.
+    """
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: downloads.append((uri, destination)),
+    )
+
+    resolved = _resolve_t5gemma_checkpoint_dir("r2://bucket/team-a/sa3-small-music")
+
+    assert resolved != embedding_model_dir("sa3-small-music")
+    assert downloads == [("r2://bucket/team-a/sa3-small-music", resolved)]
+
+
+def test_resolve_t5gemma_checkpoint_dir_with_repo_id_falls_back_to_hub_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-path, non-R2 source resolves through the HuggingFace hub.
+
+    :param monkeypatch: Fixture replacing the hub download.
+    :param tmp_path: Directory the fake download returns.
+    """
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download", lambda repo_id: str(tmp_path / repo_id.split("/")[-1])
+    )
+
+    assert _resolve_t5gemma_checkpoint_dir("stabilityai/stable-audio-3-small-music") == (
+        tmp_path / "stable-audio-3-small-music"
+    )
