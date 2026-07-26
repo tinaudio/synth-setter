@@ -118,6 +118,7 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
 _R2_AVAILABLE = r2_io.is_r2_reachable()
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Validate selected SAME e2e prerequisites and apply resource skip markers.
 
@@ -129,7 +130,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         missing = []
         if importlib.util.find_spec("stable_audio_tools") is None:
             missing.append("stable_audio_tools (install with `uv sync --extra same`)")
-        if not VST_AVAILABLE:
+        selected_lane_requires_vst = any("requires_vst" in item.keywords for item in items)
+        if selected_lane_requires_vst and not VST_AVAILABLE:
             missing.append(
                 f"VST plugin at {PLUGIN_PATH!r} "
                 "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
