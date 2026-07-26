@@ -884,6 +884,9 @@ class ValAudioProbe(Callback):
         self._future_step = step
 
 
+_PER_PARAM_MSE_OUTPUTS = ("per_param_mse", "per_param_mse_best_swap")
+
+
 class LogPerParamMSE(Callback):
     """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
 
@@ -898,8 +901,8 @@ class LogPerParamMSE(Callback):
     def on_validation_epoch_start(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
     ) -> None:
-        self.per_param_mse = 0.0
-        self.count = 0
+        self.metric_totals: dict[str, np.ndarray] = {}
+        self.metric_counts: dict[str, int] = {}
 
     def on_validation_batch_end(
         self,
@@ -910,21 +913,27 @@ class LogPerParamMSE(Callback):
         batch_idx,
         dataloader_idx=0,
     ) -> None:
-        per_param_mse = outputs["per_param_mse"]
-        self.per_param_mse += per_param_mse.detach().cpu().numpy()
-        self.count += 1
+        for metric_name in _PER_PARAM_MSE_OUTPUTS:
+            if metric_name not in outputs:
+                continue
+            values = outputs[metric_name].detach().cpu().numpy()
+            total = self.metric_totals.get(metric_name, np.zeros_like(values))
+            self.metric_totals[metric_name] = total + values
+            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + 1
 
     def on_validation_epoch_end(
         self,
         trainer,
         pl_module,
     ) -> None:
-        per_param_mse = self.per_param_mse / self.count
-        # Indexed by encoded span, not name position: onehot and note parameters
-        # own several columns each, so the two sequences have different lengths.
-        pl_module.log_dict(
-            {
-                f"per_param_mse/{param.name}": per_param_mse[span].mean()
-                for param, span in self.param_spec.encoded_slices()
-            },
-        )
+        metrics = {}
+        for metric_name, total in self.metric_totals.items():
+            per_param_mse = total / self.metric_counts[metric_name]
+            # Encoded spans preserve labels across onehot and multi-column parameters.
+            metrics.update(
+                {
+                    f"{metric_name}/{param.name}": per_param_mse[span].mean()
+                    for param, span in self.param_spec.encoded_slices()
+                }
+            )
+        pl_module.log_dict(metrics)

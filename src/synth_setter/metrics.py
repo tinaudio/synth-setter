@@ -125,6 +125,26 @@ class LinearAssignmentDistance(Metric):
         return self.linear_assignment_distance / self.count
 
 
+def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Return best-swap MSE attributed to each target parameter dimension.
+
+    :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+    :param target: Ground-truth vectors, same shape as ``predicted``.
+    :returns: Per-target-dimension mean squared error, shape ``(num_params,)``.
+    :raises ValueError: If shapes differ or inputs are not 2-D.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+
+    sorted_predicted = predicted.sort(dim=1, stable=True).values.float()
+    sorted_target, target_indices = target.sort(dim=1, stable=True)
+    sorted_errors = (sorted_predicted - sorted_target.float()).square()
+    per_target_errors = torch.empty_like(sorted_errors).scatter(1, target_indices, sorted_errors)
+    return per_target_errors.mean(dim=0)
+
+
 class BestSwapParamMSE(Metric):
     """MSE after the error-minimizing one-to-one swap of predicted and target scalars.
 
@@ -149,16 +169,10 @@ class BestSwapParamMSE(Metric):
 
         :param predicted: Parameter vectors, shape ``(batch, num_params)``.
         :param target: Ground-truth vectors, same shape as ``predicted``.
-        :raises ValueError: If shapes differ or inputs are not 2-D.
         """
-        if predicted.ndim != 2 or predicted.shape != target.shape:
-            raise ValueError(
-                f"expected matching 2-D shapes, got {tuple(predicted.shape)} "
-                f"and {tuple(target.shape)}"
-            )
-        error = predicted.sort(dim=1).values.float() - target.sort(dim=1).values.float()
-        self.sum_squared_error = self.sum_squared_error + error.square().sum()
-        self.element_count = self.element_count + error.numel()
+        per_param_mse = best_swap_per_param_mse(predicted, target)
+        self.sum_squared_error = self.sum_squared_error + per_param_mse.sum() * predicted.shape[0]
+        self.element_count = self.element_count + predicted.numel()
 
     def compute(self) -> torch.Tensor:
         """Return the accumulated mean squared error under optimal swapping.

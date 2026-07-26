@@ -11,6 +11,7 @@ from functools import partial
 
 import torch
 from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import Callback
 from torch.utils.data import DataLoader, Dataset
 
 from synth_setter.metrics import BestSwapParamMSE
@@ -19,6 +20,7 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.utils.callbacks import LogPerParamMSE
 
 _MEL_CHANNELS = 2
 _MEL_N_MELS = 4
@@ -104,12 +106,14 @@ def _flow_module(num_params: int) -> VSTFlowMatchingModule:
     )
 
 
-def _tiny_trainer() -> Trainer:
+def _tiny_trainer(*, callbacks: list[Callback] | None = None) -> Trainer:
     """Build a minimal CPU trainer for one validation/test batch.
 
+    :param callbacks: Optional callbacks to exercise with the loop.
     :returns: Silent single-batch CPU trainer.
     """
     return Trainer(
+        callbacks=callbacks,
         accelerator="cpu",
         logger=False,
         enable_checkpointing=False,
@@ -138,6 +142,17 @@ def test_validation_loop_logs_best_swap_alongside_param_mse() -> None:
     assert "val/param_mse_best_swap" in metrics
     assert "val/param_mse" in metrics
     assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse"] + 1e-6
+
+
+def test_validation_loop_logs_per_param_best_swap() -> None:
+    """The callback publishes best-swap errors under target parameter names."""
+    module = _flow_module(7)
+    loader = DataLoader(_FakeBatchDataset(7), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_4")])
+
+    metrics = trainer.validate(module, dataloaders=loader)[0]
+
+    assert "per_param_mse_best_swap/note_start_and_end" in metrics
 
 
 def test_test_loop_logs_best_swap() -> None:
