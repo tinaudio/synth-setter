@@ -250,13 +250,13 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
 
-| Key                          | Default | Effect when true                                                                                                                                                                                                 |
-| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires a synth identity on `cfg.render`, resolved via `SynthSpec.from_render_cfg`                        |
-| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                   |
-| `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                            |
-| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                     |
-| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489) |
+| Key                          | Default | Effect when true                                                                                                                                                                                                                        |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the complete `cfg.render` backend configuration, including the nested synth identity resolved via `SynthSpec.from_render_cfg` |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                                          |
+| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                               |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                            |
+| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)                        |
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
@@ -266,19 +266,28 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 
 ### 5.2 Render
 
-| Property     | Value                                                                                                                          |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} --plugin_path {vst} --plugin_state_path {preset}` |
-| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                                                   |
-| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`                                 |
-| **Compute**  | CPU — VST audio rendering via pedalboard (or in-process torchsynth, see below)                                                 |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                                             |
+| Property     | Value                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} <serialized RenderConfig>` |
+| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                            |
+| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`          |
+| **Compute**  | CPU — selected by `make_audio_renderer` from the dataset's renderer configuration                       |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                      |
 
-The render stage loads each predicted parameter tensor, decodes it via `decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison. When `--plugin_path` is the `torchsynth` sentinel (`renderer_backend.TORCHSYNTH_PLUGIN_NAME`), `_make_render_fn` in `predict_vst_audio.py` dispatches to `TorchSynthRenderer` instead — in-process, with no plugin host or display-server requirement.
+The render stage loads each predicted parameter tensor, decodes it via
+`decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and uses
+`make_audio_renderer` for both predicted and target audio. Pedalboard and
+DawDreamer VST load a plugin; `torchsynth` renders in-process; and
+`dawdreamer_faust` compiles the checked-in source registered by
+`param_spec_name`, then sets renderer-native values under exact compiled
+addresses. Faust accepts no source path or preset path. The render process
+is isolated and receives the complete `RenderConfig` for every backend.
 
 **Key behaviors:**
 
-- When `--plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer` — no `renderscript.sh`/Xvfb wrapper is involved and no plugin bundle is loaded
+- When `plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer`; no plugin bundle is loaded
+
+- When `plugin_path` is the Faust sentinel, `DawDreamerFaustRenderer` resolves only checked-in source/spec identities, validates the compiled address sequence, and applies a complete native-value patch by exact address
 
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 
@@ -288,7 +297,7 @@ The render stage loads each predicted parameter tensor, decodes it via `decode_m
 
 - Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
 
-- Preset path default: the registry preset for the selected spec, `plugin_state_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--plugin_state_path`)
+- Preset path default for VST backends: the registry state for the selected spec, `plugin_state_paths[param_spec]`; source and in-process backends use an empty state entry
 
 - Parameters are denormalized from the model-output range via `decode_model_output` before rendering
 

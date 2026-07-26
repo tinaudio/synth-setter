@@ -31,6 +31,11 @@ The preset filename convention is `<name>-base.vstpreset` for new registrations;
 several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 `presets/surge-base.vstpreset`) that the registry maps explicitly.
 
+This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
+registered source/spec pair instead: their `plugin_state_paths` entry is empty,
+their render config selects `dawdreamer_faust`, and parameter names preserve the
+exact addresses reported by Faust compilation.
+
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
 plugin's parameters, but raw names and 0–1 ranges carry **no semantics** — which
 parameters matter, sensible sub-ranges, and categorical groupings all need
@@ -113,8 +118,9 @@ The draft is a starting point, not a finished spec. Open
 `<name>_param_spec.py` and curate it using the parameter types in
 [`src/synth_setter/data/vst/param_spec.py`](../../src/synth_setter/data/vst/param_spec.py):
 
-- `ContinuousParameter(name, min, max, ...)` — a 0–1 host value sampled over a
-  sub-range; narrow `min`/`max` to the musically useful band.
+- `ContinuousParameter(name, min, max, ...)` — a finite renderer-native range
+  encoded onto `[0, 1]` for the model; narrow `min`/`max` to the musically useful
+  band.
 - `CategoricalParameter(name, values, raw_values, weights, encoding)` — discrete
   choices (waveform, filter type) with optional sample weights; `encoding`
   is `"scalar"` or `"onehot"`.
@@ -225,7 +231,9 @@ so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed
-checkout.
+checkout. Faust source identities are registered manually with an empty state
+entry and a `dawdreamer_faust` render config; the VST3 introspection command does
+not generate them.
 
 ## Step 4 — Generate a smoke dataset
 

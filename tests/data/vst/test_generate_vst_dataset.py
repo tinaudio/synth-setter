@@ -1324,6 +1324,24 @@ def test_generate_sample_silent_and_clipped_draws_counted_separately(
     assert sample.clipped_rejections == 1
 
 
+def test_reject_clipped_audio_accepts_bounds_and_rejects_adjacent_values() -> None:
+    """The dataset amplitude gate is inclusive at exactly -1 and 1."""
+    from synth_setter.data.vst.generate_vst_dataset import (
+        AudioAmplitudeError,
+        _reject_clipped_audio,
+    )
+
+    _reject_clipped_audio(np.array([[-1.0, 1.0]], dtype=np.float32))
+    outside = np.array(
+        [
+            np.nextafter(np.float32(-1.0), np.float32(-np.inf)),
+            np.nextafter(np.float32(1.0), np.float32(np.inf)),
+        ]
+    )
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(outside[None, :])
+
+
 def test_generate_sample_clipped_render_fixed_synth_params_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1335,7 +1353,7 @@ def test_generate_sample_clipped_render_fixed_synth_params_raises(
     :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
     """
     from synth_setter.data.vst import generate_vst_dataset
-    from synth_setter.data.vst.renderers import AudioAmplitudeError
+    from synth_setter.data.vst.generate_vst_dataset import AudioAmplitudeError
 
     spec = param_specs[_SPEC_NAME]
     monkeypatch.setattr(

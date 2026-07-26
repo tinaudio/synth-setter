@@ -16,6 +16,10 @@ from synth_setter.data.vst.param_spec import (
     decode_model_output,
 )
 
+LEVEL_MIN_DB = -70.0
+LEVEL_MID_DB = -15.0
+LEVEL_MAX_DB = 40.0
+
 
 def _tiny_spec() -> ParamSpec:
     return ParamSpec(
@@ -39,12 +43,202 @@ def _tiny_spec() -> ParamSpec:
 _ROW = [0.0, -1.0, 1.0, 0.0, 0.2, 0.2]
 
 
+def test_continuous_parameter_encodes_native_range_to_unit_interval() -> None:
+    """Continuous controls encode arbitrary native ranges onto the model domain."""
+    parameter = ContinuousParameter(
+        name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+    )
+
+    assert LEVEL_MIN_DB <= parameter.sample(np.random.default_rng(0)) <= LEVEL_MAX_DB
+    assert parameter.encode(LEVEL_MIN_DB) == pytest.approx(np.array([0.0]))
+    assert parameter.encode(LEVEL_MID_DB) == pytest.approx(np.array([0.5]))
+    assert parameter.encode(LEVEL_MAX_DB) == pytest.approx(np.array([1.0]))
+    assert parameter.decode(np.array([0.0])) == pytest.approx(LEVEL_MIN_DB)
+    assert parameter.decode(np.array([0.5])) == pytest.approx(LEVEL_MID_DB)
+    assert parameter.decode(np.array([1.0])) == pytest.approx(LEVEL_MAX_DB)
+
+
+def test_continuous_parameter_samples_uniform_native_domain() -> None:
+    """Sampling maps the generator's uniform draws to the complete native domain."""
+    actual_rng = np.random.default_rng(19)
+    expected_rng = np.random.default_rng(19)
+    parameter = ContinuousParameter(
+        name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+    )
+
+    actual = np.array([parameter.sample(actual_rng) for _ in range(32)])
+    expected = expected_rng.uniform(LEVEL_MIN_DB, LEVEL_MAX_DB, size=32)
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_continuous_parameter_constant_branch_uses_native_domain() -> None:
+    """An enabled constant samples and encodes within its native range."""
+    parameter = ContinuousParameter(
+        name="level_db",
+        min=LEVEL_MIN_DB,
+        max=LEVEL_MAX_DB,
+        constant_val_p=1.0,
+        constant_val=LEVEL_MID_DB,
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled == LEVEL_MID_DB
+    assert parameter.encode(sampled) == pytest.approx(np.array([0.5]))
+
+
+def test_continuous_parameter_rejects_nonfinite_native_span() -> None:
+    """Native bounds must retain a finite normalization denominator."""
+    with pytest.raises(ValueError, match="span must be finite"):
+        ContinuousParameter(name="overflow", min=-1e308, max=1e308)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"min": -np.inf}, "bounds must be finite"),
+        ({"max": np.inf}, "bounds must be finite"),
+        ({"min": 1.0, "max": 1.0}, "max must be greater than min"),
+        ({"min": 1.0, "max": 0.0}, "max must be greater than min"),
+        ({"constant_val_p": -0.1}, "constant_val_p must be in"),
+        ({"constant_val_p": 1.1}, "constant_val_p must be in"),
+        ({"constant_val_p": 1.0, "constant_val": -1.0}, "constant_val must be within"),
+        ({"constant_val_p": 1.0, "constant_val": 2.0}, "constant_val must be within"),
+    ],
+)
+def test_continuous_parameter_rejects_invalid_native_configuration(
+    overrides: dict[str, float],
+    message: str,
+) -> None:
+    """Invalid ranges and enabled constants fail outside optimized assertions.
+
+    :param overrides: Invalid constructor values under test.
+    :param message: Expected validation-error fragment.
+    """
+    values = {"name": "native", "min": 0.0, "max": 1.0, **overrides}
+
+    with pytest.raises(ValueError, match=message):
+        ContinuousParameter(**values)  # type: ignore[arg-type]
+
+
+def test_continuous_parameter_allows_disabled_constant_outside_native_domain() -> None:
+    """A disabled constant is not part of the sampled native domain."""
+    parameter = ContinuousParameter(
+        name="level_db",
+        min=LEVEL_MIN_DB,
+        max=LEVEL_MAX_DB,
+        constant_val_p=0.0,
+        constant_val=-120.0,
+    )
+
+    assert LEVEL_MIN_DB <= parameter.sample(np.random.default_rng(0)) <= LEVEL_MAX_DB
+
+
+def test_param_spec_sampling_roundtrip_preserves_native_domain() -> None:
+    """The dataset sampling path round-trips renderer-native continuous values."""
+    spec = ParamSpec(
+        [
+            ContinuousParameter(
+                name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+            )
+        ],
+        [
+            DiscreteLiteralParameter(name="pitch", min=21, max=108),
+            NoteDurationParameter(
+                name="note_start_and_end", max_note_duration_seconds=4.0
+            ),
+        ],
+    )
+
+    synth_params, note_params = spec.sample(np.random.default_rng(5))
+    decoded_synth_params, decoded_note_params = spec.decode(
+        spec.encode(synth_params, note_params)
+    )
+
+    assert LEVEL_MIN_DB <= synth_params["level_db"] <= LEVEL_MAX_DB
+    assert decoded_synth_params["level_db"] == pytest.approx(
+        synth_params["level_db"], abs=1e-5
+    )
+    assert decoded_note_params["pitch"] == note_params["pitch"]
+    assert decoded_note_params["note_start_and_end"] == pytest.approx(
+        note_params["note_start_and_end"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_output", "expected"),
+    [
+        (-1.0, LEVEL_MIN_DB),
+        (0.0, LEVEL_MID_DB),
+        (1.0, LEVEL_MAX_DB),
+    ],
+)
+def test_decode_model_output_maps_to_native_continuous_domain(
+    model_output: float, expected: float
+) -> None:
+    """Model-domain values decode to renderer-native values.
+
+    :param model_output: Scalar prediction in the model domain.
+    :param expected: Expected renderer-native value.
+    """
+    spec = ParamSpec(
+        [
+            ContinuousParameter(
+                name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+            )
+        ],
+        [],
+    )
+
+    synth_params, _ = decode_model_output(np.array([model_output]), spec)
+
+    assert synth_params["level_db"] == pytest.approx(expected)
+
+
 def test_encoded_width_counts_onehot_and_note_columns() -> None:
     """Encoded width reflects expanded parameter columns, not source parameter count."""
     spec = _tiny_spec()
 
     assert spec.encoded_width == 6
     assert len(spec) == 6
+
+
+class TestEncodedSlices:
+    """The name-to-column-span contract callers need to index an encoded row."""
+
+    def test_spans_cover_every_column_in_encoding_order(self) -> None:
+        """Slices are contiguous from 0 and ordered synth-then-note, matching ``encode``."""
+        spans = [(param.name, sl.start, sl.stop) for param, sl in _tiny_spec().encoded_slices()]
+
+        assert spans == [
+            ("cutoff", 0, 1),
+            ("mode", 1, 3),
+            ("pitch", 3, 4),
+            ("note_start_and_end", 4, 6),
+        ]
+
+    def test_multi_column_parameter_span_is_wider_than_one(self) -> None:
+        """A onehot parameter claims one column per raw value, not a single column."""
+        spans = dict((param.name, sl) for param, sl in _tiny_spec().encoded_slices())
+
+        assert spans["mode"] == slice(1, 3)
+
+    def test_final_stop_equals_encoded_width(self) -> None:
+        """The walk consumes exactly the encoded row — no trailing columns are unclaimed."""
+        spec = _tiny_spec()
+
+        *_, (_, last) = spec.encoded_slices()
+
+        assert last.stop == spec.encoded_width
+
+    def test_slice_indexes_the_column_the_parameter_encoded(self) -> None:
+        """Indexing an encoded row by a parameter's slice returns that parameter's columns."""
+        spec = _tiny_spec()
+        row = spec.encode({"cutoff": 0.5, "mode": 0.75}, {"pitch": 60, "note_start_and_end": (0, 1)})
+        spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+
+        assert row[spans["mode"]].tolist() == [0.0, 1.0]
 
 
 class TestDecodeModelOutput:

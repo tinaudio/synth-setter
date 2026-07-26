@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import cast
 
+from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.surge_xt_param_spec import (
@@ -35,6 +36,14 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("faust_bright_organ"): resolve_faust_param_spec(
+        ParamSpecName("faust_bright_organ")
+    ),
+    ParamSpecName("faust_bubble"): resolve_faust_param_spec(ParamSpecName("faust_bubble")),
+    ParamSpecName("faust_church_organ"): resolve_faust_param_spec(
+        ParamSpecName("faust_church_organ")
+    ),
+    ParamSpecName("faust_filter_osc"): resolve_faust_param_spec(ParamSpecName("faust_filter_osc")),
     ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
