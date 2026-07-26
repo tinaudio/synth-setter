@@ -43,7 +43,7 @@ pytestmark = [
     pytest.mark.skipif(sys.platform != "linux", reason="X11 wrapper is Linux-only"),
 ]
 
-PRESET_PATH = "presets/surge-base.vstpreset"
+PRESET_PATH = "presets/surge-simple.vstpreset"
 
 _NUM_SHARDS = 4
 _SAMPLES_PER_SHARD = 8
