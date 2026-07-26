@@ -2,6 +2,7 @@
 
 import json
 import sys
+import types
 from pathlib import Path
 from typing import cast
 
@@ -380,6 +381,34 @@ def _fake_checkpoint(directory: Path, *, cond_dim: int = 4, max_length: int = 3)
     return padding
 
 
+def _install_fake_conditioner_module(
+    monkeypatch: pytest.MonkeyPatch, built: list["_FakeConditioner"]
+) -> None:
+    """Stand in for ``stable_audio_3`` so the loader runs without the sa3 extra.
+
+    The module chain is injected rather than patched: CI installs no optional
+    extras, so the real package is absent there.
+
+    :param monkeypatch: Fixture restoring ``sys.modules`` after the test.
+    :param built: List receiving each conditioner the loader constructs.
+    """
+
+    def factory(**kwargs: str | int) -> _FakeConditioner:
+        conditioner = _FakeConditioner(**kwargs)  # type: ignore[arg-type]
+        built.append(conditioner)
+        return conditioner
+
+    conditioners = types.ModuleType("stable_audio_3.models.conditioners")
+    conditioners.T5GemmaConditioner = factory  # type: ignore[attr-defined]
+    models = types.ModuleType("stable_audio_3.models")
+    models.conditioners = conditioners  # type: ignore[attr-defined]
+    package = types.ModuleType("stable_audio_3")
+    package.models = models  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "stable_audio_3", package)
+    monkeypatch.setitem(sys.modules, "stable_audio_3.models", models)
+    monkeypatch.setitem(sys.modules, "stable_audio_3.models.conditioners", conditioners)
+
+
 def test_load_padding_embedding_returns_the_checkpoint_tensor(tmp_path: Path) -> None:
     """The learned padding embedding is read straight from the checkpoint.
 
@@ -414,15 +443,7 @@ def test_load_t5gemma_text_encoder_chunks_prompts_and_returns_dim_major(
     """
     _fake_checkpoint(tmp_path, cond_dim=4, max_length=3)
     built: list[_FakeConditioner] = []
-
-    def factory(**kwargs: str | int) -> _FakeConditioner:
-        conditioner = _FakeConditioner(**kwargs)  # type: ignore[arg-type]
-        built.append(conditioner)
-        return conditioner
-
-    monkeypatch.setattr(
-        "stable_audio_3.models.conditioners.T5GemmaConditioner", factory, raising=True
-    )
+    _install_fake_conditioner_module(monkeypatch, built)
     prompts = [f"prompt {index}" for index in range(T5GEMMA_ENCODE_MAX_BATCH + 4)]
 
     embeddings = load_t5gemma_text_encoder(str(tmp_path), "cpu")(prompts)
@@ -441,15 +462,7 @@ def test_load_t5gemma_text_encoder_substitutes_the_checkpoint_padding_embedding(
     """
     expected = _fake_checkpoint(tmp_path)
     built: list[_FakeConditioner] = []
-
-    def factory(**kwargs: str | int) -> _FakeConditioner:
-        conditioner = _FakeConditioner(**kwargs)  # type: ignore[arg-type]
-        built.append(conditioner)
-        return conditioner
-
-    monkeypatch.setattr(
-        "stable_audio_3.models.conditioners.T5GemmaConditioner", factory, raising=True
-    )
+    _install_fake_conditioner_module(monkeypatch, built)
 
     load_t5gemma_text_encoder(str(tmp_path), "cpu")(["a"])
 
