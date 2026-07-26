@@ -249,11 +249,12 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
-def _compose_t5gemma_cached_train_cfg(
-    model_name: str, model_overrides: Sequence[str]
+def _compose_cached_train_cfg(
+    profile: str, model_name: str, model_overrides: Sequence[str]
 ) -> DictConfig:
-    """Compose a one-step CPU train cfg reading synthetic T5Gemma batches.
+    """Compose a one-step CPU train cfg reading synthetic cached-conditioning batches.
 
+    :param profile: Cached-conditioning profile selected for the training step.
     :param model_name: VST model config selected for the training step.
     :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
     :returns: The composed config.
@@ -264,7 +265,7 @@ def _compose_t5gemma_cached_train_cfg(
             "datamodule=surge_lance",
             "datamodule.param_spec_name=surge_xt",
             f"model={model_name}",
-            "conditioning=t5gemma",
+            f"conditioning={profile}",
             "trainer=cpu",
             "+trainer.max_steps=1",
             "paths.output_dir=/tmp/synth-setter-test",
@@ -278,6 +279,7 @@ def _compose_t5gemma_cached_train_cfg(
     )
 
 
+@pytest.mark.parametrize("profile", ["clap", "m2l", "same_l", "same_s", "t5gemma"])
 @pytest.mark.parametrize(
     ("model_name", "model_overrides", "expected_output_dim"),
     [
@@ -304,20 +306,22 @@ def _compose_t5gemma_cached_train_cfg(
     ],
     ids=["flow", "feed_forward"],
 )
-def test_t5gemma_conditioning_profile_cached_batch_trains(
+def test_cached_conditioning_profile_batch_trains_model(
+    profile: str,
     model_name: str,
     model_overrides: list[str],
     expected_output_dim: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The T5Gemma profile trains either VST model from its cached Lance tensor.
+    """Every cached profile trains either VST model from its declared tensor shape.
 
+    :param profile: Cached-conditioning profile selected for the training step.
     :param model_name: VST model config selected for the training step.
     :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
     :param expected_output_dim: Model-owned cached encoder output width.
     :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
     """
-    cfg = _compose_t5gemma_cached_train_cfg(model_name, model_overrides)
+    cfg = _compose_cached_train_cfg(profile, model_name, model_overrides)
     datamodule = hydra.utils.instantiate(cfg.datamodule)
     model = hydra.utils.instantiate(cfg.model)
     monkeypatch.setattr(model, "log", lambda *args, **kwargs: None)
@@ -326,10 +330,10 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     batch = next(iter(datamodule.train_dataloader()))
     loss = model.training_step(batch, batch_idx=0)
 
-    assert datamodule.embedding_conditioning is not None
-    assert datamodule.embedding_conditioning.column == "t5gemma"
-    assert datamodule.embedding_conditioning.input_shape == (768, 256)
-    assert batch["conditioning"].shape == (2, 768, 256)
+    conditioning = datamodule.embedding_conditioning
+    assert conditioning is not None
+    assert conditioning.column == profile
+    assert batch["conditioning"].shape == (2, *conditioning.input_shape)
     assert cfg.model.encoder_output_dim == expected_output_dim
     assert cfg.model.encoder.d_model == expected_output_dim
     assert loss.ndim == 0
@@ -344,11 +348,9 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
             "datamodule=surge_lance",
             "datamodule.param_spec_name=surge_xt",
             "model=vst_flow",
-            "model/encoder=vector_projection",
+            "conditioning=clap",
             "trainer=cpu",
             "paths.output_dir=/tmp/synth-setter-test",
-            "model.conditioning={column:clap,input_shape:[512]}",
-            "datamodule.conditioning={column:clap,input_shape:[512]}",
         ],
     )
 
@@ -371,6 +373,27 @@ def _conditioning_profile_names() -> list[str]:
         for entry in (configs_dir() / "conditioning").iterdir()
         if entry.name.endswith(".yaml")
     )
+
+
+@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+def test_vst_model_without_cached_conditioning_omits_encoder_dimensions(model_name: str) -> None:
+    """Legacy mel configs omit dimensions used only by cached-conditioning encoders.
+
+    :param model_name: VST architecture composed without a conditioning profile.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert "encoder_num_heads" not in cfg.model
+    assert "encoder_output_dim" not in cfg.model
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())

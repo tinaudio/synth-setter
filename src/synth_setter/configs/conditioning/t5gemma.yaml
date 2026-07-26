@@ -2,6 +2,7 @@
 
 # Frozen offline T5Gemma parameter-text embeddings from the `t5gemma` Lance column.
 defaults:
+  - override /cached_conditioning: enabled
   - override /model/encoder: embedpool
 
 model:

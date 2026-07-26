@@ -3,6 +3,7 @@
 # CLAP conditioning on the `clap` Lance column. A pooled global vector (not a
 # sequence), so vector_projection projects it rather than the pooling embedpool.
 defaults:
+  - override /cached_conditioning: enabled
   - override /model/encoder: vector_projection
 
 model:

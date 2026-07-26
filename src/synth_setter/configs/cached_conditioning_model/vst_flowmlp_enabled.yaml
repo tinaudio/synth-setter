@@ -1,0 +1,5 @@
+# @package _global_
+
+model:
+  encoder_num_heads: 8
+  encoder_output_dim: ${model.vector_field.d_model}

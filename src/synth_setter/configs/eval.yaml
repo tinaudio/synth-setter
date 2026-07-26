@@ -13,10 +13,12 @@ defaults:
   # `render` before `experiment` (matching train.yaml/dataset.yaml): Hydra only
   # lets an experiment override groups declared ahead of it.
   - render: null
-  # embedding-conditioning profiles pairing a stored Lance column with its
-  # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
+  # Profiles enable cached_conditioning so the final model choice loads only its
+  # cached-encoder dimensions; null preserves the legacy mel config shape.
+  - cached_conditioning: null
   - conditioning: null
   - experiment: null
+  - optional cached_conditioning_model@_global_: ${model}_${cached_conditioning}
 
 task_name: "eval"
 

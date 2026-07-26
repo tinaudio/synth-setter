@@ -1,0 +1,5 @@
+# @package _global_
+
+model:
+  encoder_num_heads: 1
+  encoder_output_dim: ${param_spec_width:${datamodule.param_spec_name}}

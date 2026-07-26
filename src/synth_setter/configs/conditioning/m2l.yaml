@@ -3,6 +3,7 @@
 # music2latent conditioning on the `m2l` column add_embeddings writes — not the
 # `music2latent` column the bare `conditioning=m2l` legacy string maps to.
 defaults:
+  - override /cached_conditioning: enabled
   - override /model/encoder: embedpool
 
 model:

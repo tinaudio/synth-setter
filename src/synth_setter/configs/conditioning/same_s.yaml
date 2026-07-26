@@ -4,6 +4,7 @@
 # CLI, pooled by the embedpool encoder. 44 latent frames = 4 s render @ 44.1 kHz
 # through SAME's 4096-sample downsampling ratio (SAME_LATENT_FRAMES).
 defaults:
+  - override /cached_conditioning: enabled
   - override /model/encoder: embedpool
 
 model:
