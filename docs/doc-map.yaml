@@ -83,7 +83,7 @@ docs:
       - pattern: "src/synth_setter/cli/eval.py"
         covers: "build_eval_results_artifact / _log_eval_results_artifact: eval-{id} artifact, output-dir reference, summary-metric metadata"
       - pattern: "src/synth_setter/utils/logging_utils.py"
-        covers: "use_input_artifacts lineage edges; pin_wandb_run_id; log_wandb_provenance"
+        covers: "record_input_lineage / use_input_artifacts lineage edges and the incomplete-lineage marker; pin_wandb_run_id; log_wandb_provenance"
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
 

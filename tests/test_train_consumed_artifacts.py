@@ -1,10 +1,11 @@
 """Unit tests for ``train._consumed_artifact_refs`` and the lineage call seam.
 
 The pure helper maps the datamodule's local dataset root to the
-``(name, alias)`` lineage edge training feeds to ``use_input_artifacts``
-(``storage-provenance-spec.md`` §5). The seam tests below drive the real
-``train(cfg)`` with its heavy collaborators stubbed and pin that the entrypoint
-actually calls ``use_input_artifacts`` with those edges, gated on
+``(name, alias)`` lineage edge training feeds to ``record_input_lineage``
+(``storage-provenance-spec.md`` §5), plus the unresolved roots that call marks
+the run for (#2424). The seam tests below drive the real ``train(cfg)`` with its
+heavy collaborators stubbed and pin that the entrypoint actually calls
+``record_input_lineage`` with those edges, gated on
 ``train``/``test`` — coverage the isolated helper tests cannot give. Both kept
 out of the canonical ``test_train.py`` per
 ``tests/_meta/test_entrypoint_test_modules.py``.
@@ -70,15 +71,15 @@ def _seam_cfg(
 
 @contextlib.contextmanager
 def _stub_train_collaborators(logger_sentinel: object) -> Iterator[MagicMock]:
-    """Patch ``train``'s heavy collaborators and yield the ``use_input_artifacts`` spy.
+    """Patch ``train``'s heavy collaborators and yield the ``record_input_lineage`` spy.
 
     ``instantiate_loggers`` returns ``logger_sentinel`` so the test can assert the
-    exact object handed to ``use_input_artifacts``; the trainer is a mock whose
+    exact object handed to ``record_input_lineage``; the trainer is a mock whose
     ``fit``/``test`` are inert, and the hyperparameter/provenance writers are
     no-ops so nothing touches wandb or disk.
 
     :param logger_sentinel: Object ``instantiate_loggers`` is stubbed to return.
-    :yields MagicMock: The patched ``use_input_artifacts`` mock for call assertions.
+    :yields MagicMock: The patched ``record_input_lineage`` mock for call assertions.
     """
     # The trainer is the third ``instantiate`` call; ``train`` merges its
     # ``callback_metrics`` into a dict, so back the attribute with a real dict.
@@ -86,7 +87,7 @@ def _stub_train_collaborators(logger_sentinel: object) -> Iterator[MagicMock]:
     instantiated.callback_metrics = {}
     instantiated.checkpoint_callback.best_model_path = "ckpt.ckpt"
     with (
-        patch("synth_setter.cli.train.use_input_artifacts") as spy,
+        patch("synth_setter.cli.train.record_input_lineage") as spy,
         patch("synth_setter.cli.train.hydra.utils.instantiate", return_value=instantiated),
         patch("synth_setter.cli.train.instantiate_callbacks", return_value=[]),
         patch("synth_setter.cli.train.instantiate_loggers", return_value=logger_sentinel),
@@ -99,7 +100,7 @@ def _stub_train_collaborators(logger_sentinel: object) -> Iterator[MagicMock]:
         yield spy
 
 
-def test_train_calls_use_input_artifacts_with_discovered_dataset_edge(
+def test_train_calls_record_input_lineage_with_discovered_dataset_edge(
     tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
 ) -> None:
     """``train`` hands the logger the dataset edge found from its local root.
@@ -122,13 +123,15 @@ def test_train_calls_use_input_artifacts_with_discovered_dataset_edge(
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
+    spy.assert_called_once_with(
+        logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")], []
+    )
 
 
-def test_train_calls_use_input_artifacts_with_empty_edges_without_provenance(
+def test_train_calls_record_input_lineage_with_unresolved_root_without_provenance(
     tmp_path: Path,
 ) -> None:
-    """A local root without provenance drives the no-edge path.
+    """A local root without provenance records no edge and reports the root as unresolved.
 
     :param tmp_path: Pytest tmp dir wired to ``paths.output_dir``.
     """
@@ -138,7 +141,7 @@ def test_train_calls_use_input_artifacts_with_empty_edges_without_provenance(
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [])
+    spy.assert_called_once_with(logger_sentinel, [], [f"dataset root {tmp_path}"])
 
 
 def test_train_remote_provenance_precedes_local_dataset_spec(
@@ -190,6 +193,7 @@ def test_train_remote_provenance_precedes_local_dataset_spec(
     spy.assert_called_once_with(
         logger_sentinel,
         [("data-remote-lineage", "remote-lineage-20260713T180000000Z")],
+        [],
     )
 
 
@@ -216,7 +220,9 @@ def test_train_records_lineage_when_only_test_is_true(
     with _stub_train_collaborators(logger_sentinel) as spy:
         train(cfg)
 
-    spy.assert_called_once_with(logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")])
+    spy.assert_called_once_with(
+        logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")], []
+    )
 
 
 def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> None:
@@ -234,5 +240,17 @@ def test_train_skips_lineage_when_train_and_test_both_false(tmp_path: Path) -> N
 
 
 def test_consumed_artifact_refs_missing_dataset_root_returns_empty() -> None:
-    """A datamodule without a local root has no dataset artifact to consume."""
-    assert _consumed_artifact_refs(OmegaConf.create({"datamodule": {}})) == []
+    """A datamodule with no root at all consumes nothing, so nothing is unresolved."""
+    assert _consumed_artifact_refs(OmegaConf.create({"datamodule": {}})) == ([], [])
+
+
+def test_consumed_artifact_refs_unreadable_spec_reports_the_configured_root(
+    tmp_path: Path,
+) -> None:
+    """A configured root whose frozen spec will not parse is reported, not silently dropped.
+
+    :param tmp_path: Empty dataset root standing in for one with an unreadable spec.
+    """
+    cfg = OmegaConf.create({"datamodule": {"dataset_root": str(tmp_path)}})
+
+    assert _consumed_artifact_refs(cfg) == ([], [f"dataset root {tmp_path}"])

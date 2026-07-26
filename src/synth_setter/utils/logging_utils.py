@@ -17,6 +17,9 @@ from synth_setter.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
+#: Run tag marking a run whose consumed-artifact lineage has a missing edge.
+LINEAGE_INCOMPLETE_TAG = "lineage-incomplete"
+
 
 def resolve_run_config_id(cfg: DictConfig) -> str:
     """Resolve the run config_id from the chosen Hydra experiment, else ``task_name``.
@@ -54,42 +57,104 @@ def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
     OmegaConf.update(cfg, "logger.wandb.job_type", job_type)
 
 
-@rank_zero_only
-def use_input_artifacts(loggers: Iterable[Logger], refs: Iterable[tuple[str, str]]) -> None:
+def use_input_artifacts(
+    loggers: Iterable[Logger], refs: Iterable[tuple[str, str]]
+) -> list[tuple[str, str]]:
     """Record consumed-artifact edges on each ``WandbLogger`` for the lineage DAG.
 
     Calls ``run.use_artifact(f"{name}:{alias}")`` per ref on every ``WandbLogger``
     in ``loggers`` (``storage-provenance-spec.md`` §5: only ``use_artifact`` —
     not ``api.artifact`` — links lineage). Non-``WandbLogger`` entries and an
     empty ``refs`` are a no-op, so wandb-free runs need no special-casing. A
-    wandb failure warns and is swallowed, mirroring
+    wandb failure warns and is reported rather than raised, mirroring
     ``finalize_dataset._log_dataset_artifact`` — a lineage edge must never abort
-    a run whose real work already succeeded. Rank-zero-only so DDP/spawned runs
+    a run whose real work already succeeded. Rank-zero-gated so DDP/spawned runs
     record each edge once on the rank that owns the live W&B run.
 
     :param loggers: Lightning loggers; only ``WandbLogger`` entries record edges.
     :param refs: ``(name, alias)`` pairs naming each consumed artifact, e.g.
         ``("data-diva-v1", "latest")``.
+    :returns: The refs that failed on at least one ``WandbLogger``, in input
+        order, so callers can surface the gap via :func:`mark_lineage_incomplete`.
     """
     # Probe before importing so a wandb-free install is a true no-op (mirrors
     # ``instantiators.close_loggers``); the import is deferred for the same reason.
-    if not find_spec("wandb"):
-        return
+    if rank_zero_only.rank != 0 or not find_spec("wandb"):
+        return []
     from lightning.pytorch.loggers.wandb import WandbLogger
 
     wandb_loggers = [lg for lg in loggers if isinstance(lg, WandbLogger)]
     if not wandb_loggers:
-        return
+        return []
     # Materialize once so a generator ``refs`` is not exhausted by the first logger.
     ref_list = list(refs)
+    unrecorded: list[tuple[str, str]] = []
     for lg in wandb_loggers:
-        for name, alias in ref_list:
+        for ref in ref_list:
+            name, alias = ref
             try:
                 lg.experiment.use_artifact(f"{name}:{alias}")
             except Exception as exc:  # noqa: BLE001 — lineage failure must not abort the run
                 log.warning(
                     f"use_input_artifacts failed for {name}:{alias} on {type(lg).__name__}: {exc}"
                 )
+                if ref not in unrecorded:
+                    unrecorded.append(ref)
+    return unrecorded
+
+
+@rank_zero_only
+def mark_lineage_incomplete(loggers: Iterable[Logger], missing: Iterable[str]) -> None:
+    """Record on each ``WandbLogger`` run that some consumed input has no lineage edge.
+
+    A lineage gap otherwise only ever surfaced as a warning buried in a 100k-step
+    training log while the run finished green (#2424), so the marker is written
+    where an audit can see it: ``summary.lineage_incomplete`` to filter on,
+    ``summary.lineage_missing`` to diagnose from, and the
+    ``lineage-incomplete`` run tag to spot on the run page. Best-effort — a
+    wandb failure while marking must not abort the run it is marking.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries are marked.
+    :param missing: Human-readable descriptions of each input with no edge, e.g.
+        ``"data-diva-v1:v0"`` or ``"dataset root r2://bucket/run"``.
+    """
+    if not find_spec("wandb"):
+        return
+    from lightning.pytorch.loggers.wandb import WandbLogger
+
+    missing_list = list(missing)
+    log.warning(f"Lineage incomplete — no use_artifact edge for: {', '.join(missing_list)}")
+    for lg in loggers:
+        if not isinstance(lg, WandbLogger):
+            continue
+        try:
+            run = lg.experiment
+            run.summary["lineage_incomplete"] = True
+            run.summary["lineage_missing"] = missing_list
+            if LINEAGE_INCOMPLETE_TAG not in run.tags:
+                run.tags = (*run.tags, LINEAGE_INCOMPLETE_TAG)
+        except Exception as exc:  # noqa: BLE001 — marking must not abort the run
+            log.warning(f"mark_lineage_incomplete failed on {type(lg).__name__}: {exc}")
+
+
+def record_input_lineage(
+    loggers: Iterable[Logger],
+    refs: Iterable[tuple[str, str]],
+    unresolved: Iterable[str] = (),
+) -> None:
+    """Record every consumed-artifact edge and mark the run when any input lacks one.
+
+    :param loggers: Lightning loggers; only ``WandbLogger`` entries are touched.
+    :param refs: ``(name, alias)`` pairs naming each consumed artifact.
+    :param unresolved: Descriptions of configured inputs whose ref could not be
+        derived at all (e.g. a dataset root with an unreadable frozen spec).
+    """
+    # Materialize once — a generator ``loggers`` would be empty by the marking call.
+    logger_list = list(loggers)
+    unrecorded = use_input_artifacts(logger_list, refs)
+    missing = [*unresolved, *(f"{name}:{alias}" for name, alias in unrecorded)]
+    if missing:
+        mark_lineage_incomplete(logger_list, missing)
 
 
 @rank_zero_only

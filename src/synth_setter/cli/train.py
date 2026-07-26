@@ -19,7 +19,10 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import run_audio_probe
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.synth_spec import SynthSpec
@@ -32,11 +35,11 @@ from synth_setter.utils import (
     log_hyperparameters,
     log_wandb_provenance,
     pin_wandb_run_id,
+    record_input_lineage,
     register_resolvers,
     resolve_git_sha,
     resolve_run_config_id,
     task_wrapper,
-    use_input_artifacts,
     watch_gradients,
 )
 from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
@@ -58,18 +61,21 @@ log = RankedLogger(__name__, rank_zero_only=True)
 _SHELL_SIGNAL_EXIT_OFFSET = 128
 
 
-def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the dataset lineage edge declared by the datamodule provenance.
 
     :param cfg: Hydra-composed cfg carrying local or remote datamodule roots.
-    :returns: One W&B dataset-artifact ref when the root carries a readable frozen input spec, else
-        an empty list.
+    :returns: The pair ``(refs, unresolved)`` — one W&B dataset-artifact ref when a root carries a
+        readable frozen input spec, else a description of the configured root whose edge could not
+        be derived (#2424).
     """
-    ref = dataset_artifact_ref(
-        OmegaConf.select(cfg, "datamodule.dataset_root"),
-        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
-    )
-    return [ref] if ref is not None else []
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
+    ref = dataset_artifact_ref(dataset_root, download_uri)
+    if ref is not None:
+        return [ref], []
+    unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    return [], ([unresolved] if unresolved else [])
 
 
 def _derive_checkpoint_uri(cfg: DictConfig) -> str:
@@ -336,7 +342,41 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None
     return uri
 
 
-def build_model_artifact(cfg: DictConfig, ckpt_uri: str | None = None) -> wandb.Artifact:
+def _checkpoint_metadata(trainer: Trainer, best_model_path: str, ckpt_uri: str) -> dict[str, Any]:
+    """Describe the checkpoint the model artifact's R2 reference points at.
+
+    W&B cannot reach R2's custom endpoint, so the ``checksum=False`` reference
+    renders as a 0-byte entry carrying no size, epoch, or score (#2424); this
+    metadata is the only way to identify the referenced checkpoint without
+    leaving W&B. Each key whose source is unavailable is omitted rather than
+    recorded as ``None``.
+
+    :param trainer: The finished trainer; supplies epoch/step and the checkpoint callback.
+    :param best_model_path: Local path of the checkpoint that was uploaded.
+    :param ckpt_uri: The ``r2://`` URI it was uploaded to.
+    :returns: ``artifact.metadata`` entries describing the referenced checkpoint.
+    """
+    metadata: dict[str, Any] = {
+        "ckpt_uri": ckpt_uri,
+        "epoch": trainer.current_epoch,
+        "global_step": trainer.global_step,
+    }
+    try:
+        metadata["ckpt_bytes"] = Path(best_model_path).stat().st_size
+    except OSError as exc:
+        log.warning(f"Checkpoint size unavailable for {best_model_path}: {exc}")
+    monitor = getattr(trainer.checkpoint_callback, "monitor", None)
+    score = getattr(trainer.checkpoint_callback, "best_model_score", None)
+    if monitor is not None:
+        metadata["monitor"] = monitor
+    if score is not None:
+        metadata["monitor_score"] = float(score)
+    return metadata
+
+
+def build_model_artifact(
+    cfg: DictConfig, ckpt_uri: str | None = None, ckpt_metadata: dict[str, Any] | None = None
+) -> wandb.Artifact:
     """Build the canonical ``model`` W&B artifact for a training run.
 
     Names the artifact ``model-{config_id}`` (type ``model``) per
@@ -352,12 +392,14 @@ def build_model_artifact(cfg: DictConfig, ckpt_uri: str | None = None) -> wandb.
     :param cfg: Hydra-composed train cfg; ``task_name``/experiment determine the name.
     :param ckpt_uri: The ``r2://`` URI the checkpoint was uploaded to, or ``None``
         for a lineage-only artifact.
+    :param ckpt_metadata: :func:`_checkpoint_metadata` entries identifying the
+        referenced checkpoint, merged into the artifact metadata.
     :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
     """
     artifact = wandb.Artifact(
         name=f"model-{resolve_run_config_id(cfg)}",
         type="model",
-        metadata={"git_sha": resolve_git_sha()},
+        metadata={"git_sha": resolve_git_sha(), **(ckpt_metadata or {})},
     )
     if ckpt_uri:
         artifact.add_reference(r2_io.to_s3_uri(ckpt_uri), checksum=False)
@@ -377,7 +419,12 @@ def _has_wandb_logger(loggers: list[Logger]) -> bool:
     return any(isinstance(lg, WandbLogger) for lg in loggers)
 
 
-def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | None) -> None:
+def _log_model_artifact(
+    loggers: list[Logger],
+    cfg: DictConfig,
+    ckpt_uri: str | None,
+    ckpt_metadata: dict[str, Any] | None = None,
+) -> None:
     """Log the canonical ``model`` artifact to each ``WandbLogger`` in ``loggers``.
 
     A wandb failure warns and is swallowed so artifact logging never aborts a
@@ -388,12 +435,14 @@ def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | 
     :param cfg: Train cfg forwarded to :func:`build_model_artifact`.
     :param ckpt_uri: The uploaded checkpoint URI to reference, or ``None`` for
         a lineage-only artifact.
+    :param ckpt_metadata: :func:`_checkpoint_metadata` entries identifying the
+        referenced checkpoint.
     """
     for lg in loggers:
         if not isinstance(lg, WandbLogger):
             continue
         try:
-            lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
+            lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri, ckpt_metadata))
         except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort training
             log.warning(f"_log_model_artifact failed on {type(lg).__name__}: {exc}")
 
@@ -496,7 +545,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # its input artifact in the W&B DAG (storage-provenance-spec §5). A test-only run
     # (train: False, test: True) consumes the dataset too, so gate on either.
     if cfg.get("train") or cfg.get("test"):
-        use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+        record_input_lineage(logger, *_consumed_artifact_refs(cfg))
 
     if cfg.get("train"):
         log.info("Starting training!")
@@ -537,7 +586,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if trainer.is_global_zero and _has_wandb_logger(logger):
         best_model_path = getattr(trainer.checkpoint_callback, "best_model_path", "") or ""
         ckpt_uri = _upload_best_checkpoint(cfg, best_model_path)
-        _log_model_artifact(logger, cfg, ckpt_uri)
+        ckpt_metadata = (
+            _checkpoint_metadata(trainer, best_model_path, ckpt_uri) if ckpt_uri else None
+        )
+        _log_model_artifact(logger, cfg, ckpt_uri, ckpt_metadata)
 
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}

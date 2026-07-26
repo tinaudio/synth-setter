@@ -1,10 +1,11 @@
 """Unit tests for ``eval._consumed_artifact_refs`` and the lineage call seam.
 
 The pure helper maps the model config ID and local dataset provenance to
-``(name, alias)`` lineage edges eval feeds to ``use_input_artifacts`` — both
-the model and the dataset it consumes (``storage-provenance-spec.md`` §5). The
-seam test below drives the real ``evaluate(cfg)`` with its heavy collaborators
-stubbed and pins that the entrypoint calls ``use_input_artifacts`` once with the
+``(name, alias)`` lineage edges eval feeds to ``record_input_lineage`` — both
+the model and the dataset it consumes (``storage-provenance-spec.md`` §5) — plus
+the unresolved roots that call marks the run for (#2424). The seam test below
+drives the real ``evaluate(cfg)`` with its heavy collaborators stubbed and pins
+that the entrypoint calls ``record_input_lineage`` once with the
 model edge ordered before the dataset edge — coverage the isolated helper tests
 cannot give. Both kept out of the canonical ``test_eval.py`` per
 ``tests/_meta/test_entrypoint_test_modules.py``.
@@ -23,10 +24,10 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
 
-def test_evaluate_calls_use_input_artifacts_with_model_edge_before_data_edge(
+def test_evaluate_calls_record_input_lineage_with_model_edge_before_data_edge(
     tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
 ) -> None:
-    """``evaluate`` hands the logger and the model-then-data edges to ``use_input_artifacts``.
+    """``evaluate`` hands the logger and the model-then-data edges to ``record_input_lineage``.
 
     :param tmp_path: Pytest tmp dir wired to ``paths.output_dir`` (read only by
         ``task_wrapper``'s finally-block log line).
@@ -60,7 +61,7 @@ def test_evaluate_calls_use_input_artifacts_with_model_edge_before_data_edge(
     instantiated.callback_metrics = {}
 
     with (
-        patch("synth_setter.cli.eval.use_input_artifacts") as spy,
+        patch("synth_setter.cli.eval.record_input_lineage") as spy,
         patch("synth_setter.cli.eval.hydra.utils.instantiate", return_value=instantiated),
         patch("synth_setter.cli.eval.instantiate_callbacks", return_value=[]),
         patch("synth_setter.cli.eval.instantiate_loggers", return_value=logger_sentinel),
@@ -78,6 +79,7 @@ def test_evaluate_calls_use_input_artifacts_with_model_edge_before_data_edge(
             ("model-flow-simple", "latest"),
             ("data-diva-v1", "diva-v1-20260520T000000000Z"),
         ],
+        [],
     )
 
 
@@ -105,14 +107,21 @@ def test_consumed_artifact_refs_model_and_dataset_present_returns_model_then_dat
         ),
         tmp_path / "input_spec.json",
     )
-    assert _consumed_artifact_refs(cfg) == [
-        ("model-flow-simple", "latest"),
-        ("data-diva-v1", "diva-v1-20260520T000000000Z"),
-    ]
+    assert _consumed_artifact_refs(cfg) == (
+        [
+            ("model-flow-simple", "latest"),
+            ("data-diva-v1", "diva-v1-20260520T000000000Z"),
+        ],
+        [],
+    )
 
 
 def test_consumed_artifact_refs_missing_dataset_provenance_returns_model_edge_only() -> None:
-    """A model ID without a discoverable local dataset keeps its model edge."""
+    """A model ID without a discoverable local dataset keeps its model edge.
+
+    The undiscoverable dataset root comes back as unresolved so the run is marked rather than
+    silently losing its dataset edge (#2424).
+    """
     cfg = OmegaConf.create(
         {
             "consumed_train_config_id": "flow-simple",
@@ -120,7 +129,10 @@ def test_consumed_artifact_refs_missing_dataset_provenance_returns_model_edge_on
         }
     )
 
-    assert _consumed_artifact_refs(cfg) == [("model-flow-simple", "latest")]
+    assert _consumed_artifact_refs(cfg) == (
+        [("model-flow-simple", "latest")],
+        ["dataset root /datasets/surge"],
+    )
 
 
 def test_consumed_artifact_refs_model_id_absent_returns_dataset_edge_only(
@@ -147,11 +159,11 @@ def test_consumed_artifact_refs_model_id_absent_returns_dataset_edge_only(
         ),
         tmp_path / "input_spec.json",
     )
-    assert _consumed_artifact_refs(cfg) == [("data-diva-v1", "diva-v1-20260520T000000000Z")]
+    assert _consumed_artifact_refs(cfg) == ([("data-diva-v1", "diva-v1-20260520T000000000Z")], [])
 
 
 def test_consumed_artifact_refs_without_model_or_dataset_returns_empty() -> None:
-    """An eval without model or local dataset provenance creates no input links."""
+    """An eval without model or dataset configured has nothing to link and nothing unresolved."""
     cfg = OmegaConf.create(
         {
             "consumed_train_config_id": None,
@@ -159,4 +171,4 @@ def test_consumed_artifact_refs_without_model_or_dataset_returns_empty() -> None
         }
     )
 
-    assert _consumed_artifact_refs(cfg) == []
+    assert _consumed_artifact_refs(cfg) == ([], [])

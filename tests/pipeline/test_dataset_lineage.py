@@ -10,7 +10,10 @@ from unittest.mock import ANY, MagicMock
 import pytest
 
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
 
@@ -236,3 +239,21 @@ def test_dataset_artifact_ref_invalid_spec_returns_none(tmp_path: Path) -> None:
     (tmp_path / "input_spec.json").write_text("{}", encoding="utf-8")
 
     assert dataset_artifact_ref(tmp_path) is None
+
+
+def test_describe_unresolved_dataset_root_prefers_the_remote_uri() -> None:
+    """The description names the root discovery actually reads — the remote URI."""
+    assert (
+        describe_unresolved_dataset_root("/datasets/local", "r2://intermediate-data/run")
+        == "dataset root r2://intermediate-data/run"
+    )
+
+
+def test_describe_unresolved_dataset_root_falls_back_to_the_local_root() -> None:
+    """With no remote URI configured, the local root is what failed to resolve."""
+    assert describe_unresolved_dataset_root("/datasets/local") == "dataset root /datasets/local"
+
+
+def test_describe_unresolved_dataset_root_without_any_root_returns_none() -> None:
+    """No configured root means nothing was expected to resolve, so nothing is reported."""
+    assert describe_unresolved_dataset_root(None, None) is None

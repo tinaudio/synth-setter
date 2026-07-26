@@ -26,7 +26,10 @@ from synth_setter.evaluation.audio_probe import (
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
 from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
@@ -40,10 +43,10 @@ from synth_setter.utils import (
     log_hyperparameters,
     log_wandb_provenance,
     pin_wandb_run_id,
+    record_input_lineage,
     register_resolvers,
     resolve_run_config_id,
     task_wrapper,
-    use_input_artifacts,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -288,7 +291,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
-def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
     Eval consumes both the model it scores and the dataset it scores it on; the
@@ -297,20 +300,22 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
 
     :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
         local or remote datamodule root.
-    :returns: ``(name, alias)`` refs for the optional model plus the discovered
-        dataset, in that order.
+    :returns: ``(refs, unresolved)`` — the optional model ref then the discovered
+        dataset ref, plus a description of the configured dataset root whose edge
+        could not be derived (#2424).
     """
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
         refs.append((f"model-{train_id}", "latest"))
-    ref = dataset_artifact_ref(
-        OmegaConf.select(cfg, "datamodule.dataset_root"),
-        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
-    )
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
+    ref = dataset_artifact_ref(dataset_root, download_uri)
     if ref is not None:
         refs.append(ref)
-    return refs
+        return refs, []
+    unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    return refs, ([unresolved] if unresolved else [])
 
 
 @task_wrapper
@@ -358,7 +363,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
-    use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+    record_input_lineage(logger, *_consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
 

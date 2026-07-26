@@ -22,15 +22,18 @@ import glob
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import pytest
+import torch
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import (
+    _checkpoint_metadata,
     _derive_checkpoint_uri,
     _log_model_artifact,
     _upload_best_checkpoint,
@@ -143,6 +146,103 @@ def test_build_model_artifact_without_ckpt_uri_adds_no_reference() -> None:
     """No ckpt URI (upload skipped) logs a lineage-only artifact with no reference."""
     artifact = build_model_artifact(_cfg())
     assert artifact.manifest.entries == {}
+
+
+def test_build_model_artifact_merges_checkpoint_metadata_alongside_git_sha() -> None:
+    """Checkpoint metadata joins ``git_sha`` so the 0-byte reference is identifiable (#2424)."""
+    artifact = build_model_artifact(_cfg(), _CKPT_URI, {"epoch": 7, "ckpt_bytes": 336})
+    assert artifact.metadata == {
+        "git_sha": artifact.metadata["git_sha"],
+        "epoch": 7,
+        "ckpt_bytes": 336,
+    }
+
+
+def _fake_trainer(
+    epoch: int = 3,
+    global_step: int = 4200,
+    monitor: str | None = "val/loss",
+    best_model_score: Any = None,
+) -> Any:
+    """Build a finished-trainer stand-in exposing what ``_checkpoint_metadata`` reads.
+
+    :param epoch: Value returned as ``trainer.current_epoch``.
+    :param global_step: Value returned as ``trainer.global_step``.
+    :param monitor: The checkpoint callback's monitored metric name, or ``None``.
+    :param best_model_score: The checkpoint callback's best score (a tensor in real runs).
+    :returns: A namespace with ``current_epoch``, ``global_step``, and ``checkpoint_callback``.
+    """
+    return SimpleNamespace(
+        current_epoch=epoch,
+        global_step=global_step,
+        checkpoint_callback=SimpleNamespace(monitor=monitor, best_model_score=best_model_score),
+    )
+
+
+def test_checkpoint_metadata_records_uri_epoch_step_and_size(tmp_path: Path) -> None:
+    """The referenced checkpoint's URI, position in training, and byte size are recorded.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x" * 17)
+
+    metadata = _checkpoint_metadata(_fake_trainer(), str(ckpt), _CKPT_URI)
+
+    assert metadata["ckpt_uri"] == _CKPT_URI
+    assert metadata["epoch"] == 3
+    assert metadata["global_step"] == 4200
+    assert metadata["ckpt_bytes"] == 17
+
+
+def test_checkpoint_metadata_records_monitored_metric_as_float(tmp_path: Path) -> None:
+    """The monitored metric and its tensor score are recorded as a JSON-encodable float.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x")
+
+    metadata = _checkpoint_metadata(
+        _fake_trainer(best_model_score=torch.tensor(0.327)), str(ckpt), _CKPT_URI
+    )
+
+    assert metadata["monitor"] == "val/loss"
+    assert metadata["monitor_score"] == pytest.approx(0.327)
+
+
+def test_checkpoint_metadata_without_score_omits_the_key(tmp_path: Path) -> None:
+    """An unscored checkpoint omits ``monitor_score`` rather than recording ``None``.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x")
+
+    metadata = _checkpoint_metadata(_fake_trainer(monitor=None), str(ckpt), _CKPT_URI)
+
+    assert "monitor" not in metadata
+    assert "monitor_score" not in metadata
+
+
+def test_checkpoint_metadata_unreadable_path_omits_size_without_raising(tmp_path: Path) -> None:
+    """A vanished local checkpoint still yields metadata — size is dropped, not fatal.
+
+    :param tmp_path: Supplies a path with no checkpoint written under it.
+    """
+    metadata = _checkpoint_metadata(_fake_trainer(), str(tmp_path / "gone.ckpt"), _CKPT_URI)
+
+    assert "ckpt_bytes" not in metadata
+    assert metadata["ckpt_uri"] == _CKPT_URI
+
+
+def test_log_model_artifact_forwards_checkpoint_metadata() -> None:
+    """``_log_model_artifact`` passes checkpoint metadata through to the logged artifact."""
+    logger = _RecordingWandbLogger()
+
+    _log_model_artifact([logger], _cfg(), _CKPT_URI, {"epoch": 9})
+
+    assert logger.logged[0].metadata["epoch"] == 9
 
 
 def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(

@@ -78,16 +78,20 @@ The data-generation, training, and evaluation edges are landed; the `[promote wo
 ```python
 for lg in loggers:
     if isinstance(lg, WandbLogger):
-        lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
+        lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri, ckpt_metadata))
 ```
 
-**Consuming an input** — `use_input_artifacts` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_artifact`; it is `@rank_zero_only` so a DDP run records each edge once:
+`ckpt_metadata` (`_checkpoint_metadata`) carries `ckpt_uri`, `ckpt_bytes`, `epoch`, `global_step`, `monitor`, and `monitor_score` — W&B cannot reach R2's custom endpoint, so the `checksum=False` reference renders as a 0-byte entry and this metadata is the only in-UI way to identify the checkpoint it points at ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)).
+
+**Consuming an input** — `record_input_lineage` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_input_artifacts` (rank-zero-gated, so a DDP run records each edge once) and marks the run when any consumed input has no edge:
 
 ```python
-use_input_artifacts(loggers, _consumed_artifact_refs(cfg))  # e.g. [("data-diva-v1", "diva-v1-20260520T000000000Z")]
+record_input_lineage(loggers, *_consumed_artifact_refs(cfg))  # ([("data-diva-v1", "diva-v1-20260520T000000000Z")], [])
 ```
 
-Dataset edges are discovered from `input_spec.json` under `datamodule.download_dataset_root_uri` when configured, otherwise under `datamodule.dataset_root`. Its validated `task_name` and `run_id` resolve to the immutable `data-{task_name}:{run_id}` alias. A root without that frozen spec remains usable but records no dataset lineage.
+Dataset edges are discovered from `input_spec.json` under `datamodule.download_dataset_root_uri` when configured, otherwise under `datamodule.dataset_root`. Its validated `task_name` and `run_id` resolve to the immutable `data-{task_name}:{run_id}` alias.
+
+A root without a readable frozen spec, or a ref W&B rejects (a dataset finalized before the `run_id` alias landed in [#1881](https://github.com/tinaudio/synth-setter/issues/1881) has no such alias), still leaves the run usable — but no longer silently. `mark_lineage_incomplete` writes `summary.lineage_incomplete = true`, `summary.lineage_missing` naming each input with no edge, and the `lineage-incomplete` run tag ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)). To audit, filter runs on that tag.
 
 ______________________________________________________________________
 
@@ -125,7 +129,9 @@ ______________________________________________________________________
 | Best-checkpoint R2 upload        | `_upload_best_checkpoint` / `_derive_checkpoint_uri`         | `src/synth_setter/cli/train.py`            |
 | Eval-results artifact            | `build_eval_results_artifact` / `_log_eval_results_artifact` | `src/synth_setter/cli/eval.py`             |
 | Consumed-edge refs (training)    | `_consumed_artifact_refs`                                    | `src/synth_setter/cli/train.py`            |
-| Lineage edge recording           | `use_input_artifacts`                                        | `src/synth_setter/utils/logging_utils.py`  |
+| Lineage edge recording           | `record_input_lineage` / `use_input_artifacts`               | `src/synth_setter/utils/logging_utils.py`  |
+| Incomplete-lineage run marker    | `mark_lineage_incomplete`                                    | `src/synth_setter/utils/logging_utils.py`  |
+| Referenced-checkpoint metadata   | `_checkpoint_metadata`                                       | `src/synth_setter/cli/train.py`            |
 | `${wandb:…}` resolver            | `_resolve_wandb_checkpoint` / `register_resolvers`           | `src/synth_setter/utils/utils.py`          |
 | Run id / `job_type` pinning      | `pin_wandb_run_id`                                           | `src/synth_setter/utils/logging_utils.py`  |
 | Provenance fields (`github_sha`) | `log_wandb_provenance`                                       | `src/synth_setter/utils/logging_utils.py`  |
