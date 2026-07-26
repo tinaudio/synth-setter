@@ -283,7 +283,8 @@ def test_vst_module_cached_embedding_single_batch_overfits_to_near_zero_loss(
     batch = batch_factory()
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
 
-    initial_loss = module.training_step(batch, batch_idx=0).item()
+    loss = module.training_step(batch, batch_idx=0)
+    initial_loss = loss.item()
     for _ in range(_OVERFIT_STEPS):
         optimizer.zero_grad()
         loss = module.training_step(batch, batch_idx=0)
