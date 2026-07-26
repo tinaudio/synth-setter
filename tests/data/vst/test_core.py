@@ -81,6 +81,14 @@ class TestExtractRendererVersion:
             "dawdreamer"
         )
 
+    @pytest.mark.slow
+    @pytest.mark.requires_surgepy
+    def test_surgepy_backend_name_reads_live_engine_version(self) -> None:
+        """SurgePy provenance records the native engine version, not package 0.1.0."""
+        import surgepy
+
+        assert extract_renderer_version(Path("surgepy")) == surgepy.getVersion()
+
     def test_torchsynth_backend_name_reads_installed_package_version(self) -> None:
         """The bare ``torchsynth`` name resolves to the installed package version, not a file."""
         import importlib.metadata

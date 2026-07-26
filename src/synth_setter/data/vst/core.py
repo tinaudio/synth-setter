@@ -13,7 +13,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -61,6 +61,10 @@ def extract_renderer_version(plugin_path: Path) -> str:
         return importlib.metadata.version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
+    if str(plugin_path) == SURGEPY_PLUGIN_NAME:
+        from synth_setter.data.vst.surgepy_runtime import import_surgepy
+
+        return import_surgepy().getVersion()
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 

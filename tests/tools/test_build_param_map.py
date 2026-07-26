@@ -17,6 +17,31 @@ from synth_setter.tools import build_param_map
 from synth_setter.tools.build_param_map import HostDump, HostParam, join_param_map
 
 
+def test_surgepy_provenance_rejects_different_native_component_state(tmp_path: Path) -> None:
+    """Equivalent container metadata cannot hide different native Surge state.
+
+    :param tmp_path: Temporary VST and FXP containers.
+    """
+    vst_preset = tmp_path / "baseline.vstpreset"
+    fxp_preset = tmp_path / "baseline.fxp"
+    vst_preset.write_bytes(Path("presets/surge-base.vstpreset").read_bytes())
+    fxp_data = bytearray(Path("presets/surge-base.fxp").read_bytes())
+    fxp_data[64] ^= 1
+    fxp_preset.write_bytes(fxp_data)
+    pedalboard = _host_dump().model_copy(update={"preset_resource": str(vst_preset)})
+    surgepy = build_param_map.SurgePyDump(
+        engine_version="1.0",
+        preset_resource=str(fxp_preset),
+        preset_sha256="b" * 64,
+        parameter_count=0,
+        params=[],
+    )
+
+    errors = build_param_map._validate_surgepy_provenance(pedalboard, surgepy)
+
+    assert errors == ["SurgePy and VST preset component states disagree"]
+
+
 def test_introspection_constants_pin_shared_host_configuration() -> None:
     """Host dumps share the reviewed introspection configuration."""
     assert build_param_map.INTROSPECTION_SAMPLE_RATE == 44_100
@@ -113,7 +138,7 @@ def test_join_param_map_preserves_verified_host_identities(registry: dict[str, P
     """
     pedalboard, clap, dawdreamer = _valid_inputs()
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     identity = result.params["cutoff"]
     assert identity.pedalboard.index == 0
@@ -145,7 +170,7 @@ def test_join_param_map_resolves_each_backend_after_independent_permutations(
         HostParam(index=300, name="Cutoff"),
     )
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["cutoff"].pedalboard.index == 37
     assert result.params["cutoff"].clap is not None
@@ -177,7 +202,9 @@ def test_join_param_map_resolves_separate_clap_and_dawdreamer_oscillator_aliases
     clap = _clap(_clap_param(800, "CLAP Shape"))
     dawdreamer = _host_dump(HostParam(index=300, name="DD Shape"))
 
-    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+    identity = join_param_map(
+        "test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer
+    ).params[semantic_key]
 
     assert identity.clap is not None
     assert identity.clap.clap_param_id == 800
@@ -203,7 +230,9 @@ def test_join_param_map_resolves_fx_host_name_from_semantic_key(
     clap = _clap(_clap_param(700, "Independent Host FX"))
     dawdreamer = _host_dump(HostParam(index=46, name="Independent Host FX"))
 
-    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+    identity = join_param_map(
+        "test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer
+    ).params[semantic_key]
 
     assert identity.clap is not None
     assert identity.clap.clap_param_id == 700
@@ -222,7 +251,7 @@ def test_join_param_map_resolves_fx_slot_without_bank_anchor(
     clap = _clap(_clap_param(7, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
 
@@ -239,7 +268,7 @@ def test_join_param_map_resolves_dynamic_fx_from_semantic_key_not_pedalboard_nam
     clap = _clap(_clap_param(700, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["fx_a1_delay_time"].pedalboard.name == "My Delay Time"
     assert result.params["fx_a1_delay_time"].clap is not None
@@ -301,7 +330,7 @@ def test_join_param_map_rejects_provenance_drift(
     pedalboard, clap, dawdreamer = mutation(*_valid_inputs())
 
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 @pytest.mark.parametrize(
@@ -350,7 +379,7 @@ def test_join_param_map_rejects_duplicate_host_identities(
     :param expected: Required diagnostic text.
     """
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_duplicate_clap_ids(registry: dict[str, ParamSpec]) -> None:
@@ -362,7 +391,7 @@ def test_join_param_map_rejects_duplicate_clap_ids(registry: dict[str, ParamSpec
     clap = _clap(_clap_param(7, "Cutoff"), _clap_param(7, "Resonance"))
 
     with pytest.raises(ValueError, match="duplicate CLAP parameter ids"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpec]) -> None:
@@ -374,7 +403,7 @@ def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpe
     clap = _clap(_clap_param(7, "Cutoff"), _clap_param(8, "cut_off"))
 
     with pytest.raises(ValueError, match="CLAP name 'cutoff' is missing or ambiguous"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_ambiguous_dawdreamer_fx_name(
@@ -395,7 +424,7 @@ def test_join_param_map_rejects_ambiguous_dawdreamer_fx_name(
     with pytest.raises(
         ValueError, match="DawDreamer name 'FX A1 Param 1' is missing or ambiguous"
     ):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 @pytest.mark.parametrize(
@@ -444,7 +473,7 @@ def test_join_param_map_rejects_unresolvable_parameter_identities(
     :param expected: Required diagnostic text.
     """
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_aggregates_independent_errors(registry: dict[str, ParamSpec]) -> None:
@@ -461,7 +490,7 @@ def test_join_param_map_aggregates_independent_errors(registry: dict[str, ParamS
     dawdreamer = _host_dump()
 
     with pytest.raises(ValueError) as caught:
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert "plugin identities disagree" in str(caught.value)
     assert "DawDreamer name 'cutoff' is missing or ambiguous" in str(caught.value)
@@ -481,7 +510,7 @@ def test_join_param_map_rejects_invalid_categorical_grid(registry: dict[str, Par
     dawdreamer = _host_dump(HostParam(index=11, name="Mode"))
 
     with pytest.raises(ValueError, match="categorical grid does not match CLAP steps"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_accepts_matching_categorical_grid(registry: dict[str, ParamSpec]) -> None:
@@ -496,7 +525,11 @@ def test_join_param_map_accepts_matching_categorical_grid(registry: dict[str, Pa
     clap = _clap(_clap_param(7, "Mode", stepped=True))
     dawdreamer = _host_dump(HostParam(index=11, name="Mode"))
 
-    clap_reference = join_param_map("test", pedalboard, clap, dawdreamer).params["mode"].clap
+    clap_reference = (
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
+        .params["mode"]
+        .clap
+    )
     assert clap_reference is not None
     assert clap_reference.is_stepped
 
@@ -510,13 +543,24 @@ def test_build_command_writes_map_consumable_by_runtime(
     :param tmp_path: Temporary CLI workspace.
     """
     pedalboard, clap, dawdreamer = _valid_inputs()
+    pedalboard = pedalboard.model_copy(update={"preset_resource": "presets/surge-base.vstpreset"})
+    dawdreamer = dawdreamer.model_copy(update={"preset_resource": "presets/surge-base.vstpreset"})
+    surgepy = build_param_map.SurgePyDump(
+        engine_version="1.3.test",
+        preset_resource="presets/surge-base.fxp",
+        preset_sha256="b" * 64,
+        parameter_count=1,
+        params=[build_param_map.SurgePyHostParam(synth_side_id=19, name="Cutoff")],
+    )
     pedalboard_path = tmp_path / "pedalboard.json"
     clap_path = tmp_path / "clap.json"
     dawdreamer_path = tmp_path / "dawdreamer.json"
+    surgepy_path = tmp_path / "surgepy.json"
     output_path = tmp_path / "map.json"
     pedalboard_path.write_text(pedalboard.model_dump_json(), encoding="utf-8")
     clap_path.write_text(clap.model_dump_json(), encoding="utf-8")
     dawdreamer_path.write_text(dawdreamer.model_dump_json(), encoding="utf-8")
+    surgepy_path.write_text(surgepy.model_dump_json(), encoding="utf-8")
 
     result = CliRunner().invoke(
         build_param_map.main,
@@ -528,6 +572,8 @@ def test_build_command_writes_map_consumable_by_runtime(
             str(clap_path),
             "--dawdreamer-dump",
             str(dawdreamer_path),
+            "--surgepy-dump",
+            str(surgepy_path),
             "--param-spec-name",
             "test",
             "--out",
@@ -537,7 +583,42 @@ def test_build_command_writes_map_consumable_by_runtime(
     )
 
     assert result.exit_code == 0, result.output
-    assert load_param_map(output_path).params["cutoff"].dawdreamer.index == 11
+    parameter_map = load_param_map(output_path)
+    assert parameter_map.params["cutoff"].dawdreamer.index == 11
+    assert parameter_map.params["cutoff"].surgepy is not None
+    assert parameter_map.params["cutoff"].surgepy.synth_side_id == 19
+    assert parameter_map.surgepy is not None
+    assert parameter_map.surgepy.plugin_version == "1.3.test"
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_dump_surgepy_reads_real_patch_and_native_identities(tmp_path: Path) -> None:
+    """The SurgePy dump records real engine provenance and unique synth-side IDs.
+
+    :param tmp_path: Temporary command workspace.
+    """
+    output_path = tmp_path / "surgepy.json"
+
+    result = CliRunner().invoke(
+        build_param_map.main,
+        [
+            "dump-surgepy",
+            "--preset",
+            "presets/surge-base.fxp",
+            "--preset-resource",
+            "presets/surge-base.fxp",
+            "--out",
+            str(output_path),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    dump = build_param_map.SurgePyDump.model_validate_json(output_path.read_text())
+    assert dump.engine_version == "1.3.master.f7b97c68"
+    assert dump.parameter_count == 762
+    assert len({parameter.synth_side_id for parameter in dump.params}) == 762
 
 
 def test_dump_dawdreamer_writes_raw_host_names(
