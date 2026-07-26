@@ -23,6 +23,11 @@ on:
         required: false
         type: string
         default: ""
+      verify_wandb_recovery:
+        description: "Retrieve and resync the W&B recovery bundle after the managed job exits"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,6 +69,10 @@ jobs:
           fi
           echo "Resolved launch config: $LAUNCH_CONFIG"
           echo "LAUNCH_CONFIG=$LAUNCH_CONFIG" >> "$GITHUB_ENV"
+
+      - name: Validate recovery verification config
+        if: inputs.verify_wandb_recovery
+        run: test "$LAUNCH_CONFIG" = "src/synth_setter/configs/launch/wandb-recovery-runpod-smoke.yaml"
 
       # Exports canonical storage env plus the rclone projection for the container
       # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.
@@ -114,6 +123,44 @@ jobs:
                 --extra-env EXPERIMENT "$EXPERIMENT" \
                 "$LAUNCH_CONFIG"
             ' 2>&1 | tee train-dispatch.log
+
+      - name: Verify W&B recovery after worker teardown
+        if: ${{ always() && inputs.verify_wandb_recovery }}
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          set -euo pipefail
+          export WANDB_RECOVERY_URI="$(grep '^WANDB_RECOVERY_URI=' train-dispatch.log | tail -1 | cut -d= -f2-)"
+          test -n "$WANDB_RECOVERY_URI"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
+            -e RCLONE_CONFIG_R2_TYPE \
+            -e RCLONE_CONFIG_R2_PROVIDER \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e WANDB_API_KEY \
+            -e WANDB_RECOVERY_URI \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              rm -rf wandb-recovery-download
+              mkdir wandb-recovery-download
+              rclone copyto --checksum "r2:${WANDB_RECOVERY_URI#r2://}" wandb-recovery.tar.gz
+              tar -xzf wandb-recovery.tar.gz -C wandb-recovery-download
+              RUN_DIR="$(find wandb-recovery-download -mindepth 1 -maxdepth 1 -type d -name "run-*" -print -quit)"
+              test -n "$RUN_DIR"
+              test "$(find "$RUN_DIR" -maxdepth 1 -type f -name "run-*.wandb" | wc -l)" -eq 1
+              test -s "$RUN_DIR/logs/debug.log"
+              test -s "$RUN_DIR/logs/debug-internal.log"
+              grep -Eiq "file stream|filestream" "$RUN_DIR/logs/debug-internal.log"
+              wandb sync --include-online --append "$RUN_DIR"
+            '
 
       - name: Upload dispatch log
         if: always()

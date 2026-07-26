@@ -55,6 +55,8 @@ docs:
         covers: "Entity, project, log_model setting, offline mode, console capture (`wrap` + `console_multipart`)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
+      - pattern: "scripts/skypilot/run_with_wandb_recovery.sh"
+        covers: "Managed-training W&B recovery-bundle lifecycle"
       - pattern: "src/synth_setter/cli/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle, model-{config_id} artifact logged at train end with opt-in s3:// checkpoint reference"
       - pattern: "src/synth_setter/cli/eval.py"

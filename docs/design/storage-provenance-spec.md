@@ -36,10 +36,11 @@ intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
 ├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
-└── probes/{train_config_id}/{recovery_namespace}/step-{global_step}/
+├── probes/{train_config_id}/{recovery_namespace}/step-{global_step}/
+└── diagnostics/wandb/training/{train_wandb_run_id}/{attempt_uuid}/wandb-run.tar.gz
 ```
 
-The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). `{recovery_namespace}` is the per-launch identifier (`{run_id}-{uuid}`, `cli/train.py::_make_recovery_namespace`) shared with mid-run recovery checkpoints, so concurrent runs of one config cannot interleave snapshots and a launch's probes correlate with its checkpoints by name.
+The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). `{recovery_namespace}` is the per-launch identifier (`{run_id}-{uuid}`, `cli/train.py::_make_recovery_namespace`) shared with mid-run recovery checkpoints, so concurrent runs of one config cannot interleave snapshots and a launch's probes correlate with its checkpoints by name. `diagnostics/wandb/training/` is a private, 30-day recovery prefix for immutable W&B run-directory archives; each upload enforces retention with an age-scoped rclone delete.
 
 ______________________________________________________________________
 
@@ -103,6 +104,7 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 ```
 
 - The W&B Lightning Logger sets `log_model: False`, so no checkpoint files are uploaded to W&B (5 GB total storage budget). At train end `train.py` uploads only the best checkpoint to R2 and the `model` artifact references it (§4); intermediate checkpoints are not persisted to the cloud.
+- Managed training launches archive the closed canonical W&B run directory to `diagnostics/wandb/training/{train_wandb_run_id}/{attempt_uuid}/wandb-run.tar.gz` before worker teardown. The attempt UUID prevents retries of one run ID from colliding. These private archives may contain sensitive configuration and debug logs; they expire after 30 days through upload-time cleanup.
 
 ### 3c. Evaluation
 

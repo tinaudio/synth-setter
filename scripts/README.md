@@ -6,7 +6,7 @@ This directory holds **shell / Python tooling that ships outside the `synth_sett
 
 | Subdir / file                     | Purpose                                                                                                                                             |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/skypilot/`               | SkyPilot bootstrap / diagnostics (cred writer, cluster-state capture)                                                                               |
+| `scripts/skypilot/`               | SkyPilot bootstrap and diagnostics, including remote-training W&B recovery archives                                                                 |
 | `scripts/ci/`                     | Local CI tooling (triage agent launcher, pueue job queue CLI used by `.github/workflows/job-queue*.yaml`)                                           |
 | `scripts/sync_worker_checkout.sh` | Bake-lag bootstrap — invoked **inside** the worker container by SkyPilot Task `run:` blocks before any source sync; see "Bake-lag exception" below. |
 

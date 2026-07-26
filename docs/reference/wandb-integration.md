@@ -198,6 +198,47 @@ ______________________________________________________________________
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 `generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `close_loggers` (now in `synth_setter.utils.instantiators`, shared with finalize) — see §5 for the metric / run-id contract.
 
+### Remote-training recovery bundles
+
+Every checked-in SkyPilot training launch runs `synth-setter-train` through
+`scripts/skypilot/run_with_wandb_recovery.sh`. Its exit handler runs after
+`wandb.finish()`, archives the canonical `wandb/latest-run` directory, and uses
+`rclone --checksum` to write:
+
+```text
+r2://intermediate-data/diagnostics/wandb/training/{wandb_run_id}/{attempt_uuid}/wandb-run.tar.gz
+```
+
+The worker prints this URI as `WANDB_RECOVERY_URI=...` without an endpoint or
+credentials. A failed training command keeps its original status; a successful
+command fails if the bundle cannot be created, uploaded, or retention-cleaned.
+Each upload removes bundles older than 30 days under this private diagnostics
+prefix. The bundle is sensitive operator data because W&B configuration and
+debug logs may contain run parameters; do not publish it or move it to a public
+bucket.
+
+Retrieve and retry an interrupted online run as follows:
+
+```bash
+uri='r2://intermediate-data/diagnostics/wandb/training/<run-id>/<attempt>/wandb-run.tar.gz'
+rclone copyto --checksum "r2:${uri#r2://}" wandb-run.tar.gz
+mkdir wandb-recovery
+tar -xzf wandb-run.tar.gz -C wandb-recovery
+wandb sync --include-online --append wandb-recovery/run-*/
+```
+
+The archive contains the SDK datastore (`run-*.wandb`), `logs/debug.log`,
+`logs/debug-internal.log`, run config/summary, and console files when the SDK
+produced them. The datastore carries the original run ID used by `wandb sync`.
+An exit handler cannot survive worker `SIGKILL`, host loss, or hard spot
+preemption; mid-run checkpoints cover model state, not W&B history.
+
+The production gate uses a real SkyPilot-managed RunPod worker, rejects its
+actual W&B filestream through a forwarding proxy, waits for worker teardown,
+retrieves the bundle from R2, and runs the `wandb sync` command above:
+
+- [ ] `gh workflow run train.yml --repo tinaudio/synth-setter --ref "$(git branch --show-current)" -f experiment=surge/ffn_simple_smoke -f launch_config=src/synth_setter/configs/launch/wandb-recovery-runpod-smoke.yaml -f verify_wandb_recovery=true`
+
 ______________________________________________________________________
 
 ## 5. Dataset Generation Runs

@@ -1,0 +1,13 @@
+# Real RunPod gate for W&B filestream failure recovery.
+
+compute: runpod/smoke
+worker_image_tag: devcontainer-tools
+env_file: .env
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  rm -rf /home/build/synth-setter/wandb-recovery-smoke &&
+  bash scripts/skypilot/run_with_wandb_recovery.sh
+  /home/build/synth-setter/wandb-recovery-smoke/wandb --
+  uv run python scripts/skypilot/wandb_filestream_failure_probe.py

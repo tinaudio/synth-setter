@@ -68,7 +68,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     task = _compose_task(launch_config)
     task.validate()
     assert isinstance(task.run, str)
-    _, entrypoint, train_args = task.run.partition("exec synth-setter-train")
+    _, entrypoint, train_args = task.run.partition("-- synth-setter-train")
     assert entrypoint
 
     train_entrypoint = Path(sys.executable).with_name("synth-setter-train")

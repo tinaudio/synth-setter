@@ -364,6 +364,23 @@ Use the same model, datamodule, and experiment overrides as the failed launch. T
 
 Boundaries: resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state) — which is also why the train-end `model-{config_id}` artifact is deliberately not a discovery tier: it only exists after a *completed* run and references the monitor-best checkpoint, so continuing from it is a warm start, served by the explicit `ckpt_path='${wandb:...}'` flow in §6.3. An explicit `ckpt_path` bypasses discovery, and combining it with an active `training.resume` is a fail-fast config error. Hydra **multirun** sweeps get a fresh sweep dir per invocation, so the local tier finds no siblings there — the R2 mirror tier is the recovery path for sweeps.
 
+#### W&B post-mortem durability
+
+SkyPilot training commands keep W&B's active directory on worker-local disk.
+After `task_wrapper` calls `wandb.finish()`, the outer recovery wrapper archives
+`wandb/latest-run` and uploads it to the private diagnostics prefix defined in
+the storage provenance spec. This runs on successful and failed process exits
+because a background filestream failure does not necessarily change training's
+exit status. A successful managed job requires the upload and 30-day retention
+cleanup to succeed; failed training preserves its original status after the
+best-effort archive attempt. Worker logs expose the credential-free recovery
+URI. Retrieval and `wandb sync` commands live in
+[the W&B integration reference](../reference/wandb-integration.md#remote-training-recovery-bundles).
+
+This exit boundary does not survive `SIGKILL`, host loss, or abrupt spot
+preemption. W&B remains local during the run because an object-store mount does
+not provide the POSIX append semantics required by the live `.wandb` datastore.
+
 ### 6.3 Resume From W&B
 
 Resume must work with the same `ckpt_path=` interface users already know.

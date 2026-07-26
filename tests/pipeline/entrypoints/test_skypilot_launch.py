@@ -2525,6 +2525,24 @@ class TestCheckedInLaunchConfigs:
         assert "training.upload_checkpoints_during_training=true" in shlex.split(cfg.cmd)
 
     @pytest.mark.parametrize(
+        "path",
+        sorted((Path(str(configs_dir() / "launch"))).glob("train-*.yaml")),
+        ids=lambda path: path.stem,
+    )
+    def test_every_remote_train_archives_wandb_before_worker_teardown(self, path: Path) -> None:
+        """Every managed training command is enclosed by the recovery wrapper.
+
+        :param path: Shipped managed-training launch config.
+        """
+        cfg = load_launch_config(path)
+        assert cfg.cmd is not None
+        tokens = shlex.split(cfg.cmd)
+        wrapper = "scripts/skypilot/run_with_wandb_recovery.sh"
+        assert wrapper in tokens
+        assert "/home/build/synth-setter/train-run/wandb" in tokens
+        assert tokens.index(wrapper) < tokens.index("synth-setter-train")
+
+    @pytest.mark.parametrize(
         "name",
         [
             "train-runpod-flow-simple-440k.yaml",
