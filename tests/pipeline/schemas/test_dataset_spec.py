@@ -338,10 +338,15 @@ class TestRenderConfig:
 
     def test_surgepy_backend_accepts_isolated_in_process_rendering(self) -> None:
         """SurgePy accepts only its sentinel and per-render synth recreation."""
+        values = _valid_render_kwargs(plugin_path="surgepy")
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+        }
         cfg = RenderConfig(
             **{
-                **_valid_render_kwargs(plugin_path="surgepy"),
-                "plugin_state_path": "presets/surge-base.fxp",
+                **values,
                 "renderer_backend": "surgepy",
                 "gui_toggle_cadence": "never",
                 "plugin_reload_cadence": "render",
@@ -371,11 +376,18 @@ class TestRenderConfig:
         """
         values = {
             **_valid_render_kwargs(plugin_path="surgepy"),
-            "plugin_state_path": "presets/surge-base.fxp",
             "renderer_backend": "surgepy",
             "gui_toggle_cadence": "never",
             "plugin_reload_cadence": "render",
-            **overrides,
+        }
+        synth_keys = {"param_spec_name", "plugin_path", "plugin_state_path"}
+        synth_overrides = {key: value for key, value in overrides.items() if key in synth_keys}
+        values.update({key: value for key, value in overrides.items() if key not in synth_keys})
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+            **synth_overrides,
         }
 
         with pytest.raises(ValidationError, match=message):

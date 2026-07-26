@@ -102,7 +102,7 @@ def _config(backend: ParityBackend) -> RenderConfig:
             "plugin_path": "surgepy",
             "plugin_state_path": str(_SURGEPY_PRESET_PATH),
         }
-        values["renderer_version"] = "1.3.master.f7b97c68"
+        values["synth"]["synth_version"] = "1.3.master.f7b97c68"
     return RenderConfig.model_validate(values)
 
 
@@ -296,7 +296,7 @@ def _comparison_manifest(
     config = _config("pedalboard")
     return {
         "backends": {
-            backend: {"renderer_version": _config(backend).renderer_version}
+            backend: {"renderer_version": _config(backend).synth.synth_version}
             for backend in results
         },
         "container_image": os.environ.get("SYNTH_SETTER_BENCHMARK_IMAGE"),

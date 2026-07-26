@@ -61,7 +61,7 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
         from synth_setter.data.vst.surgepy_runtime import ensure_surgepy_runtime
         from synth_setter.resources import as_file, param_map
 
-        ensure_surgepy_runtime(backend, render_config.renderer_version)
+        ensure_surgepy_runtime(backend, render_config.synth.synth_version)
         with as_file(param_map(render_config.param_spec_name)) as path:
             joint_map = load_param_map(path)
         return SurgePyRenderer(

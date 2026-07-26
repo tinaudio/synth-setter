@@ -775,7 +775,7 @@ def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(
         cfg_dataset_dawdreamer.render.synth.plugin_path = "surgepy"
         cfg_dataset_dawdreamer.render.synth.plugin_state_path = "presets/surge-base.fxp"
         cfg_dataset_dawdreamer.render.renderer_backend = "surgepy"
-        cfg_dataset_dawdreamer.render.renderer_version = "1.3.master.f7b97c68"
+        cfg_dataset_dawdreamer.render.synth.synth_version = "1.3.master.f7b97c68"
         cfg_dataset_dawdreamer.render.gui_toggle_cadence = "never"
         cfg_dataset_dawdreamer.render.plugin_reload_cadence = "render"
         cfg_dataset_dawdreamer.r2.prefix = "fake-r2/surgepy-run/"

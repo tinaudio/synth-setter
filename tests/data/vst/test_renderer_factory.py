@@ -69,10 +69,13 @@ def test_make_audio_renderer_surgepy_returns_real_renderer() -> None:
     """The public factory constructs SurgePy with its packaged parameter map."""
     config = _render_config(
         renderer_backend="surgepy",
-        plugin_path="surgepy",
-        plugin_state_path="presets/surge-simple.fxp",
-        param_spec_name="surge_simple",
-        renderer_version="1.3.master.f7b97c68",
+        synth={
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "surgepy",
+            "plugin_state_path": "presets/surge-simple.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+        },
         plugin_reload_cadence="render",
     )
 
