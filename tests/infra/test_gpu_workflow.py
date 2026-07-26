@@ -62,11 +62,34 @@ def test_gpu_workflow_remote_command_exercises_real_production_path(project_root
     assert "nvidia-smi --query-gpu=name,memory.free --format=csv,noheader" in launch
     assert "torch.cuda.is_available()" in launch
     assert "load_plugin" in launch and "/usr/lib/vst3/Surge XT.vst3" in launch
+    chmod = "chmod u+x src/synth_setter/scripts/run-linux-vst-headless.sh"
+    assert chmod in launch
+    assert launch.index(chmod) < launch.index("load_plugin")
     assert "bash src/synth_setter/scripts/run-linux-vst-headless.sh python" in launch
     assert "bash src/synth_setter/scripts/run-linux-vst-headless.sh pytest -vv -s -m gpu" in launch
     assert "--cov=src --cov-branch --cov-report=xml" in launch
     assert "rclone copyto coverage.xml" in launch and "--checksum" in launch
     assert "WANDB_API_KEY" not in launch
+
+
+@pytest.mark.infra
+def test_gpu_workflow_mounts_supported_rclone_for_worker(project_root: Path) -> None:
+    """The worker uses the pinned rclone installed by the setup-r2 action.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    setup_r2 = _named_step(project_root, "Set up R2")
+    launch = cast(str, _named_step(project_root, "Launch GPU tests on RunPod")["run"])
+
+    assert setup_r2["uses"] == "./.github/actions/setup-r2"
+    assert cast(dict[str, object], setup_r2["with"])["install-rclone"] is True
+    assert 'rclone_path = shutil.which("rclone")' in launch
+    assert "task.update_file_mounts({worker_rclone: rclone_path})" in launch
+    assert 'worker_rclone = "/tmp/synth-setter-tools/rclone"' in launch
+    assert 'export PATH="/tmp/synth-setter-tools:$PATH"' in launch
+    assert "rclone version" in launch
+    assert '"RCLONE_CONFIG_R2_PROVIDER": "Cloudflare"' in launch
+    assert "rclone copyto coverage.xml" in launch and "--checksum" in launch
 
 
 @pytest.mark.infra

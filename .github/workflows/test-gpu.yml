@@ -82,6 +82,7 @@ jobs:
           set -euo pipefail
           uv run python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os
+          import shutil
           import time
 
           import sky
@@ -97,9 +98,16 @@ jobs:
           cluster = os.environ["CLUSTER_NAME"]
           deadline = time.monotonic() + int(os.environ["JOB_DEADLINE_SECONDS"])
           compute = apply_tier_filter(load_compute_option("runpod/smoke"), GpuTier.LOW)
+          rclone_path = shutil.which("rclone")
+          if rclone_path is None:
+              raise SystemExit("setup-r2 did not install rclone")
+          worker_rclone = "/tmp/synth-setter-tools/rclone"
           worker_command = r"""
           set -euo pipefail
           cd ~/sky_workdir
+          chmod u+x /tmp/synth-setter-tools/rclone
+          chmod u+x src/synth_setter/scripts/run-linux-vst-headless.sh
+          export PATH="/tmp/synth-setter-tools:$PATH"
           export PYTHONPATH="$PWD/src"
           export SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge\ XT.vst3
           upload_coverage() {
@@ -111,6 +119,7 @@ jobs:
             exit "$rc"
           }
           trap upload_coverage EXIT
+          rclone version
           bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
           nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
           python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; assert torch.cuda.device_count() > 0; print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())'
@@ -124,6 +133,7 @@ jobs:
               f"tinaudio/synth-setter:{os.environ['IMAGE_TAG']}",
           )
           task.workdir = os.getcwd()
+          task.update_file_mounts({worker_rclone: rclone_path})
           task.update_envs(
               {
                   "COVERAGE_KEY": os.environ["COVERAGE_KEY"],

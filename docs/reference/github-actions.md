@@ -149,7 +149,7 @@ Or use the Actions tab UI.
 
 ### GPU execution
 
-`test-gpu` uses `ubuntu-latest` only as an orchestrator. SkyPilot selects a consumer GPU from `skypilot_launch/compute=runpod/smoke` with `tier=low`, starts `tinaudio/synth-setter:<image_tag>`, and syncs the dispatching branch as the task workdir. The worker proves CUDA visibility, Surge XT loading, and the complete `pytest -m gpu` path before uploading `coverage.xml` to a run-scoped R2 key. The orchestrator downloads that report for Codecov and verifies teardown; a five-minute autodown is the cancellation safety net.
+`test-gpu` uses `ubuntu-latest` only as an orchestrator. SkyPilot selects a consumer GPU from `skypilot_launch/compute=runpod/smoke` with `tier=low`, starts `tinaudio/synth-setter:<image_tag>`, and syncs the dispatching branch as the task workdir. The worker restores the synced headless wrapper's executable mode and mounts the pinned rclone installed by `setup-r2`, then proves CUDA visibility, Surge XT loading, and the complete `pytest -m gpu` path before uploading `coverage.xml` to a run-scoped R2 key. The orchestrator downloads that report for Codecov and verifies teardown; a five-minute autodown is the cancellation safety net.
 
 ### Public image, runtime secrets
 
