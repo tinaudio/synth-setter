@@ -126,10 +126,9 @@ def _run_oracle_eval_subprocess(
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
     :param render: The generation ``RenderConfig``. The eval re-renders
-        predictions via ``predict_vst_audio``; every render field it renders with
-        (param spec, preset, plugin, sample rate, channels, velocity, signal
-        duration) is overridden from this so the re-render matches generation
-        exactly rather than falling back to the render group / CLI defaults.
+        predictions via ``predict_vst_audio``; the backend, lifecycle, plugin,
+        parameter spec, preset, and audio-shape fields are forwarded from this
+        config so evaluation matches generation.
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
@@ -174,6 +173,8 @@ def _run_oracle_eval_subprocess(
         f"+render.plugin_state_path={render.plugin_state_path}",
         f"+render.plugin_path={render.plugin_path}",
         f"+render.renderer_version={render.renderer_version}",
+        f"render.renderer_backend={render.renderer_backend}",
+        f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",

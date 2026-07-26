@@ -1331,7 +1331,7 @@ def test_generate_sample_clipped_render_fixed_synth_params_raises(
     :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
     """
     from synth_setter.data.vst import generate_vst_dataset
-    from synth_setter.data.vst.renderers import AudioAmplitudeError
+    from synth_setter.data.vst.generate_vst_dataset import AudioAmplitudeError
 
     spec = param_specs[_SPEC_NAME]
     monkeypatch.setattr(

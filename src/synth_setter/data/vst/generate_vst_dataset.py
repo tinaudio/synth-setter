@@ -15,7 +15,7 @@ from synth_setter.data.vst.audio_preview import (
 )
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import (
     MEL_N_MELS,
@@ -106,6 +106,20 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     return spec_db
 
 
+class AudioAmplitudeError(ValueError):
+    """Rendered audio exceeded the dataset storage range."""
+
+
+def _reject_clipped_audio(audio: np.ndarray) -> None:
+    """Reject audio outside the dataset's normalized storage range.
+
+    :param audio: Rendered audio accepted by the backend contract.
+    :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
+    """
+    if np.any(np.abs(audio) > 1.0):
+        raise AudioAmplitudeError("rendered audio samples must be within [-1, 1]")
+
+
 def generate_sample(
     renderer: AudioRenderer,
     velocity: int,
@@ -184,6 +198,7 @@ def generate_sample(
                 note_params["note_start_and_end"],
                 warmup=warmup,
             )
+            _reject_clipped_audio(output)
         except AudioAmplitudeError:
             # Clipping is a property of the sampled patch: reject the draw like
             # the loudness gate instead of killing the shard (#2001). With fixed

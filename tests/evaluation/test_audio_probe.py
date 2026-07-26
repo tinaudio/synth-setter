@@ -21,21 +21,25 @@ import pytest
 import torch
 
 from synth_setter.evaluation import audio_probe
-from synth_setter.evaluation.audio_probe import (
-    ProbeRenderSettings,
-    _render_argv,
-    _staged_sample_count,
-    run_audio_probe,
-)
+from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
-_SETTINGS = ProbeRenderSettings(
-    param_spec_name="surge_4",
+_SETTINGS = RenderConfig(
+    param_spec_name=ParamSpecName("surge_4"),
     plugin_state_path="presets/surge-mini.vstpreset",
     plugin_path="plugins/Surge XT.vst3",
-    sample_rate=8000.0,
+    renderer_version="1.3.4",
+    renderer_backend="dawdreamer",
+    sample_rate=8000,
     channels=2,
     velocity=100,
     signal_duration_seconds=0.1,
+    min_loudness=-55.0,
+    samples_per_render_batch=1,
+    samples_per_shard=1,
+    plugin_reload_cadence="render",
+    gui_toggle_cadence="never",
 )
 
 
@@ -62,7 +66,7 @@ def test_staged_sample_count_returns_pred_row_count(tmp_path: Path) -> None:
 
 
 def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> None:
-    """The argv names both probe subdirs, every render field, and --rerender_target.
+    """The argv names both probe subdirs, every render field, and target re-rendering.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -71,31 +75,19 @@ def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> N
 
     assert str(tmp_path / "predictions") in argv
     assert str(tmp_path / "audio") in argv
-    assert "--rerender_target" in argv
+    assert argv[argv.index("--rerender-target") + 1] == "True"
     for flag, value in (
-        ("--param_spec", "surge_4"),
-        ("--plugin_state_path", "presets/surge-mini.vstpreset"),
-        ("--plugin_path", "plugins/Surge XT.vst3"),
-        ("--sample_rate", "8000.0"),
+        ("--param-spec-name", "surge_4"),
+        ("--plugin-state-path", "presets/surge-mini.vstpreset"),
+        ("--plugin-path", "plugins/Surge XT.vst3"),
+        ("--renderer-backend", "dawdreamer"),
+        ("--plugin-reload-cadence", "render"),
+        ("--sample-rate", "8000"),
         ("--channels", "2"),
         ("--velocity", "100"),
-        ("--signal_duration_seconds", "0.1"),
+        ("--signal-duration-seconds", "0.1"),
     ):
         assert argv[argv.index(flag) + 1] == value
-
-
-def test_render_argv_omits_unset_optional_fields(tmp_path: Path) -> None:
-    """``None`` render fields stay off the argv so the CLI's defaults apply.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    settings = ProbeRenderSettings(param_spec_name="surge_4", plugin_state_path="p.vstpreset")
-
-    with ExitStack() as stack:
-        argv = _render_argv(tmp_path, settings, stack)
-
-    for flag in ("--plugin_path", "--sample_rate", "--channels", "--velocity"):
-        assert flag not in argv
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="wrapper is prepended on Linux only")

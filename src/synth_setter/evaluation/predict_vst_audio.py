@@ -1,26 +1,63 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
 import os
-from collections.abc import Callable
 from pathlib import Path
 
-import click
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from pedalboard.io import AudioFile
+from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
-from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
-from synth_setter.data.vst.renderers import TorchSynthRenderer
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
 
-RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
+
+class _PredictAudioCliArgs(RenderConfig, BaseSettings):
+    """Render configuration plus prediction-artifact CLI inputs.
+
+    .. attribute :: model_config
+
+        Pydantic settings and CLI parsing policy.
+
+    .. attribute :: pred_dir
+
+        Directory containing prediction tensors.
+
+    .. attribute :: output_dir
+
+        Destination for rendered artifacts.
+
+    .. attribute :: rerender_target
+
+        Whether to render target parameters instead of using staged audio.
+
+    .. attribute :: no_params
+
+        Whether staged target parameters are absent.
+
+    .. attribute :: skip_spectrogram
+
+        Whether to omit spectrogram artifacts.
+    """
+
+    model_config = SettingsConfigDict(
+        strict=True,
+        frozen=True,
+        extra="forbid",
+        cli_kebab_case=True,
+    )
+
+    pred_dir: CliPositionalArg[Path]
+    output_dir: CliPositionalArg[Path]
+    rerender_target: bool = False
+    no_params: bool = False
+    skip_spectrogram: bool = False
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> list[np.ndarray]:
@@ -110,120 +147,23 @@ def params_to_csv(
     df.to_csv(save_path)
 
 
-def resolve_plugin_state_path(plugin_state_path: str | None, param_spec: str) -> str:
-    """Return ``plugin_state_path`` when given, else the registry's default preset for ``param_spec``.
+def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
+    """Render prediction artifacts through the configured production backend.
 
-    ``None`` with an unregistered ``param_spec`` propagates the registry ``KeyError``.
-
-    :param plugin_state_path: Explicit preset path; ``None`` selects the registry default.
-    :param param_spec: Registry key naming the spec whose default preset to use.
-    :returns: Resolved preset path.
+    :param args: Validated render configuration and artifact paths.
+    :raises ValueError: A sample has neither staged nor re-renderable target audio.
     """
-    return plugin_state_path if plugin_state_path is not None else plugin_state_paths[param_spec]
+    spec = param_specs[args.param_spec_name]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    renderer = make_audio_renderer(args)
+    sample_rate = args.sample_rate
+    channels = args.channels
 
-
-def _make_render_fn(
-    plugin_path: str,
-    plugin_state_path: str | None,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
-    signal_duration_seconds: float,
-) -> RenderFn:
-    """Return the per-row render callable for the backend ``plugin_path`` selects.
-
-    The ``"torchsynth"`` sentinel dispatches to the in-process
-    :class:`TorchSynthRenderer` (no plugin host); every other path keeps the
-    pedalboard ``render_params`` call unchanged, without the generation-side
-    amplitude gate — predicted-parameter renders may legitimately clip.
-
-    :param plugin_path: Plugin bundle path, or the ``"torchsynth"`` backend sentinel.
-    :param plugin_state_path: Baseline preset path; unused by the torchsynth backend.
-    :param sample_rate: Render sample rate in Hz.
-    :param channels: Output channel count.
-    :param velocity: MIDI note velocity applied to every render.
-    :param signal_duration_seconds: Duration of each rendered sample.
-    :returns: Callable of ``(synth_params, pitch, note_start_and_end)`` returning
-        ``(channels, samples)`` audio.
-    """
-    if plugin_path == TORCHSYNTH_PLUGIN_NAME:
-        renderer = TorchSynthRenderer(
-            plugin_path=plugin_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            signal_duration_seconds=signal_duration_seconds,
-        )
-
-        def render_torchsynth_row(
-            synth_params: dict[str, float],
-            pitch: int,
-            note_start_and_end: tuple[float, float],
-        ) -> np.ndarray:
-            return renderer.render(synth_params, pitch, velocity, note_start_and_end)
-
-        return render_torchsynth_row
-
-    def render_pedalboard_row(
-        synth_params: dict[str, float],
-        pitch: int,
-        note_start_and_end: tuple[float, float],
-    ) -> np.ndarray:
-        return render_params(
-            plugin_path,
-            synth_params,
-            pitch,
-            velocity,
-            note_start_and_end,
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            plugin_state_path=plugin_state_path,
-        )
-
-    return render_pedalboard_row
-
-
-@click.command()
-@click.argument("pred_dir", type=str)
-@click.argument("output_dir", type=str)
-@click.option("--plugin_path", "-p", type=str, default=default_plugin_path)
-@click.option("--plugin_state_path", "-r", type=str, default=None)
-@click.option("--sample_rate", "-s", type=float, default=44100.0)
-@click.option("--channels", "-c", type=int, default=2)
-@click.option("--velocity", "-v", type=int, default=100)
-@click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
-@click.option("--param_spec", type=str, default="surge_xt")
-@click.option("--rerender_target", "-t", is_flag=True, default=False)
-@click.option("--no-params", "-X", is_flag=True, default=False)
-@click.option("--skip-spectrogram", "-S", is_flag=True, default=False)
-def main(
-    pred_dir: str,
-    output_dir: str,
-    plugin_path: str,
-    plugin_state_path: str | None = None,
-    sample_rate: float = 44100.0,
-    channels: int = 2,
-    velocity: int = 100,
-    signal_duration_seconds: float = 4.0,
-    param_spec: str = "surge_xt",
-    rerender_target: bool = False,
-    no_params: bool = False,
-    skip_spectrogram: bool = False,
-) -> None:
-    plugin_state_path = resolve_plugin_state_path(plugin_state_path, param_spec)
-    spec = param_specs[param_spec]
-    os.makedirs(output_dir, exist_ok=True)
-
-    # The pedalboard path loads the plugin (and applies plugin_state_path) on
-    # every call, so no upfront load_plugin is needed here.
-    render_fn = _make_render_fn(
-        plugin_path,
-        plugin_state_path,
-        sample_rate,
-        channels,
-        velocity,
-        signal_duration_seconds,
-    )
+    pred_dir = str(args.pred_dir)
+    output_dir = str(args.output_dir)
+    rerender_target = args.rerender_target
+    no_params = args.no_params
+    skip_spectrogram = args.skip_spectrogram
 
     # list the .pt files with accompanying indices (each file has name
     # pred-{index}.pt, and we want to sort by index)
@@ -258,9 +198,9 @@ def main(
 
         if target_audio is None and not (rerender_target and target_params is not None):
             raise ValueError(
-                f"{target_audio_file} is missing and --rerender_target is off (or "
+                f"{target_audio_file} is missing and --rerender-target is off (or "
                 "target params are absent): there is no target audio source. Stage "
-                "target-audio tensors or pass --rerender_target with target params."
+                "target-audio tensors or pass --rerender-target with target params."
             )
 
         # 5. iterate over its internal rows and render the audio
@@ -272,9 +212,10 @@ def main(
             row_params = pred_params[j].float().numpy()
             synth_params, note_params = decode_model_output(row_params, spec)
 
-            pred_audio = render_fn(
+            pred_audio = renderer.render(
                 synth_params,
                 int(note_params["pitch"]),
+                args.velocity,
                 note_params["note_start_and_end"],
             )
 
@@ -290,9 +231,10 @@ def main(
                 target_params_ = target_params[j].float().numpy()
                 target_synth_params, target_note_params = decode_model_output(target_params_, spec)
 
-                new_target = render_fn(
+                new_target = renderer.render(
                     target_synth_params,
                     int(target_note_params["pitch"]),
+                    args.velocity,
                     target_note_params["note_start_and_end"],
                 )
                 with AudioFile(out_target, "w", sample_rate, channels) as f:
@@ -326,6 +268,14 @@ def main(
             )
 
         current_offset += pred_params.shape[0]
+
+
+def main(cli_args: list[str] | None = None) -> None:
+    """Parse the process request and render prediction artifacts.
+
+    :param cli_args: Explicit arguments for tests; ``None`` reads ``sys.argv``.
+    """
+    render_prediction_audio(CliApp.run(_PredictAudioCliArgs, cli_args=cli_args))
 
 
 if __name__ == "__main__":

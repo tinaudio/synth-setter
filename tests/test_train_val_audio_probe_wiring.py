@@ -68,10 +68,15 @@ def _cfg(
                 "param_spec_name": "surge_xt",
                 "plugin_state_path": "presets/surge-base.vstpreset",
                 "plugin_path": "plugins/Surge XT.vst3",
+                "renderer_version": "1.3.4",
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
                 "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 1,
+                "gui_toggle_cadence": "never",
             }
     return cfg
 
