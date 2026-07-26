@@ -25,8 +25,10 @@ from synth_setter.pipeline.schemas.object_storage import (
 )
 
 ACTION_NAME = "setup-r2"
+INSTALL_ACTION_NAME = "install-rclone"
 EXPORT_STEP_NAME = "Export R2 credentials"
 INSTALL_STEP_NAME = "Install rclone"
+PINNED_INSTALL_STEP_NAME = "Install pinned rclone"
 
 # input name -> the `RCLONE_REQUIRED_ENV_KEYS` member it supplies.
 SECRET_INPUTS: dict[str, str] = {
@@ -55,6 +57,15 @@ def _load_action(project_root: Path) -> dict[str, object]:
     return cast(dict[str, object], load_composite_action(project_root, ACTION_NAME))
 
 
+def _load_install_action(project_root: Path) -> dict[str, object]:
+    """Return the parsed secret-free ``install-rclone`` composite action.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: the parsed YAML mapping.
+    """
+    return cast(dict[str, object], load_composite_action(project_root, INSTALL_ACTION_NAME))
+
+
 def _load_steps(project_root: Path) -> list[dict[str, object]]:
     """Return the composite action's ``runs.steps`` list.
 
@@ -62,6 +73,16 @@ def _load_steps(project_root: Path) -> list[dict[str, object]]:
     :returns: the ordered list of step mappings.
     """
     runs = cast(dict[str, object], _load_action(project_root)["runs"])
+    return cast(list[dict[str, object]], runs["steps"])
+
+
+def _load_install_steps(project_root: Path) -> list[dict[str, object]]:
+    """Return the installer composite's ``runs.steps`` list.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: the ordered list of installer step mappings.
+    """
+    runs = cast(dict[str, object], _load_install_action(project_root)["runs"])
     return cast(list[dict[str, object]], runs["steps"])
 
 
@@ -76,6 +97,18 @@ def _find_step(project_root: Path, name: str) -> dict[str, object]:
         if step.get("name") == name:
             return step
     pytest.fail(f"setup-r2 action missing step {name!r}")
+
+
+def _find_install_step(project_root: Path) -> dict[str, object]:
+    """Return the pinned binary install step from ``install-rclone``.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    :returns: the pinned installer step mapping.
+    """
+    for step in _load_install_steps(project_root):
+        if step.get("name") == PINNED_INSTALL_STEP_NAME:
+            return step
+    pytest.fail(f"install-rclone action missing step {PINNED_INSTALL_STEP_NAME!r}")
 
 
 @pytest.mark.infra
@@ -211,12 +244,12 @@ def test_setup_r2_install_rclone_is_opt_in(project_root: Path) -> None:
 
     step = _find_step(project_root, INSTALL_STEP_NAME)
     assert "install-rclone" in cast(str, step.get("if", ""))
-    assert "rclone" in cast(str, step["run"])
+    assert step.get("uses") == "./.github/actions/install-rclone"
 
 
 @pytest.mark.infra
 def test_setup_r2_installs_rclone_from_a_pinned_version_not_apt(project_root: Path) -> None:
-    """The install step pins a version and never falls back to apt.
+    """The shared install action pins a version and never falls back to apt.
 
     Ubuntu's apt candidate is rclone 1.60.1, whose S3 backend fails the first
     write of every process against R2 with ``NotImplemented`` (#1817). The
@@ -225,14 +258,14 @@ def test_setup_r2_installs_rclone_from_a_pinned_version_not_apt(project_root: Pa
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     """
-    step = _find_step(project_root, INSTALL_STEP_NAME)
+    step = _find_install_step(project_root)
     run = cast(str, step["run"])
     version = cast(str, cast(dict[str, object], step["env"])["PINNED_RCLONE_VERSION"])
 
     assert "apt-get" not in run, "apt ships rclone 1.60.1, which cannot write to R2"
     assert "https://downloads.rclone.org/v${PINNED_RCLONE_VERSION}" in run
     assert "rclone-v${PINNED_RCLONE_VERSION}-linux-amd64" in run
-    assert 'test "${installed}" = "rclone v${PINNED_RCLONE_VERSION}"' in run
+    assert '[[ "${installed}" == "rclone v${PINNED_RCLONE_VERSION}" ]]' in run
     assert version.count(".") == 2, f"expected an exact x.y.z pin, got {version!r}"
 
 
@@ -248,7 +281,7 @@ def test_setup_r2_verifies_the_rclone_download_against_a_pinned_sha256(
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     """
-    step = _find_step(project_root, INSTALL_STEP_NAME)
+    step = _find_install_step(project_root)
     run = cast(str, step["run"])
     digest = cast(str, cast(dict[str, object], step["env"])["PINNED_RCLONE_SHA256"])
 
@@ -271,7 +304,7 @@ def test_setup_r2_rclone_version_env_var_is_not_rclone_prefixed(project_root: Pa
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     """
-    step = _find_step(project_root, INSTALL_STEP_NAME)
+    step = _find_install_step(project_root)
     swallowed = [key for key in cast(dict[str, object], step["env"]) if key.startswith("RCLONE_")]
     assert not swallowed, f"rclone parses these as its own flags: {swallowed}"
 

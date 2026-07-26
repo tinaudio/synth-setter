@@ -17,6 +17,7 @@ on:
       - "**/*.md"
   pull_request:
     paths:
+      - ".github/actions/install-rclone/**"
       - ".github/actions/upload-coverage/**"
       - ".github/workflows/cpu-slow.yml"
       - "Makefile"
@@ -83,6 +84,12 @@ jobs:
 
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
+
+      # PRs need the binary for secret-free local/file-URI tests but never
+      # configure the R2 remote or receive production storage credentials.
+      - name: Install rclone for PR tests
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/install-rclone
 
       # Push and dispatch retain the live-R2 coverage added in #1185. PRs
       # exclude integration_r2 explicitly and never configure storage secrets.
