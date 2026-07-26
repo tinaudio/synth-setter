@@ -1474,7 +1474,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert eval_cfg.render.renderer_version == "1.3.4"
             assert eval_cfg.render.renderer_backend == "pedalboard"
             assert eval_cfg.render.plugin_reload_cadence == "render"
-            assert eval_cfg.render.gui_toggle_cadence == "render"
+            assert eval_cfg.render.gui_toggle_cadence == "once"
             assert eval_cfg.render.sample_rate == 44100
 
         # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
