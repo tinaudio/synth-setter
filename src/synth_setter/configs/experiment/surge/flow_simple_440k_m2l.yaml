@@ -26,9 +26,10 @@ datamodule:
     test: 3cd70984-d172-4c66-a845-60d892529442
 
 training:
-  # The comparison reads val/param_mse; rendering audio would add a plugin
-  # dependency neither arm needs.
-  val_audio_probe: false
+  # param_mse says nothing about how a prediction sounds, so the arms are
+  # compared on rendered audio too. The probe re-renders targets from staged
+  # parameters, so it needs no audio column from the projected hydration.
+  val_audio_probe: true
 
 trainer:
   min_steps: 20000
