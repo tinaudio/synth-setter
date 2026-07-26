@@ -14,6 +14,16 @@
   "runArgs": [
     "--device=/dev/fuse",
     "--cap-add=SYS_ADMIN",
+    "--cap-add=BPF",
+    "--cap-add=PERFMON",
+    "--cap-add=SYS_PTRACE",
+    "--cap-add=SYS_RESOURCE",
+    "--cap-add=DAC_READ_SEARCH",
+    "--cap-add=BPF",
+    "--cap-add=PERFMON",
+    "--cap-add=SYS_PTRACE",
+    "--cap-add=SYS_RESOURCE",
+    "--cap-add=DAC_READ_SEARCH",
     "--env-file",
     ".env"
   ],

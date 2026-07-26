@@ -286,6 +286,13 @@ The repo-wide `--checksum` rule applies to transfer/compare verbs
 (`copy`/`sync`/`check`); `mount` takes no such flag — VFS reads verify
 integrity per-request.
 
+### Continuous profiling (Grafana Alloy)
+
+The image ships Grafana Alloy and an opt-in launcher that forwards CPU profiles to Grafana Cloud
+Pyroscope. It stays inert unless `SYNTH_SETTER_PROFILING_ENABLED` is set, and it needs root, a host
+PID namespace, and tracefs — so it works on OCI workers and local runs, but not on RunPod/Vast.
+Setup, privileges, and troubleshooting: [profiling reference](profiling.md).
+
 ### `generate_dataset` — VST dataset generation
 
 Generates one or more VST dataset shards (looping over `spec.shards`) via

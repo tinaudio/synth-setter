@@ -462,6 +462,30 @@ RUN case "${TARGETARCH:-}" in \
     pueue --version && \
     pueued --version
 
+# Grafana Alloy (https://github.com/grafana/alloy) — continuous CPU profiling forwarded to
+# Grafana Cloud Pyroscope. Static upstream release binary, verified against a pinned per-arch
+# SHA256; refresh both from the release's SHA256SUMS asset when bumping ALLOY_VERSION.
+# Nothing starts at build time: the collector runs only when start_alloy_profiling.sh is invoked
+# with profiling explicitly enabled. See docs/reference/profiling.md.
+ARG ALLOY_VERSION=v1.18.0
+ARG ALLOY_SHA256_AMD64=92f4c950aec4ec16a7fdbf6f805be4334d4d5fbbe458eecf514319c1c491bef4
+ARG ALLOY_SHA256_ARM64=e20f8570628818a15192d34372839017a4c446269b5d96036ad976ebf7a7728a
+RUN case "${TARGETARCH:-}" in \
+      amd64) alloy_sha=${ALLOY_SHA256_AMD64} ;; \
+      arm64) alloy_sha=${ALLOY_SHA256_ARM64} ;; \
+      *) echo "ERROR: unsupported TARGETARCH for alloy: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    url="https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/alloy-linux-${TARGETARCH}.zip" && \
+    wget -q -O /tmp/alloy.zip "$url" && \
+    echo "${alloy_sha}  /tmp/alloy.zip" | sha256sum -c - && \
+    unzip -q /tmp/alloy.zip -d /tmp/alloy && \
+    mv "/tmp/alloy/alloy-linux-${TARGETARCH}" /usr/local/bin/alloy && \
+    rm -rf /tmp/alloy.zip /tmp/alloy && \
+    chmod +x /usr/local/bin/alloy && \
+    alloy --version
+COPY docker/ubuntu22_04/alloy/profiling.alloy /etc/alloy/profiling.alloy
+COPY --chmod=755 scripts/docker/start_alloy_profiling.sh /usr/local/bin/
+
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/

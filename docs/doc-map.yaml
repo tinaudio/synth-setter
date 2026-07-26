@@ -26,6 +26,17 @@ docs:
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
+  - doc: docs/reference/profiling.md
+    description: Grafana Alloy / Pyroscope eBPF continuous profiling — setup, privileges, backend support
+    sources:
+      - pattern: "docker/ubuntu22_04/alloy/**"
+        covers: "Alloy config: discovery.process filtering, pyroscope.ebpf targets, pyroscope.write endpoint and basic_auth, sys.env credential names"
+      - pattern: "scripts/docker/start_alloy_profiling.sh"
+        covers: "Opt-in gate, preflight refusals (root, host PID namespace, tracefs, credentials), service_name default, alloy run invocation"
+      - pattern: "src/synth_setter/configs/skypilot_launch/compute/scripts/oci-docker-run.sh"
+        covers: "--pid=host and the profiling env-var passthrough that make eBPF profiling work on OCI workers"
+        scope: "profiling"
+
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
     sources:

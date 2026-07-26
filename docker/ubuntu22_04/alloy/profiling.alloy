@@ -1,0 +1,44 @@
+// Continuous CPU profiling for synth-setter workloads, shipped to Grafana Cloud Pyroscope.
+//
+// Started only by scripts/docker/start_alloy_profiling.sh, which refuses to run unless every
+// pyroscope.ebpf precondition holds (root, host PID namespace, tracefs). Credentials are read
+// from the environment at run time so nothing sensitive enters an image layer.
+
+// Requires root and the host PID namespace, same as pyroscope.ebpf below.
+discovery.process "workloads" {
+  refresh_interval = "60s"
+}
+
+discovery.relabel "python_workloads" {
+  targets = discovery.process.workloads.targets
+
+  // Keep only the runtime venv interpreter: every training and pipeline entrypoint runs under
+  // /venv/main, so this drops apt's python3, Alloy itself, and shell helpers from the profile.
+  rule {
+    source_labels = ["__meta_process_exe"]
+    regex         = "/venv/main/bin/python.*"
+    action        = "keep"
+  }
+
+  // Pyroscope groups profiles by service_name; the launcher defaults it to "synth-setter".
+  rule {
+    target_label = "service_name"
+    replacement  = sys.env("SYNTH_SETTER_PROFILING_SERVICE_NAME")
+  }
+}
+
+pyroscope.ebpf "workloads" {
+  targets    = discovery.relabel.python_workloads.output
+  forward_to = [pyroscope.write.grafana_cloud.receiver]
+}
+
+pyroscope.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_PYROSCOPE_ENDPOINT")
+
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_PYROSCOPE_USER")
+      password = sys.env("GRAFANA_CLOUD_PYROSCOPE_API_KEY")
+    }
+  }
+}
