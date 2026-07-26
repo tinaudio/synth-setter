@@ -36,6 +36,7 @@ M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
+T5GEMMA_FIELD: str = "t5gemma"
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.

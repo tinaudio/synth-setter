@@ -53,9 +53,17 @@ cu128 = [
 # SAME (Stability AI) encoder runtime for the add_embeddings --same mode.
 # Pinned exactly: 0.0.20 is the release validated for numerical equivalence
 # between upstream's torch pin and this project's lock (see PR #2283). Its
-# stale transitive pins are relaxed in [tool.uv] override-dependencies.
+# stale transitive pins are relaxed in [[tool.uv.dependency-metadata]].
 same = [
   "stable-audio-tools==0.0.20",
+]
+# Stable Audio 3 text conditioning for the add_embeddings `t5gemma` mode.
+# Commit-pinned: upstream has no PyPI release and no tags, so a branch ref
+# would silently re-resolve. Its torch==2.7.1 / torchaudio==2.7.1 pins are
+# relaxed in [[tool.uv.dependency-metadata]] so the cpu/cu128 index routing
+# keeps choosing this project's locked wheel.
+sa3 = [
+  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
 ]
 
 # Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
@@ -148,6 +156,10 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  # Shape-checked tensor annotations; jaxtyping only checks under a runtime
+  # typechecker, so beartype is not optional here.
+  "jaxtyping>=0.2.36",
+  "beartype>=0.19",
 ]
 config = [
   "hydra-core==1.3.2",
@@ -288,6 +300,34 @@ requires-dist = [
   "transformers",
   "v-diffusion-pytorch==0.0.2",
   "vector-quantize-pytorch==1.14.41",
+]
+
+# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. As with
+# stable-audio-tools above, this static metadata replaces ONLY that package's
+# declared deps, relaxing the two pins to floors so the existing lock (and the
+# cpu/cu128 index routing) keeps choosing the torch version; a global
+# override-dependencies would rewrite the project's own extra-conditioned torch
+# requirements and collapse the cpu/cu128 fork. Every other floor it declares
+# is already satisfied by the lock. The T5Gemma prompt-conditioner path is
+# bitwise identical across torch 2.7.1 and the locked torch at float32
+# (max_abs_diff 0.0 over 22 prompts, embedding std 1.75; scripts/dev/
+# sa3_t5gemma_parity.py). At the checkpoint's declared bfloat16 the same
+# comparison diverges by 11.5, which is why the encoder is pinned to float32.
+[[tool.uv.dependency-metadata]]
+name = "stable-audio-3"
+version = "0.1.0"
+requires-dist = [
+  "einops>=0.8.2",
+  "einops-exts>=0.0.4",
+  "huggingface-hub>=1.7.1",
+  "numpy>=2.2.6",
+  "packaging>=26.0",
+  "safetensors>=0.7.0",
+  "soundfile>=0.13.1",
+  "torch>=2.7",
+  "torchaudio>=2.7",
+  "tqdm>=4.67.3",
+  "transformers>=5.8.0",
 ]
 
 [[tool.uv.index]]

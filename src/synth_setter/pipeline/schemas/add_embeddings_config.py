@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_text import (
+    DEFAULT_PARAM_TEXT_NORMALIZER,
+    PARAM_TEXT_NORMALIZERS,
+)
+from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_INDEX_METRIC,
@@ -71,6 +77,14 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: debug
 
         Whether to log every batch and enable native Lance debug output.
+
+    .. attribute :: param_spec_name
+
+        Param spec describing ``param_array``; required by param-sourced embeddings.
+
+    .. attribute :: param_text_normalizer
+
+        Strategy rendering param rows as conditioning text.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -100,6 +114,13 @@ class AddEmbeddingsConfig(BaseModel):
         default=None, description="Lance UDF checkpoint cache removed after commit."
     )
     debug: bool = Field(default=False, description="Enable per-batch and native debug logs.")
+    param_spec_name: str | None = Field(
+        default=None, description="Param spec describing param_array; null unless text-sourced."
+    )
+    param_text_normalizer: str = Field(
+        default=DEFAULT_PARAM_TEXT_NORMALIZER,
+        description="Strategy rendering param rows as conditioning text.",
+    )
 
     @field_validator("embeddings", mode="before")
     @classmethod
@@ -163,6 +184,50 @@ class AddEmbeddingsConfig(BaseModel):
         if value not in allowed:
             raise ValueError(f"metric {value!r} must be one of {sorted(allowed)}")
         return value
+
+    @field_validator("param_spec_name")
+    @classmethod
+    def _param_spec_name_is_registered(cls, value: str | None) -> str | None:
+        """Reject a param spec that no registry entry can resolve.
+
+        :param value: Configured param spec name.
+        :returns: The name unchanged when it is registered or unset.
+        :raises ValueError: The name is absent from the param-spec registry.
+        """
+        if value is not None and value not in param_specs:
+            raise ValueError(f"param_spec_name {value!r} must be one of {sorted(param_specs)}")
+        return value
+
+    @field_validator("param_text_normalizer")
+    @classmethod
+    def _param_text_normalizer_is_registered(cls, value: str) -> str:
+        """Reject an unregistered text normalizer.
+
+        :param value: Configured normalizer name.
+        :returns: The name unchanged when it is registered.
+        :raises ValueError: The name is absent from the normalizer registry.
+        """
+        if value not in PARAM_TEXT_NORMALIZERS:
+            raise ValueError(
+                f"param_text_normalizer {value!r} must be one of {sorted(PARAM_TEXT_NORMALIZERS)}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _param_sourced_embeddings_need_a_param_spec(self) -> Self:
+        """Require a param spec whenever a selected embedding reads param rows.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: A param-sourced embedding is selected without a param spec.
+        """
+        param_sourced = sorted(
+            name
+            for name in self.embeddings
+            if EMBEDDING_REGISTRY[name].input_field == PARAM_ARRAY_FIELD
+        )
+        if param_sourced and self.param_spec_name is None:
+            raise ValueError(f"embeddings {param_sourced} require param_spec_name")
+        return self
 
     @model_validator(mode="after")
     def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:

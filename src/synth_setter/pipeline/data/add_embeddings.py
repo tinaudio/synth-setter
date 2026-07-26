@@ -15,7 +15,7 @@ import math
 import os
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
@@ -30,8 +30,10 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
+    PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    T5GEMMA_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
@@ -50,6 +52,7 @@ DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 DEFAULT_M2L_CHECKPOINT: str = ""
 DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
 DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
+DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
 _DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
     DEFAULT_SAME_L_CHECKPOINT: "same-l",
     DEFAULT_SAME_S_CHECKPOINT: "same-s",
@@ -75,8 +78,9 @@ SAME_ENCODE_MAX_BATCH: int = 16
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn
-type LoadEncoderFn = Callable[[str, str | None], Encoder]
+type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
 
@@ -141,7 +145,11 @@ class EmbeddingSpec:
 
     .. attribute :: encode_column
 
-        Audio batch, sample rate, and encoder to Arrow array transform.
+        Source batch, sample rate, and encoder to Arrow array transform.
+
+    .. attribute :: input_field
+
+        Dataset column supplying this embedding's encoder input.
     """
 
     name: str
@@ -152,6 +160,7 @@ class EmbeddingSpec:
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
+    input_field: str = AUDIO_FIELD
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -316,36 +325,91 @@ def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     return _encode_same_column(SAME_L_FIELD, audio, sample_rate, encoder)
 
 
-def _load_m2l_spec_encoder(checkpoint: str, device: str | None) -> Encoder:
+def _load_m2l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load music2latent through the registry's uniform factory signature.
 
     :param checkpoint: Unused registry placeholder.
-    :param device: Torch device, or ``None`` for automatic selection.
+    :param config: Run config supplying the device.
     :returns: m2l encoder.
     """
     del checkpoint
-    return load_m2l_audio_encoder(device)
+    return load_m2l_audio_encoder(config.device)
 
 
-def _load_clap_spec_encoder(checkpoint: str, device: str | None) -> Encoder:
+def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load CLAP through the registry's uniform factory signature.
 
     :param checkpoint: HuggingFace CLAP model id.
-    :param device: Torch device, or ``None`` for automatic selection.
+    :param config: Run config supplying the device.
     :returns: CLAP encoder.
     """
-    return load_clap_audio_encoder(checkpoint, device)
+    return load_clap_audio_encoder(checkpoint, config.device)
 
 
-def _load_same_spec_encoder(checkpoint: str, device: str | None) -> Encoder:
+def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load SAME through the registry's uniform factory signature.
 
     :param checkpoint: SAME checkpoint source.
-    :param device: Torch device, or ``None`` for automatic selection.
+    :param config: Run config supplying the device.
     :returns: SAME encoder.
     """
-    return load_same_audio_encoder(checkpoint, device)
+    return load_same_audio_encoder(checkpoint, config.device)
 
+
+def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
+
+    :param checkpoint: SA3 checkpoint source.
+    :param config: Run config supplying the device, param spec, and normalizer.
+    :returns: Encoder over encoded param rows.
+    :raises ValueError: The config selects no param spec.
+    """
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+    from synth_setter.data.vst.param_text import resolve_param_text_normalizer
+    from synth_setter.param_spec_name import ParamSpecName
+    from synth_setter.pipeline.data.t5gemma import load_t5gemma_text_encoder
+
+    if config.param_spec_name is None:
+        raise ValueError(f"{T5GEMMA_FIELD} embeddings require param_spec_name")
+    spec = resolve_param_spec(ParamSpecName(config.param_spec_name))
+    normalize = resolve_param_text_normalizer(config.param_text_normalizer)
+    encode_text = load_t5gemma_text_encoder(checkpoint, _resolve_torch_device(config.device))
+
+    def encode(params: np.ndarray) -> np.ndarray:
+        if params.shape[-1] != spec.encoded_width:
+            raise ValueError(
+                f"param rows are {params.shape[-1]} wide but param spec "
+                f"{config.param_spec_name!r} has encoded width {spec.encoded_width}"
+            )
+        return encode_text(normalize(spec, params))
+
+    return encode
+
+
+def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one param batch as a fixed-shape text-embedding tensor column.
+
+    :param params: ``(B, encoded_width)`` param rows.
+    :param sample_rate: Unused source sample rate.
+    :param encoder: Encoder over param rows.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    del sample_rate
+    encode = cast("ParamTextEncodeFn", encoder)
+    embeddings = _finite_embedding(T5GEMMA_FIELD, encode(params))
+    if embeddings.ndim != 3 or len(embeddings) != len(params):
+        raise ValueError(
+            f"{T5GEMMA_FIELD} encoder produced shape {embeddings.shape}, expected "
+            f"{len(params)} rows of (dim, seq) embeddings"
+        )
+    return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
+
+
+# Extras whose distribution name differs from the module they install.
+_EXTRA_IMPORT_NAMES: dict[str, str] = {"same": "stable_audio_tools", "sa3": "stable_audio_3"}
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
@@ -388,6 +452,19 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
     ),
+    # Rows share one caption per param spec today, so an index over identical
+    # vectors would be degenerate; revisit when a values-aware normalizer lands.
+    "t5gemma": EmbeddingSpec(
+        name="t5gemma",
+        column=T5GEMMA_FIELD,
+        default_checkpoint=DEFAULT_T5GEMMA_CHECKPOINT,
+        requires_extra="sa3",
+        co_resident=False,
+        index=None,
+        load_encoder=_load_t5gemma_spec_encoder,
+        encode_column=_encode_t5gemma_column,
+        input_field=PARAM_ARRAY_FIELD,
+    ),
 }
 
 
@@ -425,7 +502,7 @@ def _require_extras(specs: Sequence[EmbeddingSpec]) -> None:
     """
     required = {spec.requires_extra for spec in specs if spec.requires_extra is not None}
     for extra in sorted(required):
-        module = "stable_audio_tools" if extra == "same" else extra
+        module = _EXTRA_IMPORT_NAMES.get(extra, extra)
         try:
             available = importlib.util.find_spec(module) is not None
         except (ImportError, ValueError):
@@ -437,16 +514,21 @@ def _require_extras(specs: Sequence[EmbeddingSpec]) -> None:
             )
 
 
-def _validate_write_source(dataset: lance.LanceDataset, batch_size: int) -> int:
+def _validate_write_source(
+    dataset: lance.LanceDataset, batch_size: int, input_fields: Sequence[str] = (AUDIO_FIELD,)
+) -> int:
     """Validate source-column and row-count preconditions for one UDF commit.
 
     :param dataset: Open Lance dataset.
     :param batch_size: Requested rows per UDF call.
+    :param input_fields: Source columns the selected policies read.
     :returns: Positive source row count.
-    :raises ValueError: Audio is absent, the dataset is empty, or batch size is non-positive.
+    :raises ValueError: A source column is absent, the dataset is empty, or batch size is non-
+        positive.
     """
-    if AUDIO_FIELD not in dataset.schema.names:
-        raise ValueError(f"dataset has no {AUDIO_FIELD!r} column to embed")
+    for field in input_fields:
+        if field not in dataset.schema.names:
+            raise ValueError(f"dataset has no {field!r} column to embed")
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     total_rows = dataset.count_rows()
@@ -502,7 +584,7 @@ def _load_encoders(
     encoders: list[Encoder] = []
     for spec in specs:
         checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
-        encoders.append(spec.load_encoder(checkpoint, config.device))
+        encoders.append(spec.load_encoder(checkpoint, config))
     return encoders
 
 
@@ -530,16 +612,28 @@ def _pooled_vector_column(
     return index.vector_column, _fixed_size_list(pooled, pooled.shape[1])
 
 
+def _decoded_sources(
+    batch: pa.RecordBatch, input_fields: Sequence[str]
+) -> dict[str, np.ndarray]:
+    """Decode each required source column of one batch into a numpy array.
+
+    :param batch: Source batch supplied by Lance.
+    :param input_fields: Column names the selected policies read.
+    :returns: Decoded arrays keyed by field name.
+    """
+    return {field: batch.column(field).to_numpy_ndarray() for field in input_fields}
+
+
 def _encode_columns(
-    audio: np.ndarray,
+    sources: Mapping[str, np.ndarray],
     sample_rate: int,
     specs: Sequence[EmbeddingSpec],
     encoders: Sequence[Encoder],
     stage_ms: dict[str, float] | None = None,
 ) -> pa.RecordBatch:
-    """Encode one decoded audio batch through every policy in a UDF pass.
+    """Encode one decoded source batch through every policy in a UDF pass.
 
-    :param audio: Decoded ``(B, C, T)`` audio shared by all policies.
+    :param sources: Decoded input columns keyed by field name.
     :param sample_rate: Dataset sample rate in Hz.
     :param specs: Policies sharing this pass.
     :param encoders: Encoders aligned with ``specs``.
@@ -549,7 +643,7 @@ def _encode_columns(
     columns: dict[str, pa.Array] = {}
     for spec, encoder in zip(specs, encoders, strict=True):
         started_at = time.monotonic()
-        encoded = spec.encode_column(audio, sample_rate, encoder)
+        encoded = spec.encode_column(sources[spec.input_field], sample_rate, encoder)
         columns[spec.column] = encoded
         if spec.index is not None:
             pooled = _pooled_vector_column(encoded, spec.index)
@@ -580,15 +674,15 @@ def _write_columns(
     if not specs:
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
-    total_rows = _validate_write_source(dataset, config.batch_size)
+    input_fields = sorted({spec.input_field for spec in specs})
+    total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
     encoders = _load_encoders(specs, config)
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)
-    sample = next(dataset.to_batches(columns=[AUDIO_FIELD], limit=1))
-    sample_audio = sample.column(AUDIO_FIELD).to_numpy_ndarray()
-    sample_output = _encode_columns(sample_audio, sample_rate, specs, encoders)
+    sample = next(dataset.to_batches(columns=input_fields, limit=1))
+    sample_output = _encode_columns(_decoded_sources(sample, input_fields), sample_rate, specs, encoders)
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -608,8 +702,8 @@ def _write_columns(
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
         nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
         udf_started = time.monotonic()
-        audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
-        output = _encode_columns(audio, sample_rate, specs, encoders, stage_ms)
+        sources = _decoded_sources(batch, input_fields)
+        output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
         rows_processed += batch.num_rows
         now = time.monotonic()
         interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
@@ -640,7 +734,7 @@ def _write_columns(
         batch_size=config.batch_size,
         source_version=dataset.version,
     )
-    dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=config.batch_size)
+    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
     _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",

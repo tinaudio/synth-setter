@@ -3,9 +3,9 @@
 Drives the two production CLIs back to back: the real VST renderer
 (``generate_vst_dataset.py``) writes a tiny Lance shard that is uploaded to a
 unique R2 prefix, then ``synth-setter-add-embeddings`` runs the real
-music2latent + LAION-CLAP encoders against that remote URI. The augmented
-dataset is reopened from R2 and its ``m2l`` / ``m2l_vec`` / ``clap`` columns,
-indexability, and ``nearest=`` query path are asserted. The prefix is purged on teardown
+music2latent, LAION-CLAP, and SA3 T5Gemma encoders against that remote URI. The
+augmented dataset is reopened from R2 and its embedding columns, indexability,
+and ``nearest=`` query path are asserted. The prefix is purged on teardown
 regardless of pass/fail.
 
 Auto-skips when the VST plugin is absent (``requires_vst``) or R2 credentials
@@ -35,11 +35,16 @@ from synth_setter.data.vst.shapes import (
     CLAP_FIELD,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
+    T5GEMMA_FIELD,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     MIN_ROWS_FOR_INDEX,
+)
+from synth_setter.pipeline.data.t5gemma import (
+    T5GEMMA_EMBEDDING_DIM,
+    T5GEMMA_MAX_LENGTH,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 from synth_setter.resources import as_file, vst_headless_wrapper
@@ -221,26 +226,29 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
-def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
+def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     remote_lance_dataset_uri: str,
 ) -> None:
     """``synth-setter-add-embeddings`` on a real R2 Lance dataset writes searchable columns.
 
     Runs the two production CLIs back to back with no mocks: the fixture renders
     + uploads a tiny Lance shard via the VST renderer, then this test invokes the
-    real ``add_embeddings`` CLI (real music2latent + LAION-CLAP encoders) against
-    that ``r2://`` URI. The augmented dataset is reopened from R2 and asserted to
-    carry a ``FixedSizeList<float32, 512>`` ``clap`` column, a
-    ``fixed_shape_tensor<float32, ...>`` ``m2l`` column, its mean-pooled
-    ``FixedSizeList<float32, D>`` ``m2l_vec`` companion, finite values, one row
-    per audio row, preserved source columns, and a working exact ``nearest=``
-    query (the 4-row shard is below the IVF_PQ training floor, so no index is
-    expected).
+    real ``add_embeddings`` CLI with the music2latent, LAION-CLAP, and SA3
+    T5Gemma encoders against that ``r2://`` URI. The augmented dataset is reopened
+    from R2 and asserted to carry the fixed-size ``clap``, ``m2l``, ``m2l_vec``,
+    and ``t5gemma`` columns with finite values and one row per audio row. Source
+    columns are preserved and exact ``nearest=`` remains usable; the 4-row shard
+    is below the IVF_PQ training floor, so no index is expected.
 
     :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
     """
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
-        [_ADD_EMBEDDINGS_CMD, f"lance_uri={remote_lance_dataset_uri}"],
+        [
+            _ADD_EMBEDDINGS_CMD,
+            f"lance_uri={remote_lance_dataset_uri}",
+            "embeddings=[clap,m2l,t5gemma]",
+            f"param_spec_name={TEST_PARAM_SPEC_NAME}",
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -257,7 +265,7 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
         f"source columns dropped: schema is {sorted(names)}"
     )
     m2l_vector_field = f"{M2L_FIELD}_vec"
-    assert {M2L_FIELD, m2l_vector_field, CLAP_FIELD} <= names, (
+    assert {M2L_FIELD, m2l_vector_field, CLAP_FIELD, T5GEMMA_FIELD} <= names, (
         f"embedding columns absent: schema is {sorted(names)}"
     )
 
@@ -285,7 +293,15 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
         f"m2l companion value type is {m2l_vector_type.value_type}"
     )
 
-    table = dataset.to_table(columns=[CLAP_FIELD, M2L_FIELD, m2l_vector_field])
+    t5gemma_type = dataset.schema.field(T5GEMMA_FIELD).type
+    assert isinstance(t5gemma_type, pa.FixedShapeTensorType), (
+        f"t5gemma is {t5gemma_type}, not a fixed-shape tensor"
+    )
+    assert t5gemma_type.value_type == pa.float32(), (
+        f"t5gemma value type is {t5gemma_type.value_type}"
+    )
+
+    table = dataset.to_table(columns=[CLAP_FIELD, M2L_FIELD, m2l_vector_field, T5GEMMA_FIELD])
     clap = np.stack(table.column(CLAP_FIELD).to_numpy(zero_copy_only=False))
     assert clap.shape == (rows, CLAP_EMBEDDING_DIM), f"clap materialized as {clap.shape}"
     assert np.isfinite(clap).all(), "clap embeddings contain non-finite values"
@@ -298,6 +314,15 @@ def test_add_embeddings_cli_against_real_r2_writes_indexable_clap_and_m2l(
     )
     assert np.isfinite(m2l_vectors).all(), "m2l companion contains non-finite values"
     np.testing.assert_allclose(m2l_vectors, m2l.mean(axis=-1), rtol=1e-5, atol=1e-6)
+    t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
+    assert t5gemma.shape == (
+        rows,
+        T5GEMMA_EMBEDDING_DIM,
+        T5GEMMA_MAX_LENGTH,
+    ), f"t5gemma materialized as {t5gemma.shape}"
+    assert np.isfinite(t5gemma).all(), "t5gemma embeddings contain non-finite values"
+    assert np.any(t5gemma != 0), "t5gemma embeddings are all zero"
+    np.testing.assert_array_equal(t5gemma, np.broadcast_to(t5gemma[0], t5gemma.shape))
 
     # Below the training floor, every index skips while exact nearest still resolves.
     assert rows < MIN_ROWS_FOR_INDEX
