@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 ConditioningMode = Literal["mel", "m2l"]
@@ -34,9 +35,9 @@ class EmbeddingConditioningSpec(BaseModel):
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
 
 
-def select_conditioning[T](
-    batch: Mapping[str, T], embedding: EmbeddingConditioningSpec | None
-) -> T:
+def select_conditioning(
+    batch: Mapping[str, torch.Tensor], embedding: EmbeddingConditioningSpec | None
+) -> torch.Tensor:
     """Select the legacy mel or canonical cached-conditioning tensor.
 
     :param batch: Model batch containing the configured conditioning tensor.
