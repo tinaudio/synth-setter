@@ -837,8 +837,6 @@ def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -
     :returns: Whether the output identifies ``BadWindow`` during ``X_GetProperty``.
     """
     output = error.output or b""
-    if isinstance(output, str):
-        output = output.encode()
     return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
 
 

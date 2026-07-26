@@ -1551,6 +1551,35 @@ class TestRun(RenderSeamFixtures):
             {"generation/badwindow_detected": 1.0},
         ]
 
+    def test_badwindow_metric_failure_does_not_mask_renderer_error(
+        self,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A logging outage preserves the fatal renderer exception.
+
+        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        metric_logger = MagicMock()
+        metric_logger.log_metrics.side_effect = RuntimeError("logger unavailable")
+        error = subprocess.CalledProcessError(
+            1,
+            "generate_vst_dataset.py",
+            output=(b"BadWindow (invalid Window parameter)\n20 (X_GetProperty)\n"),
+        )
+
+        with patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=error,
+        ):
+            with pytest.raises(subprocess.CalledProcessError) as raised:
+                generate(spec, tmp_path, [metric_logger])
+
+        assert raised.value is error
+
     @pytest.mark.parametrize(
         "output",
         [
