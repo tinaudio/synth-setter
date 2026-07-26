@@ -148,7 +148,7 @@ docs:
       - pattern: "src/synth_setter/data/vst/param_text.py"
         covers: "Param-spec text normalizers rendering encoded param rows as conditioning captions; `param_names` joins the spec's parameter names."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
-        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus embedding-selection, index, and device/batch knobs."
+        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus embedding-selection, index, device/batch, and param-text conditioning (`param_spec_name`, `param_text_normalizer`) knobs."
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
         covers: "AddEmbeddingsConfig — the strict/frozen knobs the endpoint validates from its composed cfg via `from_hydra_cfg`."
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"

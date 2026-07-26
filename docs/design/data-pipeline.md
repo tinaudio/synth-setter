@@ -1149,8 +1149,9 @@ Audio 3's frozen T5Gemma prompt conditioner behind the optional `sa3` extra
 (`pipeline/data/t5gemma.py`). `param_spec_name=` is required whenever it is
 selected, and the encoded width must match that spec. Captions past the
 checkpoint's 256-token budget are truncated exactly as SA3 truncates them, so
-the wider specs keep only their leading names (`surge_simple` 31 of 89,
-`surge_xt` 31 of 162). Pad positions carry the checkpoint's learned
+the wider specs keep only their leading names (`surge_simple` 31 of 91,
+`surge_xt` 31 of 164; pinned by
+`test_param_names_caption_retains_only_its_leading_names_after_truncation`). Pad positions carry the checkpoint's learned
 `padding_embedding` rather than zeros, since SA3's DiT cross-attends over every
 context position unmasked; an empty caption is therefore SA3's unconditional
 representation. The encoder runs at float32 even though the checkpoint declares

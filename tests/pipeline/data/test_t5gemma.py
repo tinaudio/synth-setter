@@ -257,3 +257,39 @@ def test_encode_matches_upstream_conditioner_in_float32(t5gemma_encoder: TextEnc
     embeddings = t5gemma_encoder(prompts)
 
     np.testing.assert_array_equal(embeddings, expected.float().numpy().transpose(0, 2, 1))
+
+
+@pytest.mark.slow
+@_NEEDS_WEIGHTS
+@pytest.mark.parametrize(
+    ("param_spec_name", "total_names", "retained_names"),
+    [("surge_simple", 91, 31), ("surge_xt", 164, 31)],
+)
+def test_param_names_caption_retains_only_its_leading_names_after_truncation(
+    param_spec_name: str, total_names: int, retained_names: int
+) -> None:
+    """Pin how much of each wide spec's caption survives SA3's 256-token budget.
+
+    Documented in ``docs/design/data-pipeline.md``; the counts move with the
+    tokenizer, the checkpoint's max_length, or a spec's parameter names.
+
+    :param param_spec_name: Registered param spec under test.
+    :param total_names: Parameter count the spec encodes.
+    :param retained_names: Leading names that fit the token budget.
+    """
+    from transformers import AutoTokenizer
+
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+    from synth_setter.param_spec_name import ParamSpecName
+
+    names = resolve_param_spec(ParamSpecName(param_spec_name)).names
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(_CHECKPOINT_DIR), subfolder=_read_conditioner_config(_CHECKPOINT_DIR).subfolder
+    )
+    fits = [
+        count
+        for count in range(1, len(names) + 1)
+        if len(tokenizer(", ".join(names[:count]))["input_ids"]) <= T5GEMMA_MAX_LENGTH
+    ]
+
+    assert (len(names), max(fits)) == (total_names, retained_names)
