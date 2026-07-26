@@ -305,6 +305,64 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
 
 @pytest.mark.fake_vst
+def test_from_hydra_badwindow_failure_logs_metric_before_exit(
+    cfg_dataset: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker entrypoint records a fatal X11 warmup failure before exiting.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard experiment.
+    :param monkeypatch: Replaces the shard-storage boundaries.
+    """
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/badwindow-run/"
+        cfg_dataset.logger = None
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    metric_rows: list[dict[str, float]] = []
+    finalized_statuses: list[str] = []
+    recording_logger = SimpleNamespace(
+        finalize=finalized_statuses.append,
+        log_hyperparams=lambda _payload: None,
+        log_metrics=lambda payload, step=None: metric_rows.append(dict(payload)),
+    )
+    error = subprocess.CalledProcessError(
+        1,
+        "generate_vst_dataset.py",
+        output=(
+            b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
+            b"  Major opcode of failed request:  20 (X_GetProperty)\n"
+        ),
+    )
+
+    with (
+        patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=error,
+        ),
+        patch(
+            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
+            return_value=[recording_logger],
+        ),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        from_hydra(cfg_dataset)
+
+    assert metric_rows == [{"generation/badwindow_detected": 1.0}]
+    assert finalized_statuses == ["failed"]
+
+
+@pytest.mark.fake_vst
 def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
