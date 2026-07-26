@@ -19,6 +19,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     DEFAULT_NUM_SUB_VECTORS,
     EMBEDDING_REGISTRY,
+    TINYMU_EMBEDDING_DIM,
 )
 
 if TYPE_CHECKING:
@@ -238,17 +239,19 @@ class AddEmbeddingsConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:
-        """Reject incompatible PQ splits only when CLAP is selected.
+    def _num_sub_vectors_divides_selected_fixed_widths(self) -> Self:
+        """Reject PQ splits incompatible with selected fixed-width vectors.
 
         :returns: Validated config unchanged.
-        :raises ValueError: The count cannot evenly split selected CLAP vectors.
+        :raises ValueError: The count cannot evenly split a selected known vector width.
         """
-        if "clap" in self.embeddings and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0:
-            raise ValueError(
-                f"num_sub_vectors ({self.num_sub_vectors}) must divide the clap dim "
-                f"({CLAP_EMBEDDING_DIM})"
-            )
+        fixed_widths = {"clap": CLAP_EMBEDDING_DIM, "tinymu": TINYMU_EMBEDDING_DIM}
+        for name in self.embeddings:
+            width = fixed_widths.get(name)
+            if width is not None and width % self.num_sub_vectors != 0:
+                raise ValueError(
+                    f"num_sub_vectors ({self.num_sub_vectors}) must divide the {name} dim ({width})"
+                )
         return self
 
     @classmethod

@@ -2,6 +2,7 @@
 
 TinyMU has no detected license file, so this module does not redistribute its source. Runtime
 loading requires an external checkout at the exact recorded commit plus the hash-pinned checkpoint.
+Set ``TINYMU_SOURCE_DIR``, then call ``load_tinymu_audio_encoder()`` with ``(B, C, T)`` audio.
 """
 
 from __future__ import annotations
@@ -13,16 +14,20 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
 import structlog
 
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.utils.logging_utils import resolve_git_sha
+
+if TYPE_CHECKING:
+    import torch
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +64,100 @@ _EXPECTED_UNPERSISTED_BUFFERS = frozenset(
 )
 
 type TinyMUEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+
+
+class _EncoderConfig(Protocol):
+    """Shape-defining upstream encoder settings.
+
+    .. attribute :: depth
+
+        Transformer block count.
+
+    .. attribute :: embed_dim
+
+        Per-frequency-patch width.
+    """
+
+    depth: int
+    embed_dim: int
+
+
+class _MatpacConfig(Protocol):
+    """Measured subset of the external MATPAC configuration.
+
+    .. attribute :: encoder
+
+        Encoder architecture settings.
+
+    .. attribute :: n_freq
+
+        Mel-bin count.
+
+    .. attribute :: n_t
+
+        Precise-mode frame unit.
+
+    .. attribute :: patch_size
+
+        Time/frequency patch width.
+
+    .. attribute :: sr
+
+        Model sample rate in Hz.
+    """
+
+    encoder: _EncoderConfig
+    n_freq: int
+    n_t: int
+    patch_size: int
+    sr: int
+
+
+class _IncompatibleState(Protocol):
+    """State-loading result inspected by the adapter.
+
+    .. attribute :: missing_keys
+
+        Model keys absent from the checkpoint.
+
+    .. attribute :: unexpected_keys
+
+        Checkpoint keys absent from the model.
+    """
+
+    missing_keys: list[str]
+    unexpected_keys: list[str]
+
+
+class _MatpacModel(Protocol):
+    """Narrow runtime surface required from external MATPAC.
+
+    .. attribute :: cfg
+
+        Shape-defining model configuration.
+    """
+
+    cfg: _MatpacConfig
+
+    def __call__(self, inputs: torch.Tensor) -> tuple[torch.Tensor, object]: ...
+
+    def eval(self) -> Self: ...
+
+    def load_state_dict(
+        self, state_dict: Mapping[str, torch.Tensor], *, strict: bool
+    ) -> _IncompatibleState: ...
+
+    def requires_grad_(self, requires_grad: bool = True) -> Self: ...
+
+    def to(self, device: str) -> Self: ...
+
+
+class _MatpacModule(Protocol):
+    """Constructor exported by the pinned external module."""
+
+    def matpac_wrapper(
+        self, *, inference_type: str, pull_time_dimension: bool
+    ) -> _MatpacModel: ...
 
 
 def _file_sha256(path: Path) -> str:
@@ -219,7 +318,7 @@ def _load_source_module(model_path: Path) -> ModuleType:
     return module
 
 
-def _validate_model_contract(model: Any) -> None:
+def _validate_model_contract(model: _MatpacModel) -> None:
     """Reject upstream source whose runtime architecture differs from the measured contract.
 
     :param model: Instantiated external MATPAC module.
@@ -276,12 +375,19 @@ def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """
     if audio.ndim != 3:
         raise ValueError(f"expected a (B, C, T) batch for TinyMU, got shape {audio.shape}")
+    if audio.shape[0] < 1:
+        raise ValueError("TinyMU expects a non-empty batch")
     if audio.shape[1] not in (1, 2):
         raise ValueError(f"TinyMU expects 1 or 2 channels, got shape {audio.shape}")
     if sample_rate < 1:
         raise ValueError(f"TinyMU needs a positive sample_rate, got {sample_rate}")
     if not np.isfinite(audio).all():
         raise ValueError("TinyMU input audio contains non-finite values")
+    peak_amplitude = float(np.max(np.abs(audio)))
+    if peak_amplitude > 1.0:
+        raise ValueError(
+            f"TinyMU input audio is outside [-1.0, 1.0]: peak amplitude {peak_amplitude}"
+        )
 
     tinymu_num_latent_frames(audio.shape[-1], sample_rate)
     mono = np.ascontiguousarray(audio.mean(axis=1, dtype=np.float32))
@@ -295,6 +401,61 @@ def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(resampled.numpy(), dtype=np.float32)
 
 
+def _load_tinymu_model(
+    module: _MatpacModule, checkpoint_path: Path, device: str
+) -> _MatpacModel:
+    """Construct and freeze the pinned MATPAC architecture and state.
+
+    :param module: Verified external module constructor.
+    :param checkpoint_path: SHA-256-verified model state.
+    :param device: Torch inference device.
+    :returns: Frozen eval-mode MATPAC model.
+    :raises ValueError: State keys or architecture violate the pinned contract.
+    """
+    import torch
+
+    model = module.matpac_wrapper(inference_type="precise", pull_time_dimension=False)
+    _validate_model_contract(model)
+    state = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
+    incompatible = model.load_state_dict(state, strict=False)
+    missing = set(incompatible.missing_keys)
+    unexpected = set(incompatible.unexpected_keys)
+    if missing != _EXPECTED_UNPERSISTED_BUFFERS or unexpected:
+        raise ValueError(
+            f"TinyMU checkpoint state is incompatible: missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
+    return model.to(device).eval().requires_grad_(False)
+
+
+def _encode_tinymu_chunk(
+    model: _MatpacModel, chunk: np.ndarray, device: str
+) -> np.ndarray:
+    """Encode prepared ``(B, T_16k)`` audio as ``(B, 3840, T_tokens)``.
+
+    :param model: Frozen MATPAC model.
+    :param chunk: Finite normalized mono audio at 16 kHz.
+    :param device: Torch inference device.
+    :returns: Finite contiguous float32 embedding sequences.
+    :raises ValueError: MATPAC returns an invalid shape or non-finite values.
+    """
+    import torch
+
+    with torch.inference_mode():
+        embeddings, _ = model(torch.from_numpy(chunk).to(device))
+    expected = (
+        len(chunk),
+        tinymu_num_latent_frames(chunk.shape[-1], TINYMU_SAMPLE_RATE),
+        TINYMU_EMBEDDING_DIM,
+    )
+    if tuple(embeddings.shape) != expected:
+        raise ValueError(f"TinyMU encoder produced shape {tuple(embeddings.shape)}, expected {expected}")
+    values = embeddings.float().cpu().numpy()
+    if not np.isfinite(values).all():
+        raise ValueError("TinyMU encoder produced non-finite values")
+    return np.ascontiguousarray(values.transpose(0, 2, 1), dtype=np.float32)
+
+
 def load_tinymu_audio_encoder(
     checkpoint: str = DEFAULT_TINYMU_CHECKPOINT,
     *,
@@ -306,57 +467,36 @@ def load_tinymu_audio_encoder(
     :param checkpoint: Exact pinned R2 URI or a hash-identical local file.
     :param source_dir: External TinyMU checkout root, or ``None`` for the env fallback.
     :param device: Explicit Torch device.
-    :returns: Encoder producing ``(B, 3840, T_tokens)`` float32 sequences.
-    :raises ValueError: Model state violates the pinned contract.
+    :returns: Encoder accepting finite normalized ``(B, C, T)`` audio and returning
+        ``(B, 3840, T_tokens)`` float32 sequences.
     """
-    import torch
-
     model_path = configured_tinymu_source_model(source_dir)
     checkpoint_path = resolve_tinymu_checkpoint(checkpoint)
-    module = _load_source_module(model_path)
-    model = module.matpac_wrapper(inference_type="precise", pull_time_dimension=False)
-    _validate_model_contract(model)
-
-    state = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
-    incompatible = model.load_state_dict(state, strict=False)
-    missing = set(incompatible.missing_keys)
-    unexpected = set(incompatible.unexpected_keys)
-    if missing != _EXPECTED_UNPERSISTED_BUFFERS or unexpected:
-        raise ValueError(
-            f"TinyMU checkpoint state is incompatible: missing={sorted(missing)}, "
-            f"unexpected={sorted(unexpected)}"
-        )
-    model = model.to(device).eval().requires_grad_(False)
+    module = cast("_MatpacModule", _load_source_module(model_path))
+    model = _load_tinymu_model(module, checkpoint_path, device)
     logger.info(
         "loaded_tinymu_checkpoint",
         checkpoint_revision=TINYMU_CHECKPOINT_REVISION,
         checkpoint_sha256=TINYMU_CHECKPOINT_SHA256,
-        source_commit=TINYMU_SOURCE_COMMIT,
         device=device,
+        source_commit=TINYMU_SOURCE_COMMIT,
+        synth_setter_git_sha=resolve_git_sha(),
     )
 
-    @torch.inference_mode()
-    def _encode_chunk(chunk: np.ndarray) -> np.ndarray:
-        inputs = torch.from_numpy(chunk).to(device)
-        embeddings, _ = model(inputs)
-        expected = (
-            len(chunk),
-            tinymu_num_latent_frames(chunk.shape[-1], TINYMU_SAMPLE_RATE),
-            TINYMU_EMBEDDING_DIM,
-        )
-        if tuple(embeddings.shape) != expected:
-            raise ValueError(
-                f"TinyMU encoder produced shape {tuple(embeddings.shape)}, expected {expected}"
-            )
-        values = embeddings.float().cpu().numpy()
-        if not np.isfinite(values).all():
-            raise ValueError("TinyMU encoder produced non-finite values")
-        return np.ascontiguousarray(values.transpose(0, 2, 1), dtype=np.float32)
-
     def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Encode normalized ``(B, C, T)`` audio as finite ``(B, 3840, T_tokens)``.
+
+        :param audio: One- or two-channel batch with amplitudes in ``[-1, 1]``.
+        :param sample_rate: Positive source sample rate in Hz.
+        :returns: Contiguous float32 embedding sequences.
+        """
         prepared = tinymu_encoder_input(audio, sample_rate)
         chunks = [
-            _encode_chunk(prepared[start : start + TINYMU_ENCODE_MAX_BATCH])
+            _encode_tinymu_chunk(
+                model,
+                prepared[start : start + TINYMU_ENCODE_MAX_BATCH],
+                device,
+            )
             for start in range(0, len(prepared), TINYMU_ENCODE_MAX_BATCH)
         ]
         return np.concatenate(chunks, axis=0)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import hydra
@@ -18,7 +20,6 @@ from hydra.core.global_hydra import GlobalHydra
 pytest.importorskip("timm")
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, TINYMU_FIELD  # noqa: E402
-from synth_setter.pipeline.data.add_embeddings import add_embeddings  # noqa: E402
 from synth_setter.pipeline.data.lance_shard import (  # noqa: E402
     SHARD_METADATA_SCHEMA_KEY,
     tensor_array,
@@ -30,7 +31,6 @@ from synth_setter.pipeline.data.tinymu import (  # noqa: E402
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
 )
-from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig  # noqa: E402
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata  # noqa: E402
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration_r2, pytest.mark.r2]
@@ -47,6 +47,7 @@ def _tinymu_source_dir() -> Path:
     configured = os.environ.get(TINYMU_SOURCE_DIR_ENV)
     if configured is None:
         pytest.skip(f"set {TINYMU_SOURCE_DIR_ENV} to the pinned TinyMU checkout")
+    assert configured is not None
     return Path(configured)
 
 
@@ -107,20 +108,26 @@ def _tinymu_conditioning_encoder() -> torch.nn.Module:
         GlobalHydra.instance().clear()
 
 
-def test_tinymu_real_encoder_same_audio_is_bitwise_deterministic() -> None:
-    """Frozen eval-mode MATPAC returns identical sequences for identical real audio."""
+def test_tinymu_real_encoder_distinct_audio_is_distinct_and_deterministic() -> None:
+    """MATPAC distinguishes two real clips while repeated inference stays bitwise stable."""
     source_dir = _tinymu_source_dir()
     audio, sample_rate = sf.read(
         source_dir / _SOURCE_AUDIO_RELATIVE_PATH,
         always_2d=True,
         dtype="float32",
     )
-    clip = np.ascontiguousarray(audio[: sample_rate * _CLIP_SECONDS].T[None])
+    clip_samples = sample_rate * _CLIP_SECONDS
+    clips = np.ascontiguousarray(
+        np.stack([audio[:clip_samples].T, audio[-clip_samples:].T]),
+        dtype=np.float32,
+    )
     encode = load_tinymu_audio_encoder(source_dir=source_dir, device="cpu")
 
-    first = encode(clip, sample_rate)
-    second = encode(clip, sample_rate)
+    first = encode(clips, sample_rate)
+    second = encode(clips, sample_rate)
 
+    assert np.isfinite(first).all()
+    assert not np.allclose(first[0], first[1])
     np.testing.assert_array_equal(first, second)
 
 
@@ -135,24 +142,28 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
     dataset_path = tmp_path / "tinymu-real.lance"
     sample_rate, clip_samples = _write_real_audio_lance(source_dir, dataset_path)
 
-    previous_cache_home = os.environ.get("XDG_CACHE_HOME")
-    os.environ["XDG_CACHE_HOME"] = str(tmp_path / "empty-cache")
-    try:
-        add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(dataset_path),
-                embeddings=("tinymu",),
-                tinymu_source_dir=source_dir,
-                device="cpu",
-                batch_size=1,
-                build_index=False,
-            )
-        )
-    finally:
-        if previous_cache_home is None:
-            os.environ.pop("XDG_CACHE_HOME", None)
-        else:
-            os.environ["XDG_CACHE_HOME"] = previous_cache_home
+    command = Path(sys.executable).with_name("synth-setter-add-embeddings")
+    environment = os.environ | {
+        "PROJECT_ROOT": str(Path(__file__).resolve().parents[3]),
+        "XDG_CACHE_HOME": str(tmp_path / "empty-cache"),
+    }
+    subprocess.run(
+        [
+            str(command),
+            f"lance_uri={dataset_path}",
+            "embeddings=[tinymu]",
+            f"tinymu_source_dir={source_dir}",
+            "device=cpu",
+            "batch_size=1",
+            "build_index=false",
+            f"paths.log_dir={tmp_path / 'logs'}",
+            f"hydra.run.dir={tmp_path / 'run'}",
+        ],
+        check=True,
+        cwd=Path(__file__).resolve().parents[3],
+        env=environment,
+        timeout=1_800,
+    )
 
     dataset = lance.dataset(dataset_path)
     assert dataset.count_rows() == 1

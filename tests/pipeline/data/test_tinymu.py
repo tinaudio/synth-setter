@@ -88,11 +88,47 @@ def test_tinymu_encoder_input_valid_audio_returns_finite_mono_float32(
     assert np.isfinite(prepared).all()
 
 
+def test_tinymu_encoder_input_mono_16khz_preserves_known_values() -> None:
+    """Native-rate mono samples reach MATPAC without waveform corruption."""
+    samples = np.zeros((1, 1, 2_800), dtype=np.float32)
+    samples[0, 0, :4] = [-1.0, -0.25, 0.5, 1.0]
+
+    prepared = tinymu_encoder_input(samples, 16_000)
+
+    np.testing.assert_array_equal(prepared[0, :4], [-1.0, -0.25, 0.5, 1.0])
+
+
+def test_tinymu_encoder_input_stereo_averages_known_values() -> None:
+    """Stereo downmix is the sample-wise mean of both channels."""
+    samples = np.zeros((1, 2, 2_800), dtype=np.float32)
+    samples[0, 0, :3] = [-1.0, 0.5, 1.0]
+    samples[0, 1, :3] = [1.0, -0.25, 0.0]
+
+    prepared = tinymu_encoder_input(samples, 16_000)
+
+    np.testing.assert_array_equal(prepared[0, :3], [0.0, 0.125, 0.5])
+
+
+def test_tinymu_encoder_input_8khz_constant_resamples_known_signal() -> None:
+    """Resampling doubles an 8 kHz constant clip while preserving its interior level."""
+    samples = np.full((1, 1, 2_800), 0.25, dtype=np.float32)
+
+    prepared = tinymu_encoder_input(samples, 8_000)
+
+    assert prepared.shape == (1, 5_600)
+    np.testing.assert_allclose(
+        prepared[0, 100:105],
+        [0.250010, 0.250219, 0.250010, 0.250219, 0.250010],
+        atol=1e-6,
+    )
+
+
 @pytest.mark.parametrize(
     ("audio", "sample_rate", "message"),
     [
         (np.zeros((2, 100), dtype=np.float32), 16_000, r"expected a \(B, C, T\) batch"),
         (np.zeros((1, 3, 3_000), dtype=np.float32), 16_000, "1 or 2 channels"),
+        (np.zeros((0, 1, 3_000), dtype=np.float32), 16_000, "non-empty batch"),
         (np.zeros((1, 1, 3_000), dtype=np.float32), 0, "positive sample_rate"),
         (np.full((1, 1, 3_000), np.nan, dtype=np.float32), 16_000, "non-finite"),
         (np.zeros((1, 1, 2_799), dtype=np.float32), 16_000, "at least 2800 samples"),
@@ -109,6 +145,18 @@ def test_tinymu_encoder_input_incompatible_audio_raises(
     """
     with pytest.raises(ValueError, match=message):
         tinymu_encoder_input(audio, sample_rate)
+
+
+@pytest.mark.parametrize("amplitude", [-1.0001, 1.0001])
+def test_tinymu_encoder_input_outside_unit_amplitude_raises(amplitude: float) -> None:
+    """Finite samples outside normalized audio bounds fail before inference.
+
+    :param amplitude: Invalid signed peak amplitude.
+    """
+    audio = np.full((1, 1, 2_800), amplitude, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"outside \[-1\.0, 1\.0\]"):
+        tinymu_encoder_input(audio, 16_000)
 
 
 def test_tinymu_registry_encoder_valid_sequence_returns_fixed_shape_tensor() -> None:
@@ -197,6 +245,19 @@ def test_resolve_tinymu_source_model_wrong_commit_raises(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match=TINYMU_SOURCE_COMMIT):
         resolve_tinymu_source_model(source)
+
+
+def test_add_embeddings_config_tinymu_incompatible_pq_split_raises() -> None:
+    """Known TinyMU vector width rejects an invalid PQ split before augmentation."""
+    with pytest.raises(
+        ValueError,
+        match=r"num_sub_vectors \(7\) must divide the tinymu dim \(3840\)",
+    ):
+        AddEmbeddingsConfig(
+            lance_uri="dataset.lance",
+            embeddings=("tinymu",),
+            num_sub_vectors=7,
+        )
 
 
 def test_add_embeddings_config_tinymu_source_string_coerces_path() -> None:
