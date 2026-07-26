@@ -112,8 +112,8 @@ def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
         'selector array") end\' <<<"$MUTMUT_PATTERNS")\n'
         "patterns=()\n"
         "while IFS= read -r pattern; do\n"
-        '  patterns+=("$pattern")\n'
-        'done <<<"$patterns_json"\n'
+        '  patterns+=("${pattern}")\n'
+        'done <<<"${patterns_json}"\n'
         'uv run mutmut run --max-children 4 "${patterns[@]}"\n'
     )
 
@@ -139,8 +139,9 @@ def _run_workflow_shell(
     run_step = next(
         step for step in _workflow()["jobs"]["mutmut_run"]["steps"] if step["name"] == "Run mutmut"
     )
+    bash_without_mapfile = "enable -n mapfile 2>/dev/null || true\n" + run_step["run"]
     result = subprocess.run(  # noqa: S603 — bash executes the checked-in workflow script
-        ["/bin/bash", "-c", run_step["run"]],
+        ["/bin/bash", "-c", bash_without_mapfile],
         capture_output=True,
         env=env,
         text=True,
@@ -155,7 +156,11 @@ def test_mutmut_workflow_run_step_expands_every_selector(tmp_path: Path) -> None
 
     :param tmp_path: Directory holding a recording ``uv`` executable.
     """
-    patterns = _PREDICT_SHARDS["evaluation-predict-misc"]
+    patterns = [
+        "selector with spaces",
+        r"selector\with\backslashes",
+        "selector;$(printf not-executed) [!_]*?",
+    ]
 
     result, uv_args_path = _run_workflow_shell(tmp_path, json.dumps(patterns))
 
