@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from hydra import compose, initialize_config_module
+from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
@@ -124,6 +125,12 @@ class TestFromRenderCfg:
             render = compose(config_name=f"render/{name}").render
 
         assert SynthSpec.from_render_cfg(render) == SYNTHS[SynthName(name)]
+
+    def test_nested_render_group_yields_its_synth_identity(self) -> None:
+        """A render node using the persisted nested shape resolves directly."""
+        render = OmegaConf.create({"synth": SYNTHS[SynthName("surge_simple")].model_dump()})
+
+        assert SynthSpec.from_render_cfg(render) == SYNTHS[SynthName("surge_simple")]
 
     def test_absent_render_group_yields_none(self) -> None:
         """A missing render node reports absence rather than raising."""

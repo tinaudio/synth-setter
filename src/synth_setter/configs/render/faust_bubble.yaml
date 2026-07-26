@@ -1,0 +1,4 @@
+defaults:
+  - faust_bright_organ
+
+param_spec_name: faust_bubble
