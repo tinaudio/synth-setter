@@ -28,7 +28,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationResolutionError
 from pedalboard.io import AudioFile
 
@@ -36,7 +36,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -75,6 +75,33 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
+
+
+def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
+    """The eval operator config accepts the production brightOrgan render group."""
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[
+                    "datamodule=ksin",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "ckpt_path=.",
+                    "render=faust_bright_organ",
+                ],
+            )
+        render = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert render.renderer_backend == "dawdreamer_faust"
+    assert render.plugin_path == "faust"
+    assert render.plugin_reload_cadence == "render"
+    assert render.gui_toggle_cadence == "never"
+    assert render.param_spec_name == "faust_bright_organ"
+
+
 _AUDIO_PREDICTION_CASES = (
     _AudioPredictionCase(
         "ffn_full",
@@ -810,11 +837,23 @@ def _compose_fake_oracle_eval_cfg(
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
         # Render group is null on fake_oracle; set it inline to the dataset's spec.
-        cfg.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-            "plugin_path": "plugins/fake.vst3",
-        }
+        cfg.render = RenderConfig.model_validate(
+            {
+                "param_spec_name": param_spec_name,
+                "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                "plugin_path": "plugins/fake.vst3",
+                "renderer_version": "1.3.4",
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 5,
+                "plugin_reload_cadence": "render",
+                "gui_toggle_cadence": "never",
+            }
+        ).model_dump(mode="json")
     return cfg
 
 

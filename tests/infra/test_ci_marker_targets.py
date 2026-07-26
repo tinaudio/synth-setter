@@ -22,6 +22,7 @@ import pytest
 TARGET_MARKERS: dict[str, str] = {
     "test-ci-unit": "not slow and not gpu and not mps",
     "test-ci-slow": "slow and not gpu and not mps and not requires_vst",
+    "test-ci-slow-pr": "slow and not gpu and not mps and not requires_vst and not integration_r2",
     "test-ci-nightly": "not gpu and not mps and not requires_vst",
 }
 

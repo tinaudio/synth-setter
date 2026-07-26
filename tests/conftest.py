@@ -1,7 +1,7 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
-import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -23,10 +23,12 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -116,11 +118,25 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
 _R2_AVAILABLE = r2_io.is_r2_reachable()
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-skip requires_vst / integration_r2 tests when resources are absent.
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Validate selected SAME e2e prerequisites and apply resource skip markers.
 
-    :param items: mutated in-place to insert skip markers for missing resources.
+    :param config: Active pytest configuration containing the marker expression.
+    :param items: Mutated in place to insert skip markers for missing resources.
+    :raises pytest.UsageError: If an explicitly selected SAME lane lacks a prerequisite.
     """
+    if "same_e2e" in config.getoption("-m"):
+        missing = []
+        if importlib.util.find_spec("stable_audio_tools") is None:
+            missing.append("stable_audio_tools (install with `uv sync --extra same`)")
+        if not VST_AVAILABLE:
+            missing.append(
+                f"VST plugin at {PLUGIN_PATH!r} "
+                "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
+            )
+        if missing:
+            raise pytest.UsageError("same_e2e missing prerequisites:\n- " + "\n- ".join(missing))
+
     skip_vst = pytest.mark.skip(
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
@@ -436,6 +452,33 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="dataset",
             overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with the production brightOrgan render group.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: Faust cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "render=faust_bright_organ",
+                "render.gui_toggle_cadence=never",
+            ],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -853,25 +896,6 @@ def cfg_surge_xt_global(
     )
 
 
-def _synth_flag_value(param_spec_name: str) -> str:
-    """Encode one synth identity as the renderer CLI's ``--synth`` value.
-
-    Mirrors ``build_generate_args``: the nested field reaches the worker's
-    ``CliSettingsSource`` as JSON, not as a Python repr.
-
-    :param param_spec_name: Registry key selecting the spec and its preset.
-    :returns: JSON object string for the ``--synth`` flag.
-    """
-    return json.dumps(
-        {
-            "name": param_spec_name,
-            "param_spec_name": param_spec_name,
-            "plugin_path": PLUGIN_PATH,
-            "plugin_state_path": plugin_state_paths[param_spec_name],
-        }
-    )
-
-
 def _render_smoke_train_subprocess(
     output_path: Path,
     param_spec_name: str,
@@ -893,8 +917,10 @@ def _render_smoke_train_subprocess(
         sys.executable,
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
-        # Identity is one JSON-encoded nested field, matching build_generate_args.
-        f"--synth={_synth_flag_value(param_spec_name)}",
+        f"--synth.name={param_spec_name}",
+        f"--synth.plugin_path={PLUGIN_PATH}",
+        f"--synth.plugin_state_path={plugin_state_paths[param_spec_name]}",
+        f"--synth.param_spec_name={param_spec_name}",
         f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
         f"--channels={_SURGE_FIXTURE_CHANNELS}",
@@ -944,9 +970,12 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
     """
     return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        plugin_state_path=str(plugin_state_paths[param_spec_name]),
-        param_spec_name=param_spec_name,
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=PLUGIN_PATH,
+            plugin_state_path=str(plugin_state_paths[param_spec_name]),
+        ),
         renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
         channels=_SURGE_FIXTURE_CHANNELS,
@@ -1026,8 +1055,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--synth``
-        identity for ``generate_vst_dataset``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
+        and ``--plugin_state_path`` for ``generate_vst_dataset``.
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
@@ -1291,6 +1320,33 @@ def surge_smoke_variant(request: pytest.FixtureRequest) -> _SurgeSmokeVariant:
     return request.param
 
 
+def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[str, object]:
+    """Build the complete renderer transport used by train/eval smoke fixtures.
+
+    :param param_spec_name: Registered spec identity for prediction decoding.
+    :param plugin_path: Real or test plugin path used by the fixture.
+    :returns: JSON-compatible validated render configuration.
+    """
+    config = RenderConfig.model_validate(
+        {
+            "plugin_path": plugin_path,
+            "plugin_state_path": plugin_state_paths[param_spec_name],
+            "param_spec_name": param_spec_name,
+            "renderer_version": "1.3.4",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 1,
+            "samples_per_shard": 5,
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
+        }
+    )
+    return config.model_dump(mode="json")
+
+
 def _apply_smoke_train_paths(
     cfg: DictConfig, dataset_root: Path, variant: _SurgeSmokeVariant, tmp_path: Path
 ) -> None:
@@ -1306,6 +1362,9 @@ def _apply_smoke_train_paths(
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
+        cfg.render = _surge_smoke_render_config(
+            str(cfg.datamodule.param_spec_name), variant.plugin_path
+        )
 
 
 @pytest.fixture(scope="function")
@@ -1594,11 +1653,7 @@ def _configure_surge_xt_eval_cfg(
             "rerender_target": rerender_target,
             "num_workers": 1,
         }
-        cfg.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_state_path": plugin_state_paths[param_spec_name],
-            "plugin_path": plugin_path,
-        }
+        cfg.render = _surge_smoke_render_config(param_spec_name, plugin_path)
 
 
 @pytest.fixture(scope="function")

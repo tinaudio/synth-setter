@@ -29,7 +29,7 @@ SETUP_R2_STEP_NAME = "Set up R2"
 PYTEST_STEP_NAME = "Run slow (non-GPU, non-MPS, non-VST) tests"
 
 WORKFLOW_SELF_PATH = ".github/workflows/cpu-slow.yml"
-INVARIANT_TEST_SELF_PATH = "tests/infra/test_cpu_slow_workflow_r2_creds.py"
+TESTS_PATH = "tests/**"
 
 
 def _load_workflow(project_root: Path) -> dict[str, object]:
@@ -158,15 +158,14 @@ def test_cpu_slow_sets_up_r2_before_pytest(project_root: Path) -> None:
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize("expected_path", [WORKFLOW_SELF_PATH, INVARIANT_TEST_SELF_PATH])
+@pytest.mark.parametrize("expected_path", [WORKFLOW_SELF_PATH, TESTS_PATH])
 def test_cpu_slow_pull_request_self_trigger_present(
     project_root: Path, expected_path: str
 ) -> None:
     """``on.pull_request.paths`` covers the workflow and its invariant test.
 
-    A PR that edits ``cpu-slow.yml`` (or this test, whose contract pins the
-    R2 wiring the workflow promises) must exercise the slow suite pre-merge
-    instead of waiting for the post-merge push run — see #1206.
+    A PR that edits ``cpu-slow.yml`` or any test must exercise the slow suite
+    pre-merge instead of waiting for the post-merge push run — see #1206.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     :param expected_path: a repo-relative path that must appear verbatim in
@@ -185,12 +184,8 @@ def test_cpu_slow_pull_request_self_trigger_present(
 def test_cpu_slow_job_gated_against_fork_prs(project_root: Path) -> None:
     """``run_slow_tests.if`` blocks fork-PR runs of the 90-min suite.
 
-    Fork PRs can't see ``secrets.RCLONE_CONFIG_R2_*``, so the
-    ``integration_r2`` surface skips anyway — but the rest of the slow
-    suite still burns a 4-core runner for up to 90 minutes. The job-level
-    ``if`` guard short-circuits ``pull_request`` events whose head repo
-    differs from the workflow repo; ``workflow_dispatch`` / ``push`` /
-    ``schedule`` runs are unaffected.
+    The job-level guard explicitly skips fork pull requests. Same-repository
+    PRs run the non-R2 lane; dispatch and push runs retain live-R2 coverage.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     """

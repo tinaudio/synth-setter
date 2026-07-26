@@ -78,28 +78,22 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     def from_render_cfg(cls, render: DictConfig | None) -> SynthSpec | None:
         """Read synth identity out of a composed ``render`` group.
 
-        Reads the ``synth`` group the render configs compose, falling back to the
-        pre-nesting flat keys so a hand-written or archived config still resolves.
-        In the flat form ``name`` mirrors ``param_spec_name``, which those configs
-        do not state separately.
-
         Duck-typed so this module stays free of a runtime omegaconf import — the
         minimal-env CI install that runs ``validate_spec`` does not ship it.
+        Flat render groups derive ``name`` from ``param_spec_name``; nested groups
+        preserve their explicit identity.
 
         :param render: Composed ``render`` node, or ``None`` when unset.
         :returns: The identity the group declares, or ``None`` when it names no
-            synth (e.g. the generic ``render=vst`` scaffold).
+            param spec (e.g. the generic ``render=vst`` scaffold).
         """
         if render is None:
             return None
-        synth = render.get("synth")
-        if synth is not None:
-            return cls(
-                name=SynthName(str(synth["name"])),
-                param_spec_name=ParamSpecName(str(synth["param_spec_name"])),
-                plugin_path=str(synth["plugin_path"]),
-                plugin_state_path=str(synth["plugin_state_path"]),
-            )
+        nested_synth = render.get("synth")
+        if isinstance(nested_synth, cls):
+            return nested_synth
+        if nested_synth is not None:
+            return cls.model_validate(dict(nested_synth))
         param_spec_name = render.get("param_spec_name")
         if param_spec_name is None:
             return None
@@ -116,6 +110,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 # extends this dict by line anchor (``registration.synths_with_spec``); a nested
 # constructor call would reflow under ruff-format and break that transform.
 _synth_rows: dict[str, tuple[str, str, str]] = {
+    "faust_bright_organ": ("faust_bright_organ", "faust", ""),
+    "faust_bubble": ("faust_bubble", "faust", ""),
+    "faust_church_organ": ("faust_church_organ", "faust", ""),
+    "faust_filter_osc": ("faust_filter_osc", "faust", ""),
     "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset"),
     "surge_simple": ("surge_simple", "plugins/Surge XT.vst3", "presets/surge-simple.vstpreset"),
     "surge_4": ("surge_4", "plugins/Surge XT.vst3", "presets/surge-mini.vstpreset"),
