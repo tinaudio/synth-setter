@@ -90,10 +90,16 @@ def use_input_artifacts(
     ref_list = list(refs)
     unrecorded: list[tuple[str, str]] = []
     for lg in wandb_loggers:
+        run = lg.experiment
+        # ``use_artifact`` raises outright offline, and every offline run would
+        # otherwise report every ref as a lineage gap it can never close.
+        if getattr(run, "offline", False):
+            log.info(f"Offline W&B run; not recording {len(ref_list)} lineage edge(s).")
+            continue
         for ref in ref_list:
             name, alias = ref
             try:
-                lg.experiment.use_artifact(f"{name}:{alias}")
+                run.use_artifact(f"{name}:{alias}")
             except Exception as exc:  # noqa: BLE001 — lineage failure must not abort the run
                 log.warning(
                     f"use_input_artifacts failed for {name}:{alias} on {type(lg).__name__}: {exc}"

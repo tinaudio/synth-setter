@@ -6,25 +6,31 @@ The pure helper maps the datamodule's local dataset root to the
 the run for (#2424). The seam tests below drive the real ``train(cfg)`` with its
 heavy collaborators stubbed and pin that the entrypoint actually calls
 ``record_input_lineage`` with those edges, gated on
-``train``/``test`` — coverage the isolated helper tests cannot give. Both kept
-out of the canonical ``test_train.py`` per
-``tests/_meta/test_entrypoint_test_modules.py``.
+``train``/``test`` — coverage the isolated helper tests cannot give. The two
+offline-wandb tests at the end close the remaining gap: they drive the real
+entrypoint against a real ``WandbLogger`` and read the incompleteness marker
+back out of wandb's own datastore binary. All kept out of the canonical
+``test_train.py`` per ``tests/_meta/test_entrypoint_test_modules.py``.
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from omegaconf import DictConfig, OmegaConf
+import wandb
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import _consumed_artifact_refs, train
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
+from synth_setter.utils.logging_utils import LINEAGE_INCOMPLETE_TAG
+from tests.helpers.wandb_offline import read_run_binary
 
 
 def _seam_cfg(
@@ -254,3 +260,105 @@ def test_consumed_artifact_refs_unreadable_spec_reports_the_configured_root(
     cfg = OmegaConf.create({"datamodule": {"dataset_root": str(tmp_path)}})
 
     assert _consumed_artifact_refs(cfg) == ([], [f"dataset root {tmp_path}"])
+
+
+def _attach_offline_wandb_logger(cfg: DictConfig, save_dir: Path) -> None:
+    """Swap ``cfg.logger`` for a real offline ``WandbLogger`` group rooted at ``save_dir``.
+
+    :param cfg: Train cfg, mutated in place to carry ``logger.wandb``.
+    :param save_dir: Directory the offline run's ``wandb/`` tree is written under.
+    """
+    with open_dict(cfg):
+        cfg.logger = {
+            "wandb": {
+                "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                "offline": True,
+                "save_dir": str(save_dir),
+                "id": None,
+                "job_type": "",
+                "project": "train-lineage-marker-test-project",
+            }
+        }
+
+
+def _run_offline_train(cfg: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Drive ``train(cfg)`` against a real offline ``WandbLogger`` and return the run binary.
+
+    :param cfg: Train cfg, mutated to carry the offline logger group.
+    :param tmp_path: Hosts the offline ``wandb/`` tree.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
+    :returns: Path to the offline run's ``run-*.wandb`` datastore binary.
+    """
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+    _attach_offline_wandb_logger(cfg, tmp_path)
+
+    train(cfg)
+
+    offline_dirs = list((tmp_path / "wandb").glob("offline-run-*"))
+    assert len(offline_dirs) == 1, f"expected one offline-run dir, found {offline_dirs}"
+    binaries = list(offline_dirs[0].glob("run-*.wandb"))
+    assert len(binaries) == 1, f"expected one .wandb binary, found {binaries}"
+    return binaries[0]
+
+
+@pytest.mark.slow
+def test_train_unresolvable_dataset_root_marks_the_wandb_run_incomplete(
+    cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real run over a root with no frozen spec carries the durable lineage marker (#2424).
+
+    Drives the real entrypoint against a real ``WandbLogger`` and decodes the
+    datastore binary the live client wrote, so the marker is read back from
+    wandb's own bytes rather than from a stub.
+
+    :param cfg_train_lance: CPU-cheap Lance train cfg whose root has no ``input_spec.json``.
+    :param tmp_path: Hosts the dataset, offline run dir, and outputs.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    assert not (dataset_root / "input_spec.json").exists()
+
+    binary = _run_offline_train(cfg_train_lance, tmp_path, monkeypatch)
+
+    payload = read_run_binary(binary, until=lambda data: b"lineage_incomplete" in data)
+    assert b"lineage_incomplete" in payload, "summary flag not recorded on the run"
+    assert LINEAGE_INCOMPLETE_TAG.encode() in payload, "marker tag not recorded on the run"
+    assert str(dataset_root).encode() in payload, "unresolved root not named in the run summary"
+
+
+@pytest.mark.slow
+def test_train_resolvable_dataset_root_leaves_the_wandb_run_unmarked(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """A root with a readable frozen spec is never marked incomplete (#2424).
+
+    Also pins that an offline run — where ``use_artifact`` is unavailable by
+    design — is not reported as a lineage gap it could never close.
+
+    :param cfg_train_lance: CPU-cheap Lance train cfg.
+    :param tmp_path: Hosts the dataset, offline run dir, and outputs.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    """
+    write_spec_to_path(
+        dataset_spec_factory(
+            task_name="diva-v1",
+            train_val_test_sizes=[4, 4, 0],
+            r2={"bucket": "intermediate-data"},
+            render={"samples_per_shard": 4},
+        ),
+        Path(cfg_train_lance.datamodule.dataset_root) / "input_spec.json",
+    )
+
+    binary = _run_offline_train(cfg_train_lance, tmp_path, monkeypatch)
+
+    payload = read_run_binary(binary)
+    assert b"lineage_incomplete" not in payload, "a resolvable root must not mark the run"
+    assert LINEAGE_INCOMPLETE_TAG.encode() not in payload, "marker tag written without a gap"

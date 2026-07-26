@@ -386,11 +386,16 @@ class TestPinWandbRunId:
 class FakeWandbRun:
     """Fake wandb run recording every ``use_artifact`` call as inspectable state."""
 
-    def __init__(self, raises: bool = False) -> None:
-        """:param raises: When true, ``use_artifact`` raises after recording the call."""
+    def __init__(self, raises: bool = False, offline: bool = False) -> None:
+        """Build the fake run.
+
+        :param raises: When true, ``use_artifact`` raises after recording the call.
+        :param offline: Mirrors ``wandb.Run.offline``; offline runs cannot use artifacts.
+        """
         self.consumed: list[str] = []
         self.summary: dict[str, object] = {}
         self.tags: tuple[str, ...] = ()
+        self.offline = offline
         self._raises = raises
 
     def use_artifact(self, name_alias: str) -> None:
@@ -508,6 +513,15 @@ class TestUseInputArtifacts:
         unrecorded = use_input_artifacts(loggers, [("data-diva-v1", "latest")])
 
         assert unrecorded == [("data-diva-v1", "latest")]
+
+    def test_offline_run_records_no_edge_and_reports_nothing(self) -> None:
+        """An offline run cannot use artifacts at all, so it is skipped, not called a gap."""
+        run = FakeWandbRun(offline=True)
+
+        unrecorded = use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []
+        assert unrecorded == []
 
     def test_non_zero_rank_records_no_edge(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On a non-zero DDP rank the helper is a no-op — only rank 0 records lineage.

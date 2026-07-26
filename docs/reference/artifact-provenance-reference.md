@@ -47,13 +47,13 @@ ______________________________________________________________________
 
 `artifact.metadata` holds properties of the artifact itself, never run hyperparameters (those go in `wandb.config`). Final metrics live in `wandb.summary`; the one exception is `eval-results`, which also copies a small **scalar summary** of its metrics into `artifact.metadata` (via `_eval_summary_metrics`) so a result set can be filtered without opening each run.
 
-| Artifact       | Metadata keys                                                |
-| -------------- | ------------------------------------------------------------ |
-| `dataset`      | `shard_count`, `n_samples`, `git_sha`                        |
-| `model`        | `git_sha`                                                    |
-| `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha` |
+| Artifact       | Metadata keys                                                          |
+| -------------- | ---------------------------------------------------------------------- |
+| `dataset`      | `shard_count`, `n_samples`, `git_sha`                                  |
+| `model`        | `git_sha`, plus `_checkpoint_metadata` keys when a checkpoint uploaded |
+| `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha`           |
 
-The `model` artifact carries only `git_sha`. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
+The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
 
 ______________________________________________________________________
 
