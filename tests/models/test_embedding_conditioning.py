@@ -1,5 +1,6 @@
 """Behavioral tests for generic embedding encoders and model routing."""
 
+from collections.abc import Callable
 from functools import partial
 
 import pytest
@@ -8,7 +9,11 @@ import torch
 from synth_setter.conditioning import ConditioningMode, EmbeddingConditioningSpec
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+
+_ModelFactory = Callable[[], VSTFeedForwardModule | VSTFlowMatchingModule]
+_BatchFactory = Callable[[], dict[str, torch.Tensor]]
 
 
 def _flow_module(
@@ -27,6 +32,123 @@ def _flow_module(
         num_params=1,
         conditioning=conditioning,
     )
+
+
+class _TinyVectorField(torch.nn.Module):
+    """Minimal differentiable field for exercising flow training."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.projection = torch.nn.Linear(7, 2)
+
+    def apply_dropout(self, conditioning: torch.Tensor, dropout_rate: float) -> torch.Tensor:
+        """Return conditioning unchanged for deterministic training.
+
+        :param conditioning: Encoded conditioning vectors.
+        :param dropout_rate: Unused classifier-free guidance dropout probability.
+        :returns: The unchanged vectors.
+        """
+        return conditioning
+
+    def forward(
+        self, params: torch.Tensor, time: torch.Tensor, conditioning: torch.Tensor
+    ) -> torch.Tensor:
+        """Predict a field from parameters, time, and conditioning.
+
+        :param params: Noisy parameter vectors.
+        :param time: Sampled flow times.
+        :param conditioning: Encoded conditioning vectors.
+        :returns: Predicted parameter-space field.
+        """
+        return self.projection(torch.cat((params, time, conditioning), dim=1))
+
+    def penalty(self) -> torch.Tensor:
+        """Return a differentiable zero regularization penalty.
+
+        :returns: Scalar zero connected to the field parameters.
+        """
+        return self.projection.weight.sum() * 0
+
+
+def _ff_embedding_module() -> VSTFeedForwardModule:
+    """Build a feed-forward module over a cached sequence embedding.
+
+    :returns: Feed-forward module configured for generic conditioning.
+    """
+    return VSTFeedForwardModule(
+        net=EmbeddingPool(embed_dim=4, d_model=2, num_heads=1, max_seq_len=3),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        conditioning=EmbeddingConditioningSpec(column="cached", input_shape=(4, 3)),
+    )
+
+
+def _flow_embedding_module() -> VSTFlowMatchingModule:
+    """Build a flow module over a cached sequence embedding.
+
+    :returns: Flow module configured for generic conditioning.
+    """
+    return VSTFlowMatchingModule(
+        encoder=EmbeddingPool(embed_dim=4, d_model=4, num_heads=1, max_seq_len=3),
+        vector_field=_TinyVectorField(),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=2,
+        conditioning=EmbeddingConditioningSpec(column="cached", input_shape=(4, 3)),
+    )
+
+
+def _ff_embedding_batch() -> dict[str, torch.Tensor]:
+    """Build a non-mel feed-forward training batch.
+
+    :returns: Batch containing cached conditioning and target parameters.
+    """
+    return {
+        "conditioning": torch.randn(2, 4, 3),
+        "params": torch.randn(2, 2),
+    }
+
+
+def _flow_embedding_batch() -> dict[str, torch.Tensor]:
+    """Build a non-mel flow training batch.
+
+    :returns: Batch containing cached conditioning, targets, and flow noise.
+    """
+    return {
+        "conditioning": torch.randn(2, 4, 3),
+        "noise": torch.randn(2, 2),
+        "params": torch.randn(2, 2),
+    }
+
+
+@pytest.mark.parametrize(
+    ("module_factory", "batch_factory"),
+    [
+        (_flow_embedding_module, _flow_embedding_batch),
+        (_ff_embedding_module, _ff_embedding_batch),
+    ],
+    ids=["flow", "feed_forward"],
+)
+def test_vst_module_training_step_cached_embedding_returns_finite_loss(
+    module_factory: _ModelFactory,
+    batch_factory: _BatchFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both inversion paths train directly from a cached non-mel tensor.
+
+    :param module_factory: Flow or feed-forward module factory under test.
+    :param batch_factory: Matching cached-conditioning batch factory.
+    :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
+    """
+    module = module_factory()
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+
+    loss = module.training_step(batch_factory(), batch_idx=0)
+    loss.backward()
+
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    assert any(parameter.grad is not None for parameter in module.parameters())
 
 
 def test_model_embedding_spec_reads_generic_conditioning_key() -> None:

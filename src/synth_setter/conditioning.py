@@ -34,6 +34,20 @@ class EmbeddingConditioningSpec(BaseModel):
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
 
 
+def select_conditioning[T](
+    batch: Mapping[str, T], embedding: EmbeddingConditioningSpec | None
+) -> T:
+    """Select the legacy mel or canonical cached-conditioning tensor.
+
+    :param batch: Model batch containing the configured conditioning tensor.
+    :param embedding: Resolved cached-embedding spec, or ``None`` for legacy mel.
+    :returns: The tensor selected for model conditioning.
+    """
+    if embedding is None:
+        return batch["mel_spec"]
+    return batch["conditioning"]
+
+
 def resolve_embedding_conditioning(
     conditioning: Conditioning,
 ) -> EmbeddingConditioningSpec | None:

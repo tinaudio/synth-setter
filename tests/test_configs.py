@@ -249,6 +249,75 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
+@pytest.mark.parametrize(
+    ("model_name", "model_overrides"),
+    [
+        (
+            "vst_flow",
+            [
+                "model.vector_field.d_ff=16",
+                "model.vector_field.d_model=16",
+                "model.vector_field.num_heads=1",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.projection.num_tokens=4",
+            ],
+        ),
+        (
+            "vst_ffn",
+            [
+                "model.net.d_model=16",
+                "model.net.n_heads=1",
+                "model.net.n_layers=1",
+            ],
+        ),
+    ],
+    ids=["flow", "feed_forward"],
+)
+def test_t5gemma_conditioning_profile_cached_batch_trains(
+    model_name: str,
+    model_overrides: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The T5Gemma profile trains either VST model from its cached Lance tensor.
+
+    :param model_name: VST model config selected for the training step.
+    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
+    :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            "conditioning=t5gemma",
+            "trainer=cpu",
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            *model_overrides,
+        ],
+    )
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+    monkeypatch.setattr(model, "log", lambda *args, **kwargs: None)
+
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    loss = model.training_step(batch, batch_idx=0)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == "t5gemma"
+    assert datamodule.embedding_conditioning.input_shape == (768, 256)
+    assert batch["conditioning"].shape == (2, 768, 256)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
 def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     """A CLAP spec selects generic routing and the vector projection encoder."""
     cfg = _compose(

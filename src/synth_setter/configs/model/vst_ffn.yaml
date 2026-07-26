@@ -1,7 +1,10 @@
 defaults:
+  - encoder: null
   - _self_
 
 _target_: synth_setter.models.vst_ff_module.VSTFeedForwardModule
+
+conditioning: mel
 
 net:
   _target_: synth_setter.models.components.transformer.ASTWithProjectionHead
