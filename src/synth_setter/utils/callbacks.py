@@ -920,7 +920,11 @@ class LogPerParamMSE(Callback):
         pl_module,
     ) -> None:
         per_param_mse = self.per_param_mse / self.count
-        names = self.param_spec.names
+        # Indexed by encoded span, not name position: onehot and note parameters
+        # own several columns each, so the two sequences have different lengths.
         pl_module.log_dict(
-            {f"per_param_mse/{name}": mse for name, mse in zip(names, per_param_mse)},
+            {
+                f"per_param_mse/{param.name}": per_param_mse[span].mean()
+                for param, span in self.param_spec.encoded_slices()
+            },
         )

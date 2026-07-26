@@ -128,6 +128,24 @@ The launcher reads `sky_cfg.tail` (a `SkypilotLaunchConfig` field, default `Fals
 
 Before job submission, `dispatch_via_skypilot` runs a RunPod account-balance gate (`_check_runpod_balance` in `synth_setter.pipeline.skypilot_launch`): a launch aborts with `insufficient RunPod balance` — deliberately without the actual amount, which is account-sensitive — when the balance is below the preflight floor. Without it, an exhausted account surfaces as managed jobs stuck in STARTING while the controller seeks pods it can never rent. The gate fires only for compute options whose resources request the `runpod` cloud anywhere (`ComputeConfig.requests_runpod()` scans every resources entry, not just the provider-detection winner), is skipped under a remote API server (`SKYPILOT_API_SERVER_ENDPOINT` — the server holds the provider creds, so a local `~/.runpod/config.toml` may describe a different account), and is fail-open: an unverifiable probe (missing creds, API error, malformed response) emits a stderr notice and lets the launch proceed.
 
+#### 4.1.3 GPU tier filter (`sky_cfg.tier`)
+
+`dispatch_via_skypilot` narrows the selected compute option's accelerator pool to a
+cumulative GPU class before task assembly: `compute = apply_tier_filter(sky_cfg.compute, sky_cfg.tier)`
+(`src/synth_setter/pipeline/compute_task.py`). `tier` is a `SkypilotLaunchConfig` field
+(default `GpuTier.ANY` → passthrough, so existing launches are unchanged). The
+classification lives in one place — `src/synth_setter/pipeline/schemas/gpu_tier.py`, a
+per-SKU minimum-tier map with `allowed_gpu_skus`/`filter_gpu_skus` — so pools never
+duplicate GPU lists: `low` = consumer RTX 30/40, `mid` adds workstation cards, `high`
+adds datacenter cards, and the tiers nest (`low ⊆ mid ⊆ high ⊆ any`). The filter fails
+loud rather than launching an empty `any_of`: an empty intersection raises naming the
+option and tier, and a pool SKU with no classification under a non-`any` tier raises
+naming the SKU (an anti-drift guard against a pool silently gaining an unclassified GPU).
+
+`tier` is set as a **field in the launch-config YAML** (`tier: low`) consumed by the
+click launcher, or as a Hydra override (`skypilot_launch.tier=low`) on the
+generate-dataset dispatch group — both funnel into the same `SkypilotLaunchConfig`.
+
 ### 4.2 Env-var resolution: launcher → worker
 
 The SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and local dev and CI share the same launcher code without special cases: storage settings resolve as one unit and project the rclone env block, while the remaining keys resolve individually.

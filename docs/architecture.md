@@ -8,16 +8,17 @@ individual design docs linked throughout.
 synth-setter is a collection of tools for **synthesizer inversion** (predicting
 synthesizer parameters from audio), **sound matching**, and **preset
 exploration**. The system generates large-scale audio datasets by rendering
-random synthesizer configurations through a VST3 synth, trains neural networks
+random synthesizer configurations through a configured audio renderer, trains neural networks
 on these datasets, and evaluates how well the models recover the original
 parameters.
 
 The pipeline is **synth-agnostic**: rendering, storage, features, distributed
-workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
-`RenderConfig` (plugin path, preset, spec name) looked up from a registry by
-name. Surge XT is the default; OB-Xf and Cardinal Synth are registered
-production integrations. New VST3 plugins compose through the same registry,
-render, storage, and model contracts without per-synth pipeline branches. See
+workers, and models are driven by a `ParamSpec` and a `RenderConfig` (backend
+and synth identity) selected by name. Surge XT is the default; OB-Xf and
+Cardinal Synth are registered VST3 integrations, while Faust identities compile
+checked-in source through DawDreamer. New VST3 plugins compose through the same
+registry, renderer, storage, and model contracts without per-synth pipeline
+branches. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 ## System Diagram
@@ -31,7 +32,7 @@ render, storage, and model contracts without per-synth pipeline branches. See
  │  │          │    │          │    │          │    │                  │  │
  │  │ Render   │    │ Compose  │    │ Flow     │    │ Predict → Render │  │
  │  │ audio via│    │ into     │    │ matching │    │ → Metrics        │  │
- │  │ VST synth│    │ splits   │    │ model    │    │                  │  │
+ │  │ renderer │    │ splits   │    │ model    │    │                  │  │
  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────────┬─────────┘  │
  │       │               │               │                   │            │
  │       ▼               ▼               ▼                   ▼            │
@@ -51,14 +52,17 @@ render, storage, and model contracts without per-synth pipeline branches. See
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt`, `render=obxf`, or `render=cardinal`); each render config
-   names the registered `param_spec_name`, preset, and plugin path. Hydra
+   group override (for example, `render=surge_xt`, `render=obxf`,
+   `render=cardinal`, or `render=faust_bright_organ`). Each render config names
+   the backend, selects its `synth` group, and declares backend-specific
+   resources. The synth group carries the registered parameter spec, preset,
+   and plugin path. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
-2. **Generate** -- Workers render audio samples through the configured VST3
-   synth, producing Lance
+2. **Generate** -- Workers render audio samples through the configured synth
+   backend, producing Lance
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
    and ground-truth parameter arrays. Workers are fully parallel with no shared
    state. Cardinal's committed preset maps its generic host slots to a curated
@@ -87,8 +91,8 @@ render, storage, and model contracts without per-synth pipeline branches. See
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
-   **render** (synthesize audio from predicted parameters via the same VST3
-   synth that generated the dataset), and
+   **render** (synthesize audio from predicted parameters via the same renderer
+   backend that generated the dataset), and
    **metrics** (spectral and transport-based distance metrics). Results upload to
    R2.
    Design: [eval-pipeline.md](design/eval-pipeline.md)
@@ -137,14 +141,17 @@ synth-setter/
 
 ## Key Design Decisions
 
-**Synth-agnostic core, registry as the contract.** A synth is fully described
-by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
-preset (`plugin_state_paths[name]`), and a `RenderConfig`
-(`src/synth_setter/configs/render/<name>.yaml`)
-— keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
-rendering, Lance storage, mel features, distributed workers, and models all
-read width and behavior from the resolved spec, never from a synth literal.
-Onboarding a new VST3 synth is additive: scaffold a spec with
+**Synth-agnostic core, registry as the contract.** A synth's identity — which
+`ParamSpec`, which plugin, which baseline preset — is authored once in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and
+`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it,
+pinned against the table by `tests/test_synth_spec.py`. Render configs in
+`src/synth_setter/configs/render/<name>.yaml` select an identity and declare
+backend-specific settings. The `ParamSpec` objects themselves live in
+`src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
+storage, mel features, distributed workers, and models all read width and
+behavior from the resolved spec, never from a synth literal. Faust entries use
+an empty state path and resolve checked-in source by the same identity. Onboarding a new VST3 synth is additive: scaffold a spec with
 `synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
 config — no core edits. See
 [Adding a new synth](guides/adding-a-new-synth.md).

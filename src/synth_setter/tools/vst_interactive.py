@@ -25,6 +25,7 @@ import pandas as pd
 import torch
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile, AudioStream, StreamResampler
+from pydantic_settings import CliApp
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -43,10 +44,49 @@ from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
 logger = logging.getLogger(__name__)
+
+
+def make_dataset_render_cfg(
+    *,
+    param_spec_name: str,
+    plugin_path: str,
+    plugin_state_path: str,
+    renderer_version: str,
+    samples_per_shard: int,
+) -> RenderConfig:
+    """Build the render config the captured-patch dataset is written with.
+
+    The audition session's render settings are fixed constants, so only the
+    synth identity, the plugin version pin, and the patch count vary per run.
+
+    :param param_spec_name: Registry key naming the spec the patches encode against.
+    :param plugin_path: Plugin bundle the patches were auditioned on.
+    :param plugin_state_path: Baseline preset applied before each patch.
+    :param renderer_version: Version read off the plugin bundle.
+    :param samples_per_shard: Number of captured patches, written as one shard.
+    :returns: Render config for :func:`make_lance_dataset`.
+    """
+    return RenderConfig(
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=plugin_path,
+            plugin_state_path=plugin_state_path,
+        ),
+        renderer_version=renderer_version,
+        sample_rate=SAMPLE_RATE,
+        channels=CHANNELS,
+        velocity=MAKE_DATASET_VELOCITY,
+        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
+        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
+        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
+        samples_per_shard=samples_per_shard,
+    )
 
 
 def _configure_logging() -> None:
@@ -857,8 +897,7 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
 def _build_predict_vst_audio_argv(
     predictions_output_dir: Path,
     audio_dir: Path,
-    param_spec_name: str,
-    plugin_state_path: str,
+    render_config: RenderConfig,
     *,
     platform: str | None = None,
     wrapper_path: Path | None = None,
@@ -872,8 +911,7 @@ def _build_predict_vst_audio_argv(
 
     :param predictions_output_dir: Directory containing prediction tensors.
     :param audio_dir: Directory where rendered audio artifacts are written.
-    :param param_spec_name: Registry key for the parameter specification.
-    :param plugin_state_path: Baseline plugin-state file to load.
+    :param render_config: Exact renderer configuration used to capture the patches.
     :param platform: Override for ``sys.platform``; ``None`` reads ``sys.platform`` at call time.
     :param wrapper_path: Real, on-disk path to the Xvfb wrapper; required on Linux
         (the caller materializes :func:`vst_headless_wrapper` via ``as_file``).
@@ -902,11 +940,9 @@ def _build_predict_vst_audio_argv(
         _PREDICT_VST_AUDIO_MODULE,
         str(predictions_output_dir),
         str(audio_dir),
-        "--param_spec",
-        param_spec_name,
-        "--plugin_state_path",
-        plugin_state_path,
-        "-t",
+        *CliApp.serialize(render_config),
+        "--rerender-target",
+        "True",
     ]
     return args
 
@@ -951,28 +987,19 @@ def _render_predicted_audio(
     predictions_output_dir: Path,
     audio_dir: Path,
     num_samples: int,
-    param_spec_name: str,
-    plugin_state_path: str,
+    render_config: RenderConfig,
     *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
     """Render audio for the predicted patches and validate per-sample outputs.
 
-    Thin orchestrator over :func:`_build_predict_vst_audio_argv` (argv construction) and
-    :func:`_validate_rendered_audio_dir` (post-render checks); neither helper invokes a
-    subprocess, so both are independently testable without a ``subprocess_runner``.
-
-    ``param_spec_name`` and ``plugin_state_path`` must match the values used to capture the patches —
-    otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
-    ``presets/surge-base.vstpreset``) and decode/render against a mismatched spec.
-
-    Validation errors from argv construction and rendered artifacts propagate to the caller.
+    The complete capture-time renderer configuration is forwarded to prevent backend, lifecycle,
+    spec, or audio-shape drift during re-rendering.
 
     :param predictions_output_dir: Directory containing prediction tensors.
     :param audio_dir: Directory where rendered audio artifacts are written.
     :param num_samples: Number of prediction samples to render.
-    :param param_spec_name: Registry key for the parameter specification.
-    :param plugin_state_path: Baseline plugin-state file to load.
+    :param render_config: Exact renderer configuration used to capture the patches.
     :param subprocess_runner: Optional injected subprocess runner.
     :raises subprocess.TimeoutExpired: Rendering exceeds the subprocess deadline.
     """
@@ -985,8 +1012,7 @@ def _render_predicted_audio(
         args = _build_predict_vst_audio_argv(
             predictions_output_dir,
             audio_dir,
-            param_spec_name,
-            plugin_state_path,
+            render_config,
             wrapper_path=wrapper_path,
         )
         runner = subprocess_runner if subprocess_runner is not None else subprocess.run
@@ -1056,8 +1082,7 @@ def eval_patches(
     *,
     dataset_root_dir: Path,
     checkpoint_path: Path,
-    param_spec_name: str,
-    plugin_state_path: str,
+    render_config: RenderConfig,
     experiment: str = _DEFAULT_EVAL_EXPERIMENT,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
@@ -1080,17 +1105,9 @@ def eval_patches(
     :param dataset_root_dir: Directory containing ``predict.lance``; receives
         ``prediction_outputs/``, ``audio/``, and ``metrics/`` subdirectories.
     :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
-    :param param_spec_name: Parameter spec name (key into ``param_specs``) used to set the model's
-        ``d_out`` and the decoder used to render predicted audio. Must match the spec used when
-        the patches were captured.
-    :param plugin_state_path: Base preset to load when rendering predicted audio. Must match the preset
-        used when the patches were captured.
+    :param render_config: Capture-time configuration used for decoding and rendering.
     :param experiment: Hydra experiment selecting the checkpoint's model configuration.
-    :param subprocess_runner: Test seam (#844) — when set, forwarded to every subprocess-using
-        helper so a single fake records all three external invocations. ``None`` (the default)
-        preserves production behavior by letting each helper bind its own
-        ``subprocess.run``/``subprocess.check_call`` default.
-    Downstream prediction, rendering, and metrics validation failures propagate.
+    :param subprocess_runner: Optional runner forwarded to each subprocess helper.
 
     :raises FileNotFoundError: The checkpoint, predict split, or required output is absent.
     :raises NotADirectoryError: The dataset root is not a directory.
@@ -1121,7 +1138,7 @@ def eval_patches(
         dataset_root_dir,
         predict_file,
         predictions_output_dir,
-        param_spec_name,
+        render_config.param_spec_name,
         experiment=experiment,
         **runner_kwargs,
     )
@@ -1130,8 +1147,7 @@ def eval_patches(
         predictions_output_dir,
         audio_dir,
         num_samples,
-        param_spec_name,
-        plugin_state_path,
+        render_config,
         **runner_kwargs,
     )
     _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples, **runner_kwargs)
@@ -1389,17 +1405,11 @@ def main(
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.lance"
-    render_cfg = RenderConfig(
+    render_cfg = make_dataset_render_cfg(
+        param_spec_name=param_spec_name,
         plugin_path=plugin_path,
         plugin_state_path=plugin_state_path,
-        param_spec_name=ParamSpecName(param_spec_name),
         renderer_version=extract_renderer_version(Path(plugin_path)),
-        sample_rate=SAMPLE_RATE,
-        channels=CHANNELS,
-        velocity=MAKE_DATASET_VELOCITY,
-        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
-        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
-        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
         samples_per_shard=len(synth_patches),
     )
     make_lance_dataset(
@@ -1412,8 +1422,7 @@ def main(
         output_dataset_dir_path,
         len(synth_patches),
         checkpoint_path,
-        param_spec_name,
-        plugin_state_path,
+        render_config=render_cfg,
         experiment=experiment,
     )
 
@@ -1427,8 +1436,7 @@ class EvalRunner(Protocol):
         *,
         dataset_root_dir: Path,
         checkpoint_path: Path,
-        param_spec_name: str,
-        plugin_state_path: str,
+        render_config: RenderConfig,
         experiment: str,
     ) -> None:
         """Evaluate captured patches with explicit same-typed settings.
@@ -1436,8 +1444,7 @@ class EvalRunner(Protocol):
         :param num_samples: Number of patches to evaluate.
         :param dataset_root_dir: Root containing the evaluation splits.
         :param checkpoint_path: Model checkpoint used for prediction.
-        :param param_spec_name: ParamSpec registry key used for decoding.
-        :param plugin_state_path: Baseline plugin state used for rendering.
+        :param render_config: Renderer identity and lifecycle used for captured patches.
         :param experiment: Hydra experiment selecting the model configuration.
         """
 
@@ -1447,28 +1454,21 @@ def _maybe_eval_captured_patches(
     output_dataset_dir_path: Path,
     num_patches: int,
     checkpoint_path: Path | None,
-    param_spec_name: str,
-    plugin_state_path: str,
+    render_config: RenderConfig,
     *,
     experiment: str = _DEFAULT_EVAL_EXPERIMENT,
     eval_runner: EvalRunner | None = None,
 ) -> None:
     """Replicate captured patches into the eval-pipeline splits and run eval_patches.
 
-    No-op if no checkpoint is provided.
-    The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
-    invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
-    ``param_spec_name`` and ``plugin_state_path`` are forwarded to ``eval_patches`` so the predict /
-    render / metrics steps decode and re-render against the same spec + preset that were used
-    when the patches were captured.
+    No-op if no checkpoint is provided. Evaluation receives the complete capture-time render
+    configuration so prediction and re-rendering use the same backend contract.
 
-    ``eval_runner`` defaults to :func:`eval_patches` at call time; callers may inject an evaluator.
     :param patch_file_path: Captured patch file used as the evaluation input.
     :param output_dataset_dir_path: Root directory for evaluation outputs.
     :param num_patches: Number of captured patches to evaluate.
     :param checkpoint_path: Optional model checkpoint for evaluation.
-    :param param_spec_name: Registry key for the parameter specification.
-    :param plugin_state_path: Baseline plugin-state file used for rendering.
+    :param render_config: Exact configuration used to render the captured dataset.
     :param experiment: Hydra experiment selecting the checkpoint's model configuration.
     :param eval_runner: Optional injected evaluation runner.
     :raises OSError: Replicating a captured split fails.
@@ -1500,8 +1500,7 @@ def _maybe_eval_captured_patches(
         num_patches,
         dataset_root_dir=output_dataset_dir_path,
         checkpoint_path=checkpoint_path,
-        param_spec_name=param_spec_name,
-        plugin_state_path=plugin_state_path,
+        render_config=render_config,
         experiment=experiment,
     )
 

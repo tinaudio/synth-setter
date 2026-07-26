@@ -27,7 +27,8 @@ FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
     return {
         "plugin_path": plugin_path,
-        "plugin_state_path": "presets/surge-base.vstpreset",
+        # The in-process backend has no preset file, and SynthSpec rejects one.
+        "plugin_state_path": "" if plugin_path == "torchsynth" else "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -132,7 +133,9 @@ class TestRenderConfig:
         """The domain identifier preserves the registry key's JSON shape."""
         cfg = RenderConfig(**_valid_render_kwargs())
 
-        assert json.loads(cfg.model_dump_json())["param_spec_name"] == "surge_simple"
+        synth = json.loads(cfg.model_dump_json())["synth"]
+
+        assert synth["param_spec_name"] == "surge_simple"
 
     def test_param_spec_name_preserves_nonblank_boundary_whitespace(self) -> None:
         """Nonblank registry keys retain surrounding whitespace."""
@@ -260,6 +263,57 @@ class TestRenderConfig:
             }
         )
         assert cfg.gui_toggle_cadence == "never"
+
+    def test_faust_backend_accepts_registered_source_identity(self) -> None:
+        """Faust selects checked-in source resolution without plugin or preset paths."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(plugin_path="faust"),
+                "plugin_state_path": "",
+                "param_spec_name": "faust_bright_organ",
+                "renderer_backend": "dawdreamer_faust",
+                "gui_toggle_cadence": "never",
+            }
+        )
+
+        assert cfg.renderer_backend == "dawdreamer_faust"
+        assert cfg.plugin_path == "faust"
+        assert cfg.plugin_state_path == ""
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"plugin_path": "program.dsp"}, 'requires plugin_path="faust"'),
+            ({"plugin_state_path": "preset.fxp"}, "does not accept plugin_state_path"),
+            ({"gui_toggle_cadence": "once"}, 'requires gui_toggle_cadence="never"'),
+        ],
+    )
+    def test_faust_backend_rejects_external_resources_and_editor_cadence(
+        self,
+        overrides: dict[str, str],
+        message: str,
+    ) -> None:
+        """Faust fails closed on external source/state paths and editor use.
+
+        :param overrides: Invalid Faust renderer fields.
+        :param message: Expected validation-error fragment.
+        """
+        values = {
+            **_valid_render_kwargs(plugin_path="faust"),
+            "plugin_state_path": "",
+            "param_spec_name": "faust_bright_organ",
+            "renderer_backend": "dawdreamer_faust",
+            "gui_toggle_cadence": "never",
+            **overrides,
+        }
+
+        with pytest.raises(ValidationError, match=message):
+            RenderConfig(**values)
+
+    def test_faust_plugin_sentinel_requires_faust_backend(self) -> None:
+        """The bare Faust sentinel cannot dispatch through a VST backend."""
+        with pytest.raises(ValidationError, match='plugin_path="faust" requires renderer_backend'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="faust"))
 
     @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
     def test_torchsynth_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:

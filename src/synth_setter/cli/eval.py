@@ -15,6 +15,7 @@ from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
+from pydantic_settings import CliApp
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import (
@@ -26,10 +27,11 @@ from synth_setter.evaluation.audio_probe import (
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
-from synth_setter.pipeline.schemas.spec import _get_git_sha
+from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -167,10 +169,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     always forwarded; the render-order probe (#489) runs automatically inside
     ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
-        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
-        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
-        ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` gates and metric settings, the complete
+        ``cfg.render`` contract, and ``cfg.paths.output_dir`` for artifact roots.
     :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
         ran (``metric_prefix`` empty by default); empty dict otherwise. Always
         rank-zero — the caller gates DDP duplication.
@@ -202,33 +202,26 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             if sys.platform == "linux":
                 wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
                 args.append(str(wrapper_path))
+            render_values = OmegaConf.to_container(cfg.render, resolve=True)
+            if not isinstance(render_values, dict):
+                raise TypeError("cfg.render must resolve to a mapping")
+            synth = SynthSpec.from_render_cfg(cfg.render)
+            if synth is None:
+                raise ValueError("render group names no param spec; cannot re-render audio")
+            for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
+                render_values.pop(legacy_key, None)
+            render_values["synth"] = synth.model_dump()
+            render_config = RenderConfig.model_validate(render_values)
             args += [
                 sys.executable,
                 "-m",
                 _PREDICT_VST_AUDIO_MODULE,
                 str(predictions_dir),
                 str(audio_dir),
-                "--param_spec",
-                cfg.render.param_spec_name,
-                "--plugin_state_path",
-                cfg.render.plugin_state_path,
+                *CliApp.serialize(render_config),
             ]
-            if cfg.render.get("plugin_path"):
-                args += ["--plugin_path", cfg.render.plugin_path]
-            # Forward the remaining render fields predict_vst_audio renders with so the
-            # re-render matches the dataset's generation render rather than this module's
-            # CLI defaults. Gated like plugin_path so a partial render cfg still works.
-            for flag, key in (
-                ("--sample_rate", "sample_rate"),
-                ("--channels", "channels"),
-                ("--velocity", "velocity"),
-                ("--signal_duration_seconds", "signal_duration_seconds"),
-            ):
-                value = cfg.render.get(key)
-                if value is not None:
-                    args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
-                args.append("-t")
+                args.extend(["--rerender-target", "True"])
             # Each pred file stores at most one configured batch, so this is a
             # conservative timeout budget when the final map-style batch is ragged.
             n_render_samples = (

@@ -37,6 +37,8 @@ from synth_setter.data.vst.registration import (
     registration_paths,
     registry_with_spec,
     render_config_yaml,
+    synth_group_yaml,
+    synths_with_spec,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
 
@@ -65,11 +67,22 @@ class _RegisterTarget:
 
        The registry source with the spec already registered, written last so
        a failure on any earlier artifact leaves the registry untouched.
+
+    .. attribute :: synth_source
+
+       The identity-table source with the synth's row already added.
+
+    .. attribute :: recorded_plugin_path
+
+       Plugin path as recorded for render workers, relative to the checkout
+       when it sits inside it.
     """
 
     root: Path
     paths: RegistrationPaths
     registry_source: str
+    synth_source: str
+    recorded_plugin_path: str
 
 
 @click.command()
@@ -207,10 +220,12 @@ def main(
             "--verify checks the registered checkout wiring; combine it with --register."
         )
     if register:
-        target = _resolve_register_target(spec_name, repo_root, out_spec, out_preset, out_csv)
+        target = _resolve_register_target(
+            spec_name, repo_root, out_spec, out_preset, out_csv, plugin_path
+        )
         paths = target.paths
         spec_dest, preset_dest, csv_dest = paths.spec_module, paths.preset, paths.csv
-        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config)
+        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config, paths.synth_config)
     else:
         target = None
         spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
@@ -275,6 +290,7 @@ def _resolve_register_target(
     out_spec: str | None,
     out_preset: str | None,
     out_csv: str | None,
+    plugin_path: str,
 ) -> _RegisterTarget:
     """Validate the register-mode invocation and pre-compute the checkout wiring.
 
@@ -286,6 +302,8 @@ def _resolve_register_target(
     :param out_spec: Must be unset — ``--register`` owns the layout.
     :param out_preset: Must be unset — ``--register`` owns the layout.
     :param out_csv: Must be unset — ``--register`` owns the layout.
+    :param plugin_path: Plugin path as given on the CLI; recorded relative to the
+        checkout when it sits inside it.
     :returns: The resolved checkout wiring.
     :raises click.UsageError: ``--out-*`` was supplied, no checkout was found,
         or the registry rejects ``spec_name``.
@@ -309,12 +327,22 @@ def _resolve_register_target(
                 "not inside a synth-setter checkout; pass --repo-root <checkout>."
             )
         root = found
+    recorded_path = checkout_relative_path(plugin_path, root)
     try:
         paths = registration_paths(root, spec_name)
         updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
+        synth_updated = synths_with_spec(
+            paths.synth_module.read_text(encoding="utf-8"), spec_name, plugin_path=recorded_path
+        )
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
-    return _RegisterTarget(root=root, paths=paths, registry_source=updated)
+    return _RegisterTarget(
+        root=root,
+        paths=paths,
+        registry_source=updated,
+        synth_source=synth_updated,
+        recorded_plugin_path=recorded_path,
+    )
 
 
 def _write_register_wiring(
@@ -328,15 +356,20 @@ def _write_register_wiring(
         sits inside it.
     :param version: Plugin version pinned in the render config.
     """
-    recorded_path = checkout_relative_path(plugin_path, target.root)
     render_config = target.paths.render_config
     render_config.parent.mkdir(parents=True, exist_ok=True)
     render_config.write_text(
-        render_config_yaml(spec_name, plugin_path=recorded_path, renderer_version=version),
-        encoding="utf-8",
+        render_config_yaml(spec_name, renderer_version=version), encoding="utf-8"
     )
+    synth_config = target.paths.synth_config
+    synth_config.parent.mkdir(parents=True, exist_ok=True)
+    synth_config.write_text(
+        synth_group_yaml(spec_name, plugin_path=target.recorded_plugin_path), encoding="utf-8"
+    )
+    target.paths.synth_module.write_text(target.synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
     click.echo(f"Render cfg  : {render_config}")
+    click.echo(f"Synth cfg   : {synth_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(

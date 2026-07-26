@@ -28,10 +28,14 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     KEYBOARD_DURATION_BOUNDS,
     PARAM_INDEX,
 )
-from synth_setter.renderer_backend import PluginProcessResetMode
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, PluginProcessResetMode
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
+
+# Both DawDreamer hosts pin the engine block size as a runtime invariant.
+DAWDREAMER_BLOCK_SIZE = 2048
 
 
 class _DawDreamerParameterDescription(TypedDict):
@@ -66,12 +70,85 @@ class _DawDreamerPlugin(Protocol):
     def load_preset(self, path: str) -> None: ...
 
 
+class _DawDreamerFaustProcessor(Protocol):
+    """DawDreamer Faust-processor surface used by the renderer.
+
+    .. attribute :: num_voices
+
+       Polyphonic voice count configured before compilation.
+
+    .. attribute :: group_voices
+
+       Whether polyphonic controls share one parameter address.
+    """
+
+    num_voices: int
+    group_voices: bool
+
+    def set_dsp_string(self, source: str) -> None:
+        """Set the checked-in Faust source string.
+
+        :param source: Complete Faust program.
+        """
+        ...
+
+    def compile(self) -> None:
+        """Compile the configured source."""
+        ...
+
+    def get_parameters_description(self) -> list[_DawDreamerParameterDescription]:
+        """Return compiled parameter metadata.
+
+        :returns: Parameter descriptions in compiled address order.
+        """
+        ...
+
+    def clear_midi(self) -> None:
+        """Clear scheduled MIDI events."""
+        ...
+
+    def set_parameter(self, address: str, value: float) -> bool:
+        """Set one native value by exact address.
+
+        :param address: Exact compiled Faust address.
+        :param value: Renderer-native value.
+        :returns: Whether the address accepted the value.
+        """
+        ...
+
+    def set_automation(self, address: str, values: np.ndarray) -> bool:
+        """Set audio-rate values by exact address.
+
+        :param address: Exact compiled Faust address.
+        :param values: One renderer-native value per output sample.
+        :returns: Whether the address accepted the automation.
+        """
+        ...
+
+    def add_midi_note(
+        self, pitch: int, velocity: int, start: float, duration: float
+    ) -> None:
+        """Schedule one MIDI note.
+
+        :param pitch: MIDI note number.
+        :param velocity: MIDI velocity.
+        :param start: Note-on time in seconds.
+        :param duration: Note duration in seconds.
+        """
+        ...
+
+
+type _DawDreamerProcessor = _DawDreamerPlugin | _DawDreamerFaustProcessor
+
+
 class _DawDreamerEngine(Protocol):
     """DawDreamer render-engine surface used by the renderer."""
 
     def make_plugin_processor(self, name: str, path: str) -> _DawDreamerPlugin: ...
 
-    def load_graph(self, graph: list[tuple[_DawDreamerPlugin, list[object]]]) -> None: ...
+    def make_faust_processor(self, name: str) -> _DawDreamerFaustProcessor: ...
+
+    def load_graph(self, graph: list[tuple[_DawDreamerProcessor, list[object]]]) -> None: ...
 
     def render(self, duration: float) -> None: ...
 
@@ -82,15 +159,6 @@ class _DawDreamerModule(Protocol):
     """Lazily imported DawDreamer module surface."""
 
     def RenderEngine(self, sample_rate: float, block_size: int) -> _DawDreamerEngine: ...
-
-
-class AudioAmplitudeError(ValueError):
-    """Rendered audio exceeded [-1, 1] — a property of the sampled patch, not a backend bug.
-
-    Distinct from the generic ``ValueError`` shape/finiteness violations so the
-    generation loop can treat a clipping draw as sampled-data rejection (#2001)
-    while backend contract breaks stay fatal.
-    """
 
 
 def _validate_rendered_audio(
@@ -104,9 +172,8 @@ def _validate_rendered_audio(
     :param audio: Channel-leading rendered audio.
     :param channels: Required output channel count.
     :param samples: Required output sample count.
-    :returns: The validated audio without clipping or replacement.
+    :returns: The validated audio without replacement.
     :raises ValueError: If shape or finiteness is invalid.
-    :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
     """
     if audio.shape != (channels, samples):
         raise ValueError(
@@ -114,8 +181,6 @@ def _validate_rendered_audio(
         )
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
-    if np.any(np.abs(audio) > 1.0):
-        raise AudioAmplitudeError("rendered audio samples must be within [-1, 1]")
     return audio
 
 
@@ -125,7 +190,7 @@ class AudioRenderer(ABC):
 
     .. attribute :: plugin_path
 
-       Filesystem path to the plugin bundle.
+       Plugin path or interpreter-resolved backend sentinel.
 
     .. attribute :: sample_rate
 
@@ -162,7 +227,7 @@ class AudioRenderer(ABC):
     ) -> np.ndarray:
         """Render one note and return audio shaped ``(channels, samples)``.
 
-        :param params: Normalized plugin parameter values keyed by plugin name.
+        :param params: Renderer-native parameter values keyed by renderer identity.
         :param midi_note: MIDI pitch of the note.
         :param velocity: MIDI note velocity in the inclusive range ``[0, 127]``.
         :param note_start_and_end: Note start and end times in seconds.
@@ -317,6 +382,151 @@ class TorchSynthRenderer(AudioRenderer):
 
 
 @dataclass(kw_only=True)
+class DawDreamerFaustRenderer(AudioRenderer):
+    """Compile and render one checked-in Faust program through DawDreamer.
+
+    .. attribute :: param_spec_name
+
+       Shared source and exact-address parameter-spec identity.
+
+    .. attribute :: block_size
+
+       DawDreamer engine block size.
+
+    .. attribute :: reload_processor_each_render
+
+       Whether subsequent calls compile a fresh native graph.
+
+    .. attribute :: engine
+
+       DawDreamer render engine holding the compiled graph.
+
+    .. attribute :: processor
+
+       Compiled Faust processor.
+    """
+
+    param_spec_name: ParamSpecName = field(kw_only=True)
+    block_size: int = DAWDREAMER_BLOCK_SIZE
+    reload_processor_each_render: bool = True
+    engine: _DawDreamerEngine = field(init=False, repr=False)
+    processor: _DawDreamerFaustProcessor = field(init=False, repr=False)
+    _daw: _DawDreamerModule = field(init=False, repr=False)
+    _dsp_source: str = field(init=False, repr=False)
+    _num_voices: int = field(init=False, repr=False)
+    _parameter_addresses: tuple[str, ...] = field(init=False, repr=False)
+    _has_rendered: bool = field(init=False, default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Resolve checked-in identities and compile the first native graph.
+
+        :raises ValueError: The direct renderer configuration accepts an external resource.
+        """
+        from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
+        from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+
+        if self.plugin_path != FAUST_PLUGIN_NAME:
+            raise ValueError('Faust renderer requires plugin_path="faust"')
+        if self.plugin_state_path:
+            raise ValueError("Faust renderer does not accept plugin_state_path")
+        dsp = resolve_faust_dsp(self.param_spec_name)
+        spec = resolve_faust_param_spec(self.param_spec_name)
+        self._dsp_source = dsp.source
+        self._num_voices = dsp.num_voices
+        self._parameter_addresses = tuple(spec.synth_param_names)
+        self._daw = cast(_DawDreamerModule, import_module("dawdreamer"))
+        self._initialize_graph()
+
+    def _initialize_graph(self) -> None:
+        """Compile one source string and verify its exact parameter addresses.
+
+        :raises ValueError: Compiled addresses drift from the registered specification.
+        """
+        self.engine = self._daw.RenderEngine(self.sample_rate, self.block_size)
+        self.processor = self.engine.make_faust_processor("synth")
+        self.processor.num_voices = self._num_voices
+        self.processor.group_voices = True
+        self.processor.set_dsp_string(self._dsp_source)
+        self.processor.compile()
+        self.engine.load_graph([(self.processor, [])])
+        compiled_addresses = tuple(
+            str(item["name"]) for item in self.processor.get_parameters_description()
+        )
+        if compiled_addresses != self._parameter_addresses:
+            raise ValueError("compiled Faust parameter addresses do not match the registered spec")
+
+    def render(
+        self,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Apply native values by exact address and render one MIDI note.
+
+        :param params: Complete renderer-native values keyed by exact Faust address.
+        :param midi_note: MIDI pitch of the note.
+        :param velocity: MIDI note velocity in the inclusive range ``[0, 127]``.
+        :param note_start_and_end: Note start and end times in seconds.
+        :param warmup: Unused; a source processor has no plugin editor.
+        :returns: Rendered audio with channels on the first axis.
+        """
+        del warmup
+        self._validate_parameter_addresses(params)
+        if self.reload_processor_each_render and self._has_rendered:
+            self._initialize_graph()
+        self._has_rendered = True
+        self.processor.clear_midi()
+        try:
+            samples = int(self.sample_rate * self.signal_duration_seconds)
+            self._apply_parameters(params, samples)
+            start, end = note_start_and_end
+            self.processor.add_midi_note(midi_note, velocity, start, end - start)
+            self.engine.render(self.signal_duration_seconds)
+            audio = np.asarray(self.engine.get_audio())
+        finally:
+            self.processor.clear_midi()
+        return _validate_rendered_audio(
+            audio,
+            channels=self.channels,
+            samples=samples,
+        )
+
+    def _apply_parameters(self, params: dict[str, float], samples: int) -> None:
+        """Apply a complete native patch to the compiled processor.
+
+        :param params: Exact compiled Faust addresses mapped to native values.
+        :param samples: Number of output samples in the render.
+        :raises RuntimeError: A native parameter or automation write is rejected.
+        """
+        for address, value in params.items():
+            if not self.processor.set_parameter(address, value):
+                raise RuntimeError(f"Faust rejected parameter address {address!r}")
+            # DawDreamer 0.8.3 needs automation to propagate one-voice shared controls.
+            if self._num_voices == 1 and not self.processor.set_automation(
+                address, np.full(samples, value, dtype=np.float32)
+            ):
+                raise RuntimeError(f"Faust rejected automation address {address!r}")
+
+    def _validate_parameter_addresses(self, params: dict[str, float]) -> None:
+        """Require one complete patch under the compiled exact-address identity.
+
+        :param params: Requested native values keyed by exact Faust address.
+        :raises KeyError: A requested address is absent from the registered spec.
+        :raises ValueError: One or more registered addresses are missing.
+        """
+        expected = set(self._parameter_addresses)
+        unknown = sorted(params.keys() - expected)
+        if unknown:
+            raise KeyError(f"unknown Faust parameter address(es): {', '.join(unknown)}")
+        missing = sorted(expected - params.keys())
+        if missing:
+            raise ValueError(f"missing Faust parameter address(es): {', '.join(missing)}")
+
+
+@dataclass(kw_only=True)
 class DawDreamerRenderer(AudioRenderer):
     """Render through DawDreamer's JUCE-backed VST host.
 
@@ -341,7 +551,7 @@ class DawDreamerRenderer(AudioRenderer):
        DawDreamer plugin processor instance.
     """
 
-    block_size: int = 2048
+    block_size: int = DAWDREAMER_BLOCK_SIZE
     parameter_map: SynthParamMap = field(kw_only=True)
     reload_plugin_each_render: bool = True
     engine: _DawDreamerEngine = field(init=False, repr=False)

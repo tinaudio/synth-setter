@@ -97,8 +97,11 @@ CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=
 test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
 	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
 
-test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests, excludes gpu/mps/vst.
+test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excludes gpu/mps/vst.
 	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
+
+test-ci-slow-pr: ## CI slow PR suite (cpu-slow.yml): slow CPU tests without live R2.
+	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst and not integration_r2" $(CI_COV)
 
 test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
 	PYTEST_SESSION_BUDGET_SECONDS=4800 uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"

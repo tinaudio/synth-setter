@@ -6,11 +6,35 @@ to verify both the skip-inserted and run-through branches for each marker.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 import tests.conftest as conftest_module
+
+
+class _FakeConfig:
+    """Minimal pytest config double exposing the marker expression."""
+
+    def __init__(self, mark_expression: str) -> None:
+        """Store the marker expression returned for pytest's ``-m`` option.
+
+        :param mark_expression: Value supplied to pytest's ``-m`` option.
+        """
+        self.mark_expression = mark_expression
+
+    def getoption(self, name: str) -> str:
+        """Return the configured marker expression.
+
+        :param name: Pytest option name requested by the hook.
+        :returns: The configured marker expression.
+        """
+        assert name == "-m"
+        return self.mark_expression
 
 
 class _FakeItem:
@@ -33,6 +57,159 @@ class _FakeItem:
 
 
 @pytest.mark.infra
+def test_same_e2e_selected_without_same_extra_errors_with_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly selected SAME lane errors when its Python extra is absent.
+
+    :param monkeypatch: Simulates an unavailable ``stable_audio_tools`` package.
+    """
+    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
+
+    with pytest.raises(pytest.UsageError, match=r"uv sync --extra same"):
+        conftest_module.pytest_collection_modifyitems(
+            config=cast(pytest.Config, _FakeConfig("same_e2e")), items=[]
+        )
+
+
+@pytest.mark.infra
+def test_same_e2e_selected_encoder_only_without_vst_runs_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An encoder-only SAME lane does not require an unrelated VST plugin.
+
+    :param monkeypatch: Simulates an available SAME extra and unavailable VST.
+    """
+    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
+    same_item = _FakeItem({"same_e2e": pytest.mark.same_e2e})
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("same_e2e")),
+        items=cast(list[pytest.Item], [same_item]),
+    )
+
+    assert same_item.added_markers == []
+
+
+@pytest.mark.infra
+def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Real pytest selection excludes VST-backed SAME tests before prerequisite validation.
+
+    :param monkeypatch: Supplies the optional SAME module to the child process.
+    :param tmp_path: Holds the module stub and guaranteed-absent plugin path.
+    """
+    (tmp_path / "stable_audio_tools.py").write_text("")
+    monkeypatch.setenv("PYTHONPATH", f"{tmp_path}{os.pathsep}{os.environ.get('PYTHONPATH', '')}")
+    monkeypatch.setenv("SYNTH_SETTER_PLUGIN_PATH", str(tmp_path / "absent.vst3"))
+    repo_root = Path(__file__).parents[2]
+
+    result = subprocess.run(  # noqa: S603 — interpreter and arguments are test-controlled
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-m",
+            "same_e2e and not requires_vst",
+            "tests/pipeline/data/test_same_encoder_e2e.py",
+            "tests/test_eval.py",
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "test_same_s_real_weights_encode_matches_contract" in result.stdout
+    assert "test_same_s_real_weights_encode_matches_golden_latents" in result.stdout
+    assert "test_train_eval_same_conditioning_real_e2e" not in result.stdout
+
+
+@pytest.mark.infra
+def test_same_e2e_selected_without_vst_errors_with_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly selected SAME lane errors when its VST plugin is absent.
+
+    :param monkeypatch: Simulates an unavailable VST plugin.
+    """
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
+
+    item = _FakeItem(
+        {
+            "requires_vst": pytest.mark.requires_vst,
+            "same_e2e": pytest.mark.same_e2e,
+        }
+    )
+
+    with pytest.raises(pytest.UsageError, match="SYNTH_SETTER_PLUGIN_PATH") as error:
+        conftest_module.pytest_collection_modifyitems(
+            config=cast(pytest.Config, _FakeConfig("same_e2e")),
+            items=cast(list[pytest.Item], [item]),
+        )
+
+    assert conftest_module.PLUGIN_PATH in str(error.value)
+
+
+@pytest.mark.infra
+def test_same_e2e_selected_with_prerequisites_present_runs_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly selected SAME lane remains runnable when prerequisites exist.
+
+    :param monkeypatch: Simulates available SAME and VST prerequisites.
+    """
+    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
+    item = _FakeItem(
+        {
+            "requires_vst": pytest.mark.requires_vst,
+            "same_e2e": pytest.mark.same_e2e,
+        }
+    )
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("slow and same_e2e")),
+        items=cast(list[pytest.Item], [item]),
+    )
+
+    assert item.added_markers == []
+
+
+@pytest.mark.infra
+def test_same_e2e_not_selected_with_missing_prerequisites_keeps_skip_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing SAME prerequisites remain skips outside an explicitly selected lane.
+
+    :param monkeypatch: Simulates unavailable SAME and VST prerequisites.
+    """
+    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
+    item = _FakeItem(
+        {
+            "requires_vst": pytest.mark.requires_vst,
+            "same_e2e": pytest.mark.same_e2e,
+        }
+    )
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("not slow")),
+        items=cast(list[pytest.Item], [item]),
+    )
+
+    assert len(item.added_markers) == 1
+    assert "VST plugin not found" in item.added_markers[0].kwargs["reason"]
+
+
+@pytest.mark.infra
 def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """requires_vst item gets a skip marker with a path-specific reason when VST is absent.
 
@@ -40,7 +217,10 @@ def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPat
     """
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
-    conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
     assert len(item.added_markers) == 1
     assert "VST plugin not found" in item.added_markers[0].kwargs["reason"]
 
@@ -53,7 +233,10 @@ def test_integration_r2_item_skipped_when_r2_absent(monkeypatch: pytest.MonkeyPa
     """
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", False)
     item = _FakeItem({"integration_r2": pytest.mark.integration_r2})
-    conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
     assert len(item.added_markers) == 1
     assert "rclone lsd r2:" in item.added_markers[0].kwargs["reason"]
 
@@ -66,7 +249,10 @@ def test_requires_vst_item_not_skipped_when_vst_present(monkeypatch: pytest.Monk
     """
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
     item = _FakeItem({"requires_vst": pytest.mark.requires_vst})
-    conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
     assert item.added_markers == []
 
 
@@ -78,7 +264,10 @@ def test_integration_r2_item_not_skipped_when_r2_present(monkeypatch: pytest.Mon
     """
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", True)
     item = _FakeItem({"integration_r2": pytest.mark.integration_r2})
-    conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
     assert item.added_markers == []
 
 
@@ -91,5 +280,8 @@ def test_unmarked_item_receives_no_skip_markers(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
     monkeypatch.setattr(conftest_module, "_R2_AVAILABLE", False)
     item = _FakeItem({"slow": pytest.mark.slow})
-    conftest_module.pytest_collection_modifyitems(items=cast(list[pytest.Item], [item]))
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
     assert item.added_markers == []

@@ -73,6 +73,25 @@ def _build_postprocess_cfg(
         scales with ``pred-*.pt`` count times this.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
+    if render is not None:
+        render_values: dict[str, Any] = {
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.3.4",
+            "renderer_backend": "pedalboard",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 1,
+            "samples_per_shard": 1,
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
+        }
+        render_values.update(render)
+        render = render_values
     return OmegaConf.create(  # type: ignore[no-any-return]
         {
             "paths": {"output_dir": str(output_dir)},
@@ -211,12 +230,12 @@ def test_postprocessing_non_linux_argv_omits_wrapper(
     assert _FAKE_WRAPPER not in render_argv
 
 
-def test_postprocessing_plugin_path_gate(
+def test_postprocessing_serializes_plugin_path(
     monkeypatch: pytest.MonkeyPatch,
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``cfg.render.plugin_path`` adds ``--plugin_path <value>`` to the render argv only when set.
+    """The serialized render config carries its plugin path unchanged.
 
     :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the headless wrapper
         prefix doesn't shift argv indices the test asserts on.
@@ -241,9 +260,39 @@ def test_postprocessing_plugin_path_gate(
     _run_predict_postprocessing(cfg)
 
     render_argv = captured_argv[0]
-    assert "--plugin_path" in render_argv
-    plugin_idx = render_argv.index("--plugin_path")
+    assert "--synth.plugin-path" in render_argv
+    plugin_idx = render_argv.index("--synth.plugin-path")
     assert render_argv[plugin_idx + 1] == plugin_path
+
+
+def test_postprocessing_rejects_torchsynth_preset_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A torchsynth render cannot carry a plugin-host preset.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so no wrapper is materialized.
+    :param predictions_tree: Output tree satisfying the prediction existence guard.
+    :param captured_argv: Captured subprocess calls; remains empty on validation failure.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={
+            "param_spec_name": "torchsynth_full",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "presets/invalid.vstpreset",
+            "renderer_backend": "torchsynth",
+        },
+    )
+
+    with pytest.raises(ValueError, match="has no preset"):
+        _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []
 
 
 def test_postprocessing_forwards_render_audio_fields(
@@ -274,6 +323,7 @@ def test_postprocessing_forwards_render_audio_fields(
             "channels": 1,
             "velocity": 64,
             "signal_duration_seconds": 2.5,
+            "renderer_backend": "dawdreamer",
         },
     )
 
@@ -281,10 +331,12 @@ def test_postprocessing_forwards_render_audio_fields(
 
     render_argv = captured_argv[0]
     for flag, value in (
-        ("--sample_rate", "22050"),
+        ("--sample-rate", "22050"),
         ("--channels", "1"),
         ("--velocity", "64"),
-        ("--signal_duration_seconds", "2.5"),
+        ("--signal-duration-seconds", "2.5"),
+        ("--renderer-backend", "dawdreamer"),
+        ("--plugin-reload-cadence", "render"),
     ):
         assert flag in render_argv, f"{flag} not forwarded"
         assert render_argv[render_argv.index(flag) + 1] == value
@@ -295,7 +347,7 @@ def test_postprocessing_rerender_target_gate(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``evaluation.rerender_target`` appends ``-t`` only when truthy.
+    """``evaluation.rerender_target`` enables the child operation only when truthy.
 
     :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the wrapper branch is skipped.
     :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
@@ -315,8 +367,9 @@ def test_postprocessing_rerender_target_gate(
         )
     )
 
-    assert "-t" in captured_argv[0]
-    assert "-t" not in captured_argv[1]
+    assert "--rerender-target" in captured_argv[0]
+    assert captured_argv[0][captured_argv[0].index("--rerender-target") + 1] == "True"
+    assert "--rerender-target" not in captured_argv[1]
 
 
 def test_postprocessing_metrics_argv_includes_num_workers(

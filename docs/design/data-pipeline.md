@@ -1140,6 +1140,28 @@ interrupted run can resume without re-encoding already-processed rows (see
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
+`t5gemma` is the one embedding that conditions on parameters rather than audio.
+Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,
+renders each row to text through the `param_text_normalizer` strategy
+(`data/vst/param_text.py`; the shipped `param_names` joins the spec's parameter
+names with commas and ignores values), and encodes the captions with Stable
+Audio 3's frozen T5Gemma prompt conditioner behind the optional `sa3` extra
+(`pipeline/data/t5gemma.py`). `param_spec_name=` is required whenever it is
+selected, and the encoded width must match that spec. Captions past the
+checkpoint's 256-token budget are truncated exactly as SA3 truncates them, so
+the wider specs keep only their leading names (`surge_simple` 31 of 91,
+`surge_xt` 31 of 164; pinned by
+`test_param_names_caption_retains_only_its_leading_names_after_truncation`). Pad positions carry the checkpoint's learned
+`padding_embedding` rather than zeros, since SA3's DiT cross-attends over every
+context position unmasked; an empty caption is therefore SA3's unconditional
+representation. The encoder runs at float32 even though the checkpoint declares
+bfloat16 — bf16 SDPA kernels move these embeddings by up to 11.5 (embedding std
+1.75) between torch releases, while float32 is bitwise identical across torch
+2.7.1 and the locked torch. The column is a `[768, 256]` fixed-shape tensor with
+no index: every row of one dataset shares a caption today, so an IVF_PQ index
+over it would be degenerate. The mirrored weights carry Gemma Terms of Use
+redistribution conditions.
+
 Current generation writes `audio_mp3` and `audio_uuid` in the initial Lance fragment. `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) remains a manual utility for legacy Lance audio shards that lack those columns; there is no automated migration or compatibility path for existing datasets.
 
 Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory; a sidecar manifest gates cache reuse by request hash.
@@ -1190,10 +1212,9 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str  # "torchsynth" selects the in-process backend; must agree with renderer_backend (RenderConfig._validate_torchsynth_backend)
-    plugin_state_path: str
-    param_spec_name: str
+    synth: SynthSpec  # param spec + plugin + baseline preset; see synth_setter/synth_spec.py
     renderer_version: str
+    renderer_backend: RendererBackend
     sample_rate: int
     channels: int
     velocity: int
@@ -1259,6 +1280,14 @@ class DatasetSpec(BaseModel):
 ```
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
+
+`RendererBackend` and its sentinels in `src/synth_setter/renderer_backend.py`
+are the source of truth for backend selection. `dawdreamer_faust` accepts only
+the Faust sentinel and an empty plugin-state path; the worker resolves checked-in
+source by `param_spec_name`, compiles it, and dispatches renderer-native values by
+exact compiled address. Faust render groups recompile per row so DSP and voice
+state cannot cross sample boundaries. External Faust files and URIs are not
+supported.
 
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
 split masters. Each `ShardSpec` pairs its split master with a split-local
@@ -1414,7 +1443,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 
 1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` (a thin wrapper over `DatasetSpec.from_hydra_cfg`) masks the cfg to `DatasetSpec`'s own fields, resolves, and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) — the same model used for the on-R2 artifact.
-3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. The renderer subprocess receives the complete `RenderConfig` and dispatches through `make_audio_renderer`: VST backends load their plugin and verify pinned provenance, while `dawdreamer_faust` compiles registered checked-in source and validates its exact addresses against the registered spec.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
 6. Proceed with reconciliation.

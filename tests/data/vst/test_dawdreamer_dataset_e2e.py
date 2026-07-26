@@ -21,6 +21,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
@@ -55,9 +56,9 @@ def _dawdreamer_experiment_config() -> RenderConfig:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
-                f"render.plugin_path={PLUGIN_PATH}",
-                f"render.plugin_state_path={TEST_PRESET_PATH}",
-                f"render.param_spec_name={TEST_PARAM_SPEC_NAME}",
+                f"render.synth.plugin_path={PLUGIN_PATH}",
+                f"render.synth.plugin_state_path={TEST_PRESET_PATH}",
+                f"render.synth.param_spec_name={TEST_PARAM_SPEC_NAME}",
                 f"render.renderer_version={TEST_RENDERER_VERSION}",
             ],
         )
@@ -101,14 +102,16 @@ def test_dawdreamer_dataset_audio_is_similar_to_pedalboard(tmp_path: Path) -> No
     dawdreamer_path = tmp_path / "dawdreamer.lance"
     fixed_synth = [_HARDCODED_SYNTH_PARAMS, _HARDCODED_SYNTH_PARAMS]
     fixed_note = [_HARDCODED_NOTE_PARAMS, _HARDCODED_NOTE_PARAMS]
-    dawdreamer_renderer = DawDreamerRenderer(
-        plugin_path=str(Path(PLUGIN_PATH).resolve()),
-        sample_rate=dawdreamer_config.sample_rate,
-        channels=dawdreamer_config.channels,
-        signal_duration_seconds=dawdreamer_config.signal_duration_seconds,
-        plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
-        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
+    dawdreamer_renderer = make_audio_renderer(dawdreamer_config)
+    assert isinstance(dawdreamer_renderer, DawDreamerRenderer)
+    factory_audio = dawdreamer_renderer.render(
+        _HARDCODED_SYNTH_PARAMS,
+        _HARDCODED_NOTE_PARAMS["pitch"],
+        dawdreamer_config.velocity,
+        _HARDCODED_NOTE_PARAMS["note_start_and_end"],
     )
+    assert np.isfinite(factory_audio).all()
+    assert np.max(np.abs(factory_audio)) > 1e-4
     missing_keys = _HARDCODED_SYNTH_PARAMS.keys() - dawdreamer_renderer._parameter_indices.keys()
     assert not missing_keys
     host_indices = [dawdreamer_renderer._parameter_indices[key] for key in _HARDCODED_SYNTH_PARAMS]

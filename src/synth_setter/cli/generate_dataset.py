@@ -16,6 +16,7 @@ instead of composing one.
 
 from __future__ import annotations
 
+import json
 import platform
 import re
 import shlex
@@ -126,10 +127,9 @@ def _run_oracle_eval_subprocess(
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
     :param render: The generation ``RenderConfig``. The eval re-renders
-        predictions via ``predict_vst_audio``; every render field it renders with
-        (param spec, preset, plugin, sample rate, channels, velocity, signal
-        duration) is overridden from this so the re-render matches generation
-        exactly rather than falling back to the render group / CLI defaults.
+        predictions via ``predict_vst_audio``; the backend, lifecycle, plugin,
+        parameter spec, preset, and audio-shape fields are forwarded from this
+        config so evaluation matches generation.
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
@@ -170,10 +170,14 @@ def _run_oracle_eval_subprocess(
         "logger=wandb",
         # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
         "render=vst",
-        f"+render.param_spec_name={render.param_spec_name}",
-        f"+render.plugin_state_path={render.plugin_state_path}",
-        f"+render.plugin_path={render.plugin_path}",
+        f"+render.synth.name={render.synth.name}",
+        f"+render.synth.param_spec_name={render.param_spec_name}",
+        f"+render.synth.plugin_state_path={render.plugin_state_path}",
+        f"+render.synth.plugin_path={render.plugin_path}",
         f"+render.renderer_version={render.renderer_version}",
+        f"render.renderer_backend={render.renderer_backend}",
+        f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
+        f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
@@ -263,7 +267,11 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ]
     render_args = spec.render_for_shard(shard).model_dump()
     for key, value in render_args.items():
-        args.extend([f"--{key}", str(value)])
+        # Non-scalars (``synth``) reach the worker's CliSettingsSource via json.loads;
+        # str() would emit a single-quoted Python repr it rejects. bool is an int
+        # subclass, so flags keep their existing "True"/"False" spelling.
+        encoded = str(value) if isinstance(value, str | int | float) else json.dumps(value)
+        args.extend([f"--{key}", encoded])
     args.extend(["--shard_id", str(shard.shard_id)])
 
     return args

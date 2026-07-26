@@ -1,5 +1,4 @@
-# Spec-identity override; generic torchsynth render knobs inherit from torchsynth_full.
+# Spec-identity override; generic render knobs inherit from torchsynth_full.
 defaults:
   - torchsynth_full
-
-param_spec_name: torchsynth_simple
+  - override synth: torchsynth_simple

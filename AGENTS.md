@@ -35,9 +35,11 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
   `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
-  models only. Do not select Anthropic models or launch Anthropic-backed Pi
-  subagents; keep `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`, and Pi agent
-  briefs aligned.
+  models only. Agent `model` arguments use a fully qualified
+  `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
+  the provider-only `openai-codex`. Do not select Anthropic models or launch
+  Anthropic-backed Pi subagents; keep `.pi/settings.json`,
+  `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
 - **Check the RunPod balance before launching jobs** — exhaustion shows up as

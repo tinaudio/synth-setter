@@ -18,6 +18,11 @@ conflicts = [[
 [manifest]
 
 [[manifest.dependency-metadata]]
+name = "stable-audio-3"
+version = "0.1.0"
+requires-dist = ["einops>=0.8.2", "einops-exts>=0.0.4", "huggingface-hub>=1.7.1", "numpy>=2.2.6", "packaging>=26.0", "safetensors>=0.7.0", "soundfile>=0.13.1", "torch>=2.7", "torchaudio>=2.7", "tqdm>=4.67.3", "transformers>=5.8.0"]
+
+[[manifest.dependency-metadata]]
 name = "stable-audio-tools"
 version = "0.0.20"
 requires-dist = ["alias-free-torch==0.0.6", "dill", "einops", "einops-exts", "huggingface-hub", "importlib-resources>=6.0", "nnaudio", "pywavelets>=1.6", "safetensors", "scipy", "sentencepiece>=0.2.0", "setuptools", "soxr", "torch>=2.0.0", "torchaudio>=2.0.0", "torchsde", "tqdm", "transformers", "v-diffusion-pytorch==0.0.2", "vector-quantize-pytorch==1.14.41"]
@@ -352,6 +357,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/87/69/edacb37481d360d06fc947dab5734aaf511acb7d1a1f9e2849454376c0f8/bcrypt-4.0.1-cp36-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:e9a51bbfe7e9802b5f3508687758b564069ba937748ad7b9e890086290d2f79e", size = 624290, upload-time = "2022-10-09T15:36:31.251Z" },
     { url = "https://files.pythonhosted.org/packages/aa/ca/6a534669890725cbb8c1fb4622019be31813c8edaa7b6d5b62fc9360a17e/bcrypt-4.0.1-cp36-abi3-win32.whl", hash = "sha256:2caffdae059e06ac23fce178d31b4a702f2a3264c20bfb5ff541b338194d8fab", size = 159428, upload-time = "2022-10-09T15:36:32.893Z" },
     { url = "https://files.pythonhosted.org/packages/46/81/d8c22cd7e5e1c6a7d48e41a1d1d46c92f17dae70a54d9814f746e6027dec/bcrypt-4.0.1-cp36-abi3-win_amd64.whl", hash = "sha256:8a68f4341daf7522fe8d73874de8906f3a339048ba406be6ddc1b3ccb16fc0d9", size = 152930, upload-time = "2022-10-09T15:36:34.635Z" },
+]
+
+[[package]]
+name = "beartype"
+version = "0.22.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/94/1009e248bbfbab11397abca7193bea6626806be9a327d399810d523a07cb/beartype-0.22.9.tar.gz", hash = "sha256:8f82b54aa723a2848a56008d18875f91c1db02c32ef6a62319a002e3e25a975f", size = 1608866, upload-time = "2025-12-13T06:50:30.72Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/cc/18245721fa7747065ab478316c7fea7c74777d07f37ae60db2e84f8172e8/beartype-0.22.9-py3-none-any.whl", hash = "sha256:d16c9bbc61ea14637596c5f6fbff2ee99cbe3573e46a716401734ef50c3060c2", size = 1333658, upload-time = "2025-12-13T06:50:28.266Z" },
 ]
 
 [[package]]
@@ -1671,6 +1685,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173", size = 54410, upload-time = "2024-04-16T21:28:15.614Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef", size = 16234, upload-time = "2024-04-16T21:28:14.499Z" },
+]
+
+[[package]]
+name = "jaxtyping"
+version = "0.3.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/c1/091b8852bd7cbf50bd655543c8506033cf4029300c67f8c176c1286879a9/jaxtyping-0.3.11.tar.gz", hash = "sha256:b09c14acf6686feb9e0df5b0d8c6e7c5b6f8d36bf059ee54cd522a186c2ef050", size = 46489, upload-time = "2026-06-13T18:35:23.167Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/38/c66bbdc5047f4776c2bd3e47e5295a350e3fa44d5b8942105e71c2a876a0/jaxtyping-0.3.11-py3-none-any.whl", hash = "sha256:8a4bedc4e3f963fa82df41bd13c7ebc2bad925601eb48614c65798f21329d4e3", size = 56593, upload-time = "2026-06-13T18:35:22.01Z" },
 ]
 
 [[package]]
@@ -4433,6 +4459,28 @@ wheels = [
 ]
 
 [[package]]
+name = "stable-audio-3"
+version = "0.1.0"
+source = { git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1#124e8a799f57a1f665495ecb72e547d0a62867f1" }
+dependencies = [
+    { name = "einops" },
+    { name = "einops-exts" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "safetensors" },
+    { name = "soundfile" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+
+[[package]]
 name = "stable-audio-tools"
 version = "0.0.20"
 source = { registry = "https://pypi.org/simple" }
@@ -4552,6 +4600,9 @@ cu128 = [
     { name = "torchvision", version = "0.26.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "torchvision", version = "0.27.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
 ]
+sa3 = [
+    { name = "stable-audio-3" },
+]
 same = [
     { name = "stable-audio-tools" },
 ]
@@ -4587,6 +4638,7 @@ data = [
 ]
 dev = [
     { name = "backports-zstd" },
+    { name = "beartype" },
     { name = "click" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "dtw-python" },
@@ -4597,6 +4649,7 @@ dev = [
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
     { name = "hypothesis" },
+    { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
     { name = "librosa" },
@@ -4674,6 +4727,7 @@ notebooks = [
     { name = "smoosense", extra = ["jupyter"] },
 ]
 runtime = [
+    { name = "beartype" },
     { name = "click" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "dtw-python" },
@@ -4681,6 +4735,7 @@ runtime = [
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
+    { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
     { name = "librosa" },
@@ -4724,6 +4779,8 @@ runtime = [
     { name = "wandb" },
 ]
 torch = [
+    { name = "beartype" },
+    { name = "jaxtyping" },
     { name = "lightning" },
     { name = "music2latent" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4757,6 +4814,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "stable-audio-3", marker = "extra == 'sa3'", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "stable-audio-tools", marker = "extra == 'same'", specifier = "==0.0.20" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cpu') or (sys_platform == 'win32' and extra == 'cpu')", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "synth-setter", extra = "cpu" } },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cu128') or (sys_platform == 'win32' and extra == 'cu128')", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "synth-setter", extra = "cu128" } },
@@ -4771,7 +4829,7 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'cpu'", specifier = ">=0.15.0" },
     { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'cu128'", specifier = ">=0.15.0" },
 ]
-provides-extras = ["cpu", "cu128", "same"]
+provides-extras = ["cpu", "cu128", "same", "sa3"]
 
 [package.metadata.requires-dev]
 audio = [
@@ -4804,6 +4862,7 @@ data = [
 ]
 dev = [
     { name = "backports-zstd" },
+    { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "dtw-python", specifier = "==1.7.4" },
@@ -4814,6 +4873,7 @@ dev = [
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
     { name = "hypothesis" },
+    { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
     { name = "librosa" },
@@ -4885,6 +4945,7 @@ notebooks = [
     { name = "smoosense", extras = ["jupyter"] },
 ]
 runtime = [
+    { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "dtw-python", specifier = "==1.7.4" },
@@ -4892,6 +4953,7 @@ runtime = [
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
+    { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
     { name = "librosa" },
@@ -4929,6 +4991,8 @@ runtime = [
     { name = "wandb" },
 ]
 torch = [
+    { name = "beartype", specifier = ">=0.19" },
+    { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "music2latent", specifier = ">=0.1.8" },
     { name = "torch", specifier = ">=2.0.0" },
@@ -5589,6 +5653,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e1/0d/4e93c8e6d1001a75763f87d8f5ecda8ebc7f4aa2153dddfaf4ae8892821a/virtualenv-21.4.2.tar.gz", hash = "sha256:38e6ee0a555615c0ea9da2ac7e9998fe8dc3b911dd33ad8eaad2020957653b0c", size = 7613326, upload-time = "2026-05-31T17:01:22.827Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/c4/557dc082be035381b85fdb2b74e21d3d21b57750b74f2b47a32f3a639ff9/virtualenv-21.4.2-py3-none-any.whl", hash = "sha256:854210ca524a1a4d0d744734f4acbc721c3ffe163b85bbf5d56d14d5ae2f0fae", size = 7594079, upload-time = "2026-05-31T17:01:20.735Z" },
+]
+
+[[package]]
+name = "wadler-lindig"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/67/cbae4bf7683a64755c2c1778c418fea96d00e34395bb91743f08bd951571/wadler_lindig-0.1.7.tar.gz", hash = "sha256:81d14d3fe77d441acf3ebd7f4aefac20c74128bf460e84b512806dccf7b2cd55", size = 15842, upload-time = "2025-06-18T07:00:42.843Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/96/04e7b441807b26b794da5b11e59ed7f83b2cf8af202bd7eba8ad2fa6046e/wadler_lindig-0.1.7-py3-none-any.whl", hash = "sha256:e3ec83835570fd0a9509f969162aeb9c65618f998b1f42918cfc8d45122fe953", size = 20516, upload-time = "2025-06-18T07:00:41.684Z" },
 ]
 
 [[package]]

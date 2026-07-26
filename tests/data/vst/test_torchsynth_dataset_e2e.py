@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,8 @@ import pytest
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
 from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _SAMPLE_RATE = 22_050
@@ -27,9 +30,12 @@ def _torchsynth_render_cfg() -> RenderConfig:
     :returns: Render config for a five-row ADSR-spec shard.
     """
     return RenderConfig(
-        plugin_path="torchsynth",
-        plugin_state_path="",
-        param_spec_name="torchsynth_adsr",  # type: ignore[arg-type]
+        synth=SynthSpec(
+            name=SynthName("torchsynth_adsr"),
+            param_spec_name=ParamSpecName("torchsynth_adsr"),
+            plugin_path="torchsynth",
+            plugin_state_path="",
+        ),
         renderer_version="1.0.2",
         renderer_backend="torchsynth",
         sample_rate=_SAMPLE_RATE,
@@ -97,12 +103,15 @@ def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Pat
             "-m",
             "synth_setter.data.vst.generate_vst_dataset",
             str(shard),
-            "--plugin_path",
-            "torchsynth",
-            "--plugin_state_path",
-            "",
-            "--param_spec_name",
-            "torchsynth_adsr",
+            "--synth",
+            json.dumps(
+                {
+                    "name": "torchsynth_adsr",
+                    "param_spec_name": "torchsynth_adsr",
+                    "plugin_path": "torchsynth",
+                    "plugin_state_path": "",
+                }
+            ),
             "--renderer_version",
             importlib.metadata.version("torchsynth"),
             "--renderer_backend",

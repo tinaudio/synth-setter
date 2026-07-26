@@ -2235,6 +2235,37 @@ class TestSkypilotLaunchCli:
         assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
         assert injected["EXPERIMENT"] == "surge/flow_simple"
 
+    def test_tier_low_submits_only_consumer_gpu_alternatives(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """The real CLI filters a composed compute pool before SkyPilot submission.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked SkyPilot submission boundary.
+        """
+        cfg_path = _write_launch_yaml(
+            tmp_path,
+            compute="runpod/smoke",
+            cmd="echo hello",
+            env_file=str(env_file),
+            tier="low",
+        )
+
+        result = CliRunner().invoke(main, [str(cfg_path)])
+
+        assert result.exit_code == 0, result.output
+        task = mock_sky.jobs.launch.call_args.args[0]
+        assert sorted(str(resource.accelerators) for resource in task.resources) == [
+            "{'RTX3070': 1}",
+            "{'RTX3080': 1}",
+            "{'RTX3090': 1}",
+            "{'RTX4090': 1}",
+        ]
+
     def test_network_volume_option_overrides_config_volume(
         self,
         tmp_path: Path,

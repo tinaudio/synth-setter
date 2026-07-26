@@ -1,8 +1,7 @@
 defaults:
   - vst
+  - synth: cardinal
+  - _self_
 
-plugin_path: "plugins/CardinalSynth.vst3"
-plugin_state_path: "presets/cardinal-base.vstpreset"
-param_spec_name: "cardinal"
 renderer_version: "0.26.2"
 process_reset_mode: preserve

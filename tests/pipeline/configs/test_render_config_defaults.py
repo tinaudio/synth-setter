@@ -8,6 +8,7 @@ from omegaconf import DictConfig
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
     "audio_dtype",
@@ -70,16 +71,14 @@ def test_vst_render_group_accepts_appended_synth_identity() -> None:
             overrides=[
                 "experiment=surge/fake_oracle",
                 "render=vst",
-                "+render.param_spec_name=obxf",
-                "+render.plugin_state_path=presets/obxf-base.vstpreset",
-                "+render.plugin_path=plugins/OB-Xf.vst3",
+                "+render/synth=obxf",
                 "+render.renderer_version=1.0.3",
             ],
         )
 
-    assert cfg.render.param_spec_name == "obxf"
-    assert cfg.render.plugin_state_path == "presets/obxf-base.vstpreset"
-    assert cfg.render.plugin_path == "plugins/OB-Xf.vst3"
+    assert cfg.render.synth.param_spec_name == "obxf"
+    assert cfg.render.synth.plugin_state_path == "presets/obxf-base.vstpreset"
+    assert cfg.render.synth.plugin_path == "plugins/OB-Xf.vst3"
     assert cfg.render.renderer_version == "1.0.3"
     assert cfg.render.plugin_reload_cadence == "once"
 
@@ -87,9 +86,12 @@ def test_vst_render_group_accepts_appended_synth_identity() -> None:
 def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -> None:
     """Render configuration exposes the pedalboard state file as plugin_state_path."""
     config = RenderConfig(
-        plugin_path="plugin.vst3",
-        plugin_state_path="state.vstpreset",
-        param_spec_name=ParamSpecName("surge_xt"),
+        synth=SynthSpec(
+            name=SynthName("surge_xt"),
+            param_spec_name=ParamSpecName("surge_xt"),
+            plugin_path="plugin.vst3",
+            plugin_state_path="state.vstpreset",
+        ),
         renderer_version="1.0.0",
         sample_rate=44100,
         channels=2,
@@ -177,6 +179,7 @@ def test_render_cardinal_composes_into_valid_render_config() -> None:
     """``render=cardinal`` selects the mapped Rack patch and preserves automation."""
     spec = _spec_from_dataset_overrides(["render=cardinal"])
 
+    assert spec.render.synth.name == "cardinal"
     assert spec.render.param_spec_name == "cardinal"
     assert spec.render.renderer_version == "0.26.2"
     assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
@@ -184,6 +187,38 @@ def test_render_cardinal_composes_into_valid_render_config() -> None:
     assert spec.render.process_reset_mode == "preserve"
     assert spec.num_params == 13
     assert spec.render.plugin_reload_cadence == "once"
+
+
+@pytest.mark.parametrize(
+    ("name", "num_params", "channels"),
+    [
+        ("faust_bright_organ", 13, 2),
+        ("faust_bubble", 10, 2),
+        ("faust_church_organ", 16, 2),
+        ("faust_filter_osc", 6, 1),
+    ],
+)
+def test_render_faust_composes_into_valid_render_config(
+    name: str,
+    num_params: int,
+    channels: int,
+) -> None:
+    """Each Faust group resolves checked-in source/spec identity without paths.
+
+    :param name: Render group and Faust registry identity.
+    :param num_params: Expected encoded synth-and-note width.
+    :param channels: Native source output channel count.
+    """
+    spec = _spec_from_dataset_overrides([f"render={name}"])
+
+    assert spec.render.param_spec_name == name
+    assert spec.render.renderer_backend == "dawdreamer_faust"
+    assert spec.render.plugin_path == "faust"
+    assert spec.render.plugin_state_path == ""
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.channels == channels
+    assert spec.num_params == num_params
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:
@@ -217,8 +252,8 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     cfg = _compose_render_group(group)
     surge_xt = _compose_render_group("surge_xt")
 
-    assert cfg.param_spec_name == param_spec_name
-    assert cfg.plugin_state_path == plugin_state_path
-    assert cfg.plugin_path == surge_xt.plugin_path
+    assert cfg.synth.param_spec_name == param_spec_name
+    assert cfg.synth.plugin_state_path == plugin_state_path
+    assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
     assert cfg.renderer_version == surge_xt.renderer_version
     assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence
