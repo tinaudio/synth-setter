@@ -10,7 +10,6 @@ CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]
 
 from __future__ import annotations
 
-import importlib.util
 import math
 import os
 import sys
@@ -127,10 +126,6 @@ class EmbeddingSpec:
 
         Checkpoint source used without a keyed config override.
 
-    .. attribute :: requires_extra
-
-        Optional uv extra required before loading, or ``None``.
-
     .. attribute :: co_resident
 
         Whether the encoder may share a UDF pass with other selected encoders.
@@ -155,7 +150,6 @@ class EmbeddingSpec:
     name: str
     column: str
     default_checkpoint: str
-    requires_extra: str | None
     co_resident: bool
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
@@ -408,15 +402,11 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
     return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
-# Extras whose distribution name differs from the module they install.
-_EXTRA_IMPORT_NAMES: dict[str, str] = {"same": "stable_audio_tools", "sa3": "stable_audio_3"}
-
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
         name="clap",
         column=CLAP_FIELD,
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
-        requires_extra=None,
         co_resident=True,
         index=IndexSpec(pool="none"),
         load_encoder=_load_clap_spec_encoder,
@@ -426,7 +416,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="m2l",
         column=M2L_FIELD,
         default_checkpoint=DEFAULT_M2L_CHECKPOINT,
-        requires_extra=None,
         co_resident=True,
         index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
@@ -436,7 +425,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="same_s",
         column=SAME_S_FIELD,
         default_checkpoint=DEFAULT_SAME_S_CHECKPOINT,
-        requires_extra="same",
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
@@ -446,7 +434,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="same_l",
         column=SAME_L_FIELD,
         default_checkpoint=DEFAULT_SAME_L_CHECKPOINT,
-        requires_extra="same",
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
@@ -458,7 +445,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="t5gemma",
         column=T5GEMMA_FIELD,
         default_checkpoint=DEFAULT_T5GEMMA_CHECKPOINT,
-        requires_extra="sa3",
         co_resident=False,
         index=None,
         load_encoder=_load_t5gemma_spec_encoder,
@@ -492,26 +478,6 @@ def _guard_existing_columns(
     existing = target_columns & set(dataset.schema.names)
     if existing:
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
-
-
-def _require_extras(specs: Sequence[EmbeddingSpec]) -> None:
-    """Fail before checkpoint downloads when a selected optional extra is absent.
-
-    :param specs: Selected embedding policies.
-    :raises ImportError: A selected embedding's optional dependency is unavailable.
-    """
-    required = {spec.requires_extra for spec in specs if spec.requires_extra is not None}
-    for extra in sorted(required):
-        module = _EXTRA_IMPORT_NAMES.get(extra, extra)
-        try:
-            available = importlib.util.find_spec(module) is not None
-        except (ImportError, ValueError):
-            available = False
-        if not available:
-            raise ImportError(
-                f"embedding selection requires the optional `{extra}` extra — "
-                f"install it with `uv sync --extra {extra}`"
-            )
 
 
 def _validate_write_source(
@@ -815,7 +781,6 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
-    _require_extras(specs)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(
@@ -989,27 +954,19 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     :param checkpoint: Local directory, R2 mirror, or HuggingFace repo id.
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
-    :raises ImportError: The optional ``same`` extra is unavailable.
     """
     import json
 
     import torch
     from safetensors.torch import load_file
-
-    try:
-        from stable_audio_tools.models.factory import create_model_from_config
-    except ImportError as exc:
-        raise ImportError(
-            "loading SAME encoders requires the optional `same` extra — "
-            "install it with `uv sync --extra same`"
-        ) from exc
+    from stable_audio_3.factory import create_autoencoder_from_config
 
     checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
     resolved_device = _resolve_torch_device(device)
     logger.info("loading_same_checkpoint", checkpoint=checkpoint, device=resolved_device)
     model_config = json.loads((checkpoint_dir / "model_config.json").read_text())
-    model = create_model_from_config(model_config)
-    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"))
+    model = create_autoencoder_from_config(model_config["model"], model_config["sample_rate"])
+    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"), strict=True)
     model = model.to(resolved_device).eval().requires_grad_(False)
 
     @torch.no_grad()

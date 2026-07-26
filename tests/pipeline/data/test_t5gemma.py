@@ -1,6 +1,5 @@
 """Checkpoint resolution, config parsing, and real-weight behavior of the SA3 T5Gemma encoder."""
 
-import importlib.util
 import json
 import sys
 import types
@@ -13,23 +12,22 @@ import torch
 
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline.data.t5gemma import (
+    _PADDING_EMBEDDING_KEY,
     DEFAULT_T5GEMMA_CHECKPOINT,
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
-    _PADDING_EMBEDDING_KEY,
+    TextEncodeFn,
     _load_padding_embedding,
     _read_conditioner_config,
     _resolve_t5gemma_checkpoint_dir,
-    TextEncodeFn,
     load_t5gemma_text_encoder,
 )
 
 _CHECKPOINT_DIR = embedding_model_dir("sa3-small-music")
 _NEEDS_WEIGHTS = pytest.mark.skipif(
-    not (_CHECKPOINT_DIR / "model_config.json").is_file()
-    or importlib.util.find_spec("stable_audio_3") is None,
+    not (_CHECKPOINT_DIR / "model_config.json").is_file(),
     reason=(
-        "SA3 extra or checkpoint absent; install with `uv sync --extra sa3` and hydrate with "
+        f"SA3 checkpoint absent at {_CHECKPOINT_DIR}; hydrate it with "
         f"`rclone copy --checksum {DEFAULT_T5GEMMA_CHECKPOINT} {_CHECKPOINT_DIR}`"
     ),
 )
@@ -192,7 +190,9 @@ def padding_embedding() -> np.ndarray:
 
 @pytest.mark.slow
 @_NEEDS_WEIGHTS
-def test_encode_any_prompt_batch_returns_fixed_dim_by_max_length(t5gemma_encoder: TextEncodeFn) -> None:
+def test_encode_any_prompt_batch_returns_fixed_dim_by_max_length(
+    t5gemma_encoder: TextEncodeFn,
+) -> None:
     """Every prompt yields the same fixed-shape embedding regardless of length.
 
     :param t5gemma_encoder: Loaded prompt conditioner.
@@ -239,7 +239,9 @@ def test_encode_short_prompt_pads_some_positions_and_keeps_others(
 
 @pytest.mark.slow
 @_NEEDS_WEIGHTS
-def test_encode_overlong_prompt_truncates_to_the_same_first_tokens(t5gemma_encoder: TextEncodeFn) -> None:
+def test_encode_overlong_prompt_truncates_to_the_same_first_tokens(
+    t5gemma_encoder: TextEncodeFn,
+) -> None:
     """Text past the token budget is dropped, so a longer suffix changes nothing.
 
     :param t5gemma_encoder: Loaded prompt conditioner.
@@ -411,10 +413,9 @@ def _fake_checkpoint(directory: Path) -> torch.Tensor:
 def _install_fake_conditioner_module(
     monkeypatch: pytest.MonkeyPatch, built: list["_FakeConditioner"]
 ) -> None:
-    """Stand in for ``stable_audio_3`` so the loader runs without the sa3 extra.
+    """Stand in for ``stable_audio_3`` so the unit test avoids the real model.
 
-    The module chain is injected rather than patched: CI installs no optional
-    extras, so the real package is absent there.
+    The injected module chain keeps external model weights out of the unit test.
 
     :param monkeypatch: Fixture restoring ``sys.modules`` after the test.
     :param built: List receiving each conditioner the loader constructs.
@@ -532,21 +533,6 @@ def test_load_t5gemma_text_encoder_substitutes_the_checkpoint_padding_embedding(
     load_t5gemma_text_encoder(str(tmp_path), "cpu")(["a"])
 
     torch.testing.assert_close(built[0].padding_embedding.detach(), expected)
-
-
-def test_load_t5gemma_text_encoder_without_the_sa3_extra_names_its_install_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A missing optional dependency fails with the command that installs it.
-
-    :param tmp_path: Checkpoint directory.
-    :param monkeypatch: Fixture hiding the SA3 conditioner module.
-    """
-    _fake_checkpoint(tmp_path)
-    monkeypatch.setitem(sys.modules, "stable_audio_3.models.conditioners", None)
-
-    with pytest.raises(ImportError, match="uv sync --extra sa3"):
-        load_t5gemma_text_encoder(str(tmp_path), "cpu")
 
 
 def test_resolve_t5gemma_checkpoint_dir_with_non_default_r2_prefix_uses_a_distinct_cache(

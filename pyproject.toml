@@ -50,22 +50,6 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# SAME (Stability AI) encoder runtime for the add_embeddings --same mode.
-# Pinned exactly: 0.0.20 is the release validated for numerical equivalence
-# between upstream's torch pin and this project's lock (see PR #2283). Its
-# stale transitive pins are relaxed in [[tool.uv.dependency-metadata]].
-same = [
-  "stable-audio-tools==0.0.20",
-]
-# Stable Audio 3 text conditioning for the add_embeddings `t5gemma` mode.
-# Commit-pinned: upstream has no PyPI release and no tags, so a branch ref
-# would silently re-resolve. Its torch==2.7.1 / torchaudio==2.7.1 pins are
-# relaxed in [[tool.uv.dependency-metadata]] so the cpu/cu128 index routing
-# keeps choosing this project's locked wheel.
-sa3 = [
-  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
-]
-
 # Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
 # on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
 
@@ -156,6 +140,9 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
+  # below relaxes its torch pins without changing cpu/cu128 wheel routing.
+  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
   # Shape-checked tensor annotations; jaxtyping only checks under a runtime
   # typechecker, so beartype is not optional here.
   "jaxtyping>=0.2.36",
@@ -266,46 +253,10 @@ conflicts = [
     { extra = "cu128" },
   ],
 ]
-# stable-audio-tools 0.0.20 hard-pins torch==2.7.1 / torchaudio==2.7.1, two
-# packages with no py3.12 wheels (sentencepiece 0.1.99, PyWavelets 1.4.1), and
-# importlib-resources==5.12.0 (collides with the dev group's semantic-release).
-# This static metadata replaces ONLY that package's declared deps, relaxing the
-# stale pins to floors so the existing lock (and cpu/cu128 index routing) keeps
-# choosing the torch version. A global override-dependencies would instead
-# rewrite the project's own extra-conditioned torch requirements and collapse
-# the cpu/cu128 fork. The SAME-S encode path is numerically equivalent across
-# torch 2.7.1 and the locked torch (max_abs_diff 9.5e-5 on latents with
-# std 1.8; see PR #2283).
-[[tool.uv.dependency-metadata]]
-name = "stable-audio-tools"
-version = "0.0.20"
-requires-dist = [
-  "alias-free-torch==0.0.6",
-  "dill",
-  "einops",
-  "einops-exts",
-  "huggingface_hub",
-  "importlib-resources>=6.0",
-  "nnAudio",
-  "PyWavelets>=1.6",
-  "safetensors",
-  "scipy",
-  "sentencepiece>=0.2.0",
-  "setuptools",
-  "soxr",
-  "torch>=2.0.0",
-  "torchaudio>=2.0.0",
-  "torchsde",
-  "tqdm",
-  "transformers",
-  "v-diffusion-pytorch==0.0.2",
-  "vector-quantize-pytorch==1.14.41",
-]
-
-# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. As with
-# stable-audio-tools above, this static metadata replaces ONLY that package's
-# declared deps, relaxing the two pins to floors so the existing lock (and the
-# cpu/cu128 index routing) keeps choosing the torch version; a global
+# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. This
+# static metadata replaces ONLY that package's declared deps, relaxing the two
+# pins to floors so the existing lock (and cpu/cu128 index routing) keeps
+# choosing the torch version; a global
 # override-dependencies would rewrite the project's own extra-conditioned torch
 # requirements and collapse the cpu/cu128 fork. Every other floor it declares
 # is already satisfied by the lock. The T5Gemma prompt-conditioner path is
@@ -423,7 +374,7 @@ markers = [
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
-  "same_e2e: SAME encoder tests needing the `same` extra + HF weight download (own GHA workflow)",
+  "same_e2e: real-weight SAME encoder tests with immutable HF checkpoints (own GHA workflow)",
 ]
 minversion = "6.0"
 pythonpath = ["src"]

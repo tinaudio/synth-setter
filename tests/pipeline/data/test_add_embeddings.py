@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import importlib.util
 import os
 import subprocess
 import sys
@@ -11,7 +10,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import lance
@@ -58,7 +57,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
     _downmix_to_mono,
-    _require_extras,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -169,7 +167,7 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
             events.append(f"load:{name}")
         return _encoder_for(name)
 
-    return replace(EMBEDDING_REGISTRY[name], requires_extra=None, load_encoder=load)
+    return replace(EMBEDDING_REGISTRY[name], load_encoder=load)
 
 
 def _install_fake_specs(
@@ -286,9 +284,6 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     )
     assert EMBEDDING_REGISTRY["t5gemma"].index is None
     assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
-    assert EMBEDDING_REGISTRY["t5gemma"].requires_extra == "sa3"
-    assert EMBEDDING_REGISTRY["same_s"].requires_extra == "same"
-    assert EMBEDDING_REGISTRY["same_l"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
@@ -966,23 +961,6 @@ def test_write_columns_with_debug_logs_progress_and_versions(
     assert "committed_version" in next(
         entry for entry in logs if entry["event"] == "wrote_embeddings"
     )
-
-
-def test_require_extras_with_missing_same_dependency_names_uv_sync_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A missing optional dependency fails with its install command.
-
-    :param monkeypatch: Fixture hiding the SAME dependency.
-    """
-    real_find_spec = importlib.util.find_spec
-
-    def find_spec(name: str) -> object:
-        return None if name == "stable_audio_tools" else real_find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
-    with pytest.raises(ImportError, match="uv sync --extra same"):
-        _require_extras([EMBEDDING_REGISTRY["same_s"]])
 
 
 def test_add_embeddings_with_mixed_selection_writes_exact_columns(
@@ -1744,19 +1722,129 @@ def test_resolve_same_checkpoint_dir_with_existing_local_path_returns_it(
     assert _resolve_same_checkpoint_dir(str(tmp_path)) == tmp_path
 
 
-def test_load_same_audio_encoder_without_extra_names_install_command(
+def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The direct SAME loader reports the optional-extra install command.
+    """A HuggingFace repo ID resolves to its downloaded snapshot directory.
 
-    :param monkeypatch: Fixture hiding the optional dependency.
-    :param tmp_path: Local checkpoint placeholder.
+    :param monkeypatch: Fixture replacing the Hub download.
+    :param tmp_path: Downloaded snapshot directory.
     """
-    monkeypatch.setitem(sys.modules, "stable_audio_tools", None)
-    monkeypatch.setitem(sys.modules, "stable_audio_tools.models", None)
-    monkeypatch.setitem(sys.modules, "stable_audio_tools.models.factory", None)
+    downloads: list[str] = []
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda repo_id: downloads.append(repo_id) or str(tmp_path),
+    )
 
-    with pytest.raises(ImportError, match="uv sync --extra same"):
+    resolved = _resolve_same_checkpoint_dir("org/same-checkpoint")
+
+    assert resolved == tmp_path
+    assert downloads == ["org/same-checkpoint"]
+
+
+def _install_sa3_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    factory: Callable[[dict[str, object], int], torch.nn.Module],
+) -> None:
+    """Install a local SA3 factory module at the external dependency boundary.
+
+    :param monkeypatch: Fixture restoring imported modules after the test.
+    :param factory: Autoencoder factory exposed by the test module.
+    """
+    factory_module = ModuleType("stable_audio_3.factory")
+    factory_module.create_autoencoder_from_config = factory  # type: ignore[attr-defined]
+    package = ModuleType("stable_audio_3")
+    package.factory = factory_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "stable_audio_3", package)
+    monkeypatch.setitem(sys.modules, "stable_audio_3.factory", factory_module)
+
+
+class _RecordingSameAutoencoder(torch.nn.Module):
+    """Record observable inference state for the SAME loader contract test."""
+
+    def __init__(self) -> None:
+        """Create a one-parameter encoder with inference-state logs."""
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(2.0))
+        self.chunk_sizes: list[int] = []
+        self.grad_enabled: list[bool] = []
+        self.training_states: list[bool] = []
+        self.parameter_grad_states: list[bool] = []
+
+    def encode(self, audio: torch.Tensor) -> torch.Tensor:
+        """Encode one chunk while recording model and autograd state.
+
+        :param audio: Prepared stereo audio.
+        :returns: Float64 first-channel values scaled by the loaded parameter.
+        """
+        self.chunk_sizes.append(len(audio))
+        self.grad_enabled.append(torch.is_grad_enabled())
+        self.training_states.append(self.training)
+        self.parameter_grad_states.append(self.scale.requires_grad)
+        return (audio[:, :1] * self.scale).double()
+
+
+def _write_same_checkpoint(checkpoint_dir: Path, weights: dict[str, torch.Tensor]) -> None:
+    """Write a minimal SA3-shaped checkpoint directory for loader tests.
+
+    :param checkpoint_dir: Destination directory.
+    :param weights: Safetensors state dictionary.
+    """
+    import json
+
+    from safetensors.torch import save_file
+
+    (checkpoint_dir / "model_config.json").write_text(
+        json.dumps({"model": {"family": "same"}, "sample_rate": SAME_SAMPLE_RATE})
+    )
+    save_file(weights, checkpoint_dir / "model.safetensors")
+
+
+def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The SA3 loader preserves config, batching, frozen inference, and output contracts.
+
+    :param monkeypatch: Fixture installing the external SA3 factory boundary.
+    :param tmp_path: Local checkpoint directory.
+    """
+    model = _RecordingSameAutoencoder()
+    factory_calls: list[tuple[dict[str, object], int]] = []
+
+    def factory(config: dict[str, object], sample_rate: int) -> torch.nn.Module:
+        factory_calls.append((config, sample_rate))
+        return model
+
+    _install_sa3_factory(monkeypatch, factory)
+    _write_same_checkpoint(tmp_path, model.state_dict())
+    encode = load_same_audio_encoder(str(tmp_path), device="cpu")
+    audio = np.ones((17, 2, 8), dtype=np.float32)
+
+    latents = encode(audio)
+
+    assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
+    assert model.chunk_sizes == [16, 1]
+    assert model.grad_enabled == [False, False]
+    assert model.training_states == [False, False]
+    assert model.parameter_grad_states == [False, False]
+    assert next(model.parameters()).device.type == "cpu"
+    assert latents.shape == (17, 1, 8)
+    assert latents.dtype == np.float32
+    np.testing.assert_array_equal(latents, np.full((17, 1, 8), 2.0, dtype=np.float32))
+
+
+def test_load_same_audio_encoder_with_incompatible_state_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing and unexpected checkpoint keys fail strict SA3 state loading.
+
+    :param monkeypatch: Fixture installing the external SA3 factory boundary.
+    :param tmp_path: Local checkpoint directory.
+    """
+    _install_sa3_factory(monkeypatch, lambda config, sample_rate: torch.nn.Linear(2, 2))
+    _write_same_checkpoint(tmp_path, {"unexpected": torch.ones(1)})
+
+    with pytest.raises(RuntimeError, match=r"(?s)Missing key\(s\).*Unexpected key\(s\)"):
         load_same_audio_encoder(str(tmp_path), device="cpu")
 
 
@@ -2148,25 +2236,8 @@ def _install_fake_t5gemma(
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "t5gemma",
-        replace(EMBEDDING_REGISTRY["t5gemma"], requires_extra=None, load_encoder=load),
+        replace(EMBEDDING_REGISTRY["t5gemma"], load_encoder=load),
     )
-
-
-def test_require_extras_with_missing_sa3_dependency_names_uv_sync_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The sa3 extra gates on the stable_audio_3 import name, not the extra name.
-
-    :param monkeypatch: Fixture hiding the SA3 dependency.
-    """
-    real_find_spec = importlib.util.find_spec
-
-    def find_spec(name: str) -> object:
-        return None if name == "stable_audio_3" else real_find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
-    with pytest.raises(ImportError, match="uv sync --extra sa3"):
-        _require_extras([EMBEDDING_REGISTRY["t5gemma"]])
 
 
 def test_add_embeddings_with_param_array_spec_feeds_encoder_param_rows_not_audio(
