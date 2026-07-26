@@ -1,5 +1,8 @@
 """Tests for the shared offline audio-renderer factory."""
 
+from pathlib import Path
+from unittest.mock import MagicMock
+
 import pytest
 
 from synth_setter.data.vst.renderers import (
@@ -54,6 +57,14 @@ def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
     assert renderer.signal_duration_seconds == 0.5
 
 
+def test_make_audio_renderer_pedalboard_render_cadence_stays_lazy() -> None:
+    """Render cadence defers plugin loading to each renderer call."""
+    renderer = make_audio_renderer(_render_config(plugin_reload_cadence="render"))
+
+    assert isinstance(renderer, PedalboardRenderer)
+    assert renderer.plugin is None
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_make_audio_renderer_pedalboard_once_loads_real_plugin_session() -> None:
@@ -64,13 +75,78 @@ def test_make_audio_renderer_pedalboard_once_loads_real_plugin_session() -> None
     assert renderer.plugin is not None
 
 
+def test_make_audio_renderer_pedalboard_once_loads_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached Pedalboard construction loads the configured plugin and preset.
+
+    :param monkeypatch: Replaces native plugin construction for the CPU unit lane.
+    """
+    plugin = MagicMock(name="plugin")
+    loaded_presets: list[tuple[object, str]] = []
+    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", lambda _path: plugin)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.load_preset",
+        lambda loaded, path: loaded_presets.append((loaded, path)),
+    )
+    config = _render_config(plugin_reload_cadence="once")
+
+    renderer = make_audio_renderer(config)
+
+    assert isinstance(renderer, PedalboardRenderer)
+    assert renderer.plugin is plugin
+    assert loaded_presets == [(plugin, config.plugin_state_path)]
+
+
+@pytest.mark.parametrize(
+    ("cadence", "reload_each_render"),
+    [("once", False), ("render", True)],
+)
+def test_make_audio_renderer_dawdreamer_unit_maps_reload_cadence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cadence: str,
+    reload_each_render: bool,
+) -> None:
+    """DawDreamer receives the configured native-plugin lifecycle policy.
+
+    :param tmp_path: Provides a concrete packaged-map stand-in path.
+    :param monkeypatch: Replaces native host construction for the CPU unit lane.
+    :param cadence: Public reload cadence under test.
+    :param reload_each_render: Expected renderer lifecycle flag.
+    """
+    map_path = tmp_path / "map.json"
+    map_path.write_text("{}")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "synth_setter.data.vst.dawdreamer_runtime.ensure_dawdreamer_runtime",
+        lambda _backend: None,
+    )
+    monkeypatch.setattr("synth_setter.resources.param_map", lambda _name: map_path)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.param_map.load_param_map", lambda _path: MagicMock(name="map")
+    )
+    monkeypatch.setattr(
+        "synth_setter.renderer_factory.DawDreamerRenderer",
+        lambda **kwargs: captured.update(kwargs) or MagicMock(),
+    )
+    config = _render_config(
+        renderer_backend="dawdreamer",
+        plugin_reload_cadence=cadence,
+    )
+
+    make_audio_renderer(config)
+
+    assert captured["reload_plugin_each_render"] is reload_each_render
+
+
 @pytest.mark.parametrize(
     ("cadence", "reload_each_render"),
     [("once", False), ("render", True)],
 )
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_make_audio_renderer_dawdreamer_maps_reload_cadence(
+def test_make_audio_renderer_dawdreamer_real_maps_reload_cadence(
     cadence: str,
     reload_each_render: bool,
 ) -> None:
