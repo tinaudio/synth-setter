@@ -26,12 +26,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: evaluation
-            pattern: synth_setter.evaluation.*
+          - name: evaluation-audio
+            pattern: synth_setter.evaluation.a*
+          - name: evaluation-metrics
+            pattern: synth_setter.evaluation.compute_audio_metrics.*
+          - name: evaluation-predict
+            pattern: synth_setter.evaluation.predict_vst_audio.*
+          - name: evaluation-shuffle
+            pattern: synth_setter.evaluation.shuffle_pred_audio.*
           - name: tools
             pattern: synth_setter.tools.*
-          - name: pipeline-data
-            pattern: synth_setter.pipeline.data.*
+          - name: pipeline-add
+            pattern: synth_setter.pipeline.data.add_*
+          - name: pipeline-lance
+            pattern: synth_setter.pipeline.data.lance_*
+          - name: pipeline-stats
+            pattern: synth_setter.pipeline.data.stats.*
+          - name: pipeline-finalize
+            pattern: synth_setter.pipeline.data.finalize_progress.*
           - name: ci-scripts
             pattern: scripts.ci.*
 

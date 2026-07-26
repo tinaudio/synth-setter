@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import subprocess
 import sys
@@ -14,9 +15,27 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/mutmut.yaml"
 _MUTANT_SHARDS = [
-    {"name": "evaluation", "pattern": "synth_setter.evaluation.*"},
+    {"name": "evaluation-audio", "pattern": "synth_setter.evaluation.a*"},
+    {
+        "name": "evaluation-metrics",
+        "pattern": "synth_setter.evaluation.compute_audio_metrics.*",
+    },
+    {
+        "name": "evaluation-predict",
+        "pattern": "synth_setter.evaluation.predict_vst_audio.*",
+    },
+    {
+        "name": "evaluation-shuffle",
+        "pattern": "synth_setter.evaluation.shuffle_pred_audio.*",
+    },
     {"name": "tools", "pattern": "synth_setter.tools.*"},
-    {"name": "pipeline-data", "pattern": "synth_setter.pipeline.data.*"},
+    {"name": "pipeline-add", "pattern": "synth_setter.pipeline.data.add_*"},
+    {"name": "pipeline-lance", "pattern": "synth_setter.pipeline.data.lance_*"},
+    {"name": "pipeline-stats", "pattern": "synth_setter.pipeline.data.stats.*"},
+    {
+        "name": "pipeline-finalize",
+        "pattern": "synth_setter.pipeline.data.finalize_progress.*",
+    },
     {"name": "ci-scripts", "pattern": "scripts.ci.*"},
 ]
 
@@ -30,7 +49,7 @@ def _workflow() -> dict[Any, Any]:
 
 
 def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
-    """Each configured mutation root runs in a parallel job bounded to 40 minutes."""
+    """Each mutable module has one parallel job bounded to 40 minutes."""
     with (_REPO_ROOT / "pyproject.toml").open("rb") as file:
         mutation_paths = tomllib.load(file)["tool"]["mutmut"]["paths_to_mutate"]
     job = _workflow()["jobs"]["mutmut_run"]
@@ -42,6 +61,16 @@ def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
         "scripts/ci/",
     ]
     assert job["strategy"] == {"fail-fast": False, "matrix": {"include": _MUTANT_SHARDS}}
+    patterns = [shard["pattern"] for shard in _MUTANT_SHARDS]
+    for mutation_path in mutation_paths:
+        root = _REPO_ROOT / mutation_path
+        for source_path in root.rglob("*.py"):
+            if source_path.name == "__init__.py":
+                continue
+            relative_path = source_path.relative_to(_REPO_ROOT).with_suffix("")
+            parts = relative_path.parts
+            module = ".".join(parts[1:] if parts[0] == "src" else parts)
+            assert sum(fnmatch.fnmatchcase(f"{module}.x", pattern) for pattern in patterns) == 1
     assert job["timeout-minutes"] == 40
     run_step = next(step for step in job["steps"] if step["name"] == "Run mutmut")
     assert run_step["run"] == 'uv run mutmut run --max-children 4 "${{ matrix.pattern }}"'
