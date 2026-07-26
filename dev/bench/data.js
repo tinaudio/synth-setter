@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785091991672,
+  "lastUpdate": 1785091993954,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18339,6 +18339,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.552073382100001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "82648af075f677cedc7ad3f2bcd562bdfe9297d1",
+          "message": "internal-feat(data-pipeline): SA3 T5Gemma param-text conditioning (#2439)\n\n* internal-feat(data-pipeline): add sa3 extra for SA3 text conditioning\n\nCommit-pins stable-audio-3 and neutralizes its torch==2.7.1 /\ntorchaudio==2.7.1 pins via [[tool.uv.dependency-metadata]], mirroring the\nstable-audio-tools block. Lock diff adds only stable-audio-3, jaxtyping,\nbeartype, and wadler-lindig; torch, torchaudio, torchvision, and numpy are\nbyte-identical on the cpu, cu128, and macOS branches.\n\nRefs #2433\n\n* internal-feat(data-pipeline): SA3 T5Gemma text encoder\n\nAdds the param-spec text normalizer registry (one strategy: comma-joined\nparameter names) and the SA3 prompt-conditioner loader. Conditioner settings\ncome from the checkpoint's model_config.json and a non-learned padding_mode\nis rejected, since the class default 'zero' would silently produce embeddings\nthat are not SA3's. Tokenization, truncation, and padding all come from\nstable_audio_3 rather than being reimplemented.\n\nRefs #2433\n\n* internal-feat(data-pipeline): t5gemma embedding mode reading param_array\n\nEmbeddingSpec gains an input_field so a policy can source param rows instead\nof audio; the write path reads the union of selected input fields. The t5gemma\nentry renders each row through a configured param-text normalizer and encodes\nthe captions, guarding against a param spec whose width does not describe the\ndataset. Index is left unset because every row shares one caption today.\n\nRefs #2433\n\n* internal-feat(data-pipeline): pin T5Gemma conditioning to float32\n\nThe checkpoint declares bfloat16, whose SDPA kernels differ between torch\nreleases enough to move these embeddings by up to 11.5 against an embedding\nstd of 1.75 (min cosine 0.971 over 22 prompts). At float32 the same comparison\nis bitwise identical across torch 2.7.1 and the locked torch, so a persisted\ncolumn stays reproducible and the relaxed torch pin is justified. Adds the\nparity script producing that evidence and a reference-parity test against\nSA3's own conditioner.\n\nRefs #2433\n\n* docs(data-pipeline): document the t5gemma param-text embedding mode\n\nRecords the param-sourced input_field, the normalizer strategy, SA3's\ntruncation behavior and its effect on the wider param specs, why padding is\nlearned rather than zeroed, and why the encoder runs at float32.\n\nRefs #2433\n\n* internal-feat(data-pipeline): shape-check the T5Gemma encode path\n\nAnnotates the encoder's chunk and batch outputs with jaxtyping under beartype,\nso a conditioner returning the wrong rank or dtype fails at the boundary rather\nthan at the Arrow write.\n\nRefs #2433\n\n* test(data-pipeline): pin documented T5Gemma truncation counts\n\nThe retained-name counts in the pipeline doc had nothing keeping them honest;\nthey move with the tokenizer, the checkpoint's max_length, or a spec's\nparameter names. Pinning them also corrected the totals: captions render\nParamSpec.names, so they cover note params too (91 and 164, not 89 and 162).\n\nRefs #2433\n\n* test(data-pipeline): cover the T5Gemma loader without real weights\n\ncodecov/patch failed at 77.6% because the conditioner loader and the changed\nregistry adapters only execute in the slow lane, which skips in CI with no\ncheckpoint present. Adds fixture-free tests driving the real loader against a\nstand-in conditioner and a tiny written safetensors, plus the device-threading\nadapters and the malformed-output guard. t5gemma.py reaches 100% and every\nline this PR adds is now covered.\n\nRefs #2433\n\n* internal-fix(testing): run T5Gemma loader tests without the sa3 extra\n\nThe new loader tests patched stable_audio_3 in place, so they errored in CI,\nwhere no optional extras are installed. They now inject the module chain into\nsys.modules instead. Verified by running the suite with stable_audio_3 imports\nblocked at the meta-path.\n\nRefs #2433\n\n* test(data-pipeline): cover T5Gemma against real R2\n\nExtends the production-path add-embeddings integration test to load the\nmirrored SA3 checkpoint and write T5Gemma conditioning into a real remote\nLance dataset. It validates shape, dtype, finiteness, nonzero content, and\nrow stability.\n\nRefs #2433",
+          "timestamp": "2026-07-26T11:17:01-07:00",
+          "tree_id": "52d401f993486af650c7e1ae705123db46526f1b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/82648af075f677cedc7ad3f2bcd562bdfe9297d1"
+        },
+        "date": 1785091993508,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.783753395080566,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.141432305276394,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.11310167610645294,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006267428398132324,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.368924856185913,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.831710832000022,
             "unit": "seconds"
           }
         ]
