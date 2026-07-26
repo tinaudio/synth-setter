@@ -317,7 +317,7 @@ def test_from_hydra_badwindow_failure_logs_metric_before_exit(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/badwindow-run/"
         cfg_dataset.logger = None
 
