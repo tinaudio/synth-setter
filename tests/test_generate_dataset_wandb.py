@@ -15,6 +15,7 @@ import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import wandb
@@ -297,10 +298,14 @@ def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
         id=spec.run_id,
         project="wandb-track-test-project",
     )
+    wandb_run = wandb_logger.experiment
+    define_metric = MagicMock(wraps=wandb_run.define_metric)
+    monkeypatch.setattr(wandb_run, "define_metric", define_metric)
 
     with pytest.raises(subprocess.CalledProcessError):
         generate(spec, tmp_path, [wandb_logger])
 
+    define_metric.assert_called_once_with("generation/badwindow_detected", summary="max")
     assert wandb.run is None, "generate() did not close the failed wandb run"
     binary_files = glob.glob(
         str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
@@ -308,11 +313,11 @@ def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
     assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
     rows = read_history_rows(
         Path(binary_files[0]),
-        until=lambda scanned: any("generation/badwindow_failures" in row for row in scanned),
+        until=lambda scanned: any("generation/badwindow_detected" in row for row in scanned),
     )
-    failure_rows = [row for row in rows if "generation/badwindow_failures" in row]
+    failure_rows = [row for row in rows if "generation/badwindow_detected" in row]
     assert len(failure_rows) == 1
-    assert json.loads(failure_rows[0]["generation/badwindow_failures"]) == 1
+    assert json.loads(failure_rows[0]["generation/badwindow_detected"]) == 1
 
 
 def test_generate_relay_preserves_nonzero_rejection_counts_offline(

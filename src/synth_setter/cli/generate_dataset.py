@@ -94,6 +94,7 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _WORKER_VENV = "/venv/main"
 # Worker images install an unpacked package, so this module-relative script path is available.
 _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
+_BADWINDOW_FAILURE_METRIC = "generation/badwindow_detected"
 _BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
 _X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
 
@@ -469,11 +470,15 @@ def _log_shard_metrics(
 def _log_badwindow_failure(loggers: list[Logger]) -> None:
     """Record one fatal X11 ``BadWindow`` renderer failure.
 
+    W&B keeps the maximum event marker so the run summary reports whether any attempt failed.
+
     :param loggers: Lightning loggers — empty list is a no-op.
     """
-    payload = {"generation/badwindow_failures": 1.0}
+    payload = {_BADWINDOW_FAILURE_METRIC: 1.0}
     for lg in loggers:
         try:
+            if isinstance(lg, WandbLogger):
+                lg.experiment.define_metric(_BADWINDOW_FAILURE_METRIC, summary="max")
             lg.log_metrics(payload)
         except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
             logger.warning(

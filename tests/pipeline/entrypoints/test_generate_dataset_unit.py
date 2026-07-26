@@ -37,7 +37,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from unittest.mock import call as mock_call
 
 import pytest
 
@@ -1546,9 +1545,10 @@ class TestRun(RenderSeamFixtures):
             with pytest.raises(subprocess.CalledProcessError):
                 generate(spec, tmp_path, [metric_logger])
 
-        assert metric_logger.log_metrics.call_args_list == [
-            mock_call({"generation/badwindow_failures": 1.0}),
-            mock_call({"generation/badwindow_failures": 1.0}),
+        payloads = [args.args[0] for args in metric_logger.log_metrics.call_args_list]
+        assert payloads == [
+            {"generation/badwindow_detected": 1.0},
+            {"generation/badwindow_detected": 1.0},
         ]
 
     @pytest.mark.parametrize(
