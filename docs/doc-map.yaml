@@ -330,7 +330,7 @@ docs:
       - pattern: "jobs/predict/*.sh"
         covers: "Per-variant predict launchers — compose `experiment=surge/wandb_checkpoint/<x>` (config-pinned `${wandb:...}` ckpt_path) plus `mode=predict`"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group composed by eval.yaml defaults; supplies param_spec_name, plugin_state_path, optional plugin_path consumed by _run_predict_postprocessing in cli/eval.py"
+        covers: "Render-group composed by eval.yaml defaults; supplies the synth identity (param_spec_name, plugin_state_path, optional plugin_path) via SynthSpec.from_render_cfg, consumed by _run_predict_postprocessing in cli/eval.py"
       - pattern: "src/synth_setter/configs/callbacks/eval_vst.yaml"
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "src/synth_setter/configs/callbacks/prediction_writer.yaml"

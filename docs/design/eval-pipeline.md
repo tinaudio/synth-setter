@@ -252,7 +252,7 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 
 | Key                          | Default | Effect when true                                                                                                                                                                                                 |
 | ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, plugin_state_path}` and optional `cfg.render.plugin_path`           |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires a synth identity on `cfg.render`, resolved via `SynthSpec.from_render_cfg`                        |
 | `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                   |
 | `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                            |
 | `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                     |
@@ -333,7 +333,7 @@ num_workers: 4  # per dataloader — validation doubles the live worker count
 persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
-`surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
+`surge_simple.yaml` is a thin overlay (`defaults: [surge_xt, override synth: surge_simple]`) that swaps only the synth identity group; it inherits the keys above from `surge_xt.yaml`, which in turn inherits them from `vst.yaml`.
 
 To use R2, pass it explicitly:
 
