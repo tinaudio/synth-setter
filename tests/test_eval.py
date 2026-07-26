@@ -75,6 +75,33 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
+
+
+def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
+    """The eval operator config accepts the production brightOrgan render group."""
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[
+                    "datamodule=ksin",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "ckpt_path=.",
+                    "render=faust_bright_organ",
+                ],
+            )
+        render = RenderConfig.model_validate(dict(cfg.render))
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert render.renderer_backend == "dawdreamer_faust"
+    assert render.plugin_path == "faust"
+    assert render.plugin_reload_cadence == "render"
+    assert render.gui_toggle_cadence == "never"
+    assert render.param_spec_name == "faust_bright_organ"
+
+
 _AUDIO_PREDICTION_CASES = (
     _AudioPredictionCase(
         "ffn_full",
