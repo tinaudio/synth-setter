@@ -78,17 +78,28 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     def from_render_cfg(cls, render: DictConfig | None) -> SynthSpec | None:
         """Read synth identity out of a composed ``render`` group.
 
+        Reads the ``synth`` group the render configs compose, falling back to the
+        pre-nesting flat keys so a hand-written or archived config still resolves.
+        In the flat form ``name`` mirrors ``param_spec_name``, which those configs
+        do not state separately.
+
         Duck-typed so this module stays free of a runtime omegaconf import — the
         minimal-env CI install that runs ``validate_spec`` does not ship it.
-        ``name`` mirrors ``param_spec_name``, which the render groups do not state
-        separately.
 
         :param render: Composed ``render`` node, or ``None`` when unset.
         :returns: The identity the group declares, or ``None`` when it names no
-            param spec (e.g. the generic ``render=vst`` scaffold).
+            synth (e.g. the generic ``render=vst`` scaffold).
         """
         if render is None:
             return None
+        synth = render.get("synth")
+        if synth is not None:
+            return cls(
+                name=SynthName(str(synth["name"])),
+                param_spec_name=ParamSpecName(str(synth["param_spec_name"])),
+                plugin_path=str(synth["plugin_path"]),
+                plugin_state_path=str(synth["plugin_state_path"]),
+            )
         param_spec_name = render.get("param_spec_name")
         if param_spec_name is None:
             return None

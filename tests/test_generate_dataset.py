@@ -189,7 +189,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.render.audio_dtype = "float32"
         cfg_dataset.render.mel_spec_dtype = "float16"
@@ -311,7 +311,7 @@ def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.use_shard_queue = True
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
         # Disable the default wandb logger: generate() would call wandb.init() and block.
@@ -360,7 +360,7 @@ def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.use_shard_queue = True
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/crash-run/"
         cfg_dataset.logger = None
@@ -437,7 +437,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/invalid-run/"
         cfg_dataset.logger = None
@@ -516,7 +516,7 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.use_shard_queue = True
-        cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_REAL_PLUGIN_VST3)
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
@@ -559,7 +559,7 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 1, 1]
-        cfg_dataset.render.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_REAL_PLUGIN_VST3)
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-lance-run/"
@@ -603,7 +603,7 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/seed-run/"
         cfg_dataset.logger = None
@@ -643,7 +643,7 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset_dawdreamer):
         cfg_dataset_dawdreamer.output_format = "lance"
-        cfg_dataset_dawdreamer.render.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset_dawdreamer.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
         cfg_dataset_dawdreamer.render.renderer_version = _TEST_PLUGIN_VERSION
         cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-run/"
         cfg_dataset_dawdreamer.logger = None
@@ -916,7 +916,7 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
         [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
         ],
@@ -993,7 +993,7 @@ def remote_worker_dispatch(
             [
                 "synth-setter-generate-dataset",
                 "experiment=generate_dataset/smoke-shard",
-                f"render.plugin_path={_TEST_PLUGIN_VST3}",
+                f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
                 "skypilot_launch/compute=runpod/smoke",
             ],
         )
@@ -1070,7 +1070,7 @@ def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
         [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
         ],
     )
@@ -1110,7 +1110,7 @@ def test_main_remote_dispatch_defaults_worker_ref_before_submission(
         [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={_TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
         ],
     )
@@ -1150,7 +1150,7 @@ def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_execute
     install, invocation = trace.read_text().splitlines()
     assert install == "install:pip install --group runtime -e ."
     assert invocation.startswith("exec:experiment=generate_dataset/smoke-shard ")
-    assert f"render.plugin_path={_TEST_PLUGIN_VST3}" in invocation
+    assert f"render.synth.plugin_path={_TEST_PLUGIN_VST3}" in invocation
     assert "skypilot_launch/compute=runpod/smoke" in invocation
     assert "+created_at=" in invocation
 

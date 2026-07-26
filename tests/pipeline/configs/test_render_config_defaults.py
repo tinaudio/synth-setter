@@ -71,16 +71,14 @@ def test_vst_render_group_accepts_appended_synth_identity() -> None:
             overrides=[
                 "experiment=surge/fake_oracle",
                 "render=vst",
-                "+render.param_spec_name=obxf",
-                "+render.plugin_state_path=presets/obxf-base.vstpreset",
-                "+render.plugin_path=plugins/OB-Xf.vst3",
+                "+render/synth=obxf",
                 "+render.renderer_version=1.0.3",
             ],
         )
 
-    assert cfg.render.param_spec_name == "obxf"
-    assert cfg.render.plugin_state_path == "presets/obxf-base.vstpreset"
-    assert cfg.render.plugin_path == "plugins/OB-Xf.vst3"
+    assert cfg.render.synth.param_spec_name == "obxf"
+    assert cfg.render.synth.plugin_state_path == "presets/obxf-base.vstpreset"
+    assert cfg.render.synth.plugin_path == "plugins/OB-Xf.vst3"
     assert cfg.render.renderer_version == "1.0.3"
     assert cfg.render.plugin_reload_cadence == "once"
 
@@ -208,8 +206,8 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     cfg = _compose_render_group(group)
     surge_xt = _compose_render_group("surge_xt")
 
-    assert cfg.param_spec_name == param_spec_name
-    assert cfg.plugin_state_path == plugin_state_path
-    assert cfg.plugin_path == surge_xt.plugin_path
+    assert cfg.synth.param_spec_name == param_spec_name
+    assert cfg.synth.plugin_state_path == plugin_state_path
+    assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
     assert cfg.renderer_version == surge_xt.renderer_version
     assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence
