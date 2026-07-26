@@ -307,12 +307,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 @pytest.mark.fake_vst
 def test_from_hydra_badwindow_failure_logs_metric_before_exit(
     cfg_dataset: DictConfig,
-    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The worker entrypoint records a fatal X11 warmup failure before exiting.
 
     :param cfg_dataset: Hydra cfg composed with the smoke-shard experiment.
-    :param fake_r2_remote: Local-filesystem root backing the rendering marker write.
+    :param monkeypatch: Replaces the shard-storage boundaries.
     """
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
@@ -321,6 +321,14 @@ def test_from_hydra_badwindow_failure_logs_metric_before_exit(
         cfg_dataset.r2.prefix = "fake-r2/badwindow-run/"
         cfg_dataset.logger = None
 
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
     metric_rows: list[dict[str, float]] = []
     finalized_statuses: list[str] = []
     recording_logger = SimpleNamespace(

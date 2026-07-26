@@ -708,6 +708,17 @@ class RenderSeamFixtures:
         )
 
     @pytest.fixture()
+    def no_rendering_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace the pre-render storage write for renderer-failure tests.
+
+        :param monkeypatch: Patches the marker boundary for the calling test.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_rendering_marker",
+            lambda *_args, **_kwargs: None,
+        )
+
+    @pytest.fixture()
     def patched_subprocess(self, fake_r2_remote: Path, spec: DatasetSpec) -> Iterator[MagicMock]:  # noqa: ARG002
         """Patch ``_check_call_streamed`` with the ``stub_renderer`` dispatcher.
 
@@ -1517,12 +1528,12 @@ class TestRun(RenderSeamFixtures):
 
     def test_badwindow_failure_logs_one_metric_per_failed_attempt(
         self,
-        fake_r2_remote: Path,
+        no_rendering_marker: None,
         tmp_path: Path,
     ) -> None:
         """Each fatal X11 warmup attempt emits one failure metric before propagation.
 
-        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param no_rendering_marker: Fixture-activation only.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         """
         kwargs = _base_spec_kwargs(tmp_path)
@@ -1553,13 +1564,13 @@ class TestRun(RenderSeamFixtures):
 
     def test_badwindow_metric_failure_does_not_mask_renderer_error(
         self,
-        fake_r2_remote: Path,
+        no_rendering_marker: None,
         spec: DatasetSpec,
         tmp_path: Path,
     ) -> None:
         """A logging outage preserves the fatal renderer exception.
 
-        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param no_rendering_marker: Fixture-activation only.
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         :param tmp_path: Caller-supplied work directory.
         """
@@ -1592,14 +1603,14 @@ class TestRun(RenderSeamFixtures):
     def test_non_badwindow_renderer_failure_does_not_log_badwindow_metric(
         self,
         output: bytes,
-        fake_r2_remote: Path,
+        no_rendering_marker: None,
         spec: DatasetSpec,
         tmp_path: Path,
     ) -> None:
         """A renderer exit without the full signature emits no BadWindow metric.
 
         :param output: Captured renderer output missing one or both signature components.
-        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param no_rendering_marker: Fixture-activation only.
         :param spec: Fixture-provided single-shard ``DatasetSpec``.
         :param tmp_path: Caller-supplied work directory.
         """

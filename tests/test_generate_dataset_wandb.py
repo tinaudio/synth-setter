@@ -255,15 +255,13 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
 
 def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
     tmp_path: Path,
-    fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
     """A fatal X11 warmup failure reaches W&B before generation exits.
 
     :param tmp_path: Per-test render and offline W&B directory.
-    :param fake_r2_remote: Local filesystem backing the rendering marker write.
-    :param monkeypatch: Pins offline W&B and renderer boundaries.
+    :param monkeypatch: Pins offline W&B, storage, and renderer boundaries.
     :param dataset_spec_factory: Shared ``DatasetSpec`` factory.
     """
     _offline_wandb_env(monkeypatch, tmp_path)
@@ -275,6 +273,10 @@ def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
         lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
     )
     badwindow_output = (
         b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
