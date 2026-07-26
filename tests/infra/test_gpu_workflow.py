@@ -19,6 +19,16 @@ _WORKER_SCRIPT = _REPO_ROOT / "scripts/ci/gpu_tests.sh"
 _WORKFLOW = "test-gpu.yml"
 
 
+def _workflow_steps(project_root: Path) -> list[dict[str, object]]:
+    """Load the GPU workflow's ordered steps.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    :returns: Step mappings from the GPU job.
+    """
+    jobs = cast(dict[str, dict[str, object]], load_workflow(project_root, _WORKFLOW)["jobs"])
+    return cast(list[dict[str, object]], jobs["run_tests"]["steps"])
+
+
 def _named_step(project_root: Path, name: str) -> dict[str, object]:
     """Load one named step from the GPU workflow's only job.
 
@@ -26,9 +36,7 @@ def _named_step(project_root: Path, name: str) -> dict[str, object]:
     :param name: Exact workflow step name.
     :returns: The matching step mapping.
     """
-    jobs = cast(dict[str, dict[str, object]], load_workflow(project_root, _WORKFLOW)["jobs"])
-    steps = cast(list[dict[str, object]], jobs["run_tests"]["steps"])
-    return next(step for step in steps if step.get("name") == name)
+    return next(step for step in _workflow_steps(project_root) if step.get("name") == name)
 
 
 def _launch_step(project_root: Path) -> dict[str, object]:
@@ -70,7 +78,7 @@ def test_gpu_worker_script_prefers_the_mounted_rclone_over_the_image_one() -> No
     """The image's apt rclone fails first R2 writes, so the mounted binary must win $PATH."""
     script = _WORKER_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'export PATH="/tmp/synth-setter-tools:$PATH"' in script
+    assert 'export PATH="/tmp/synth-setter-tools:${PATH}"' in script
     assert script.index("chmod u+x /tmp/synth-setter-tools/rclone") < script.index("export PATH=")
     assert script.index("export PATH=") < script.index("rclone copyto coverage.xml")
 
@@ -180,6 +188,51 @@ def test_gpu_workflow_pins_worker_checkout_to_the_dispatched_commit(project_root
     step_env = cast(dict[str, str], _launch_step(project_root)["env"])
 
     assert step_env["WORKER_GIT_REF"] == "${{ github.sha }}"
+
+
+@pytest.mark.infra
+def test_gpu_workflow_supplies_local_launcher_and_worker_credentials(project_root: Path) -> None:
+    """Local dispatch bootstraps R2 while the managed worker receives W&B auth.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    launch_step = _launch_step(project_root)
+    step_env = cast(dict[str, str], launch_step["env"])
+
+    assert step_env["R2_ACCOUNT_ID"] == "${{ secrets.R2_ACCOUNT_ID }}"
+    assert step_env["WANDB_API_KEY"] == "${{ secrets.WANDB_API_KEY }}"
+    assert '--extra-env WANDB_API_KEY "$WANDB_API_KEY"' in cast(str, launch_step["run"])
+
+
+@pytest.mark.infra
+def test_gpu_workflow_does_not_persist_launcher_logs(project_root: Path) -> None:
+    """Launcher output can contain credentials, so it remains only in masked job logs.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    steps = _workflow_steps(project_root)
+
+    assert all(step.get("name") != "Upload run metadata" for step in steps)
+    assert "tee" not in cast(str, _launch_step(project_root)["run"])
+
+
+@pytest.mark.infra
+def test_gpu_workflow_pins_external_actions_to_commit_shas(project_root: Path) -> None:
+    """External actions use immutable revisions while local actions stay relative.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    external_uses = [
+        cast(str, step["uses"])
+        for step in _workflow_steps(project_root)
+        if "uses" in step and not cast(str, step["uses"]).startswith("./")
+    ]
+
+    assert external_uses == [
+        "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e",
+    ]
 
 
 @pytest.mark.infra
