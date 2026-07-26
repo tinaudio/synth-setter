@@ -1,15 +1,38 @@
-# Same as `code-quality-pr.yaml` but triggered on commit to main branch
-# and runs on all files (instead of only the changed ones)
+# All-files hooks for main and PRs that change global lint infrastructure (#2458).
 
 name: Code Quality Main
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/actions/setup-precommit/**"
+      - ".editorconfig"
+      - ".github/workflows/code-quality-main.yaml"
+      - ".gitlint"
+      - ".pre-commit-config.yaml"
+      - ".pydoclint-baseline.txt"
+      - "agent/hooks/**"
+      - "checkmake.ini"
+      - "Makefile"
+      - "pyproject.toml"
+      - "pyrightconfig.json"
+      - "scripts/check_no_new_funcs_in_pydoclint_excluded.py"
+      - "scripts/ci/count_doc_noqa.sh"
+      - "scripts/ci/pr_body_lint.py"
+      - "tests/infra/test_deep_premerge_workflows.py"
+      - "tests/scripts/test_check_no_new_funcs_in_pydoclint_excluded.py"
+      - "uv.lock"
+
+permissions:
+  contents: read
 
 jobs:
   code-quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -25,7 +48,6 @@ jobs:
       # through `uv run` instead — pre-commit is in the dev group.
       - name: Run pre-commits
         env:
-          # no-commit-to-branch hook rejects commits on main, but this CI job
-          # runs after merge to main, so the hook must be skipped. See 628fa8e.
-          SKIP: no-commit-to-branch
+          # Main pushes skip the branch guard; PR merge refs still run it.
+          SKIP: ${{ github.event_name == 'push' && 'no-commit-to-branch' || '' }}
         run: uv run pre-commit run --all-files

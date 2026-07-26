@@ -15,11 +15,10 @@ from pathlib import Path
 
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
 from tqdm import trange
 
 from synth_setter.data.vst.audio_preview import validate_mp3_sample_rate
-from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
+from synth_setter.data.vst.core import run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,
@@ -27,12 +26,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.renderers import (
-    AudioRenderer,
-    DawDreamerRenderer,
-    PedalboardRenderer,
-    TorchSynthRenderer,
-)
+from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
@@ -42,6 +36,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
 
 
 def _sample_batch_arrays(
@@ -96,45 +91,6 @@ def _validate_fixed_params_lengths(
             )
 
 
-def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -> AudioRenderer:
-    """Construct the configured audio renderer for one shard or render.
-
-    :param render_cfg: Render settings that identify the backend and audio shape.
-    :param plugin: Preloaded pedalboard plugin for ``plugin_reload_cadence="once"``.
-    :returns: Renderer configured for the requested backend.
-    """
-    if render_cfg.renderer_backend == "dawdreamer":
-        from synth_setter.data.vst.param_map import load_param_map
-        from synth_setter.resources import as_file, param_map
-
-        with as_file(param_map(render_cfg.param_spec_name)) as path:
-            joint_map = load_param_map(path)
-        return DawDreamerRenderer(
-            plugin_path=render_cfg.plugin_path,
-            sample_rate=render_cfg.sample_rate,
-            channels=render_cfg.channels,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-            plugin_state_path=render_cfg.plugin_state_path,
-            parameter_map=joint_map,
-            reload_plugin_each_render=render_cfg.plugin_reload_cadence == "render",
-        )
-    if render_cfg.renderer_backend == "torchsynth":
-        return TorchSynthRenderer(
-            plugin_path=render_cfg.plugin_path,
-            sample_rate=render_cfg.sample_rate,
-            channels=render_cfg.channels,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-        )
-    return PedalboardRenderer(
-        plugin_path=render_cfg.plugin_path,
-        sample_rate=render_cfg.sample_rate,
-        channels=render_cfg.channels,
-        signal_duration_seconds=render_cfg.signal_duration_seconds,
-        plugin_state_path=render_cfg.plugin_state_path,
-        plugin=plugin,
-    )
-
-
 def _render_in_batches(
     *,
     render_cfg: RenderConfig,
@@ -169,14 +125,7 @@ def _render_in_batches(
     clipped_rejections = 0
     silent_rejections = 0
 
-    # "once" reuses one renderer per shard; "render" reloads for each attempt (see #705).
-    cached_plugin: VST3Plugin | None = None
-    cached_renderer: AudioRenderer | None = None
-    if render_cfg.plugin_reload_cadence == "once":
-        if render_cfg.renderer_backend == "pedalboard":
-            cached_plugin = load_plugin(render_cfg.plugin_path)
-            load_preset(cached_plugin, render_cfg.plugin_state_path)
-        cached_renderer = _make_renderer(render_cfg, cached_plugin)
+    renderer = make_audio_renderer(render_cfg)
 
     def _render_loop() -> None:
         nonlocal clipped_rejections, silent_rejections
@@ -205,7 +154,6 @@ def _render_in_batches(
                 fixed_note = (
                     fixed_note_params_list[i] if fixed_note_params_list is not None else None
                 )
-            renderer = cached_renderer or _make_renderer(render_cfg)
             sample = generate_sample(
                 renderer=renderer,
                 velocity=render_cfg.velocity,
@@ -238,18 +186,14 @@ def _render_in_batches(
         if sample_batch:
             flush_batch(sample_batch, sample_batch_start)
 
-    # always_on: main thread blocks in ``show_editor`` while ``_render_loop`` runs
-    # on a worker (pedalboard requires show_editor on the main thread, #1204).
-    # RenderConfig validator pairs always_on with plugin_reload_cadence="once"
-    # so cached_plugin is non-None on this branch (#1187).
+    # Pedalboard requires show_editor on the main thread while rendering runs on a worker.
     if render_cfg.gui_toggle_cadence == "always_on":
-        if cached_plugin is None:
+        if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
             raise RuntimeError(
                 "always_on reached the renderer without a cached plugin; "
-                "RenderConfig._always_on_requires_plugin_reload_once validator "
-                "should have rejected this combination."
+                "RenderConfig validation should have rejected this combination."
             )
-        run_with_editor_held_open(cached_plugin, _render_loop)
+        run_with_editor_held_open(renderer.plugin, _render_loop)
     else:
         _render_loop()
 

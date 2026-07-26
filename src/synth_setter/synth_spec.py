@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, NewType
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, TORCHSYNTH_PLUGIN_NAME
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -78,28 +78,22 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     def from_render_cfg(cls, render: DictConfig | None) -> SynthSpec | None:
         """Read synth identity out of a composed ``render`` group.
 
-        Reads the ``synth`` group the render configs compose, falling back to the
-        pre-nesting flat keys so a hand-written or archived config still resolves.
-        In the flat form ``name`` mirrors ``param_spec_name``, which those configs
-        do not state separately.
-
         Duck-typed so this module stays free of a runtime omegaconf import — the
         minimal-env CI install that runs ``validate_spec`` does not ship it.
+        Flat render groups derive ``name`` from ``param_spec_name``; nested groups
+        preserve their explicit identity.
 
         :param render: Composed ``render`` node, or ``None`` when unset.
         :returns: The identity the group declares, or ``None`` when it names no
-            synth (e.g. the generic ``render=vst`` scaffold).
+            param spec (e.g. the generic ``render=vst`` scaffold).
         """
         if render is None:
             return None
-        synth = render.get("synth")
-        if synth is not None:
-            return cls(
-                name=SynthName(str(synth["name"])),
-                param_spec_name=ParamSpecName(str(synth["param_spec_name"])),
-                plugin_path=str(synth["plugin_path"]),
-                plugin_state_path=str(synth["plugin_state_path"]),
-            )
+        nested_synth = render.get("synth")
+        if isinstance(nested_synth, cls):
+            return nested_synth
+        if nested_synth is not None:
+            return cls.model_validate(dict(nested_synth))
         param_spec_name = render.get("param_spec_name")
         if param_spec_name is None:
             return None
@@ -131,6 +125,16 @@ def _synth(name: str, param_spec_name: str, plugin_path: str, preset: str) -> Sy
 _SURGE_XT_PLUGIN = "plugins/Surge XT.vst3"
 
 _synths: dict[SynthName, SynthSpec] = {
+    SynthName("faust_bright_organ"): _synth(
+        "faust_bright_organ", "faust_bright_organ", FAUST_PLUGIN_NAME, ""
+    ),
+    SynthName("faust_bubble"): _synth("faust_bubble", "faust_bubble", FAUST_PLUGIN_NAME, ""),
+    SynthName("faust_church_organ"): _synth(
+        "faust_church_organ", "faust_church_organ", FAUST_PLUGIN_NAME, ""
+    ),
+    SynthName("faust_filter_osc"): _synth(
+        "faust_filter_osc", "faust_filter_osc", FAUST_PLUGIN_NAME, ""
+    ),
     SynthName("surge_xt"): _synth(
         "surge_xt", "surge_xt", _SURGE_XT_PLUGIN, "presets/surge-base.vstpreset"
     ),

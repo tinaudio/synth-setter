@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import plistlib
 import threading
 import time
@@ -68,6 +70,16 @@ class TestExtractRendererVersion:
         (contents / "moduleinfo.json").write_text('{"Name": "TestPlugin"}')
         with pytest.raises(KeyError):
             extract_renderer_version(plugin)
+
+    @pytest.mark.skipif(
+        importlib.util.find_spec("dawdreamer") is None,
+        reason="DawDreamer is unavailable on this platform",
+    )
+    def test_faust_backend_name_reads_installed_dawdreamer_version(self) -> None:
+        """The Faust sentinel resolves provenance from the real DawDreamer package."""
+        assert extract_renderer_version(Path("faust")) == importlib.metadata.version(
+            "dawdreamer"
+        )
 
     def test_torchsynth_backend_name_reads_installed_package_version(self) -> None:
         """The bare ``torchsynth`` name resolves to the installed package version, not a file."""

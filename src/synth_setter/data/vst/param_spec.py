@@ -1,21 +1,17 @@
 """Synth/note parameter definitions, sampling, and encoding for VST param specs."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any, Literal, TypedDict, cast
 
 import numpy as np
 
-# param representations:
-# 1. Synth: dict of str -> float pairs, where the float is on [0, 1]
-# 2. Semantic: dict of str -> representation pairs, where the representation takes on
-#    the interpretable value of the parameter
-# 3. Encoded: NumPy array of values on [0, 1]
+# Synth values are renderer-native; semantic values are interpretable; encoded values use [0, 1].
 
 
 class Parameter:
     name: str
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.name = name
 
     def sample(self, rng: np.random.Generator) -> Any:
@@ -166,16 +162,23 @@ class ContinuousParameter(Parameter):
         max: float = 1.0,
         constant_val_p: float = 0.0,
         constant_val: float = 0.0,
-    ):
+    ) -> None:
         super().__init__(name)
 
-        assert max > min, "max must be greater than min"
-        assert min >= 0.0, "min must be greater than or equal to 0.0"
-        assert max <= 1.0, "max must be less than or equal to 1.0"
+        if not np.isfinite(min) or not np.isfinite(max):
+            raise ValueError("bounds must be finite")
+        if max <= min:
+            raise ValueError("max must be greater than min")
+        # Finite bounds can still overflow when normalization subtracts them.
+        if not np.isfinite(max - min):
+            raise ValueError("span must be finite")
+        if not 0.0 <= constant_val_p <= 1.0:
+            raise ValueError("constant_val_p must be in [0, 1]")
+        if constant_val_p > 0.0 and not min <= constant_val <= max:
+            raise ValueError("constant_val must be within [min, max] when enabled")
 
         self.min = min
         self.max = max
-
         self.constant_val_p = constant_val_p
         self.constant_val = constant_val
 
@@ -234,10 +237,8 @@ class NoteParams(TypedDict):  # noqa: DOC601, DOC603
 
 class ParamSpec:
     def __init__(
-        self,
-        synth_params: list[Parameter],
-        note_params: list[Parameter],
-    ):
+        self, synth_params: list[Parameter], note_params: list[Parameter]
+    ) -> None:
         self.synth_params = synth_params
         self.note_params = note_params
 
@@ -256,6 +257,24 @@ class ParamSpec:
 
     def __len__(self) -> int:
         return self.encoded_width
+
+    def encoded_slices(self) -> Iterator[tuple[Parameter, slice]]:
+        """Pair each parameter with the columns it occupies in an encoded row.
+
+        Spans are contiguous from 0, ordered ``synth_params`` then ``note_params``
+        to match :meth:`encode`, and the final stop equals :attr:`encoded_width`.
+        Callers must index encoded rows through these spans: a parameter may own
+        several columns (onehot values, note start/end), so there is no positional
+        correspondence between :attr:`names` and encoded columns.
+
+        :yields: One ``(parameter, span)`` pair per parameter, in encoding order.
+        :ytype: tuple[Parameter, slice]
+        """
+        pointer = 0
+        for param in (*self.synth_params, *self.note_params):
+            width = len(param)
+            yield param, slice(pointer, pointer + width)
+            pointer += width
 
     def sample(
         self, rng: np.random.Generator | None = None
@@ -297,22 +316,14 @@ class ParamSpec:
         :param params: Encoded row (output of :meth:`encode`), nominally ``len(self)`` wide.
         :returns: ``(synth_param_dict, note_params)``.
         """
-        synth_params_to_process = [(p, len(p)) for p in self.synth_params]
-        note_params_to_process = [(p, len(p)) for p in self.note_params]
+        # Split positionally, not by name: encoded_slices() yields synth spans first,
+        # and a synth and note parameter may legitimately share a name.
+        spans = list(self.encoded_slices())
+        synth_spans = spans[: len(self.synth_params)]
+        note_spans = spans[len(self.synth_params) :]
 
-        synth_params = {}
-        note_params = {}
-
-        pointer = 0
-        for param, length in synth_params_to_process:
-            param_value = param.decode(params[pointer : pointer + length])
-            synth_params[param.name] = param_value
-            pointer += length
-
-        for param, length in note_params_to_process:
-            param_value = param.decode(params[pointer : pointer + length])
-            note_params[param.name] = param_value
-            pointer += length
+        synth_params = {param.name: param.decode(params[span]) for param, span in synth_spans}
+        note_params = {param.name: param.decode(params[span]) for param, span in note_spans}
 
         # Same cast as sample(): keys come from runtime ``Parameter.name`` values,
         # so the checker can't prove the NoteParams key->type mapping.
@@ -341,9 +352,9 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
     :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
         ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
     :param spec: Spec the model was trained against.
-    :returns: ``(synth_param_dict, note_params)``; synth values are
-        pedalboard-normalized raw values (conventionally ``[0, 1]``), note
-        params are in their native domains (pitch as int, start/end seconds).
+    :returns: ``(synth_param_dict, note_params)``; synth values are in the
+        selected renderer's native parameter domains, while note params contain
+        pitch as int and start/end seconds.
     """
     scaled = np.clip((row + 1) / 2, 0, 1)
     return spec.decode(scaled)
