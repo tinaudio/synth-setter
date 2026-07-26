@@ -160,6 +160,25 @@ def _registry_key_value(key: ast.expr | None) -> str | None:
     return key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
 
 
+def _module_dict(tree: ast.Module, dict_name: str) -> ast.Dict | None:
+    """Return one named module-level dictionary expression.
+
+    :param tree: Parsed registry module.
+    :param dict_name: Module-level dictionary variable to inspect.
+    :returns: The dictionary expression, or ``None`` when absent.
+    """
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names_dict = any(
+            isinstance(target, ast.Name) and target.id == dict_name for target in targets
+        )
+        if names_dict and isinstance(node.value, ast.Dict):
+            return node.value
+    return None
+
+
 def _dict_key_lines(
     tree: ast.Module, *, lines: list[str], dict_name: str, key_value: str
 ) -> list[str]:
@@ -171,19 +190,32 @@ def _dict_key_lines(
     :param key_value: String key identity to find.
     :return: Source lines whose key evaluates to ``key_value``.
     """
-    matches: list[str] = []
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(target, ast.Name) and target.id == dict_name for target in targets):
-            continue
-        if not isinstance(node.value, ast.Dict):
-            continue
-        for key in node.value.keys:
-            if key is not None and _registry_key_value(key) == key_value:
-                matches.append(lines[key.lineno - 1])
-    return matches
+    mapping = _module_dict(tree, dict_name)
+    if mapping is None:
+        return []
+    return [
+        lines[key.lineno - 1]
+        for key in mapping.keys
+        if key is not None and _registry_key_value(key) == key_value
+    ]
+
+
+def _dict_values(tree: ast.Module, *, dict_name: str, key_value: str) -> list[ast.expr]:
+    """Return values assigned to one logical key in a module-level dict.
+
+    :param tree: Parsed registry module.
+    :param dict_name: Module-level dictionary variable to inspect.
+    :param key_value: String key identity to find.
+    :returns: Matching value expressions.
+    """
+    mapping = _module_dict(tree, dict_name)
+    if mapping is None:
+        return []
+    return [
+        value
+        for key, value in zip(mapping.keys, mapping.values, strict=True)
+        if key is not None and _registry_key_value(key) == key_value
+    ]
 
 
 def _module_scope_imports(node: ast.AST) -> list[ast.ImportFrom]:
@@ -254,30 +286,42 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def synths_with_spec(source: str, spec_name: str, *, plugin_path: str) -> str:
+def synths_with_spec(
+    source: str, spec_name: str, *, plugin_path: str, synth_version: str
+) -> str:
     """Return ``source`` with ``spec_name`` added to the synth identity table.
 
-    Inserts one flat row into ``_synth_rows``. Re-applying an identical
+    Inserts one formatter-stable row into ``_synth_rows``. Re-applying an identical
     registration is a no-op so ``--force`` re-runs converge instead of erroring.
 
     :param source: Current ``synth_spec.py`` source text.
     :param spec_name: Registry key; also names the param spec and render group.
     :param plugin_path: ``.vst3`` path recorded for render workers.
+    :param synth_version: Plugin version recorded in synth identity.
     :returns: The modified ``synth_spec.py`` source.
     :raises ValueError: ``spec_name`` is already present with different wiring,
         or ``source`` lacks the ``_synth_rows`` anchor.
     """
-    row = (
-        f'    "{spec_name}": ("{spec_name}", {json.dumps(plugin_path)}, '
-        f"{json.dumps(preset_repo_path(spec_name))}),"
+    expected = (spec_name, plugin_path, preset_repo_path(spec_name), synth_version)
+    row = "\n".join(
+        [
+            f'    "{spec_name}": (',
+            f"        {json.dumps(spec_name)},",
+            f"        {json.dumps(plugin_path)},",
+            f"        {json.dumps(preset_repo_path(spec_name))},",
+            f"        {json.dumps(synth_version)},",
+            "    ),",
+        ]
     )
 
     lines = source.splitlines()
-    existing = _dict_key_lines(
-        ast.parse(source), lines=lines, dict_name="_synth_rows", key_value=spec_name
-    )
+    existing = _dict_values(ast.parse(source), dict_name="_synth_rows", key_value=spec_name)
     if existing:
-        if existing == [row]:
+        try:
+            matches_expected = len(existing) == 1 and ast.literal_eval(existing[0]) == expected
+        except (TypeError, ValueError):
+            matches_expected = False
+        if matches_expected:
             return source
         raise ValueError(
             f"{spec_name!r} is already registered in synth_spec with different wiring; "
@@ -288,7 +332,7 @@ def synths_with_spec(source: str, spec_name: str, *, plugin_path: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def synth_group_yaml(spec_name: str, *, plugin_path: str) -> str:
+def synth_group_yaml(spec_name: str, *, plugin_path: str, synth_version: str) -> str:
     """Emit the Hydra synth-identity group config for ``spec_name``.
 
     The generated projection of the ``SYNTHS`` row; ``tests/test_synth_spec.py``
@@ -297,6 +341,7 @@ def synth_group_yaml(spec_name: str, *, plugin_path: str) -> str:
 
     :param spec_name: Registry key; names the param spec and preset.
     :param plugin_path: ``.vst3`` path recorded for render workers.
+    :param synth_version: Plugin version pinned in synth identity.
     :returns: YAML text for ``configs/render/synth/<spec_name>.yaml``.
     """
     return "\n".join(
@@ -307,6 +352,7 @@ def synth_group_yaml(spec_name: str, *, plugin_path: str) -> str:
             f"param_spec_name: {json.dumps(spec_name)}",
             f"plugin_path: {json.dumps(plugin_path)}",
             f"plugin_state_path: {json.dumps(preset_repo_path(spec_name))}",
+            f"synth_version: {json.dumps(synth_version)}",
             "",
         ]
     )
@@ -392,7 +438,7 @@ def checkout_relative_path(plugin_path: str, root: Path) -> str:
     return str(absolute.resolve())
 
 
-def render_config_yaml(spec_name: str, *, renderer_version: str) -> str:
+def render_config_yaml(spec_name: str) -> str:
     """Emit the Hydra render group config selecting ``spec_name``.
 
     Generic render knobs (sample rate, shard sizing, cadences) inherit from
@@ -402,7 +448,6 @@ def render_config_yaml(spec_name: str, *, renderer_version: str) -> str:
     A spec name that is a YAML 1.1 literal (``on``, ``true``) stays a string.
 
     :param spec_name: Registry key; names the param spec and preset.
-    :param renderer_version: Plugin version pin checked before each render.
     :returns: YAML text for ``configs/render/<spec_name>.yaml``.
     :raises ValueError: If the name is reserved for a shared render config.
     """
@@ -415,8 +460,6 @@ def render_config_yaml(spec_name: str, *, renderer_version: str) -> str:
             "  - vst",
             f"  - synth: {spec_name}",
             "  - _self_",
-            "",
-            f"renderer_version: {json.dumps(renderer_version)}",
             "",
         ]
     )

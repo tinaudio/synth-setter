@@ -1215,8 +1215,7 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    synth: SynthSpec  # param spec + plugin + baseline preset; see synth_setter/synth_spec.py
-    renderer_version: str
+    synth: SynthSpec  # Param spec, rendering artifact, preset, and synth_version
     renderer_backend: RendererBackend
     sample_rate: int
     channels: int
@@ -1316,7 +1315,7 @@ class DatasetCard(BaseModel):
     git_sha: str
     is_repo_dirty: bool
     param_spec: str
-    renderer_version: str
+    synth_version: str
     output_format: str      # "lance"
     sample_rate: int
 
@@ -1526,7 +1525,8 @@ src/synth_setter/configs/
   datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
-  render/              # Renderer + plugin / preset / sample rate / batch sizes
+  render/              # Generic renderer settings and per-synth selectors
+    synth/              # Synth identity groups, including synth_version
     surge_simple.yaml
     surge_xt.yaml
   r2/                  # R2 bucket + prefix root
@@ -1540,7 +1540,7 @@ src/synth_setter/configs/
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
-  # render/              # Renderer-specific configs (param_spec_name, renderer_version, samples_per_shard, …)
+  # render/              # Renderer settings plus nested synth identity groups
   #   surge_xt.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml

@@ -3,3 +3,4 @@ name: faust_church_organ
 param_spec_name: faust_church_organ
 plugin_path: faust
 plugin_state_path: ""
+synth_version: "0.8.3"

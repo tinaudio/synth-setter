@@ -17,6 +17,7 @@ from synth_setter.pipeline.schemas.spec import (
     RenderConfig,
 )
 from synth_setter.pipeline.spec_io import read_spec_text
+from synth_setter.synth_spec import SynthSpec
 
 # Required keys are derived from the model so adding a field to ``DatasetSpec``
 # (including computed_fields, which serialize on dump) automatically tightens
@@ -25,28 +26,25 @@ _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
 )
 _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset({"audio_dtype", "mel_spec_dtype"})
-# ``synth`` is checked shape-aware below instead of by presence: specs written before
-# identity was nested carry the flat keys, and ``workflow_dispatch`` accepts any
-# archived spec URI. Exempting it outright would make identity optional in both shapes.
+# ``synth`` is checked shape-aware below so its required version is validated too.
 _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
     sorted(
         set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS - {"synth"}
     )
 )
-_LEGACY_IDENTITY_KEYS = frozenset({"param_spec_name", "plugin_path", "plugin_state_path"})
+_REQUIRED_SYNTH_FIELDS: tuple[str, ...] = tuple(sorted(SynthSpec.model_fields))
 
 
 def _render_param_spec_name(render: dict[str, Any]) -> str | None:
-    """Read the param-spec name from either the nested or the legacy flat shape.
+    """Read the param-spec name from canonical nested synth identity.
 
     :param render: Raw ``render`` mapping from a spec dict.
     :returns: The declared param-spec name, or ``None`` when identity is absent.
     """
     synth = render.get("synth")
-    if isinstance(synth, dict):
-        name = synth.get("param_spec_name")
-        return None if name is None else str(name)
-    name = render.get("param_spec_name")
+    if not isinstance(synth, dict):
+        return None
+    name = synth.get("param_spec_name")
     return None if name is None else str(name)
 
 
@@ -70,7 +68,7 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
 
     Returns a list of error strings (empty means valid).
     Checks: required fields present, git_sha is 40-char hex,
-    renderer_version non-empty, shards non-empty.
+    synth_version non-empty, shards non-empty.
     """
     errors: list[str] = []
 
@@ -86,8 +84,18 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
     if missing_render:
         errors.append(f"missing required render fields: {missing_render}")
 
-    if "synth" not in render and not _LEGACY_IDENTITY_KEYS <= render.keys():
-        errors.append("render: missing synth identity (no 'synth' and no legacy flat keys)")
+    synth = render.get("synth")
+    if not isinstance(synth, dict):
+        errors.append("render.synth must be a mapping")
+    else:
+        missing_synth = [field for field in _REQUIRED_SYNTH_FIELDS if field not in synth]
+        if missing_synth:
+            errors.append(f"missing required synth fields: {missing_synth}")
+        synth_version = synth.get("synth_version")
+        if "synth_version" in synth and (
+            not isinstance(synth_version, str) or not synth_version.strip()
+        ):
+            errors.append("render.synth.synth_version must be a non-empty string")
 
     cv = spec.get("git_sha", "")
     if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
@@ -98,9 +106,6 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
         errors.append(
             f"output_format {raw_format!r} is not one of {sorted(f.value for f in OutputFormat)}"
         )
-
-    if not render.get("renderer_version"):
-        errors.append("render.renderer_version is empty")
 
     if not spec.get("shards"):
         errors.append("shards is empty")
@@ -182,7 +187,8 @@ def main() -> None:
         render = spec.get("render", {})
         sys.stdout.write("All structural checks passed:\n")
         sys.stdout.write(f"  git_sha:          {spec['git_sha']}\n")
-        sys.stdout.write(f"  renderer_version: {render.get('renderer_version')}\n")
+        synth = render.get("synth", {})
+        sys.stdout.write(f"  synth_version:    {synth.get('synth_version')}\n")
         sys.stdout.write(f"  num_params:       {spec['num_params']}\n")
         sys.stdout.write(f"  num_shards:       {len(spec['shards'])}\n")
 

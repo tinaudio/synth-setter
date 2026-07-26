@@ -135,7 +135,7 @@ def _run_cli(
     """Subprocess-invoke ``synth-setter-generate-dataset`` with offline wandb.
 
     Pins the smoke-shard experiment, the system Surge VST3 (so the
-    ``renderer_version`` probe and the actual render-subprocess have a real
+    runtime-version probe and the actual render subprocess have a real
     plugin to load), a unique ``r2.prefix``, and the Hydra run dir (which
     flows into the wandb logger's ``save_dir`` via
     ``${paths.output_dir}``). ``WANDB_MODE=offline`` keeps the run hermetic.

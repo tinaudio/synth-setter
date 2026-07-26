@@ -100,7 +100,7 @@ def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by generate) returns a deterministic version
 # without loading any .so via pedalboard. Version inside is "1.0.0-test" — the
-# specs built in this file pin renderer_version to the same string so the
+# specs built in this file pin synth_version to the same string so the
 # constraint check passes.
 TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPlugin.vst3"
 TEST_PLUGIN_VERSION = "1.0.0-test"
@@ -152,10 +152,13 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
         },
         "render": {
-            "plugin_path": str(TEST_PLUGIN_VST3),
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": TEST_PLUGIN_VERSION,
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": str(TEST_PLUGIN_VST3),
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": TEST_PLUGIN_VERSION,
+            },
             "sample_rate": 8000,
             "channels": 2,
             "velocity": 100,
@@ -1117,7 +1120,7 @@ class TestRun(RenderSeamFixtures):
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
-    def test_renderer_version_mismatch_raises_before_uploads(
+    def test_synth_version_mismatch_raises_before_uploads(
         self,
         patched_subprocess: MagicMock,
         fake_r2_remote: Path,
@@ -1125,17 +1128,18 @@ class TestRun(RenderSeamFixtures):
     ) -> None:
         """Fail before any rclone/subprocess work when plugin version disagrees with spec.
 
-        This prevents emitting a shard tagged with the wrong renderer_version.
+        This prevents emitting a shard tagged with the wrong synth_version.
 
         :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
         :param fake_r2_remote: Local-typed R2 remote — asserted empty.
         :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
         """
         kwargs = _base_spec_kwargs(tmp_path)
-        kwargs["render"] = {**kwargs["render"], "renderer_version": "999.999.999"}  # type: ignore[dict-item]
+        render = kwargs["render"]
+        render["synth"] = {**render["synth"], "synth_version": "999.999.999"}  # type: ignore[index]
         spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
-        with pytest.raises(RuntimeError, match="Renderer version mismatch"):
+        with pytest.raises(RuntimeError, match="Synth version mismatch"):
             generate(spec, tmp_path, [])
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
@@ -2882,7 +2886,7 @@ class TestMainDispatchBranches:
         assert "+render.synth.param_spec_name=surge_xt" in called_argv
         assert "+render.synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "+render.synth.plugin_path=plugins/Surge XT.vst3" in called_argv
-        assert f"+render.renderer_version={render.renderer_version}" in called_argv
+        assert f"+render.synth.synth_version={render.synth.synth_version}" in called_argv
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
         assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv

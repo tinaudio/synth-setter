@@ -75,10 +75,13 @@ def staged_lance_spec() -> Iterator[DatasetSpec]:
         "base_seed": 42,
         "r2": {"bucket": bucket, "prefix": prefix},
         "render": {
-            "plugin_path": "/fake/Plugin.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.0.0-test",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "/fake/Plugin.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.0.0-test",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

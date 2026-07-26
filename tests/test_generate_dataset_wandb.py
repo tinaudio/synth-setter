@@ -132,7 +132,7 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 
@@ -196,7 +196,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 
@@ -268,7 +268,7 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
     spec = _build_spec(dataset_spec_factory)
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
@@ -340,7 +340,7 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 

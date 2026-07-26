@@ -209,7 +209,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.render.audio_dtype = "float32"
         cfg_dataset.render.mel_spec_dtype = "float16"
         # Pin r2.prefix so the spec built here for assertions and the one
@@ -331,7 +331,7 @@ def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
         cfg_dataset.output_format = "lance"
         cfg_dataset.use_shard_queue = True
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
         # Disable the default wandb logger: generate() would call wandb.init() and block.
         cfg_dataset.logger = None
@@ -380,7 +380,7 @@ def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
         cfg_dataset.output_format = "lance"
         cfg_dataset.use_shard_queue = True
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/crash-run/"
         cfg_dataset.logger = None
 
@@ -457,7 +457,7 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/invalid-run/"
         cfg_dataset.logger = None
     spec = spec_from_cfg(cfg_dataset)
@@ -623,7 +623,7 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/seed-run/"
         cfg_dataset.logger = None
 
@@ -663,7 +663,7 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     with open_dict(cfg_dataset_dawdreamer):
         cfg_dataset_dawdreamer.output_format = "lance"
         cfg_dataset_dawdreamer.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset_dawdreamer.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset_dawdreamer.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-run/"
         cfg_dataset_dawdreamer.logger = None
 
@@ -1490,7 +1490,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             eval_cfg = OmegaConf.load(config_path)
             assert eval_cfg.render.synth.param_spec_name == "surge_simple"
             assert eval_cfg.render.synth.plugin_state_path == "presets/surge-simple.vstpreset"
-            assert eval_cfg.render.renderer_version == "1.3.4"
+            assert eval_cfg.render.synth.synth_version == "1.3.4"
             assert eval_cfg.render.renderer_backend == "pedalboard"
             assert eval_cfg.render.plugin_reload_cadence == "render"
             assert eval_cfg.render.gui_toggle_cadence == "once"

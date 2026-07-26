@@ -56,7 +56,7 @@ def make_dataset_render_cfg(
     param_spec_name: str,
     plugin_path: str,
     plugin_state_path: str,
-    renderer_version: str,
+    synth_version: str,
     samples_per_shard: int,
 ) -> RenderConfig:
     """Build the render config the captured-patch dataset is written with.
@@ -67,7 +67,7 @@ def make_dataset_render_cfg(
     :param param_spec_name: Registry key naming the spec the patches encode against.
     :param plugin_path: Plugin bundle the patches were auditioned on.
     :param plugin_state_path: Baseline preset applied before each patch.
-    :param renderer_version: Version read off the plugin bundle.
+    :param synth_version: Version read off the plugin bundle.
     :param samples_per_shard: Number of captured patches, written as one shard.
     :returns: Render config for :func:`make_lance_dataset`.
     """
@@ -77,8 +77,8 @@ def make_dataset_render_cfg(
             param_spec_name=ParamSpecName(param_spec_name),
             plugin_path=plugin_path,
             plugin_state_path=plugin_state_path,
+            synth_version=synth_version,
         ),
-        renderer_version=renderer_version,
         sample_rate=SAMPLE_RATE,
         channels=CHANNELS,
         velocity=MAKE_DATASET_VELOCITY,
@@ -1409,7 +1409,7 @@ def main(
         param_spec_name=param_spec_name,
         plugin_path=plugin_path,
         plugin_state_path=plugin_state_path,
-        renderer_version=extract_renderer_version(Path(plugin_path)),
+        synth_version=extract_renderer_version(Path(plugin_path)),
         samples_per_shard=len(synth_patches),
     )
     make_lance_dataset(

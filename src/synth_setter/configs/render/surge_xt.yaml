@@ -2,5 +2,3 @@ defaults:
   - vst
   - synth: surge_xt
   - _self_
-
-renderer_version: "1.3.4"

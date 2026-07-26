@@ -113,7 +113,7 @@ stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-pr
 # src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
-plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
+plugin_path: plugins/Surge XT.vst3    # render.synth.synth_version pins the artifact; worker verifies
 output_format: lance
 sample_rate: 44100
 shard_size: 10000
@@ -146,9 +146,8 @@ python -m pipeline generate \
   --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
-**Renderer version:** Pinned at materialization to the `SURGE_XT_RENDERER_VERSION`
-constant in `pipeline/schemas/spec.py` (kept in lockstep with the `dev-snapshot`
-image's `SURGE_GIT_REF`). The launcher path stays interpreter-only; the worker
+**Synth version:** Authored in the selected `render/synth` Hydra group as
+`render.synth.synth_version`. The launcher path stays interpreter-only; the worker
 calls `extract_renderer_version` against the actual plugin bundle (`moduleinfo.json`
 on Linux, `Info.plist` → `CFBundleShortVersionString` on macOS, pedalboard fallback)
 and refuses to render on mismatch.
@@ -264,7 +263,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `output_format` defaults to `"lance"` if missing from config.
 - `DatasetPipelineSpec` (frozen, strict): `run_id`,
   `r2` (nested `R2Location`), `created_at`, `code_version`, `is_repo_dirty`,
-  `param_spec`, `renderer_version`, `output_format` (`"lance"`), `sample_rate`,
+  `param_spec`, `synth_version`, `output_format` (`"lance"`), `sample_rate`,
   `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `plugin_state_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
   `samples_per_render_batch`, `shards` (tuple of `ShardSpec`).
@@ -285,7 +284,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `WorkerReport`: includes `cpu_arch`, `os_info`, `attempt_uuid`, `results: list[ShardResult]`.
 - `ValidationSummary`: `valid: int`, `quarantined: int`, `quarantined_shards: list[str]`.
 - `DatasetCard`: `schema_version`, `dataset_config_id`, `dataset_wandb_run_id`, `finalized_at`, `code_version`, `is_repo_dirty`,
-  `param_spec`, `renderer_version`, `output_format`, `sample_rate`, `total_samples`,
+  `param_spec`, `synth_version`, `output_format`, `sample_rate`, `total_samples`,
   `splits` (sample counts, not shard counts), `stats`, `validation_summary`,
   `worker_architectures` (list of unique CPU archs), `shard_manifest: list[dict]`
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
@@ -294,9 +293,9 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `{name}-{total_train_samples}-{shard_size}`; CI smoke and partitioner-exercise configs use
   role-descriptive names (see design doc §14.6).
 - `materialize_spec(config: DatasetConfig, config_id: DatasetConfigId) -> DatasetPipelineSpec`.
-  Derives all runtime state internally (git SHA, repo dirty status, pinned renderer version
-  from `SURGE_XT_RENDERER_VERSION`, UTC timestamp). The launcher path stays interpreter-only;
-  the worker re-derives the renderer version via `extract_renderer_version` and refuses on
+  Derives runtime state internally (git SHA, repo dirty status, composed synth version,
+  UTC timestamp). The launcher path stays interpreter-only;
+  the worker re-derives the synth artifact version via `extract_renderer_version` and refuses on
   mismatch. No optional overrides — tests mock I/O helpers instead.
 
 **Design doc schema gaps to fix alongside this task:**
@@ -413,7 +412,7 @@ ______________________________________________________________________
 - Pure functions (functional core)
 
 **`_make_test_spec` helper** (defined in `tests/pipeline/conftest.py`):
-Returns a valid `DatasetPipelineSpec` with sensible defaults: `renderer_version="test"`,
+Returns a valid `DatasetPipelineSpec` with sensible defaults: `synth_version="test"`,
 `code_version="abc1234"`, `run_id` derived from params, `output_format="lance"`.
 Accepts `num_shards`, `shard_size`, `output_format` overrides.
 
@@ -639,10 +638,10 @@ Click group from `cli.py`).
 - Auth validation: check R2 connectivity + RunPod API key before launching.
   On failure: clear error message, exit 1, no workers launched.
 - Plugin-path validation runs on the worker, not the launcher. The launcher path is
-  interpreter-only (no VST load), so it pins `renderer_version` to
-  `SURGE_XT_RENDERER_VERSION` and the worker validates the actual plugin bundle
+  interpreter-only (no VST load), so it composes `render.synth.synth_version`
+  from the selected synth group and the worker validates the actual plugin bundle
   via `extract_renderer_version` before rendering.
-- First run: config → validate → pin `renderer_version` constant → materialize spec →
+- First run: config → validate → compose `synth_version` → materialize spec →
   upload frozen spec to `metadata/input_spec.json` + source config to
   `metadata/config.yaml` (provenance copy) → if `is_repo_dirty`, upload
   `git diff` to `metadata/run_diff.patch` → reconcile → partition → submit → exit.
@@ -940,9 +939,9 @@ no workers launched.
 **GP4. Plugin-path validation belongs on the worker, not the launcher.**
 The launcher path is interpreter-only (the SkyPilot launcher in
 `src/synth_setter/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
-so `materialize_spec` neither extracts `renderer_version` from the plugin bundle nor
-enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
-`SURGE_XT_RENDERER_VERSION` at materialization; the worker calls
+so `materialize_spec` neither extracts `synth_version` from the plugin bundle nor
+enforces a `plugin_path.exists()` precondition. Compose `render.synth.synth_version`
+from the selected synth group; the worker calls
 `extract_renderer_version` against the actual plugin before rendering and raises a clear
 mismatch error if the running plugin disagrees with the spec. This pushes plugin-bundle
 errors to the worker, where the X stack and pedalboard fallback are available, instead

@@ -40,14 +40,14 @@ from tests.helpers.logger_assertions import assert_no_logger_exceptions  # noqa:
 
 _PLUGIN_PATH = "plugins/fake.vst3"  # never touched on disk — load_plugin is patched
 _PRESET_PATH = "presets/fake.vstpreset"
-_RENDERER_VERSION = "fake-0.0.0"
+_SYNTH_VERSION = "fake-0.0.0"
 
 
 def _fake_render_cfg(**overrides: object) -> RenderConfig:
     """Build a ``RenderConfig`` pointing at the fake plugin paths.
 
-    Wraps the canonical ``_render_cfg`` and rebinds ``plugin_path`` / ``plugin_state_path`` /
-    ``renderer_version`` to the never-touched fake-plugin strings so the writer runs
+    Wraps the canonical ``_render_cfg`` and rebinds the nested synth identity
+    to never-touched fake-plugin strings so the writer runs
     entirely under ``install_fake_plugin``.
 
     :param \\*\\*overrides: Passed through to ``_render_cfg`` (e.g. ``num_samples``,
@@ -58,9 +58,13 @@ def _fake_render_cfg(**overrides: object) -> RenderConfig:
     cadence = overrides.pop("param_sample_cadence", None)
     cfg = _render_cfg(num_samples=num_samples, **overrides)  # type: ignore[arg-type]
     update: dict[str, object] = {
-        "plugin_path": _PLUGIN_PATH,
-        "plugin_state_path": _PRESET_PATH,
-        "renderer_version": _RENDERER_VERSION,
+        "synth": cfg.synth.model_copy(
+            update={
+                "plugin_path": _PLUGIN_PATH,
+                "plugin_state_path": _PRESET_PATH,
+                "synth_version": _SYNTH_VERSION,
+            }
+        )
     }
     if cadence is not None:
         update["param_sample_cadence"] = cadence
@@ -111,11 +115,16 @@ def test_make_lance_dataset_always_on_writes_valid_shard_under_fake_plugin(
         samples_per_render_batch=2,
         plugin_reload_cadence="once",
         gui_toggle_cadence="always_on",
-    ).model_copy(
+    )
+    render_cfg = render_cfg.model_copy(
         update={
-            "plugin_path": _PLUGIN_PATH,
-            "plugin_state_path": _PRESET_PATH,
-            "renderer_version": _RENDERER_VERSION,
+            "synth": render_cfg.synth.model_copy(
+                update={
+                    "plugin_path": _PLUGIN_PATH,
+                    "plugin_state_path": _PRESET_PATH,
+                    "synth_version": _SYNTH_VERSION,
+                }
+            )
         }
     )
     out = tmp_path / "shard-000000.lance"

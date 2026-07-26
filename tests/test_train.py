@@ -40,10 +40,11 @@ from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests._vst import PLUGIN_PATH
+from tests._vst import PLUGIN_PATH, TEST_SYNTH_VERSION
 from tests.conftest import (
     _SURGE_FIXTURE_CHANNELS,
     _SURGE_FIXTURE_DURATION_SECONDS,
+    _SURGE_FIXTURE_MIN_LOUDNESS,
     _SURGE_FIXTURE_SAMPLE_RATE,
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
@@ -559,8 +560,13 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
     with open_dict(cfg):
         cfg.training.val_audio_probe = True
         cfg.render = {
-            "param_spec_name": "surge_xt",
-            "plugin_state_path": "presets/surge-base.vstpreset",
+            "synth": {
+                "name": "surge_xt",
+                "param_spec_name": "surge_xt",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            }
         }
 
     HydraConfig().set_config(cfg)
@@ -1380,15 +1386,25 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     probe_samples = 2
     with open_dict(cfg_surge_real_train):
         cfg_surge_real_train.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_path": str(
-                Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else workspace / PLUGIN_PATH
-            ),
-            "plugin_state_path": str(workspace / plugin_state_paths[param_spec_name]),
+            "synth": {
+                "name": param_spec_name,
+                "param_spec_name": param_spec_name,
+                "plugin_path": str(
+                    Path(PLUGIN_PATH)
+                    if Path(PLUGIN_PATH).is_absolute()
+                    else workspace / PLUGIN_PATH
+                ),
+                "plugin_state_path": str(workspace / plugin_state_paths[param_spec_name]),
+                "synth_version": TEST_SYNTH_VERSION,
+            },
             "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
             "channels": _SURGE_FIXTURE_CHANNELS,
             "velocity": 100,
             "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
+            "min_loudness": _SURGE_FIXTURE_MIN_LOUDNESS,
+            "samples_per_render_batch": probe_samples,
+            "samples_per_shard": probe_samples,
+            "gui_toggle_cadence": "never",
         }
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.

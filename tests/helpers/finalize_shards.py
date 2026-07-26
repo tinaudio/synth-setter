@@ -31,11 +31,14 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from tests.helpers.lance_fixtures import with_preview_columns
 
 # The shortest MP3-supported rate and loudness-compatible duration keep shards small.
-_LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
-    "plugin_path": "/fake/Plugin.vst3",
-    "plugin_state_path": "presets/surge-base.vstpreset",
-    "param_spec_name": "surge_simple",
-    "renderer_version": "1.0.0-test",
+_LANCE_SMOKE_RENDER: dict[str, Any] = {
+    "synth": {
+        "name": "surge_simple",
+        "param_spec_name": "surge_simple",
+        "plugin_path": "/fake/Plugin.vst3",
+        "plugin_state_path": "presets/surge-base.vstpreset",
+        "synth_version": "1.0.0-test",
+    },
     "sample_rate": 8000,
     "channels": 2,
     "velocity": 100,
@@ -104,10 +107,13 @@ def build_multishard_lance_smoke_spec(
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
         "render": {
-            "plugin_path": "/fake/Plugin.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.0.0-test",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "/fake/Plugin.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.0.0-test",
+            },
             "sample_rate": 8000,
             "channels": 2,
             "velocity": 100,

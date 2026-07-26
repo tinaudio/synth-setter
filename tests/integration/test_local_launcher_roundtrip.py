@@ -148,24 +148,13 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
-    # ``main()`` reads sys.argv to build Hydra overrides. Pin:
-    #   - experiment (drives shard count + render config)
-    #   - render.plugin_path → TestPlugin.vst3 so the renderer_version probe
-    #     resolves "1.0.0-test" without loading a real .so
-    #   - render.renderer_version → same value so the constraint check passes
-    #   - r2.prefix → the unique ci_r2_prefix so cleanup can purge a tight scope
-    #     (uses ``+`` because ``prefix`` is not in ``configs/r2/default.yaml``;
-    #     ``DatasetSpec``'s ``_normalize_r2_input`` then promotes the nested
-    #     ``r2`` dict into the ``R2Location`` field, prefix included).
-    #   - created_at → fixed timestamp for determinism (``+`` because the key
-    #     is not in ``configs/dataset.yaml``; matches how the production
-    #     launcher pins it on the worker side in ``_build_worker_cmd``).
+    # Pin deterministic, isolated Hydra inputs; ``+`` adds keys absent from defaults.
     fixed_created_at = datetime(2026, 5, 19, 0, 0, 0, tzinfo=UTC).isoformat()
     argv = [
         "synth-setter-generate-dataset",
         f"experiment={experiment}",
         f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
-        f"render.renderer_version={TEST_PLUGIN_VERSION}",
+        f"render.synth.synth_version={TEST_PLUGIN_VERSION}",
         f"+r2.prefix={ci_r2_prefix}",
         f"+created_at={fixed_created_at}",
     ]
@@ -260,7 +249,7 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     overrides = [
         "experiment=generate_dataset/smoke-shard",
         f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
-        f"render.renderer_version={TEST_PLUGIN_VERSION}",
+        f"render.synth.synth_version={TEST_PLUGIN_VERSION}",
         f"+r2.prefix={ci_r2_prefix}",
         f"+created_at={fixed_created_at}",
         f"hydra.run.dir={hydra_run_dir}",

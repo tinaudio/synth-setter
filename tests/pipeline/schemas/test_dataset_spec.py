@@ -25,12 +25,21 @@ FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 
 
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
+    synth_name = {
+        "faust": "faust_bright_organ",
+        "torchsynth": "torchsynth_simple",
+    }.get(plugin_path, "surge_simple")
+    synth_version = {"faust": "0.8.3", "torchsynth": "1.0.2"}.get(plugin_path, "1.3.4")
     return {
-        "plugin_path": plugin_path,
-        # The in-process backend has no preset file, and SynthSpec rejects one.
-        "plugin_state_path": "" if plugin_path == "torchsynth" else "presets/surge-base.vstpreset",
-        "param_spec_name": "surge_simple",
-        "renderer_version": "1.3.4",
+        "synth": {
+            "name": synth_name,
+            "param_spec_name": synth_name,
+            "plugin_path": plugin_path,
+            "plugin_state_path": (
+                "presets/surge-base.vstpreset" if synth_name == "surge_simple" else ""
+            ),
+            "synth_version": synth_version,
+        },
         "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
@@ -139,7 +148,10 @@ class TestRenderConfig:
 
     def test_param_spec_name_preserves_nonblank_boundary_whitespace(self) -> None:
         """Nonblank registry keys retain surrounding whitespace."""
-        cfg = RenderConfig(**(_valid_render_kwargs() | {"param_spec_name": "  surge_simple  "}))
+        kwargs = _valid_render_kwargs()
+        kwargs["synth"] = {**kwargs["synth"], "param_spec_name": "  surge_simple  "}
+
+        cfg = RenderConfig(**kwargs)
 
         assert cfg.param_spec_name == "  surge_simple  "
 
@@ -152,8 +164,6 @@ class TestRenderConfig:
             ("signal_duration_seconds", 0.0, "signal_duration_seconds must be positive"),
             ("samples_per_render_batch", 0, "samples_per_render_batch must be positive"),
             ("samples_per_shard", 0, "samples_per_shard must be positive"),
-            ("param_spec_name", "   ", "param spec name must not be blank"),
-            ("renderer_version", "", "renderer_version must not be blank"),
         ],
     )
     def test_render_config_range_validators(self, field: str, bad_value: Any, match: str) -> None:
@@ -256,8 +266,6 @@ class TestRenderConfig:
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(plugin_path="faust"),
-                "plugin_state_path": "",
-                "param_spec_name": "faust_bright_organ",
                 "renderer_backend": "dawdreamer_faust",
                 "gui_toggle_cadence": "never",
             }
@@ -287,12 +295,19 @@ class TestRenderConfig:
         """
         values = {
             **_valid_render_kwargs(plugin_path="faust"),
-            "plugin_state_path": "",
-            "param_spec_name": "faust_bright_organ",
             "renderer_backend": "dawdreamer_faust",
             "gui_toggle_cadence": "never",
-            **overrides,
         }
+        synth_overrides = {
+            key: value
+            for key, value in overrides.items()
+            if key in {"plugin_path", "plugin_state_path"}
+        }
+        values.update(
+            {key: value for key, value in overrides.items() if key not in synth_overrides}
+        )
+        if synth_overrides:
+            values["synth"] = {**values["synth"], **synth_overrides}
 
         with pytest.raises(ValidationError, match=message):
             RenderConfig(**values)
@@ -930,7 +945,8 @@ class TestDatasetSpecComputedFields:
         name = ParamSpecName("registered_at_runtime")
         monkeypatch.setitem(param_spec_registry._param_specs, name, param_specs["surge_simple"])
         kwargs = _valid_spec_kwargs()
-        kwargs["render"] = {**kwargs["render"], "param_spec_name": str(name)}
+        render = kwargs["render"]
+        render["synth"] = {**render["synth"], "param_spec_name": str(name)}
 
         spec = DatasetSpec(**kwargs)
 
@@ -940,7 +956,8 @@ class TestDatasetSpecComputedFields:
     def test_unknown_param_spec_name_raises_at_compute(self, patch_runtime_io: None) -> None:
         """An unknown ``param_spec_name`` raises only when ``num_params`` is materialized."""
         kwargs = _valid_spec_kwargs()
-        kwargs["render"] = {**kwargs["render"], "param_spec_name": "nonexistent_synth"}
+        render = kwargs["render"]
+        render["synth"] = {**render["synth"], "param_spec_name": "nonexistent_synth"}
         spec = DatasetSpec(**kwargs)
         with pytest.raises(KeyError):
             _ = spec.num_params
@@ -1191,8 +1208,10 @@ class TestSpecConstructionStaysPedalboardFree:
             "    task_name='ci', output_format='lance', train_val_test_sizes=[1, 0, 0],\n"
             "    base_seed=0, r2={'bucket': 'b'},\n"
             "    render={\n"
-            "        'plugin_path': '/tmp/x.vst3', 'plugin_state_path': '/tmp/x.vstpreset',\n"
-            "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
+            "        'synth': {'name': 'surge_simple', 'param_spec_name': 'surge_simple',\n"
+            "                  'plugin_path': '/tmp/x.vst3',\n"
+            "                  'plugin_state_path': '/tmp/x.vstpreset',\n"
+            "                  'synth_version': 'v1'},\n"
             "        'sample_rate': 44100, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"

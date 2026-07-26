@@ -306,32 +306,32 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
 
 def test_render_config_yaml_selects_the_synth_group_over_vst_defaults() -> None:
     """The emitted config inherits generic VST knobs and selects its synth group."""
-    text = render_config_yaml("fake_synth", renderer_version="9.9.9")
+    cfg = yaml.safe_load(render_config_yaml("fake_synth"))
 
-    cfg = yaml.safe_load(text)
-    assert cfg["defaults"] == ["vst", {"synth": "fake_synth"}, "_self_"]
-    assert cfg["renderer_version"] == "9.9.9"
-
-
-def test_render_config_yaml_states_no_identity_of_its_own() -> None:
-    """Identity lives in the synth group, so the render config cannot restate it."""
-    cfg = yaml.safe_load(render_config_yaml("fake_synth", renderer_version="1.0"))
-
-    assert not {"plugin_path", "plugin_state_path", "param_spec_name"} & cfg.keys()
+    assert cfg == {"defaults": ["vst", {"synth": "fake_synth"}, "_self_"]}
 
 
 def test_synth_group_yaml_quotes_arbitrary_plugin_path() -> None:
     """A plugin path with YAML-hostile characters round-trips through safe_load."""
     hostile = '/tmp/odd: "name" #1.vst3'  # noqa: S108 — literal fixture path, never opened
 
-    text = synth_group_yaml("fake_synth", plugin_path=hostile)
+    text = synth_group_yaml("fake_synth", plugin_path=hostile, synth_version="9.9.9")
 
     assert yaml.safe_load(text)["plugin_path"] == hostile
 
 
+def test_synth_group_yaml_owns_the_synth_version() -> None:
+    """The generated identity group owns the artifact version pin."""
+    text = synth_group_yaml(
+        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
+
+    assert yaml.safe_load(text)["synth_version"] == "9.9.9"
+
+
 def test_synth_group_yaml_preserves_reserved_word_spec_name_as_string() -> None:
     """A spec name that is a YAML 1.1 boolean literal stays a string after parsing."""
-    text = synth_group_yaml("on", plugin_path="plugins/fake.vst3")
+    text = synth_group_yaml("on", plugin_path="plugins/fake.vst3", synth_version="1.0")
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
 
@@ -343,7 +343,7 @@ def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: s
     :param spec_name: Exact or case-variant reserved group name.
     """
     with pytest.raises(ValueError, match="reserved for a render config"):
-        render_config_yaml(spec_name, renderer_version="1.0")
+        render_config_yaml(spec_name)
 
 
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
@@ -460,8 +460,13 @@ _SYNTH_SPEC_SOURCE = '''"""Doc."""
 
 from types import MappingProxyType
 
-_synth_rows: dict[str, tuple[str, str, str]] = {
-    "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset"),
+_synth_rows: dict[str, tuple[str, str, str, str]] = {
+    "surge_xt": (
+        "surge_xt",
+        "plugins/Surge XT.vst3",
+        "presets/surge-base.vstpreset",
+        "1.3.4",
+    ),
 }
 
 SYNTHS = MappingProxyType({})
@@ -469,57 +474,127 @@ SYNTHS = MappingProxyType({})
 
 
 def test_synths_with_spec_adds_one_row_for_a_new_synth() -> None:
-    """A newly registered synth gains an identity row in the table."""
-    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+    """A newly registered synth gains a versioned identity row in the table."""
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
 
-    assert '    "fake_synth": ("fake_synth", "plugins/fake.vst3",' in result
+    assert '    "fake_synth": (' in result
+    assert '        "plugins/fake.vst3",' in result
+    assert '        "9.9.9",' in result
 
 
-def test_synths_with_spec_row_stays_on_one_line() -> None:
-    """Rows are single-line so the line-anchor transform survives ruff-format."""
-    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+def test_synths_with_spec_row_is_formatter_stable() -> None:
+    """Generated rows retain their structural anchor after ruff-format."""
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
 
-    row = next(line for line in result.splitlines() if '"fake_synth"' in line)
+    formatted = subprocess.run(
+        [sys.executable, "-m", "ruff", "format", "--stdin-filename", "synth_spec.py", "-"],
+        input=result,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
 
-    assert row.rstrip().endswith(",")
-    assert len(row) <= 99
+    assert formatted == result
 
 
 def test_synths_with_spec_records_the_conventional_preset_path() -> None:
     """The row's preset matches what registration writes to disk."""
-    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
 
     assert preset_repo_path("fake_synth") in result
 
 
 def test_synths_with_spec_reapplied_identically_is_a_noop() -> None:
     """``--force`` re-runs converge instead of duplicating or raising."""
-    once = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+    once = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
 
-    twice = synths_with_spec(once, "fake_synth", plugin_path="plugins/fake.vst3")
+    twice = synths_with_spec(
+        once, "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
 
     assert twice == once
 
 
 def test_synths_with_spec_conflicting_wiring_raises() -> None:
-    """Re-registering a name against a different plugin is refused, not silently kept."""
-    once = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+    """Re-registering a name against different wiring is refused."""
+    once = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
 
     with pytest.raises(ValueError, match="already registered"):
-        synths_with_spec(once, "fake_synth", plugin_path="plugins/other.vst3")
+        synths_with_spec(
+            once,
+            "fake_synth",
+            plugin_path="plugins/other.vst3",
+            synth_version="9.9.9",
+        )
+
+
+def test_synths_with_spec_nonliteral_existing_row_reports_conflict() -> None:
+    """Dynamic existing wiring receives the same actionable conflict error."""
+    source = _SYNTH_SPEC_SOURCE.replace(
+        '''    "surge_xt": (
+        "surge_xt",
+        "plugins/Surge XT.vst3",
+        "presets/surge-base.vstpreset",
+        "1.3.4",
+    ),''',
+        '    "surge_xt": existing_wiring,',
+    )
+
+    with pytest.raises(ValueError, match="already registered"):
+        synths_with_spec(
+            source,
+            "surge_xt",
+            plugin_path="plugins/Surge XT.vst3",
+            synth_version="1.3.4",
+        )
 
 
 def test_synths_with_spec_without_the_table_anchor_raises() -> None:
     """A table whose dict anchor is gone fails loudly rather than silently no-op."""
     with pytest.raises(ValueError, match="_synth_rows"):
-        synths_with_spec('"""Doc."""\n', "fake_synth", plugin_path="plugins/fake.vst3")
+        synths_with_spec(
+            '"""Doc."""\n',
+            "fake_synth",
+            plugin_path="plugins/fake.vst3",
+            synth_version="9.9.9",
+        )
 
 
 def test_synth_group_yaml_states_the_full_identity() -> None:
     """The generated group carries every field ``SynthSpec`` requires."""
-    yaml_text = synth_group_yaml("fake_synth", plugin_path="plugins/fake.vst3")
+    yaml_text = synth_group_yaml(
+        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
 
-    assert yaml.safe_load(yaml_text)["name"] == "fake_synth"
-    assert yaml.safe_load(yaml_text)["param_spec_name"] == "fake_synth"
-    assert '"plugins/fake.vst3"' in yaml_text
-    assert preset_repo_path("fake_synth") in yaml_text
+    assert yaml.safe_load(yaml_text) == {
+        "name": "fake_synth",
+        "param_spec_name": "fake_synth",
+        "plugin_path": "plugins/fake.vst3",
+        "plugin_state_path": preset_repo_path("fake_synth"),
+        "synth_version": "9.9.9",
+    }

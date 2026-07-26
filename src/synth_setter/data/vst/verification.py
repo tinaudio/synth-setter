@@ -257,7 +257,7 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         print(json.dumps({{
             "encoded_width": spec.encoded_width,
             "plugin_path": render.plugin_path,
-            "renderer_version": render.renderer_version,
+            "synth_version": render.synth.synth_version,
         }}))
         """
     )
@@ -280,8 +280,8 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
             f"render plugin_path is absolute and host-specific: {probe_result['plugin_path']!r} "
             "(expected repo-relative 'plugins/<x>.vst3'); not portable across machines"
         )
-    if probe_result["renderer_version"] == "unknown":
-        report.warn("renderer_version is 'unknown' — generate cross-checks this; pin it by hand")
+    if probe_result["synth_version"] == "unknown":
+        report.warn("synth_version is 'unknown' — generate cross-checks this; pin it by hand")
 
 
 def check_classifier_against_plugin(

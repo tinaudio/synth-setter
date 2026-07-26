@@ -21,10 +21,13 @@ def _render_config(**overrides: object) -> RenderConfig:
     :returns: Validated renderer configuration.
     """
     values: dict[str, object] = {
-        "plugin_path": "plugins/Surge XT.vst3",
-        "plugin_state_path": "presets/surge-simple.vstpreset",
-        "param_spec_name": "surge_simple",
-        "renderer_version": "1.3.4",
+        "synth": {
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+        },
         "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
@@ -42,10 +45,13 @@ def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
     """The public factory constructs TorchSynth from the shared render config."""
     config = _render_config(
         renderer_backend="torchsynth",
-        plugin_path="torchsynth",
-        plugin_state_path="",
-        param_spec_name="torchsynth_adsr",
-        renderer_version="1.0.2",
+        synth={
+            "name": "torchsynth_adsr",
+            "param_spec_name": "torchsynth_adsr",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "",
+            "synth_version": "1.0.2",
+        },
         sample_rate=22050,
         signal_duration_seconds=0.5,
     )

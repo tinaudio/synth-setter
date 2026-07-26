@@ -26,7 +26,7 @@ from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_RENDERER_VERSION,
+    TEST_SYNTH_VERSION,
     TEST_SYNTH,
 )
 from tests.data.vst.test_generate_vst_dataset import (
@@ -59,7 +59,7 @@ def _dawdreamer_experiment_config() -> RenderConfig:
                 f"render.synth.plugin_path={PLUGIN_PATH}",
                 f"render.synth.plugin_state_path={TEST_PRESET_PATH}",
                 f"render.synth.param_spec_name={TEST_PARAM_SPEC_NAME}",
-                f"render.renderer_version={TEST_RENDERER_VERSION}",
+                f"render.synth.synth_version={TEST_SYNTH_VERSION}",
             ],
         )
     config = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
