@@ -30,7 +30,7 @@ def _render_group(group: str) -> tuple[str, str]:
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name=f"render/{group}").render
-    return cfg.plugin_path, cfg.renderer_version
+    return cfg.synth.plugin_path, cfg.renderer_version
 
 
 def test_test_renderer_version_matches_the_selected_synths_render_group() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -102,12 +103,15 @@ def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Pat
             "-m",
             "synth_setter.data.vst.generate_vst_dataset",
             str(shard),
-            "--plugin_path",
-            "torchsynth",
-            "--plugin_state_path",
-            "",
-            "--param_spec_name",
-            "torchsynth_adsr",
+            "--synth",
+            json.dumps(
+                {
+                    "name": "torchsynth_adsr",
+                    "param_spec_name": "torchsynth_adsr",
+                    "plugin_path": "torchsynth",
+                    "plugin_state_path": "",
+                }
+            ),
             "--renderer_version",
             importlib.metadata.version("torchsynth"),
             "--renderer_backend",

@@ -157,7 +157,7 @@ def _run_cli(
     """
     overrides = [
         "experiment=generate_dataset/smoke-shard",
-        f"render.plugin_path={_SURGE_VST3}",
+        f"render.synth.plugin_path={_SURGE_VST3}",
         f"+r2.prefix={r2_prefix}",
         f"hydra.run.dir={hydra_run_dir}",
     ]

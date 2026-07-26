@@ -2302,7 +2302,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -2338,7 +2338,7 @@ class TestMainDispatchBranches:
             [
                 "synth-setter-generate-dataset",
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
-                f"render.plugin_path={TEST_PLUGIN_VST3}",
+                f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             ],
         )
         monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
@@ -2373,7 +2373,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -2407,7 +2407,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "use_shard_queue=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -2451,7 +2451,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             "use_shard_queue=true",
         ]
@@ -2502,7 +2502,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
         ]
@@ -2549,7 +2549,7 @@ class TestMainDispatchBranches:
             [
                 "synth-setter-generate-dataset",
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
-                f"render.plugin_path={TEST_PLUGIN_VST3}",
+                f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
                 "skypilot_launch/compute=runpod/smoke",
             ],
         )
@@ -2583,7 +2583,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "+skypilot_launch.cmd=rm -rf /",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -2623,7 +2623,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -2662,7 +2662,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
@@ -2700,7 +2700,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             "finalize_inline=true",
         ]
@@ -2743,7 +2743,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
             # Override smoke-shard's [12, 0, 0] — the zero-size guard rejects
@@ -2879,9 +2879,9 @@ class TestMainDispatchBranches:
         # render_vst=true re-renders predicted params; the generic VST group supplies
         # the structure while synth identity comes from the generation RenderConfig.
         assert "render=vst" in called_argv
-        assert "+render.param_spec_name=surge_xt" in called_argv
-        assert "+render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
-        assert "+render.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert "+render.synth.param_spec_name=surge_xt" in called_argv
+        assert "+render.synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
+        assert "+render.synth.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"+render.renderer_version={render.renderer_version}" in called_argv
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
@@ -3067,7 +3067,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -3097,7 +3097,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "render.plugin_reload_cadence=render",
             "render.gui_toggle_cadence=always_on",
         ]
@@ -3126,7 +3126,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "oracle_eval_inline=true",
         ]
         monkeypatch.setattr("sys.argv", argv)
@@ -3162,7 +3162,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
             # smoke-shard now defaults to [4, 4, 4]; pin a zero split to exercise the guard.
@@ -3208,7 +3208,7 @@ class TestMainDispatchBranches:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             "oracle_eval_inline=true",
         ]
@@ -3293,7 +3293,7 @@ class TestMainSpecPersistence:
         return [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
         ]
 
@@ -3315,7 +3315,7 @@ class TestMainSpecPersistence:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -3339,7 +3339,7 @@ class TestMainSpecPersistence:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -3390,7 +3390,7 @@ class TestMainSpecPersistence:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -3556,7 +3556,7 @@ class TestMainHydraOutputDir:
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
-            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
         ]
         monkeypatch.setattr("sys.argv", argv)
 

@@ -7,6 +7,8 @@ against the registries and render groups that previously restated the same facts
 
 from __future__ import annotations
 
+from importlib.resources import files
+
 import pytest
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
@@ -126,12 +128,6 @@ class TestFromRenderCfg:
 
         assert SynthSpec.from_render_cfg(render) == SYNTHS[SynthName(name)]
 
-    def test_nested_render_group_yields_its_synth_identity(self) -> None:
-        """A render node using the persisted nested shape resolves directly."""
-        render = OmegaConf.create({"synth": SYNTHS[SynthName("surge_simple")].model_dump()})
-
-        assert SynthSpec.from_render_cfg(render) == SYNTHS[SynthName("surge_simple")]
-
     def test_absent_render_group_yields_none(self) -> None:
         """A missing render node reports absence rather than raising."""
         assert SynthSpec.from_render_cfg(None) is None
@@ -152,10 +148,36 @@ class TestFromRenderCfg:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             render = compose(
                 config_name="render/obxf",
-                overrides=["render.plugin_path=plugins/TestPlugin.vst3"],
+                overrides=["render.synth.plugin_path=plugins/TestPlugin.vst3"],
             ).render
 
         synth = SynthSpec.from_render_cfg(render)
 
         assert synth is not None
         assert synth.plugin_path == "plugins/TestPlugin.vst3"
+
+
+class TestSynthConfigGroup:
+    """``configs/render/synth`` is a generated artifact of ``SYNTHS``, pinned here."""
+
+    @pytest.mark.parametrize("name", _ALL_SYNTHS)
+    def test_synth_group_matches_the_table(self, name: str) -> None:
+        """Each shipped group states exactly what the table declares.
+
+        The YAML is checked in so ``--register`` and the fake-synth end-to-end test
+        can compose from a temp checkout without importing its Python. This test is
+        what keeps the two from drifting.
+
+        :param name: Registry key / synth group under test.
+        """
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            group = compose(config_name=f"render/synth/{name}").render.synth
+
+        assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
+
+    def test_group_covers_every_registered_synth(self) -> None:
+        """No table entry lacks a config group, and no group lacks a table entry."""
+        group_dir = files("synth_setter") / "configs" / "render" / "synth"
+        shipped = {p.name.removesuffix(".yaml") for p in group_dir.iterdir()}
+
+        assert shipped == set(SYNTHS)

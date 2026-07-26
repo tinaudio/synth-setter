@@ -23,7 +23,7 @@ OVERRIDE_ARGS: list[str] = [
     # ``--help`` still walks the defaults list, so an ``experiment=`` override
     # is required even for the cheapest invocation.
     "experiment=generate_dataset/smoke-shard --help",
-    f"experiment=generate_dataset/smoke-shard render.plugin_path={shlex.quote(PLUGIN_PATH)}",
+    f"experiment=generate_dataset/smoke-shard render.synth.plugin_path={shlex.quote(PLUGIN_PATH)}",
 ]
 
 

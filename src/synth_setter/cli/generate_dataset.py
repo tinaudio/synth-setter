@@ -170,9 +170,10 @@ def _run_oracle_eval_subprocess(
         "logger=wandb",
         # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
         "render=vst",
-        f"+render.param_spec_name={render.param_spec_name}",
-        f"+render.plugin_state_path={render.plugin_state_path}",
-        f"+render.plugin_path={render.plugin_path}",
+        f"+render.synth.name={render.synth.name}",
+        f"+render.synth.param_spec_name={render.param_spec_name}",
+        f"+render.synth.plugin_state_path={render.plugin_state_path}",
+        f"+render.synth.plugin_path={render.plugin_path}",
         f"+render.renderer_version={render.renderer_version}",
         f"render.renderer_backend={render.renderer_backend}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",

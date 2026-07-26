@@ -1,7 +1,8 @@
+defaults:
+  - synth: faust_bright_organ
+  - _self_
+
 # DawDreamer compiles this identity's checked-in source string; no source or preset path is accepted.
-plugin_path: faust
-plugin_state_path: ""
-param_spec_name: faust_bright_organ
 renderer_version: "0.8.3"
 renderer_backend: dawdreamer_faust
 sample_rate: 44100
