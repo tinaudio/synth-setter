@@ -149,3 +149,8 @@ class TestSerializedShape:
 
         assert copied.param_spec_name == "surge_xt"
         assert copied.plugin_state_path == "presets/surge-base.vstpreset"
+
+    def test_a_non_mapping_payload_passes_through_to_pydantic(self) -> None:
+        """The lift only touches mappings, leaving other shapes to normal validation."""
+        with pytest.raises(ValidationError):
+            RenderConfig.model_validate("not-a-mapping")
