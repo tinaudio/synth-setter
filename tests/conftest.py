@@ -1190,11 +1190,12 @@ def build_surge_xt_embedding_train_cfg(
     *,
     param_spec_name: str,
     conditioning: str,
+    architecture: Literal["flow", "feed_forward"] = "flow",
 ) -> DictConfig:
-    """Compose a one-step CPU flow-training cfg wired to an embedding-conditioning profile.
+    """Compose a one-step CPU train cfg wired to an embedding-conditioning profile.
 
-    Composes ``experiment=surge/flow_simple`` with ``conditioning=<profile>`` over
-    the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
+    Composes the selected shipped Surge architecture with ``conditioning=<profile>``
+    over the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
     dataset augmented with the profile's Lance column. Lives here (not inline in
     ``tests/test_train.py``) because that module is barred from importing Hydra
     config-initializers (see ``tests/_meta/test_entrypoint_e2e_only.py``).
@@ -1204,19 +1205,36 @@ def build_surge_xt_embedding_train_cfg(
     :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         model width and per-parameter callback labels.
-    :param conditioning: Conditioning profile group (``"clap"`` / ``"m2l"``).
+    :param conditioning: Conditioning profile group.
+    :param architecture: Shipped flow or feed-forward VST model; defaults to flow.
     :returns: Resolved one-step embedding-conditioning train DictConfig.
     """
+    experiment = {
+        "feed_forward": "surge/ffn_simple",
+        "flow": "surge/flow_simple",
+    }[architecture]
+    model_overrides = (
+        [
+            "model.net.d_model=16",
+            "model.net.n_heads=1",
+            "model.net.n_layers=1",
+            "model.net.patch_size=128",
+            "model.net.patch_stride=64",
+        ]
+        if architecture == "feed_forward"
+        else []
+    )
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_simple",
+                f"experiment={experiment}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
                 "callbacks=[default_vst,eval_vst]",
+                *model_overrides,
             ],
         )
         with open_dict(cfg):
@@ -1230,8 +1248,7 @@ def build_surge_xt_embedding_train_cfg(
             cfg.trainer.devices = 1
             cfg.trainer.max_steps = 1
             cfg.trainer.min_steps = 1
-            # Flow validation runs expensive ODE sampling; the train-loss e2e skips
-            # it. The eval e2e drives validation through evaluate() instead.
+            # Training skips validation; checkpoint-consumer coverage uses evaluate().
             cfg.trainer.limit_val_batches = 0
             cfg.trainer.log_every_n_steps = 1
             cfg.trainer.enable_model_summary = False

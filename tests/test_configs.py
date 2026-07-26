@@ -250,7 +250,7 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
 
 
 @pytest.mark.parametrize(
-    ("model_name", "model_overrides"),
+    ("model_name", "model_overrides", "expected_output_dim"),
     [
         (
             "vst_flow",
@@ -261,6 +261,7 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
                 "model.vector_field.num_layers=1",
                 "model.vector_field.projection.num_tokens=4",
             ],
+            16,
         ),
         (
             "vst_ffn",
@@ -269,6 +270,7 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
                 "model.net.n_heads=1",
                 "model.net.n_layers=1",
             ],
+            300,
         ),
     ],
     ids=["flow", "feed_forward"],
@@ -276,12 +278,14 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
 def test_t5gemma_conditioning_profile_cached_batch_trains(
     model_name: str,
     model_overrides: list[str],
+    expected_output_dim: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The T5Gemma profile trains either VST model from its cached Lance tensor.
 
     :param model_name: VST model config selected for the training step.
     :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
+    :param expected_output_dim: Model-owned cached encoder output width.
     :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
     """
     cfg = _compose(
@@ -314,6 +318,8 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     assert datamodule.embedding_conditioning.column == "t5gemma"
     assert datamodule.embedding_conditioning.input_shape == (768, 256)
     assert batch["conditioning"].shape == (2, 768, 256)
+    assert cfg.model.encoder_output_dim == expected_output_dim
+    assert cfg.model.encoder.d_model == expected_output_dim
     assert loss.ndim == 0
     assert torch.isfinite(loss)
 
@@ -353,6 +359,35 @@ def _conditioning_profile_names() -> list[str]:
         for entry in (configs_dir() / "conditioning").iterdir()
         if entry.name.endswith(".yaml")
     )
+
+
+@pytest.mark.parametrize("profile", _conditioning_profile_names())
+@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+def test_embedding_conditioning_profile_encoder_matches_model_output(
+    profile: str, model_name: str
+) -> None:
+    """Every cached profile produces the output width its VST model owns.
+
+    :param profile: Conditioning profile under test.
+    :param model_name: VST architecture consuming the profile.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+    input_shape = tuple(cfg.model.conditioning.input_shape)
+
+    encoded = encoder(torch.randn(2, *input_shape))
+
+    assert encoded.shape == (2, cfg.model.encoder_output_dim)
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())

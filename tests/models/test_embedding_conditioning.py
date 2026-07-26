@@ -76,7 +76,8 @@ def _ff_embedding_module() -> VSTFeedForwardModule:
     :returns: Feed-forward module configured for generic conditioning.
     """
     return VSTFeedForwardModule(
-        net=EmbeddingPool(embed_dim=4, d_model=2, num_heads=1, max_seq_len=3),
+        net=torch.nn.Identity(),
+        encoder=EmbeddingPool(embed_dim=4, d_model=2, num_heads=1, max_seq_len=3),
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
         conditioning=EmbeddingConditioningSpec(column="cached", input_shape=(4, 3)),
@@ -119,6 +120,49 @@ def _flow_embedding_batch() -> dict[str, torch.Tensor]:
         "noise": torch.randn(2, 2),
         "params": torch.randn(2, 2),
     }
+
+
+def test_ff_cached_conditioning_without_encoder_raises() -> None:
+    """Cached feed-forward conditioning requires an explicit production encoder."""
+    with pytest.raises(ValueError, match="cached conditioning requires an encoder"):
+        VSTFeedForwardModule(
+            net=torch.nn.Identity(),
+            optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+            scheduler=None,  # pyright: ignore[reportArgumentType]
+            conditioning=EmbeddingConditioningSpec(column="cached", input_shape=(4, 3)),
+        )
+
+
+def test_ff_cached_encoder_wrong_output_width_raises() -> None:
+    """A cached encoder incompatible with parameter targets fails before MSE broadcasting."""
+    module = VSTFeedForwardModule(
+        net=torch.nn.Identity(),
+        encoder=EmbeddingPool(embed_dim=4, d_model=3, num_heads=1, max_seq_len=3),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        conditioning=EmbeddingConditioningSpec(column="cached", input_shape=(4, 3)),
+    )
+
+    with pytest.raises(ValueError, match=r"encoder output shape .*3.*target shape .*2"):
+        module.model_step(_ff_embedding_batch())
+
+
+def test_ff_default_mel_conditioning_uses_legacy_network() -> None:
+    """Default feed-forward configuration retains the mel-to-network contract."""
+    module = VSTFeedForwardModule(
+        net=torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(6, 2)),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+    )
+    mel_spec = torch.randn(2, 1, 2, 3)
+
+    loss, predictions, _, conditioning = module.model_step(
+        {"mel_spec": mel_spec, "params": torch.randn(2, 2)}
+    )
+
+    assert conditioning is mel_spec
+    assert predictions.shape == (2, 2)
+    assert torch.isfinite(loss)
 
 
 @pytest.mark.parametrize(

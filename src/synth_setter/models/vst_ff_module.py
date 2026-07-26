@@ -25,6 +25,8 @@ class VSTFeedForwardModule(LightningModule):
         warmup_steps: int = 0,
         conditioning: Conditioning = "mel",
         encoder: torch.nn.Module | None = None,
+        encoder_num_heads: int | None = None,
+        encoder_output_dim: int | None = None,
     ):
         """Wire the regression net and persist the optimizer/scheduler hyperparameters.
 
@@ -37,11 +39,16 @@ class VSTFeedForwardModule(LightningModule):
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param encoder: Profile-selected embedding encoder. When configured, it replaces
             the legacy mel network for cached conditioning.
+        :param encoder_num_heads: Model-owned attention head count for sequence encoders.
+        :param encoder_output_dim: Configured cached-encoder output width.
+        :raises ValueError: If cached conditioning has no encoder.
         """
         super().__init__()
 
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
-        if self._embedding_conditioning is not None and encoder is not None:
+        if self._embedding_conditioning is not None:
+            if encoder is None:
+                raise ValueError("cached conditioning requires an encoder")
             net = encoder
 
         self.save_hyperparameters(logger=False)
@@ -59,6 +66,11 @@ class VSTFeedForwardModule(LightningModule):
         conditioning = self._get_conditioning_from_batch(batch)
 
         pred_params = self.net(conditioning)
+        if self._embedding_conditioning is not None and pred_params.shape != target_params.shape:
+            raise ValueError(
+                f"cached conditioning encoder output shape {tuple(pred_params.shape)} "
+                f"does not match target shape {tuple(target_params.shape)}"
+            )
         loss = torch.nn.functional.mse_loss(pred_params, target_params)
         return loss, pred_params, target_params, conditioning
 

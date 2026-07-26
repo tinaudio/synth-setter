@@ -33,6 +33,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -1911,7 +1912,7 @@ def test_train_all_embedding_conditioning_real_e2e(
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every conditioning profile through real render, encode, and fit paths.
+    """Train every profile, then load a real T5Gemma FF checkpoint for validation.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -1943,3 +1944,44 @@ def test_train_all_embedding_conditioning_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+
+    ff_output_dir = tmp_path / "t5gemma-feed-forward"
+    ff_cfg = build_surge_xt_embedding_train_cfg(
+        ff_output_dir,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="t5gemma",
+        architecture="feed_forward",
+    )
+    HydraConfig().set_config(ff_cfg)
+    try:
+        ff_metric_dict, ff_object_dict = train(ff_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    ff_trainer = ff_object_dict["trainer"]
+    assert isinstance(ff_object_dict["model"], VSTFeedForwardModule)
+    assert ff_trainer.global_step >= 1, (
+        f"T5Gemma feed-forward trainer did not advance: global_step={ff_trainer.global_step}"
+    )
+    assert_finite_train_loss(ff_metric_dict)
+
+    checkpoint_path = ff_output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    ff_eval_cfg = ff_cfg.copy()
+    eval_output_dir = ff_output_dir / "evaluation"
+    with open_dict(ff_eval_cfg):
+        ff_eval_cfg.paths.output_dir = str(eval_output_dir)
+        ff_eval_cfg.paths.log_dir = str(eval_output_dir)
+        ff_eval_cfg.ckpt_path = str(checkpoint_path)
+        ff_eval_cfg.mode = "validate"
+        ff_eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(ff_eval_cfg)
+    try:
+        eval_metric_dict, eval_object_dict = evaluate(ff_eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
