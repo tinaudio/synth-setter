@@ -37,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from unittest.mock import call as mock_call
 
 import pytest
 
@@ -1514,6 +1515,80 @@ class TestRun(RenderSeamFixtures):
         assert renderer_calls == 2
         assert sidecar_exists_at_attempt_start == [False, False]
         assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+
+    def test_badwindow_failure_logs_one_metric_per_failed_attempt(
+        self,
+        fake_r2_remote: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Each fatal X11 warmup attempt emits one failure metric before propagation.
+
+        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {**kwargs["render"], "max_retries": 1}  # type: ignore[dict-item]
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+        metric_logger = MagicMock()
+        error = subprocess.CalledProcessError(
+            1,
+            "generate_vst_dataset.py",
+            output=(
+                b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
+                b"  Major opcode of failed request:  20 (X_GetProperty)\n"
+            ),
+        )
+
+        with patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=error,
+        ):
+            with pytest.raises(subprocess.CalledProcessError):
+                generate(spec, tmp_path, [metric_logger])
+
+        assert metric_logger.log_metrics.call_args_list == [
+            mock_call({"generation/badwindow_failures": 1.0}),
+            mock_call({"generation/badwindow_failures": 1.0}),
+        ]
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            b"plugin preset is invalid\n",
+            b"BadWindow (invalid Window parameter)\n",
+            b"20 (X_GetProperty)\n",
+        ],
+        ids=["unrelated", "badwindow-only", "x-get-property-only"],
+    )
+    def test_non_badwindow_renderer_failure_does_not_log_badwindow_metric(
+        self,
+        output: bytes,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A renderer exit without the full signature emits no BadWindow metric.
+
+        :param output: Captured renderer output missing one or both signature components.
+        :param fake_r2_remote: Fixture-activation only for the rendering marker.
+        :param spec: Fixture-provided single-shard ``DatasetSpec``.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        metric_logger = MagicMock()
+        error = subprocess.CalledProcessError(
+            1,
+            "generate_vst_dataset.py",
+            output=output,
+        )
+
+        with patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=error,
+        ):
+            with pytest.raises(subprocess.CalledProcessError):
+                generate(spec, tmp_path, [metric_logger])
+
+        metric_logger.log_metrics.assert_not_called()
 
     def test_parallel_render_uses_thread_pool_and_uploads_all_shards(
         self,
@@ -3754,7 +3829,7 @@ def test_render_one_owned_shard_relays_rejection_report_without_rclone(
     )
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset._render_and_upload_shard",
-        lambda _spec, _shard, _work_dir: (123, expected),
+        lambda _spec, _shard, _work_dir, **_kwargs: (123, expected),
     )
 
     rendered, skipped, rejections = _render_one_owned_shard(spec, 0, tmp_path, [])

@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -249,6 +250,69 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
         assert key in summary, (key, summary)
     assert json.loads(summary["generation/samples"]) == 0, summary
     assert json.loads(summary["generation/samples_per_second"]) == 0.0, summary
+
+
+def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """A fatal X11 warmup failure reaches W&B before generation exits.
+
+    :param tmp_path: Per-test render and offline W&B directory.
+    :param fake_r2_remote: Local filesystem backing the rendering marker write.
+    :param monkeypatch: Pins offline W&B and renderer boundaries.
+    :param dataset_spec_factory: Shared ``DatasetSpec`` factory.
+    """
+    _offline_wandb_env(monkeypatch, tmp_path)
+    spec = _build_spec(dataset_spec_factory)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.renderer_version,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    badwindow_output = (
+        b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
+        b"  Major opcode of failed request:  20 (X_GetProperty)\n"
+    )
+
+    def _raise_badwindow(_args: list[str]) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            "generate_vst_dataset.py",
+            output=badwindow_output,
+        )
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        _raise_badwindow,
+    )
+    wandb_logger = WandbLogger(
+        offline=True,
+        save_dir=str(tmp_path),
+        id=spec.run_id,
+        project="wandb-track-test-project",
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate(spec, tmp_path, [wandb_logger])
+
+    assert wandb.run is None, "generate() did not close the failed wandb run"
+    binary_files = glob.glob(
+        str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
+    )
+    assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
+    rows = read_history_rows(
+        Path(binary_files[0]),
+        until=lambda scanned: any("generation/badwindow_failures" in row for row in scanned),
+    )
+    failure_rows = [row for row in rows if "generation/badwindow_failures" in row]
+    assert len(failure_rows) == 1
+    assert json.loads(failure_rows[0]["generation/badwindow_failures"]) == 1
 
 
 def test_generate_relay_preserves_nonzero_rejection_counts_offline(
