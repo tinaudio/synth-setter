@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "[project.dependencies] (lite closure: pydantic/python-dotenv/pyyaml), [project.optional-dependencies] backend extras (cpu, cu128), [dependency-groups] heavy runtime (torch/config/compute/data/audio/metrics/util + runtime meta + dev/docs), [tool.uv].default-groups+conflicts, [[tool.uv.index]], [tool.uv.sources]"
+        covers: "[project.dependencies] lite closure, optional backend/encoder extras, dependency groups, uv conflicts, indexes, and sources"
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -25,6 +25,16 @@ docs:
         covers: "uv-lock hook (astral-sh/uv-pre-commit) relocking uv.lock on every commit; the local lock-sync gate that complements uv-lock-check.yml"
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
+
+  - doc: docs/reference/tinymu-embeddings.md
+    description: TinyMU MATPAC source, artifact, preprocessing, and conditioning contract
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/tinymu.py"
+        covers: "Pinned external source validation, R2 hydration, SHA-256 verification, preprocessing, and frozen inference"
+      - pattern: "src/synth_setter/configs/conditioning/tinymu.yaml"
+        covers: "Four-second TinyMU generic conditioning profile"
+      - pattern: "pyproject.toml"
+        covers: "The source-free `tinymu` optional dependency"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
@@ -146,13 +156,13 @@ docs:
       - pattern: "src/synth_setter/model_cache.py"
         covers: "XDG-aware shared cache paths for embedding model artifacts."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Post-finalize registry-driven Lance column augmentation (EMBEDDING_REGISTRY keys: clap/m2l/same_s/same_l/t5gemma) via the `add_embeddings(config)` endpoint; each spec's `input_field` selects its source column."
+        covers: "Post-finalize registry-driven Lance augmentation for clap, m2l, same_s, same_l, t5gemma, and tinymu"
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 prompt conditioner behind the `sa3` extra — frozen T5Gemma at float32 with the checkpoint's learned padding embedding substituted at pad positions."
       - pattern: "src/synth_setter/data/vst/param_text.py"
         covers: "Param-spec text normalizers rendering encoded param rows as conditioning captions; `param_names` joins the spec's parameter names."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
-        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus embedding-selection, index, device/batch, and param-text conditioning (`param_spec_name`, `param_text_normalizer`) knobs."
+        covers: "Hydra config for embedding selection, indexing, runtime, param text, and the external TinyMU source boundary"
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
         covers: "AddEmbeddingsConfig — the strict/frozen knobs the endpoint validates from its composed cfg via `from_hydra_cfg`."
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"

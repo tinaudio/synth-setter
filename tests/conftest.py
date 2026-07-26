@@ -1541,7 +1541,14 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "t5gemma",
+        "tinymu",
+    }
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,

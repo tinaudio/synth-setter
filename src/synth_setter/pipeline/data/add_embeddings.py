@@ -34,9 +34,17 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.tinymu import (
+    DEFAULT_TINYMU_CHECKPOINT,
+    TINYMU_EMBEDDING_DIM,
+    TinyMUEncodeFn,
+    load_tinymu_audio_encoder,
+    tinymu_num_latent_frames,
+)
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -79,7 +87,7 @@ type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -356,6 +364,20 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load TinyMU through the pinned external-source adapter.
+
+    :param checkpoint: Exact pinned URI or a hash-identical local artifact.
+    :param config: Run config supplying the source checkout and device.
+    :returns: Frozen MATPAC encoder.
+    """
+    return load_tinymu_audio_encoder(
+        checkpoint,
+        source_dir=config.tinymu_source_dir,
+        device=_resolve_torch_device(config.device),
+    )
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -386,6 +408,31 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape TinyMU MATPAC tensor column.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: Frozen MATPAC encoder over source audio.
+    :returns: ``(B, 3840, T_tokens)`` fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    encode = cast("TinyMUEncodeFn", encoder)
+    embeddings = _finite_embedding(TINYMU_FIELD, encode(audio, sample_rate))
+    expected_shape = (
+        len(audio),
+        TINYMU_EMBEDDING_DIM,
+        tinymu_num_latent_frames(audio.shape[-1], sample_rate),
+    )
+    if embeddings.shape != expected_shape:
+        raise ValueError(
+            f"{TINYMU_FIELD} encoder produced shape {embeddings.shape}, expected {expected_shape}"
+        )
+    return tensor_array(embeddings, np.dtype("float32"), expected_shape[1:])
+
+
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
     """Encode one param batch as a fixed-shape text-embedding tensor column.
 
@@ -409,7 +456,11 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
 
 
 # Extras whose distribution name differs from the module they install.
-_EXTRA_IMPORT_NAMES: dict[str, str] = {"same": "stable_audio_tools", "sa3": "stable_audio_3"}
+_EXTRA_IMPORT_NAMES: dict[str, str] = {
+    "same": "stable_audio_tools",
+    "sa3": "stable_audio_3",
+    "tinymu": "timm",
+}
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
@@ -464,6 +515,16 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
         input_field=PARAM_ARRAY_FIELD,
+    ),
+    "tinymu": EmbeddingSpec(
+        name="tinymu",
+        column=TINYMU_FIELD,
+        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
+        requires_extra="tinymu",
+        co_resident=False,
+        index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
+        load_encoder=_load_tinymu_spec_encoder,
+        encode_column=_encode_tinymu_column,
     ),
 }
 

@@ -273,7 +273,14 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "t5gemma",
+        "tinymu",
+    }
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
@@ -294,6 +301,8 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
+    assert EMBEDDING_REGISTRY["tinymu"].requires_extra == "tinymu"
+    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:

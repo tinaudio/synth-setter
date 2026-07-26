@@ -9,6 +9,7 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | ------------------------------------ | -------------------------------------------------------------- |
 | macOS (Apple Silicon, MPS)           | `uv sync --frozen`                                             |
 | Linux GPU box (CUDA 12.8)            | `uv sync --frozen --extra cu128`                               |
+| TinyMU MATPAC adapter                | `uv sync --frozen --extra tinymu`                              |
 | Linux CPU-only — laptop / CI runner  | `uv sync --frozen --extra cpu --no-default-groups --group dev` |
 | Lint / type-check only (no torch)    | `uv sync --frozen --only-group dev`                            |
 | Verify the lock is in sync           | `uv lock --check`                                              |
@@ -116,8 +117,9 @@ hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
 - `.github/workflows/docs.yml` (mkdocs build) → `uv pip install --group dev`/`--group docs --group runtime`.
 - `.github/workflows/test-dataset-finalization.yml` (oracle smoke) → `uv pip install --group dev -e .`.
 
-Only the `cpu`/`cu128` backend-routing extras remain in
-`[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
+`cpu`/`cu128` remain backend-routing extras because `[tool.uv.sources]` keys on
+them. Encoder-specific `same`, `sa3`, and `tinymu` extras keep heavyweight or
+special-license runtimes opt-in.
 
 ## Adding a new extra or dependency group
 

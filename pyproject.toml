@@ -65,6 +65,11 @@ same = [
 sa3 = [
   "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
 ]
+# TinyMU source is intentionally external because upstream has no detected license file.
+# This extra installs only MATPAC's pinned third-party runtime dependency.
+tinymu = [
+  "timm==0.4.12",
+]
 
 # Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
 # on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
