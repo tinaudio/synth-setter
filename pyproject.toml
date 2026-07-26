@@ -655,4 +655,8 @@ tests_dir = [
 # ImportError during stats collection. Copy the whole package so the sandbox
 # can resolve them.
 also_copy = ["src/synth_setter/"]
-pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
+pytest_add_cli_args = [
+    "-m",
+    "not slow and not requires_vst and not r2 and not gpu and not benchmark",
+    "--capture=no",
+]

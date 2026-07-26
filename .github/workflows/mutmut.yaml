@@ -21,7 +21,35 @@ permissions:
 jobs:
   mutmut_run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: evaluation-audio
+            pattern: synth_setter.evaluation.a*
+          - name: evaluation-metrics
+            pattern: synth_setter.evaluation.compute_audio_metrics.*
+          - name: evaluation-predict
+            pattern: synth_setter.evaluation.predict_vst_audio.*
+          - name: evaluation-shuffle
+            pattern: synth_setter.evaluation.shuffle_pred_audio.*
+          - name: tools
+            pattern: synth_setter.tools.*
+          - name: pipeline-add-public
+            pattern: synth_setter.pipeline.data.add_*.x_[!_]*
+          - name: pipeline-add-private-a-m
+            pattern: synth_setter.pipeline.data.add_*.x__[a-m]*
+          - name: pipeline-add-private-n-z
+            pattern: synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-lance
+            pattern: synth_setter.pipeline.data.lance_*
+          - name: pipeline-stats
+            pattern: synth_setter.pipeline.data.stats.*
+          - name: pipeline-finalize
+            pattern: synth_setter.pipeline.data.finalize_progress.*
+          - name: ci-scripts
+            pattern: scripts.ci.*
 
     steps:
       - name: Checkout
@@ -46,7 +74,7 @@ jobs:
       - name: Run mutmut
         env:
           HYDRA_FULL_ERROR: "1"
-        run: uv run mutmut run
+        run: uv run mutmut run --max-children 4 "${{ matrix.pattern }}"
 
       - name: Print results
         if: always()
@@ -56,7 +84,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutmut-mutants
+          name: mutmut-${{ matrix.name }}-mutants
           path: mutants/
           retention-days: 14
           if-no-files-found: warn
