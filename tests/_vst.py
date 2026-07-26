@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from hydra import compose, initialize_config_module
+
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
 
 # ``or`` (not a ``get`` default) so an empty override also falls back to Surge XT.
@@ -25,16 +27,24 @@ TEST_PARAM_SPEC_NAME = TEST_SYNTH
 # than letting a downstream render test skip or fail opaquely.
 TEST_PRESET_PATH = plugin_state_paths[TEST_SYNTH]
 
-# Per-synth renderer pin mirroring ``configs/render/<synth>.yaml`` (the value
-# ``generate_dataset`` cross-checks against the plugin), so the synth-agnostic
+
+def _composed_renderer_version(synth: str) -> str:
+    """Read one render group's ``renderer_version`` pin through Hydra.
+
+    Read rather than mirrored so the tests cannot pin a version the shipped
+    render group no longer declares.
+
+    :param synth: Render group name, matching the registry key.
+    :returns: The ``renderer_version`` that group composes to.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return str(compose(config_name=f"render/{synth}").render.renderer_version)
+
+
+# Sourced from ``configs/render/<synth>.yaml`` — the same value
+# ``generate_dataset`` cross-checks against the plugin — so the synth-agnostic
 # dataset test labels provenance for the selected synth, not always Surge XT's.
-# The Surge family shares one plugin binary, hence one version.
-TEST_RENDERER_VERSION = {
-    "surge_xt": "1.3.4",
-    "surge_simple": "1.3.4",
-    "surge_4": "1.3.4",
-    "obxf": "1.0.3",
-}[TEST_SYNTH]
+TEST_RENDERER_VERSION = _composed_renderer_version(TEST_SYNTH)
 
 PLUGIN_PATH = default_plugin_path()
 
