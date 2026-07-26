@@ -1212,9 +1212,7 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str  # Plugin path or the sentinel exported for an interpreter-resolved backend
-    plugin_state_path: str  # Empty for backends with no preset file
-    param_spec_name: str
+    synth: SynthSpec  # param spec + plugin + baseline preset; see synth_setter/synth_spec.py
     renderer_version: str
     renderer_backend: RendererBackend
     sample_rate: int

@@ -52,8 +52,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). The synth is selected by a `render`
    group override (e.g. `render=surge_xt`, `render=obxf`, or
-   `render=faust_bright_organ`); each render config names the backend and
-   registered `param_spec_name`, plus any backend-specific resources. Hydra
+   `render=faust_bright_organ`); each render config names the backend, selects
+   its `synth` group, and declares any backend-specific resources. The synth
+   group carries the registered parameter spec, preset, and plugin path. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -136,15 +137,17 @@ synth-setter/
 
 ## Key Design Decisions
 
-**Synth-agnostic core, registry as the contract.** A synth is fully described
-by three registered artifacts — a `ParamSpec` (`param_specs[name]`), an optional
-backend state entry (`plugin_state_paths[name]`), and a `RenderConfig`
-(`src/synth_setter/configs/render/<name>.yaml`)
-— keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
-rendering, Lance storage, mel features, distributed workers, and models all
-read width and behavior from the resolved spec, never from a synth literal.
-Faust entries use an empty state path and resolve checked-in source by the same
-identity. Onboarding a new VST3 synth is additive: scaffold a spec with
+**Synth-agnostic core, registry as the contract.** A synth's identity — which
+`ParamSpec`, which plugin, which baseline preset — is authored once in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and
+`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it,
+pinned against the table by `tests/test_synth_spec.py`. Render configs in
+`src/synth_setter/configs/render/<name>.yaml` select an identity and declare
+backend-specific settings. The `ParamSpec` objects themselves live in
+`src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
+storage, mel features, distributed workers, and models all read width and
+behavior from the resolved spec, never from a synth literal. Faust entries use
+an empty state path and resolve checked-in source by the same identity. Onboarding a new VST3 synth is additive: scaffold a spec with
 `synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
 config — no core edits. See
 [Adding a new synth](guides/adding-a-new-synth.md).
