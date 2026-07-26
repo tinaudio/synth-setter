@@ -60,6 +60,17 @@ def test_discover_and_run_both_select_via_the_shared_marker() -> None:
 
 
 @pytest.mark.infra
+def test_jobs_use_available_standard_runners_with_explicit_timeouts() -> None:
+    """Every stage starts on the available hosted pool and has a runtime bound."""
+    discover = _WORKFLOW_YAML["jobs"]["discover"]
+    sweep = _WORKFLOW_YAML["jobs"]["vst_sweep"]
+    assert (discover["runs-on"], discover["timeout-minutes"]) == ("ubuntu-latest", 20)
+    assert (sweep["runs-on"], sweep["timeout-minutes"]) == ("ubuntu-latest", 90)
+    run = _step_run("vst_sweep", "Run VST sweep shard in Docker")
+    assert "timeout --signal=TERM --kill-after=30s 80m" in run
+
+
+@pytest.mark.infra
 def test_matrix_is_discovered_at_runtime_not_a_static_allowlist() -> None:
     """The run matrix is the discover job's output, never a literal file list."""
     sweep = _WORKFLOW_YAML["jobs"]["vst_sweep"]
