@@ -1157,8 +1157,11 @@ context position unmasked; an empty caption is therefore SA3's unconditional
 representation. The encoder runs at float32 even though the checkpoint declares
 bfloat16 — bf16 SDPA kernels move these embeddings by up to 11.5 (embedding std
 1.75) between torch releases, while float32 is bitwise identical across torch
-2.7.1 and the locked torch. The column is a `[768, 256]` fixed-shape tensor with
-no index: every row of one dataset shares a caption today, so an IVF_PQ index
+2.7.1 and the locked torch. Each unique caption is encoded as a singleton and
+reused for duplicate rows because batched SDPA also varies with batch shape.
+Checkpoints must declare T5Gemma with the canonical 768-dimensional,
+256-token contract. The column is a `[768, 256]` fixed-shape tensor with no
+index: every row of one dataset shares a caption today, so an IVF_PQ index
 over it would be degenerate. The mirrored weights carry Gemma Terms of Use
 redistribution conditions.
 

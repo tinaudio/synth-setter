@@ -12,7 +12,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import numpy as np
 import structlog
@@ -20,6 +20,7 @@ import torch
 from beartype import beartype
 from einops import rearrange
 from jaxtyping import Float, jaxtyped
+from pydantic import AliasPath, BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
@@ -30,7 +31,6 @@ logger = structlog.get_logger(__name__)
 DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
 T5GEMMA_EMBEDDING_DIM: int = 768
 T5GEMMA_MAX_LENGTH: int = 256
-T5GEMMA_ENCODE_MAX_BATCH: int = 16
 # Only model name SA3's conditioner accepts; the checkpoint supplies the weights.
 _T5GEMMA_MODEL_NAME: str = "google/t5gemma-b-b-ul2"
 _PROMPT_CONDITIONER_ID: str = "prompt"
@@ -41,6 +41,66 @@ _DEFAULT_T5GEMMA_CACHE_NAMES: dict[str, str] = {
 }
 
 type TextEncodeFn = Callable[[list[str]], Float[np.ndarray, "batch dim seq"]]
+
+
+@dataclass(frozen=True)
+class _PromptConditioner(BaseModel):
+    """Validate the prompt entry and flatten its nested settings.
+
+    .. attribute :: id
+
+        Canonical prompt conditioner identifier.
+
+    .. attribute :: type
+
+        Canonical T5Gemma conditioner type.
+
+    .. attribute :: max_length
+
+        Token budget read from the nested config.
+
+    .. attribute :: padding_mode
+
+        Padding strategy read from the nested config.
+
+    .. attribute :: subfolder
+
+        Checkpoint-relative encoder directory.
+
+    .. attribute :: model_config
+
+        Strict Pydantic validation settings.
+    """
+
+    id: Literal["prompt"]
+    type: Literal["t5gemma"]
+    max_length: int = Field(validation_alias=AliasPath("config", "max_length"))
+    padding_mode: str = Field(validation_alias=AliasPath("config", "padding_mode"))
+    subfolder: str = Field(validation_alias=AliasPath("config", "subfolder"))
+
+    model_config = ConfigDict(strict=True)
+
+
+class _ConditioningConfig(BaseModel):
+    """Validate the conditioning width and preserve entries for prompt selection.
+
+    .. attribute :: configs
+
+        Raw conditioner entries; the selected prompt receives stricter validation.
+
+    .. attribute :: cond_dim
+
+        Shared conditioner output width.
+
+    .. attribute :: model_config
+
+        Strict Pydantic validation settings.
+    """
+
+    configs: list[dict[str, object]]
+    cond_dim: int
+
+    model_config = ConfigDict(strict=True)
 
 
 @dataclass(frozen=True)
@@ -103,29 +163,42 @@ def _read_conditioner_config(checkpoint_dir: Path) -> T5GemmaConditionerConfig:
 
     :param checkpoint_dir: Directory containing ``model_config.json``.
     :returns: Settings for the prompt conditioner.
-    :raises ValueError: No prompt conditioner exists, or its padding is not learned.
+    :raises ValueError: The checkpoint lacks a canonical learned-padding T5Gemma conditioner.
     """
-    conditioning = json.loads((checkpoint_dir / "model_config.json").read_text())["model"][
-        "conditioning"
-    ]
-    prompts = [c for c in conditioning["configs"] if c.get("id") == _PROMPT_CONDITIONER_ID]
+    raw_checkpoint = json.loads((checkpoint_dir / "model_config.json").read_text())
+    try:
+        raw_conditioning = raw_checkpoint["model"]["conditioning"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"{checkpoint_dir} has no model conditioning config") from exc
+    conditioning = _ConditioningConfig.model_validate(raw_conditioning)
+    prompts = [c for c in conditioning.configs if c.get("id") == _PROMPT_CONDITIONER_ID]
     if not prompts:
         raise ValueError(
             f"{checkpoint_dir} has no {_PROMPT_CONDITIONER_ID!r} conditioner; "
             "it cannot produce text embeddings"
         )
-    config = prompts[0]["config"]
-    padding_mode = config["padding_mode"]
+    prompt = _PromptConditioner.model_validate(prompts[0])
+    max_length = prompt.max_length
+    if max_length != T5GEMMA_MAX_LENGTH:
+        raise ValueError(
+            f"{checkpoint_dir} declares max_length={max_length}, expected {T5GEMMA_MAX_LENGTH}"
+        )
+    cond_dim = conditioning.cond_dim
+    if cond_dim != T5GEMMA_EMBEDDING_DIM:
+        raise ValueError(
+            f"{checkpoint_dir} declares cond_dim={cond_dim}, expected {T5GEMMA_EMBEDDING_DIM}"
+        )
+    padding_mode = prompt.padding_mode
     if padding_mode != _LEARNED_PADDING_MODE:
         raise ValueError(
             f"{checkpoint_dir} declares padding_mode={padding_mode!r}, expected "
             f"{_LEARNED_PADDING_MODE!r}; other modes do not reproduce SA3 conditioning"
         )
     return T5GemmaConditionerConfig(
-        max_length=config["max_length"],
+        max_length=max_length,
         padding_mode=padding_mode,
-        subfolder=config["subfolder"],
-        cond_dim=conditioning["cond_dim"],
+        subfolder=prompt.subfolder,
+        cond_dim=cond_dim,
     )
 
 
@@ -193,16 +266,20 @@ def load_t5gemma_text_encoder(checkpoint: str, device: str) -> TextEncodeFn:
 
     @torch.no_grad()
     @jaxtyped(typechecker=beartype)
-    def _encode_chunk(chunk: list[str]) -> Float[np.ndarray, "chunk seq dim"]:
-        embeddings, _ = conditioner(chunk, device)
+    def _encode_prompt(prompt: str) -> Float[np.ndarray, "one seq dim"]:
+        embeddings, _ = conditioner([prompt], device)
         return embeddings.float().cpu().numpy()
 
     @jaxtyped(typechecker=beartype)
     def encode(prompts: list[str]) -> Float[np.ndarray, "batch dim seq"]:
-        chunks = [
-            _encode_chunk(prompts[start : start + T5GEMMA_ENCODE_MAX_BATCH])
-            for start in range(0, len(prompts), T5GEMMA_ENCODE_MAX_BATCH)
-        ]
-        return rearrange(np.concatenate(chunks, axis=0), "b seq dim -> b dim seq")
+        if not prompts:
+            return np.empty(
+                (0, T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), dtype=np.float32
+            )
+        unique_embeddings = {
+            prompt: _encode_prompt(prompt)[0] for prompt in dict.fromkeys(prompts)
+        }
+        batch = np.stack([unique_embeddings[prompt] for prompt in prompts])
+        return rearrange(batch, "b seq dim -> b dim seq")
 
     return encode

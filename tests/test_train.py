@@ -1900,7 +1900,7 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
 
 
 @pytest.mark.requires_vst
@@ -1919,7 +1919,9 @@ def test_train_all_embedding_conditioning_real_e2e(
     :param param_spec_name: Parameter specification driving model width.
     """
     dataset_root = augment_lance_splits_with_all_embeddings(
-        surge_xt_embedding_smoke_datasets, local_embedding_checkpoints
+        surge_xt_embedding_smoke_datasets,
+        local_embedding_checkpoints,
+        param_spec_name,
     )
     assert_all_embedding_columns(dataset_root)
 
