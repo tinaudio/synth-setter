@@ -46,6 +46,8 @@ jobs:
             pattern: synth_setter.pipeline.data.lance_*
           - name: pipeline-stats
             pattern: synth_setter.pipeline.data.stats.*
+          - name: pipeline-t5gemma
+            pattern: synth_setter.pipeline.data.t5gemma.*
           - name: pipeline-finalize
             pattern: synth_setter.pipeline.data.finalize_progress.*
           - name: ci-scripts

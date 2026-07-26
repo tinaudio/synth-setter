@@ -45,6 +45,10 @@ _MUTANT_SHARDS = [
     {"name": "pipeline-lance", "pattern": "synth_setter.pipeline.data.lance_*"},
     {"name": "pipeline-stats", "pattern": "synth_setter.pipeline.data.stats.*"},
     {
+        "name": "pipeline-t5gemma",
+        "pattern": "synth_setter.pipeline.data.t5gemma.*",
+    },
+    {
         "name": "pipeline-finalize",
         "pattern": "synth_setter.pipeline.data.finalize_progress.*",
     },
@@ -118,36 +122,44 @@ def test_mutmut_workflow_always_reports_each_shard_without_pr_trigger() -> None:
     assert upload["with"]["path"] == "mutants/"
 
 
-def test_mutmut_shard_command_with_configured_pytest_args_completes(tmp_path: Path) -> None:
-    """A real mutmut sandbox survives W&B import and accepts the CI shard pattern.
+def test_mutmut_t5gemma_shard_with_configured_pytest_args_completes(
+    tmp_path: Path,
+) -> None:
+    """A real mutmut sandbox accepts and executes the T5Gemma shard pattern.
 
     :param tmp_path: Synthetic repository used by the real mutmut process.
     """
     with (_REPO_ROOT / "pyproject.toml").open("rb") as file:
         pytest_args = tomllib.load(file)["tool"]["mutmut"]["pytest_add_cli_args"]
-    ci_pattern = next(
-        shard["pattern"] for shard in _MUTANT_SHARDS if shard["name"] == "ci-scripts"
+    t5gemma_pattern = next(
+        shard["pattern"] for shard in _MUTANT_SHARDS if shard["name"] == "pipeline-t5gemma"
     )
 
-    source_dir = tmp_path / "scripts/ci"
+    source_dir = tmp_path / "src/synth_setter/pipeline/data"
     source_dir.mkdir(parents=True)
-    (source_dir / "smoke.py").write_text("def increment(value):\n    return value + 1\n")
+    (tmp_path / "src/synth_setter/__init__.py").write_text("")
+    (tmp_path / "src/synth_setter/pipeline/__init__.py").write_text("")
+    (source_dir / "__init__.py").write_text("")
+    (source_dir / "t5gemma.py").write_text(
+        "def load_t5gemma_text_encoder(value):\n    return value + 1\n"
+    )
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
-    (tests_dir / "test_smoke.py").write_text(
+    (tests_dir / "test_t5gemma.py").write_text(
         "import wandb\n"
-        "from scripts.ci.smoke import increment\n\n"
-        "def test_increment_returns_successor():\n"
-        "    assert increment(1) == 2\n"
+        "from synth_setter.pipeline.data.t5gemma import load_t5gemma_text_encoder\n\n"
+        "def test_load_t5gemma_text_encoder_returns_successor():\n"
+        "    assert load_t5gemma_text_encoder(1) == 2\n"
     )
     (tmp_path / "pyproject.toml").write_text(
         "[tool.mutmut]\n"
-        'paths_to_mutate = ["scripts/ci/"]\n'
+        'paths_to_mutate = ["src/synth_setter/pipeline/data/"]\n'
+        'also_copy = ["src/synth_setter/"]\n'
         'tests_dir = ["tests/"]\n'
         f"pytest_add_cli_args = {json.dumps(pytest_args)}\n"
     )
 
-    assert ci_pattern == "scripts.ci.*"
+    assert t5gemma_pattern == "synth_setter.pipeline.data.t5gemma.*"
     result = subprocess.run(  # noqa: S603 — sys.executable and argv are test-owned
         [
             sys.executable,
@@ -156,7 +168,7 @@ def test_mutmut_shard_command_with_configured_pytest_args_completes(tmp_path: Pa
             "run",
             "--max-children",
             "1",
-            "scripts.ci.*",
+            t5gemma_pattern,
         ],
         cwd=tmp_path,
         capture_output=True,

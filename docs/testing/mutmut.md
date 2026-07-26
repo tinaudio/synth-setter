@@ -4,7 +4,7 @@
 modules listed under `[tool.mutmut].paths_to_mutate` in `pyproject.toml`.
 This is the authoritative entry point — the CI workflow
 `.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
-cron). CI partitions the configured mutation roots across twelve parallel
+cron). CI partitions the configured mutation roots across parallel
 module/function families; each job retains its own results and `mutants/`
 artifact even when another shard fails.
 
