@@ -116,14 +116,14 @@ def _wire_generate_into_fake_renderer(
     is the caller's responsibility — leave both unset for default-mode tests
     or call ``monkeypatch.setenv`` for explicit-rank tests.
 
-    :param spec: Spec whose ``render.renderer_version`` is mirrored by the stub probe.
+    :param spec: Spec whose synth version is mirrored by the stub runtime probe.
     :param tmp_path: Per-test tmp dir; the fake renderer is dropped here.
     :param monkeypatch: Pytest fixture used for all the stubs.
     """
     monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 8)
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     # Stub the directory skip-probe absent so every shard renders (local rclone
     # raises on a missing dir, unlike S3).

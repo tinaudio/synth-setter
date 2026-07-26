@@ -3,5 +3,4 @@ defaults:
   - synth: cardinal
   - _self_
 
-renderer_version: "0.26.2"
 process_reset_mode: preserve

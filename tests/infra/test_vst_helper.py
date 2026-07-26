@@ -134,7 +134,7 @@ def test_test_synth_defaults_to_surge_xt_when_env_unset(
     assert mod.TEST_SYNTH == "surge_xt"
     assert mod.TEST_PARAM_SPEC_NAME == "surge_xt"
     assert mod.TEST_PRESET_PATH == "presets/surge-base.vstpreset"
-    assert mod.TEST_RENDERER_VERSION == "1.3.4"
+    assert mod.TEST_SYNTH_VERSION == "1.3.4"
 
 
 @pytest.mark.infra
@@ -151,14 +151,14 @@ def test_test_synth_selects_registry_entry_from_env_override(
     assert mod.TEST_SYNTH == "obxf"
     assert mod.TEST_PARAM_SPEC_NAME == "obxf"
     assert mod.TEST_PRESET_PATH == "presets/obxf-base.vstpreset"
-    assert mod.TEST_RENDERER_VERSION == "1.0.3"
+    assert mod.TEST_SYNTH_VERSION == "1.0.3"
 
 
 @pytest.mark.infra
 def test_test_synth_selects_cardinal_registry_entry(
     monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
 ) -> None:
-    """The Cardinal CI cell resolves its preset and renderer version.
+    """The Cardinal CI cell resolves its preset and synth version.
 
     :param monkeypatch: Pins ``SYNTH_SETTER_TEST_SYNTH`` to ``cardinal``.
     :param reload_vst: Re-resolves the module constants under the patched env.
@@ -168,7 +168,7 @@ def test_test_synth_selects_cardinal_registry_entry(
     assert mod.TEST_SYNTH == "cardinal"
     assert mod.TEST_PARAM_SPEC_NAME == "cardinal"
     assert mod.TEST_PRESET_PATH == "presets/cardinal-base.vstpreset"
-    assert mod.TEST_RENDERER_VERSION == "0.26.2"
+    assert mod.TEST_SYNTH_VERSION == "0.26.2"
 
 
 @pytest.mark.infra

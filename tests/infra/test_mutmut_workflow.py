@@ -48,6 +48,7 @@ _MUTANT_SHARDS = [
         "name": "pipeline-finalize",
         "pattern": "synth_setter.pipeline.data.finalize_progress.*",
     },
+    {"name": "pipeline-t5gemma", "pattern": "synth_setter.pipeline.data.t5gemma.*"},
     {"name": "ci-scripts", "pattern": "scripts.ci.*"},
 ]
 

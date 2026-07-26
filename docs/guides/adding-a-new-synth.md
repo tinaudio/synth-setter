@@ -180,13 +180,18 @@ before the synth is generation-ready.
 
 If you prefer to register by hand (or are committing a hand-tuned spec on top of
 an earlier draft), make **two** Python edits. First the identity row in
-[`synth_spec.py`](../../src/synth_setter/synth_spec.py) — rows stay on one line
-because `--register` extends this dict by line anchor:
+[`synth_spec.py`](../../src/synth_setter/synth_spec.py), which `--register`
+extends structurally:
 
 ```python
-_synth_rows: dict[str, tuple[str, str, str]] = {
+_synth_rows: dict[str, tuple[str, str, str, str]] = {
     # ...
-    "mysynth": ("mysynth", "plugins/MySynth.vst3", "presets/mysynth-base.vstpreset"),
+    "mysynth": (
+        "mysynth",
+        "plugins/MySynth.vst3",
+        "presets/mysynth-base.vstpreset",
+        "1.2.3",
+    ),
 }
 ```
 
@@ -205,7 +210,8 @@ param_specs: dict[str, ParamSpec] = {
 Skipping the identity row is the common mistake: `--verify` will pass, then
 `tests/test_synth_spec.py` fails in CI because `SYNTHS` has no entry.
 
-The identity group is a generated projection of that row:
+The synth group is a generated projection of that row and owns all identity
+fields, including the required artifact version:
 
 ```yaml
 # src/synth_setter/configs/render/synth/mysynth.yaml
@@ -213,10 +219,11 @@ name: "mysynth"
 param_spec_name: "mysynth"
 plugin_path: "plugins/MySynth.vst3"
 plugin_state_path: "presets/mysynth-base.vstpreset"
+synth_version: "1.2.3"
 ```
 
-The render config selects it and inherits generic render knobs (sample rate,
-cadence, batch size) from the `vst` render base
+The render config selects the synth group and inherits generic render knobs
+(sample rate, cadence, batch size) from the `vst` render base
 (`src/synth_setter/configs/render/vst.yaml`):
 
 ```yaml
@@ -225,12 +232,10 @@ defaults:
   - vst
   - synth: mysynth
   - _self_
-
-renderer_version: "1.2.3"
 ```
 
-`renderer_version` is cross-checked against the loaded plugin before rendering,
-so pin the exact version you onboarded against.
+`render.synth.synth_version` is cross-checked against the loaded plugin before
+rendering, so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed

@@ -72,14 +72,13 @@ def test_vst_render_group_accepts_appended_synth_identity() -> None:
                 "experiment=surge/fake_oracle",
                 "render=vst",
                 "+render/synth=obxf",
-                "+render.renderer_version=1.0.3",
             ],
         )
 
     assert cfg.render.synth.param_spec_name == "obxf"
     assert cfg.render.synth.plugin_state_path == "presets/obxf-base.vstpreset"
     assert cfg.render.synth.plugin_path == "plugins/OB-Xf.vst3"
-    assert cfg.render.renderer_version == "1.0.3"
+    assert cfg.render.synth.synth_version == "1.0.3"
     assert cfg.render.plugin_reload_cadence == "once"
 
 
@@ -91,8 +90,8 @@ def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -
             param_spec_name=ParamSpecName("surge_xt"),
             plugin_path="plugin.vst3",
             plugin_state_path="state.vstpreset",
+            synth_version="1.0.0",
         ),
-        renderer_version="1.0.0",
         sample_rate=44100,
         channels=2,
         velocity=100,
@@ -166,7 +165,7 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
     assert spec.render.renderer_backend == "torchsynth"
     assert spec.render.plugin_path == "torchsynth"
     assert spec.render.plugin_state_path == ""
-    assert spec.render.renderer_version == "1.0.2"
+    assert spec.render.synth.synth_version == "1.0.2"
     assert spec.render.audio_dtype == "float16"
     assert spec.render.mel_spec_dtype == "float32"
     assert spec.render.gui_toggle_cadence == "never"
@@ -181,7 +180,7 @@ def test_render_cardinal_composes_into_valid_render_config() -> None:
 
     assert spec.render.synth.name == "cardinal"
     assert spec.render.param_spec_name == "cardinal"
-    assert spec.render.renderer_version == "0.26.2"
+    assert spec.render.synth.synth_version == "0.26.2"
     assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
     assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
     assert spec.render.process_reset_mode == "preserve"
@@ -226,7 +225,7 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     spec = _spec_from_dataset_overrides(["render=obxf"])
 
     assert spec.render.param_spec_name == "obxf"
-    assert spec.render.renderer_version == "1.0.3"
+    assert spec.render.synth.synth_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
     assert spec.render.plugin_state_path == "presets/obxf-base.vstpreset"
     assert spec.num_params == 187
@@ -255,5 +254,5 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     assert cfg.synth.param_spec_name == param_spec_name
     assert cfg.synth.plugin_state_path == plugin_state_path
     assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
-    assert cfg.renderer_version == surge_xt.renderer_version
+    assert cfg.synth.synth_version == surge_xt.synth.synth_version
     assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence

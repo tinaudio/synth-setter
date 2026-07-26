@@ -15,6 +15,7 @@ from typing import Literal
 import pytest
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
+from pydantic import ValidationError
 
 from synth_setter.cli.train import (
     _checkpoint_prefix_uri,
@@ -65,10 +66,13 @@ def _cfg(
     if with_render:
         with open_dict(cfg):
             cfg.render = {
-                "param_spec_name": "surge_xt",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "plugin_path": "plugins/Surge XT.vst3",
-                "renderer_version": "1.3.4",
+                "synth": {
+                    "name": "surge_xt",
+                    "param_spec_name": "surge_xt",
+                    "plugin_state_path": "presets/surge-base.vstpreset",
+                    "plugin_path": "plugins/Surge XT.vst3",
+                    "synth_version": "1.3.4",
+                },
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
@@ -126,7 +130,7 @@ def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
     settings = probe._probe_fn.keywords["settings"]  # noqa: SLF001
     assert settings.param_spec_name == "surge_xt"
     assert settings.plugin_state_path == "presets/surge-base.vstpreset"
-    assert settings.renderer_version == "1.3.4"
+    assert settings.synth.synth_version == "1.3.4"
     assert settings.sample_rate == 44100
 
 
@@ -231,16 +235,14 @@ def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> 
     assert isinstance(callbacks[0], ValAudioProbe)
 
 
-def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> None:
-    """A render group without ``param_spec_name`` fails and the message says it is unset."""
+def test_configure_val_audio_probe_rejects_synth_missing_param_spec_name() -> None:
+    """A malformed nested synth identity fails before probe construction."""
     cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
     with open_dict(cfg):
-        del cfg.render.param_spec_name
+        del cfg.render.synth.param_spec_name
 
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValidationError, match="param_spec_name"):
         _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
-
-    assert "render.param_spec_name is unset" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

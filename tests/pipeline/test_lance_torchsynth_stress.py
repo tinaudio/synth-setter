@@ -37,10 +37,13 @@ def _torchsynth_render_cfg(**overrides: object) -> RenderConfig:
     :returns: Validated render config.
     """
     kwargs: dict[str, object] = {
-        "plugin_path": "torchsynth",
-        "plugin_state_path": "",
-        "param_spec_name": "torchsynth_adsr",
-        "renderer_version": package_version("torchsynth"),
+        "synth": {
+            "name": "torchsynth_adsr",
+            "param_spec_name": "torchsynth_adsr",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "",
+            "synth_version": package_version("torchsynth"),
+        },
         "renderer_backend": "torchsynth",
         "sample_rate": _SAMPLE_RATE,
         "channels": 2,

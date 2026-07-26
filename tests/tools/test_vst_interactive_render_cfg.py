@@ -26,7 +26,7 @@ def _cfg(**overrides: object) -> RenderConfig:
         "param_spec_name": "surge_simple",
         "plugin_path": "plugins/Surge XT.vst3",
         "plugin_state_path": "presets/surge-simple.vstpreset",
-        "renderer_version": "1.3.4",
+        "synth_version": "1.3.4",
         "samples_per_shard": 3,
     }
     kwargs.update(overrides)

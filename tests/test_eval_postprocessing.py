@@ -75,10 +75,13 @@ def _build_postprocess_cfg(
     """
     if render is not None:
         render_values: dict[str, Any] = {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "plugin_state_path": "presets/surge-simple.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-simple.vstpreset",
+                "synth_version": "1.3.4",
+            },
             "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
@@ -90,7 +93,12 @@ def _build_postprocess_cfg(
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
         }
-        render_values.update(render)
+        identity_keys = {"param_spec_name", "plugin_path", "plugin_state_path", "synth_version"}
+        identity_overrides = {key: render[key] for key in identity_keys if key in render}
+        render_values["synth"].update(identity_overrides)
+        render_values.update(
+            {key: value for key, value in render.items() if key not in identity_keys}
+        )
         render = render_values
     return OmegaConf.create(  # type: ignore[no-any-return]
         {

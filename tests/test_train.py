@@ -33,6 +33,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -559,8 +560,13 @@ def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: P
     with open_dict(cfg):
         cfg.training.val_audio_probe = True
         cfg.render = {
-            "param_spec_name": "surge_xt",
-            "plugin_state_path": "presets/surge-base.vstpreset",
+            "synth": {
+                "name": "surge_xt",
+                "param_spec_name": "surge_xt",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            }
         }
 
     HydraConfig().set_config(cfg)
@@ -1368,7 +1374,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     """
     import concurrent.futures
 
-    from synth_setter.data.vst.param_spec_registry import plugin_state_paths
+    from synth_setter.synth_spec import SynthName, resolve_synth
     from synth_setter.utils.callbacks import ValAudioProbe
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
@@ -1377,19 +1383,18 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     # fake_r2_remote chdirs into tmp_path, so the render config's repo-relative
     # plugin/preset paths must be absolutized before they are handed to the renderer.
     workspace = operator_workspace()
+    plugin_path = Path(PLUGIN_PATH)
+    resolved_plugin_path = plugin_path if plugin_path.is_absolute() else workspace / plugin_path
+    registered_synth = resolve_synth(SynthName(param_spec_name))
+    probe_synth = registered_synth.model_copy(
+        update={
+            "plugin_path": str(resolved_plugin_path),
+            "plugin_state_path": str(workspace / registered_synth.plugin_state_path),
+        }
+    )
     probe_samples = 2
     with open_dict(cfg_surge_real_train):
-        cfg_surge_real_train.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_path": str(
-                Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else workspace / PLUGIN_PATH
-            ),
-            "plugin_state_path": str(workspace / plugin_state_paths[param_spec_name]),
-            "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
-            "channels": _SURGE_FIXTURE_CHANNELS,
-            "velocity": 100,
-            "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
-        }
+        cfg_surge_real_train.render.synth = probe_synth.model_dump(mode="json")
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
@@ -1911,7 +1916,7 @@ def test_train_all_embedding_conditioning_real_e2e(
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every conditioning profile through real render, encode, and fit paths.
+    """Train every profile, then load a real T5Gemma FF checkpoint for validation.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -1943,3 +1948,44 @@ def test_train_all_embedding_conditioning_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+
+    ff_output_dir = tmp_path / "t5gemma-feed-forward"
+    ff_cfg = build_surge_xt_embedding_train_cfg(
+        ff_output_dir,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="t5gemma",
+        architecture="feed_forward",
+    )
+    HydraConfig().set_config(ff_cfg)
+    try:
+        ff_metric_dict, ff_object_dict = train(ff_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    ff_trainer = ff_object_dict["trainer"]
+    assert isinstance(ff_object_dict["model"], VSTFeedForwardModule)
+    assert ff_trainer.global_step >= 1, (
+        f"T5Gemma feed-forward trainer did not advance: global_step={ff_trainer.global_step}"
+    )
+    assert_finite_train_loss(ff_metric_dict)
+
+    checkpoint_path = ff_output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    ff_eval_cfg = ff_cfg.copy()
+    eval_output_dir = ff_output_dir / "evaluation"
+    with open_dict(ff_eval_cfg):
+        ff_eval_cfg.paths.output_dir = str(eval_output_dir)
+        ff_eval_cfg.paths.log_dir = str(eval_output_dir)
+        ff_eval_cfg.ckpt_path = str(checkpoint_path)
+        ff_eval_cfg.mode = "validate"
+        ff_eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(ff_eval_cfg)
+    try:
+        eval_metric_dict, eval_object_dict = evaluate(ff_eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])

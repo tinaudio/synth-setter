@@ -53,8 +53,8 @@ def _render_config(
             param_spec_name=ParamSpecName(param_spec_name),
             plugin_path="faust",
             plugin_state_path="",
+            synth_version="0.8.3",
         ),
-        renderer_version="0.8.3",
         renderer_backend="dawdreamer_faust",
         sample_rate=_SAMPLE_RATE,
         channels=channels,
@@ -123,9 +123,12 @@ def test_factory_renders_real_checked_in_faust_source(
     assert float(np.max(np.abs(audio))) > _MIN_AUDIBLE_PEAK
 
 
-def test_factory_rejects_mismatched_faust_renderer_version() -> None:
+def test_factory_rejects_mismatched_faust_synth_version() -> None:
     """Faust provenance must match the pinned DawDreamer runtime."""
-    config = _render_config().model_copy(update={"renderer_version": "9.9.9"})
+    config = _render_config()
+    config = config.model_copy(
+        update={"synth": config.synth.model_copy(update={"synth_version": "9.9.9"})}
+    )
 
     with pytest.raises(ValueError, match="DawDreamer renderer version"):
         make_audio_renderer(config)

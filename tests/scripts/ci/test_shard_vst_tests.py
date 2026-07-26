@@ -95,8 +95,11 @@ def test_main_appends_matrix_line_to_github_output_file() -> None:
     assert line.startswith("matrix=")
     matrix = json.loads(line[len("matrix=") :])
     files_across_shards = " ".join(cell["files"] for cell in matrix["include"])
-    assert "tests/data/vst/test_a.py" in files_across_shards
-    assert "tests/tools/test_c.py" in files_across_shards
+    assert sorted(files_across_shards.split()) == [
+        "tests/data/vst/test_a.py",
+        "tests/test_b.py",
+        "tests/tools/test_c.py",
+    ]
 
 
 def test_main_prints_matrix_to_stdout_when_github_output_unset() -> None:

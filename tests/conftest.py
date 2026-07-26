@@ -43,7 +43,7 @@ _SURGE_FIXTURE_CHANNELS = 2
 _SURGE_FIXTURE_DURATION_SECONDS = 4.0
 _SURGE_FIXTURE_VELOCITY = 100
 _SURGE_FIXTURE_MIN_LOUDNESS = -55.0
-_SURGE_FIXTURE_RENDERER_VERSION = "1.3.4"
+_SURGE_FIXTURE_SYNTH_VERSION = "1.3.4"
 _SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_FIXTURE_SAMPLE_RATE * _SURGE_FIXTURE_DURATION_SECONDS)
 _SURGE_AUDIO_CHANNELS = _SURGE_FIXTURE_CHANNELS
 _SURGE_MEL_SHAPE = (2, 128, 401)
@@ -921,7 +921,7 @@ def _render_smoke_train_subprocess(
         f"--synth.plugin_path={PLUGIN_PATH}",
         f"--synth.plugin_state_path={plugin_state_paths[param_spec_name]}",
         f"--synth.param_spec_name={param_spec_name}",
-        f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
+        f"--synth.synth_version={_SURGE_FIXTURE_SYNTH_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
         f"--channels={_SURGE_FIXTURE_CHANNELS}",
         f"--velocity={_SURGE_FIXTURE_VELOCITY}",
@@ -975,8 +975,8 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
             param_spec_name=ParamSpecName(param_spec_name),
             plugin_path=PLUGIN_PATH,
             plugin_state_path=str(plugin_state_paths[param_spec_name]),
+            synth_version=_SURGE_FIXTURE_SYNTH_VERSION,
         ),
-        renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
         channels=_SURGE_FIXTURE_CHANNELS,
         velocity=_SURGE_FIXTURE_VELOCITY,
@@ -1187,11 +1187,12 @@ def build_surge_xt_embedding_train_cfg(
     *,
     param_spec_name: str,
     conditioning: str,
+    architecture: Literal["flow", "feed_forward"] = "flow",
 ) -> DictConfig:
-    """Compose a one-step CPU flow-training cfg wired to an embedding-conditioning profile.
+    """Compose a one-step CPU train cfg wired to an embedding-conditioning profile.
 
-    Composes ``experiment=surge/flow_simple`` with ``conditioning=<profile>`` over
-    the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
+    Composes the selected shipped Surge architecture with ``conditioning=<profile>``
+    over the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
     dataset augmented with the profile's Lance column. Lives here (not inline in
     ``tests/test_train.py``) because that module is barred from importing Hydra
     config-initializers (see ``tests/_meta/test_entrypoint_e2e_only.py``).
@@ -1201,19 +1202,36 @@ def build_surge_xt_embedding_train_cfg(
     :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         model width and per-parameter callback labels.
-    :param conditioning: Conditioning profile group (``"clap"`` / ``"m2l"``).
+    :param conditioning: Conditioning profile group.
+    :param architecture: Shipped flow or feed-forward VST model; defaults to flow.
     :returns: Resolved one-step embedding-conditioning train DictConfig.
     """
+    experiment = {
+        "feed_forward": "surge/ffn_simple",
+        "flow": "surge/flow_simple",
+    }[architecture]
+    model_overrides = (
+        [
+            "model.net.d_model=16",
+            "model.net.n_heads=1",
+            "model.net.n_layers=1",
+            "model.net.patch_size=128",
+            "model.net.patch_stride=64",
+        ]
+        if architecture == "feed_forward"
+        else []
+    )
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_simple",
+                f"experiment={experiment}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
                 "callbacks=[default_vst,eval_vst]",
+                *model_overrides,
             ],
         )
         with open_dict(cfg):
@@ -1227,8 +1245,7 @@ def build_surge_xt_embedding_train_cfg(
             cfg.trainer.devices = 1
             cfg.trainer.max_steps = 1
             cfg.trainer.min_steps = 1
-            # Flow validation runs expensive ODE sampling; the train-loss e2e skips
-            # it. The eval e2e drives validation through evaluate() instead.
+            # Training skips validation; checkpoint-consumer coverage uses evaluate().
             cfg.trainer.limit_val_batches = 0
             cfg.trainer.log_every_n_steps = 1
             cfg.trainer.enable_model_summary = False
@@ -1349,10 +1366,13 @@ def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[s
     """
     config = RenderConfig.model_validate(
         {
-            "plugin_path": plugin_path,
-            "plugin_state_path": plugin_state_paths[param_spec_name],
-            "param_spec_name": param_spec_name,
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": param_spec_name,
+                "param_spec_name": param_spec_name,
+                "plugin_path": plugin_path,
+                "plugin_state_path": plugin_state_paths[param_spec_name],
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
@@ -1836,10 +1856,13 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
         "output_format": "lance",
         "base_seed": 42,
         "render": {
-            "plugin_path": "plugins/fake.vst3",
-            "plugin_state_path": "presets/fake.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "0.0.0-fake",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/fake.vst3",
+                "plugin_state_path": "presets/fake.vstpreset",
+                "synth_version": "0.0.0-fake",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

@@ -2,7 +2,7 @@
 
 ``SYNTH_SETTER_TEST_SYNTH`` (a ``plugin_state_paths`` key, default ``surge_xt``)
 drives ``TEST_SYNTH`` / ``TEST_PARAM_SPEC_NAME`` / ``TEST_PRESET_PATH`` /
-``TEST_RENDERER_VERSION`` so a CI cell can target a second synth without
+``TEST_SYNTH_VERSION`` so a CI cell can target a second synth without
 hardcoding. The plugin binary resolves
 separately via ``SYNTH_SETTER_PLUGIN_PATH`` (``PLUGIN_PATH`` / ``VST_AVAILABLE``);
 ``conftest.pytest_collection_modifyitems`` consults ``VST_AVAILABLE`` to
@@ -28,23 +28,17 @@ TEST_PARAM_SPEC_NAME = TEST_SYNTH
 TEST_PRESET_PATH = plugin_state_paths[TEST_SYNTH]
 
 
-def _composed_renderer_version(synth: str) -> str:
-    """Read one render group's ``renderer_version`` pin through Hydra.
-
-    Read rather than mirrored so the tests cannot pin a version the shipped
-    render group no longer declares.
+def _composed_synth_version(synth: str) -> str:
+    """Read one synth group's ``synth_version`` pin through Hydra.
 
     :param synth: Render group name, matching the registry key.
-    :returns: The ``renderer_version`` that group composes to.
+    :returns: The ``synth_version`` that group composes to.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        return str(compose(config_name=f"render/{synth}").render.renderer_version)
+        return str(compose(config_name=f"render/{synth}").render.synth.synth_version)
 
 
-# Sourced from ``configs/render/<synth>.yaml`` — the same value
-# ``generate_dataset`` cross-checks against the plugin — so the synth-agnostic
-# dataset test labels provenance for the selected synth, not always Surge XT's.
-TEST_RENDERER_VERSION = _composed_renderer_version(TEST_SYNTH)
+TEST_SYNTH_VERSION = _composed_synth_version(TEST_SYNTH)
 
 PLUGIN_PATH = default_plugin_path()
 

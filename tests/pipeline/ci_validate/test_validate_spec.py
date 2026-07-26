@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from synth_setter.pipeline.ci.validate_spec import (
     _REQUIRED_RENDER_FIELDS,
+    _REQUIRED_SYNTH_FIELDS,
     _REQUIRED_TOP_LEVEL_FIELDS,
     validate_structure,
     validate_test_values,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthSpec
 
 
 def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> dict:
@@ -39,8 +43,8 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
                 "param_spec_name": "surge_simple",
                 "plugin_path": "plugins/Surge XT.vst3",
                 "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
             },
-            "renderer_version": "1.3.4",
             "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
@@ -114,10 +118,16 @@ class TestValidateStructure:
         spec = _make_valid_spec(git_sha="not-a-sha")
         assert any("git_sha" in e for e in validate_structure(spec))
 
-    def test_empty_renderer_version_returns_error(self) -> None:
-        """Empty render.renderer_version returns a renderer_version error."""
-        spec = _make_valid_spec(render={"renderer_version": ""})
-        assert any("renderer_version" in e for e in validate_structure(spec))
+    @pytest.mark.parametrize("value", ["", "  ", 1.3, None])
+    def test_invalid_synth_version_returns_specific_error(self, value: object) -> None:
+        """The version must be a nonblank string.
+
+        :param value: Invalid serialized version value.
+        """
+        spec = _make_valid_spec()
+        spec["render"]["synth"]["synth_version"] = value
+
+        assert "render.synth.synth_version must be a non-empty string" in validate_structure(spec)
 
     def test_empty_shards_returns_error(self) -> None:
         """Empty shards list returns a shards error."""
@@ -154,9 +164,13 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "mel_spec_dtype",
-            # Checked shape-aware instead, so pre-nesting specs still validate.
+            # Checked shape-aware so the nested identity can be validated.
             "synth",
         }
+
+    def test_required_synth_fields_match_synth_spec_model(self) -> None:
+        """Structural validation derives synth identity fields from the schema."""
+        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields)
 
     def test_other_defaulted_render_field_remains_required(self) -> None:
         """Platform-dependent defaults must be materialized in persisted specs."""
@@ -200,51 +214,29 @@ class TestValidateTestValues:
 
 
 class TestSynthIdentityShape:
-    """Identity is checked shape-aware so archived specs stay validatable.
+    """Synth identity must use the canonical nested shape."""
 
-    ``validate-dataset-shards.yaml`` exposes a ``workflow_dispatch`` taking an
-    arbitrary ``spec_uri``, so operators can point this validator at a spec written
-    before identity was nested.
-    """
+    @pytest.mark.parametrize("field", sorted(SynthSpec.model_fields))
+    def test_a_spec_missing_a_required_synth_field_is_rejected(self, field: str) -> None:
+        """Every schema-required identity field is enforced structurally.
 
-    def _legacy_render(self) -> dict[str, object]:
-        """Return a render mapping in the pre-nesting flat identity shape.
-
-        :returns: A render dict whose identity keys are top-level.
+        :param field: Required identity field removed from the payload.
         """
         spec = _make_valid_spec()
-        render = dict(spec["render"])
-        synth = render.pop("synth")
-        assert isinstance(synth, dict)
-        render["param_spec_name"] = synth["param_spec_name"]
-        render["plugin_path"] = synth["plugin_path"]
-        render["plugin_state_path"] = synth["plugin_state_path"]
-        return render
-
-    def test_a_pre_nesting_spec_still_validates(self) -> None:
-        """A spec carrying the flat identity keys passes structural validation."""
-        spec = _make_valid_spec()
-        spec["render"] = self._legacy_render()
-
-        assert validate_structure(spec) == []
-
-    def test_a_spec_with_no_identity_at_all_is_rejected(self) -> None:
-        """Neither shape present is an error, not a silently-accepted omission."""
-        spec = _make_valid_spec()
-        render = dict(spec["render"])
-        del render["synth"]
-        spec["render"] = render
+        del spec["render"]["synth"][field]
 
         errors = validate_structure(spec)
 
-        assert any("synth identity" in error for error in errors)
+        assert any("missing required synth fields" in error and field in error for error in errors)
 
-    def test_test_values_read_the_param_spec_from_the_legacy_shape(self) -> None:
-        """The passthrough check reads identity from whichever shape the spec uses."""
+    def test_a_spec_with_no_nested_identity_is_rejected(self) -> None:
+        """A missing nested synth mapping is a structural error."""
         spec = _make_valid_spec()
-        spec["render"] = self._legacy_render()
+        del spec["render"]["synth"]
 
-        assert not [e for e in validate_test_values(spec) if "param_spec_name" in e]
+        errors = validate_structure(spec)
+
+        assert any("render.synth must be a mapping" in error for error in errors)
 
     def test_test_values_flag_a_wrong_param_spec_in_the_nested_shape(self) -> None:
         """A nested identity naming the wrong spec is still caught."""

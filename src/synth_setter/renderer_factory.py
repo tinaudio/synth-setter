@@ -28,7 +28,7 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
     if backend == "dawdreamer_faust":
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 
-        ensure_dawdreamer_runtime(backend, render_config.renderer_version)
+        ensure_dawdreamer_runtime(backend, renderer_version=render_config.synth.synth_version)
         return DawDreamerFaustRenderer(
             plugin_path=render_config.plugin_path,
             sample_rate=render_config.sample_rate,

@@ -34,10 +34,13 @@ def _spec_kwargs() -> dict[str, object]:
             "prefix": "data/test-task/test-task-20260519T120000000Z/",
         },
         "render": {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

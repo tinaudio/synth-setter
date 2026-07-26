@@ -90,7 +90,8 @@ jobs:
   vst_sweep:
     name: VST sweep shard ${{ matrix.shard }}
     needs: discover
-    runs-on: ubuntu-latest-4core
+    # The paid 4-core pool is paused; standard hosted runners start promptly (#2461).
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     # Neither shard masks the other: every failing VST test must be named in
     # its own red cell.
@@ -138,7 +139,8 @@ jobs:
               fi
               [[ -d plugins/CardinalSynth.vst3 ]]
               read -ra shard_files <<< "$SHARD_FILES"
-              src/synth_setter/scripts/run-linux-vst-headless.sh \
+              timeout --signal=TERM --kill-after=30s 80m \
+                src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
                   -m "$VST_MARKER" \
