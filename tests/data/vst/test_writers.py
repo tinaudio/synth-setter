@@ -242,8 +242,10 @@ def _stub_plugin_loading(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Pytest fixture used to patch module-level callables.
     """
-    monkeypatch.setattr(writers, "load_plugin", lambda _path: _FakePlugin())
-    monkeypatch.setattr(writers, "load_preset", lambda _plugin, _preset: None)
+    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", lambda _path: _FakePlugin())
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.load_preset", lambda _plugin, _preset: None
+    )
 
 
 def _stub_plugin_load_seams(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,8 +253,8 @@ def _stub_plugin_load_seams(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Caller's fixture, so the stubs revert at that test's teardown.
     """
-    monkeypatch.setattr(writers, "load_plugin", lambda _path: _FakePlugin())
-    monkeypatch.setattr(writers, "load_preset", lambda _plugin, _path: None)
+    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", lambda _path: _FakePlugin())
+    monkeypatch.setattr("synth_setter.data.vst.core.load_preset", lambda _plugin, _path: None)
 
 
 def _stub_render_dependencies(
@@ -298,8 +300,8 @@ def _stub_render_dependencies(
             silent_rejections=silent_rejections,
         )
 
-    monkeypatch.setattr(writers, "load_plugin", _fake_load_plugin)
-    monkeypatch.setattr(writers, "load_preset", _fake_load_preset)
+    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", _fake_load_plugin)
+    monkeypatch.setattr("synth_setter.data.vst.core.load_preset", _fake_load_preset)
     monkeypatch.setattr(writers, "generate_sample", _fake_generate_sample)
     return captured
 
@@ -479,61 +481,6 @@ def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(
     for call_kwargs in captured:
         assert getattr(call_kwargs["renderer"], "plugin") is cached
     assert sum(len(batch) for batch, _ in flushed) == n
-
-
-@pytest.mark.parametrize(
-    ("cadence", "reload_each_render"),
-    [("once", False), ("render", True)],
-)
-def test_make_renderer_maps_dawdreamer_reload_cadence(
-    monkeypatch: pytest.MonkeyPatch,
-    cadence: str,
-    reload_each_render: bool,
-) -> None:
-    """DawDreamer receives the requested plugin lifecycle policy.
-
-    :param monkeypatch: Replaces renderer construction with a capture seam.
-    :param cadence: Public reload cadence under test.
-    :param reload_each_render: Expected renderer lifecycle flag.
-    """
-    captured: dict[str, object] = {}
-
-    def capture_renderer(**kwargs: object) -> MagicMock:
-        captured.update(kwargs)
-        return MagicMock()
-
-    monkeypatch.setattr(writers, "DawDreamerRenderer", capture_renderer)
-    render_cfg = _smoke_render_cfg(
-        renderer_backend="dawdreamer",
-        plugin_reload_cadence=cadence,
-        gui_toggle_cadence="never",
-    )
-
-    writers._make_renderer(render_cfg)
-
-    assert captured["reload_plugin_each_render"] is reload_each_render
-
-
-def test_make_renderer_torchsynth_backend_builds_in_process_renderer() -> None:
-    """The torchsynth backend dispatches to the in-process renderer with the audio geometry."""
-    from synth_setter.data.vst.renderers import TorchSynthRenderer
-
-    render_cfg = _smoke_render_cfg(
-        renderer_backend="torchsynth",
-        plugin_path="torchsynth",
-        plugin_state_path="",
-        param_spec_name="torchsynth_adsr",
-        renderer_version="1.0.2",
-        sample_rate=22050,
-        signal_duration_seconds=0.5,
-        gui_toggle_cadence="never",
-    )
-
-    renderer = writers._make_renderer(render_cfg)
-
-    assert isinstance(renderer, TorchSynthRenderer)
-    assert (renderer.sample_rate, renderer.channels) == (22050, 2)
-    assert renderer.signal_duration_seconds == 0.5
 
 
 def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(

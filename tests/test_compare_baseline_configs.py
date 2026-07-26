@@ -351,6 +351,10 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "datamodule.stats_file",
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
+    # Subset-hydration selectors added in #2360; absent in v0.0.0. Both resolve to
+    # null, hydrating the whole dataset, so training sees the v0.0.0 row set.
+    "datamodule.download_dataset_row_limit",
+    "datamodule.download_dataset_txids",
     # Param-spec selection key added in #1602; absent in v0.0.0 — selects the spec,
     # doesn't size the model (d_out/num_params are pinned separately).
     "datamodule.param_spec_name",

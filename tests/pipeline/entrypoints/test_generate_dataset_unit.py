@@ -2886,6 +2886,9 @@ class TestMainDispatchBranches:
         assert "+render.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "+render.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"+render.renderer_version={render.renderer_version}" in called_argv
+        assert f"render.renderer_backend={render.renderer_backend}" in called_argv
+        assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
+        assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
         assert f"render.channels={render.channels}" in called_argv
         assert f"render.velocity={render.velocity}" in called_argv

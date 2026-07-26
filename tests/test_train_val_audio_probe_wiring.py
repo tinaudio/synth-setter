@@ -68,10 +68,15 @@ def _cfg(
                 "param_spec_name": "surge_xt",
                 "plugin_state_path": "presets/surge-base.vstpreset",
                 "plugin_path": "plugins/Surge XT.vst3",
+                "renderer_version": "1.3.4",
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
                 "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 1,
+                "gui_toggle_cadence": "never",
             }
     return cfg
 
@@ -108,6 +113,21 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
     assert isinstance(probe, ValAudioProbe)
     assert probe.num_samples == 5
     assert probe.probe_root == Path("/runs/out") / "val_audio_probe"
+
+
+def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
+    """The callback receives both synth identity and renderer settings."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    settings = probe._probe_fn.keywords["settings"]  # noqa: SLF001
+    assert settings.param_spec_name == "surge_xt"
+    assert settings.plugin_state_path == "presets/surge-base.vstpreset"
+    assert settings.renderer_version == "1.3.4"
+    assert settings.sample_rate == 44100
 
 
 def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:

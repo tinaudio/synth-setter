@@ -5,17 +5,13 @@ from typing import Any, Literal, TypedDict, cast
 
 import numpy as np
 
-# param representations:
-# 1. Synth: dict of str -> float pairs, where the float is on [0, 1]
-# 2. Semantic: dict of str -> representation pairs, where the representation takes on
-#    the interpretable value of the parameter
-# 3. Encoded: NumPy array of values on [0, 1]
+# Synth values are renderer-native; semantic values are interpretable; encoded values use [0, 1].
 
 
 class Parameter:
     name: str
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.name = name
 
     def sample(self, rng: np.random.Generator) -> Any:
@@ -166,16 +162,23 @@ class ContinuousParameter(Parameter):
         max: float = 1.0,
         constant_val_p: float = 0.0,
         constant_val: float = 0.0,
-    ):
+    ) -> None:
         super().__init__(name)
 
-        assert max > min, "max must be greater than min"
-        assert min >= 0.0, "min must be greater than or equal to 0.0"
-        assert max <= 1.0, "max must be less than or equal to 1.0"
+        if not np.isfinite(min) or not np.isfinite(max):
+            raise ValueError("bounds must be finite")
+        if max <= min:
+            raise ValueError("max must be greater than min")
+        # Finite bounds can still overflow when normalization subtracts them.
+        if not np.isfinite(max - min):
+            raise ValueError("span must be finite")
+        if not 0.0 <= constant_val_p <= 1.0:
+            raise ValueError("constant_val_p must be in [0, 1]")
+        if constant_val_p > 0.0 and not min <= constant_val <= max:
+            raise ValueError("constant_val must be within [min, max] when enabled")
 
         self.min = min
         self.max = max
-
         self.constant_val_p = constant_val_p
         self.constant_val = constant_val
 
@@ -234,10 +237,8 @@ class NoteParams(TypedDict):  # noqa: DOC601, DOC603
 
 class ParamSpec:
     def __init__(
-        self,
-        synth_params: list[Parameter],
-        note_params: list[Parameter],
-    ):
+        self, synth_params: list[Parameter], note_params: list[Parameter]
+    ) -> None:
         self.synth_params = synth_params
         self.note_params = note_params
 
@@ -341,9 +342,9 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
     :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
         ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
     :param spec: Spec the model was trained against.
-    :returns: ``(synth_param_dict, note_params)``; synth values are
-        pedalboard-normalized raw values (conventionally ``[0, 1]``), note
-        params are in their native domains (pitch as int, start/end seconds).
+    :returns: ``(synth_param_dict, note_params)``; synth values are in the
+        selected renderer's native parameter domains, while note params contain
+        pitch as int and start/end seconds.
     """
     scaled = np.clip((row + 1) / 2, 0, 1)
     return spec.decode(scaled)

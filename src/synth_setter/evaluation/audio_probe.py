@@ -13,13 +13,14 @@ import logging
 import subprocess
 import sys
 from contextlib import ExitStack
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from pydantic_settings import CliApp
 
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS, scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 
@@ -41,52 +42,6 @@ _UPLOAD_EXCLUDE = "predictions/**"
 PREDICTIONS_DIRNAME = "predictions"
 AUDIO_DIRNAME = "audio"
 METRICS_DIRNAME = "metrics"
-
-
-@dataclass(frozen=True, kw_only=True)
-class ProbeRenderSettings:
-    """Render fields forwarded to ``predict_vst_audio``.
-
-    Mirrors the ``render`` config group so the probe re-renders the way the dataset
-    was generated rather than falling back to the CLI's own defaults. ``None``
-    means "leave the CLI default", matching eval's gated forwarding.
-
-    .. attribute :: param_spec_name
-
-        Registry key naming the spec predictions decode against.
-
-    .. attribute :: plugin_state_path
-
-        Preset applied before each render.
-
-    .. attribute :: plugin_path
-
-        VST3 bundle path; ``None`` uses the CLI default.
-
-    .. attribute :: sample_rate
-
-        Render sample rate in Hz.
-
-    .. attribute :: channels
-
-        Output channel count.
-
-    .. attribute :: velocity
-
-        MIDI note velocity.
-
-    .. attribute :: signal_duration_seconds
-
-        Rendered clip length in seconds.
-    """
-
-    param_spec_name: str
-    plugin_state_path: str
-    plugin_path: str | None = None
-    sample_rate: float | None = None
-    channels: int | None = None
-    velocity: int | None = None
-    signal_duration_seconds: float | None = None
 
 
 def _run_captured(argv: list[str], stage: str, timeout: float) -> None:  # noqa: DOC502 — raised by subprocess.run
@@ -121,7 +76,7 @@ def _staged_sample_count(probe_dir: Path) -> int:
     return int(pred.shape[0])
 
 
-def _render_argv(probe_dir: Path, settings: ProbeRenderSettings, stack: ExitStack) -> list[str]:
+def _render_argv(probe_dir: Path, settings: RenderConfig, stack: ExitStack) -> list[str]:
     """Build the ``predict_vst_audio`` argv, Xvfb-wrapped on Linux.
 
     The wrapper must precede the interpreter so the VST3 has a display before
@@ -141,24 +96,12 @@ def _render_argv(probe_dir: Path, settings: ProbeRenderSettings, stack: ExitStac
         _PREDICT_VST_AUDIO_MODULE,
         str(probe_dir / PREDICTIONS_DIRNAME),
         str(probe_dir / AUDIO_DIRNAME),
-        "--param_spec",
-        settings.param_spec_name,
-        "--plugin_state_path",
-        settings.plugin_state_path,
+        *CliApp.serialize(settings),
         # Training val batches carry no raw audio, so the target is re-rendered
-        # from the staged target-params.
-        "--rerender_target",
+        # from the staged target parameters.
+        "--rerender-target",
+        "True",
     ]
-    optional = (
-        ("--plugin_path", settings.plugin_path),
-        ("--sample_rate", settings.sample_rate),
-        ("--channels", settings.channels),
-        ("--velocity", settings.velocity),
-        ("--signal_duration_seconds", settings.signal_duration_seconds),
-    )
-    for flag, value in optional:
-        if value is not None:
-            argv += [flag, str(value)]
     return argv
 
 
@@ -166,7 +109,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
     probe_dir: Path,
     step: int,
     *,
-    settings: ProbeRenderSettings,
+    settings: RenderConfig,
     upload_uri: str | None = None,
     num_workers: int = 2,
 ) -> dict[str, float]:
@@ -194,7 +137,7 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         _run_captured(
             argv,
             "render",
-            # 2× samples: --rerender_target renders both pred and target per sample.
+            # Target re-rendering doubles the renderer work per sample.
             timeout=scaled_timeout(
                 n_samples * 2,
                 overhead_seconds=RENDER_TIMEOUT_OVERHEAD_SECONDS,

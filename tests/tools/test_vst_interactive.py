@@ -20,9 +20,38 @@ from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests.helpers.lance_fixtures import write_lance_shard
 
 SURGE_SIMPLE = "surge_simple"
+
+
+def _render_config(
+    param_spec_name: str = SURGE_SIMPLE,
+    plugin_state_path: str = "presets/surge-simple.vstpreset",
+) -> RenderConfig:
+    """Return a complete config for captured-patch renderer subprocesses.
+
+    :param param_spec_name: Registry identity rendered by the subprocess.
+    :param plugin_state_path: Preset loaded before each render session.
+    :returns: Validated renderer configuration.
+    """
+    return RenderConfig(
+        plugin_path="plugins/Surge XT.vst3",
+        plugin_state_path=plugin_state_path,
+        param_spec_name=ParamSpecName(param_spec_name),
+        renderer_version="1.3.4",
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-55.0,
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -1467,7 +1496,7 @@ class _RecordingEvalRunner:
     """
 
     def __init__(self) -> None:
-        self.calls: list[tuple[int, Path, Path, str, str, str]] = []
+        self.calls: list[tuple[int, Path, Path, RenderConfig, str]] = []
 
     def __call__(
         self,
@@ -1475,8 +1504,7 @@ class _RecordingEvalRunner:
         *,
         dataset_root_dir: Path,
         checkpoint_path: Path,
-        param_spec_name: str,
-        plugin_state_path: str,
+        render_config: RenderConfig,
         experiment: str,
     ) -> None:
         self.calls.append(
@@ -1484,8 +1512,7 @@ class _RecordingEvalRunner:
                 num_samples,
                 dataset_root_dir,
                 checkpoint_path,
-                param_spec_name,
-                plugin_state_path,
+                render_config,
                 experiment,
             )
         )
@@ -1521,8 +1548,7 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=1,
             checkpoint_path=None,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-base.vstpreset",
+            render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
             eval_runner=runner,
         )
 
@@ -1550,8 +1576,7 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=3,
             checkpoint_path=ckpt_path,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-simple.vstpreset",
+            render_config=_render_config(),
             experiment="vst/custom",
             eval_runner=runner,
         )
@@ -1566,8 +1591,7 @@ class TestMaybeEvalCapturedPatches:
                 3,
                 tmp_path,
                 ckpt_path,
-                SURGE_SIMPLE,
-                "presets/surge-simple.vstpreset",
+                _render_config(),
                 "vst/custom",
             )
         ]
@@ -1600,8 +1624,7 @@ class TestMaybeEvalCapturedPatches:
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
                 checkpoint_path=ckpt_path,
-                param_spec_name=SURGE_SIMPLE,
-                plugin_state_path="presets/surge-base.vstpreset",
+                render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
                 eval_runner=runner,
             )
 
@@ -1646,8 +1669,7 @@ class TestMaybeEvalCapturedPatches:
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
                 checkpoint_path=checkpoint_path,
-                param_spec_name=SURGE_SIMPLE,
-                plugin_state_path="presets/surge-base.vstpreset",
+                render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
                 eval_runner=_RecordingEvalRunner(),
             )
 
@@ -1773,8 +1795,7 @@ class TestEvalPatches:
             2,
             dataset_root_dir=tmp_path,
             checkpoint_path=checkpoint_path,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-simple.vstpreset",
+            render_config=_render_config(),
             experiment="vst/custom",
             subprocess_runner=runner,
         )
@@ -1818,8 +1839,7 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            SURGE_SIMPLE,
-            _RENDER_DEFAULT_PRESET,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             platform="linux",
             wrapper_path=wrapper_path,
         )
@@ -1840,8 +1860,7 @@ class TestBuildPredictVstAudioArgv:
             vst_interactive._build_predict_vst_audio_argv(
                 tmp_path / "preds",
                 tmp_path / "audio",
-                SURGE_SIMPLE,
-                _RENDER_DEFAULT_PRESET,
+                _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
                 platform="linux",
                 wrapper_path=missing_wrapper,
             )
@@ -1859,8 +1878,7 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            SURGE_SIMPLE,
-            _RENDER_DEFAULT_PRESET,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             platform="darwin",
             wrapper_path=missing_wrapper,
         )
@@ -1882,16 +1900,15 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            "custom-spec",
-            "presets/custom.vstpreset",
+            _render_config("custom_spec", "presets/custom.vstpreset"),
             platform="darwin",
         )
 
-        assert "--param_spec" in argv
-        assert argv[argv.index("--param_spec") + 1] == "custom-spec"
-        assert "--plugin_state_path" in argv
-        assert argv[argv.index("--plugin_state_path") + 1] == "presets/custom.vstpreset"
-        assert argv[-1] == "-t"
+        assert "--param-spec-name" in argv
+        assert argv[argv.index("--param-spec-name") + 1] == "custom_spec"
+        assert "--plugin-state-path" in argv
+        assert argv[argv.index("--plugin-state-path") + 1] == "presets/custom.vstpreset"
+        assert argv[argv.index("--rerender-target") + 1] == "True"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(
         self, vst_interactive: ModuleType, tmp_path: Path
@@ -1905,7 +1922,10 @@ class TestBuildPredictVstAudioArgv:
         audio_dir = tmp_path / "audio"
 
         argv = vst_interactive._build_predict_vst_audio_argv(
-            preds_dir, audio_dir, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET, platform="darwin"
+            preds_dir,
+            audio_dir,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
+            platform="darwin",
         )
 
         assert str(preds_dir) in argv
@@ -2038,8 +2058,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
             tmp_path / "preds",
             audio_dir,
             num_samples=1,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path=_RENDER_DEFAULT_PRESET,
+            render_config=_render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             subprocess_runner=runner,
         )
 
@@ -2119,7 +2138,7 @@ def _write_synthetic_prediction_files(
     pred_dir.mkdir(parents=True, exist_ok=True)
     total_length = simple_spec.synth_param_length + simple_spec.note_param_length
     # ``predict_vst_audio.py`` loads ``target-audio-{i}.pt`` unconditionally and indexes
-    # ``target_audio[j]`` for spectrogram generation even under ``-t``/``--rerender_target``,
+    # ``target_audio[j]`` for spectrogram generation even with target re-rendering,
     # so the saved tensor must be (batch, channels, frames) matching that script's CLI
     # defaults. Contents can be silent — only the post-render pred/target WAVs are checked
     # for non-silence.
@@ -2169,8 +2188,7 @@ class TestRenderPredictedAudioE2E:
             pred_dir,
             audio_dir,
             num_samples,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path=plugin_state_path,
+            render_config=_render_config(plugin_state_path=plugin_state_path),
         )
 
         for i in range(num_samples):

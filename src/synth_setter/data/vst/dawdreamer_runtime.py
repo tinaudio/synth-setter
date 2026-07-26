@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import sys
 from importlib import import_module
+from importlib.metadata import version as distribution_version
 
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
@@ -17,16 +18,21 @@ _SUPPORTED_TARGETS = {
 }
 
 
-def ensure_dawdreamer_runtime(renderer_backend: RendererBackend) -> None:
+def ensure_dawdreamer_runtime(
+    renderer_backend: RendererBackend,
+    renderer_version: str | None = None,
+) -> None:
     """Fail early when a DawDreamer worker cannot load the pinned package.
 
     The check belongs on the process that renders audio. A launcher may run a newer Python while
     dispatching to a compatible worker interpreter.
 
     :param renderer_backend: Backend selected for the current render process.
+    :param renderer_version: Optional required DawDreamer distribution version.
     :raises RuntimeError: DawDreamer is unsupported or unavailable on this worker.
+    :raises ValueError: The required renderer version differs from the installed package.
     """
-    if renderer_backend != "dawdreamer":
+    if renderer_backend not in ("dawdreamer", "dawdreamer_faust"):
         return
 
     python_minor = sys.version_info[:2]
@@ -53,3 +59,11 @@ def ensure_dawdreamer_runtime(renderer_backend: RendererBackend) -> None:
             "DawDreamer could not be loaded on this render worker. Run `uv sync --frozen` "
             "under CPython 3.12 and verify the worker matches a supported wheel target."
         ) from exc
+
+    if renderer_version is not None:
+        installed_version = distribution_version("dawdreamer")
+        if installed_version != renderer_version:
+            raise ValueError(
+                f"DawDreamer renderer version {renderer_version!r} does not match "
+                f"installed version {installed_version!r}"
+            )

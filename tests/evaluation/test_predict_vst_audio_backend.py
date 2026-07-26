@@ -6,24 +6,26 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from click.testing import CliRunner
 from pedalboard.io import AudioFile
+from pydantic_settings import CliApp
 
 from synth_setter.data.vst import param_specs
 from synth_setter.evaluation.predict_vst_audio import main
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 _SR = 22_050.0
 _DURATION_SECONDS = 4.0  # matches the spec note window — the midpoint note starts at 2.0s
 _SAMPLES = int(_SR * _DURATION_SECONDS)
 _CHANNELS = 2
-_PARAM_SPEC_NAME = "torchsynth_simple"
+_PARAM_SPEC_NAME = ParamSpecName("torchsynth_simple")
 
 
 def _stage_predictions(pred_dir: Path, batch_size: int = 1) -> None:
     """Write one ``PredictionWriter`` batch of model-space rows for the torchsynth spec.
 
     Stages pred + target-params only (the ``ValAudioProbe`` layout), so the CLI's
-    ``--rerender_target`` path renders both rows through the same backend.
+    ``--rerender-target`` path renders both rows through the same backend.
 
     :param pred_dir: Destination directory for the ``.pt`` files.
     :param batch_size: Number of rows in the staged batch.
@@ -46,7 +48,7 @@ def _read_wav(path: Path) -> np.ndarray:
 
 
 def test_main_torchsynth_plugin_path_renders_without_plugin_host(tmp_path: Path) -> None:
-    """``--plugin_path torchsynth`` renders pred and rerendered target in-process.
+    """The TorchSynth backend renders predictions and targets in-process.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -55,23 +57,33 @@ def test_main_torchsynth_plugin_path_renders_without_plugin_host(tmp_path: Path)
     _stage_predictions(pred_dir)
     out_dir = tmp_path / "out"
 
-    result = CliRunner().invoke(
-        main,
+    render_config = RenderConfig(
+        plugin_path="torchsynth",
+        plugin_state_path="",
+        param_spec_name=_PARAM_SPEC_NAME,
+        renderer_version="1.0.2",
+        renderer_backend="torchsynth",
+        sample_rate=int(_SR),
+        channels=_CHANNELS,
+        velocity=100,
+        signal_duration_seconds=_DURATION_SECONDS,
+        min_loudness=-55.0,
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        gui_toggle_cadence="never",
+    )
+    main(
         [
             str(pred_dir),
             str(out_dir),
-            "--plugin_path=torchsynth",
-            f"--param_spec={_PARAM_SPEC_NAME}",
-            f"--sample_rate={int(_SR)}",
-            f"--channels={_CHANNELS}",
-            f"--signal_duration_seconds={_DURATION_SECONDS}",
-            "--rerender_target",
+            *CliApp.serialize(render_config),
+            "--rerender-target",
+            "True",
             "--skip-spectrogram",
-        ],
-        catch_exceptions=False,
+            "True",
+        ]
     )
 
-    assert result.exit_code == 0, result.output
     sample_dir = out_dir / "sample_0"
     pred_audio = _read_wav(sample_dir / "pred.wav")
     target_audio = _read_wav(sample_dir / "target.wav")
