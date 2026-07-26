@@ -914,7 +914,7 @@ def _render_smoke_train_subprocess(
     """
     generate_dataset_args = []
     if sys.platform == "linux":
-        generate_dataset_args.append(VST_HEADLESS_WRAPPER)
+        generate_dataset_args.extend(("bash", VST_HEADLESS_WRAPPER))
 
     generate_dataset_args += [
         sys.executable,
