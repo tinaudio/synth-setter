@@ -1,0 +1,33 @@
+# @package _global_
+
+# Shared arm of the Fourier value-encoder comparison: the finalized 440k Surge
+# Simple dataset read through stored music2latent embeddings, so conditioning is
+# frozen and the arms differ only in the parameter-value path. Select the arm
+# with `model=vst_flow` (baseline) or `model=vst_flow_fourier`.
+
+defaults:
+  - /experiment/surge/flow_simple_440k
+  - override /conditioning: m2l
+  - _self_
+
+run_name: flow_440k_m2l
+
+datamodule:
+  batch_size: 512
+  num_workers: 8
+  # Projected hydration: only param_array and the m2l column transfer, pinned to
+  # the snapshots the comparison was measured against.
+  download_dataset_txids:
+    train: 4966d51f-8fdb-4f7a-96b3-73f9b3b13174
+    val: 6dd78d8b-57a2-4bb2-aea7-3d5947df19d7
+    test: 3cd70984-d172-4c66-a845-60d892529442
+
+training:
+  # The comparison reads val/param_mse; rendering audio would add a plugin
+  # dependency neither arm needs.
+  val_audio_probe: false
+
+trainer:
+  min_steps: 20000
+  max_steps: 20000
+  val_check_interval: 2000

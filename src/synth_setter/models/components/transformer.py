@@ -67,8 +67,25 @@ class LearntProjection(nn.Module):
         num_tokens: int,
         initial_ffn: bool = True,
         final_ffn: bool = True,
+        value_encoder: nn.Module | None = None,
     ):
+        """Build the parameter/token assignment and its optional FFN heads.
+
+        :param d_model: Transformer width the tokens are emitted in.
+        :param d_token: Per-parameter embedding width before assignment.
+        :param num_params: Parameter coordinates the projection consumes.
+        :param num_tokens: Transformer tokens the parameters are assigned to.
+        :param initial_ffn: Whether to build the pre-assignment FFN head.
+        :param final_ffn: Whether to build the post-assignment FFN head; when
+            false a bare linear head appears only if ``d_token != d_model``.
+        :param value_encoder: Module encoding each scalar coordinate into
+            ``d_token`` features. ``None`` keeps the linear value path.
+        """
         super().__init__()
+
+        # None keeps the linear value path, so existing checkpoints stay
+        # strictly loadable: no extra state-dict entries appear.
+        self.value_encoder = value_encoder
 
         assignment = torch.full((num_tokens, num_params), 1.0 / math.sqrt(num_tokens * num_params))
         assignment = assignment + 1e-4 * torch.randn_like(assignment)
@@ -114,7 +131,19 @@ class LearntProjection(nn.Module):
         return self._out_projection
 
     def param_to_token(self, x: torch.Tensor) -> torch.Tensor:
-        values = torch.einsum("bn,nd->bnd", x, self.in_projection)
+        if self.value_encoder is None:
+            values = torch.einsum("bn,nd->bnd", x, self.in_projection)
+        else:
+            encoded = self.value_encoder(x)
+            d_token = self.in_projection.shape[-1]
+            if encoded.shape[-1] != d_token:
+                raise ValueError(
+                    f"value_encoder must emit d_token={d_token} features, got {encoded.shape[-1]}"
+                )
+            # Multiplicative gate, not addition: it keeps in_projection's
+            # per-parameter role and stops the encoder's linear layer from
+            # collapsing into initial_ffn's.
+            values = encoded * self.in_projection
 
         if self.initial_ffn is not None:
             values = self.initial_ffn(values)

@@ -314,7 +314,7 @@ def test_eval_config_conditioning_unset_composes() -> None:
 
 @pytest.mark.parametrize(
     "model_name",
-    ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],
+    ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flow_fourier", "vst_flowmlp", "vst_flowvae"],
 )
 def test_vst_model_group_composes(model_name: str) -> None:
     """Each synth-neutral VST model group composes successfully.
@@ -340,6 +340,7 @@ def test_vst_model_group_composes(model_name: str) -> None:
         ("vst_ffn", "net.d_out"),
         ("vst_flow", "num_params"),
         ("vst_flow", "vector_field.projection.num_params"),
+        ("vst_flow_fourier", "vector_field.projection.num_params"),
         ("vst_flowmlp", "num_params"),
         ("vst_flowmlp", "vector_field.n_params"),
         ("vst_flowvae", "net.decoder.latent_dim"),

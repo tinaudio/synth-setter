@@ -1,0 +1,19 @@
+# Opt-in arm of the Fourier value-encoding experiment: identical to vst_flow
+# except that parameter coordinates reach the projection through a Fourier
+# band instead of a single linear ray.
+defaults:
+  - vst_flow
+  - _self_
+
+vector_field:
+  projection:
+    value_encoder:
+      _target_: synth_setter.models.components.fourier_number.FourierNumberEmbedder
+      # Matching d_token keeps token_to_param identical to the baseline arm, so
+      # the two runs differ only on the encode side.
+      features: ${model.vector_field.projection.d_token}
+      dim: 256
+      min_freq: 0.5
+      # Tuned to unclipped [-1, 1] flow coordinates, not upstream's clipped
+      # [0, 1] duration input: 10 kHz decorrelates values 1e-3 apart.
+      max_freq: 32.0
