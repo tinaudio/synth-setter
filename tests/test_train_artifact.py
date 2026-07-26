@@ -19,6 +19,7 @@ every cfg-level train test no-ops past with ``logger=None``) fails here.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import shutil
 from pathlib import Path
@@ -426,3 +427,63 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     )
     assert b"model" in payload, "artifact type 'model' not recorded"
     assert b"git_sha" in payload, "artifact metadata 'git_sha' not recorded in offline run binary"
+
+
+@pytest.mark.slow
+def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
+    cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real uploaded checkpoint is identifiable from the logged artifact's metadata (#2424).
+
+    Runs the real entrypoint through a real ``rclone`` upload (``r2:`` resolved
+    against the local filesystem, the ``fake_r2_remote`` pattern) and a real
+    ``WandbLogger``, then decodes the artifact metadata out of wandb's own
+    datastore binary and cross-checks ``ckpt_bytes`` against the uploaded
+    object. ``git_sha`` is not asserted — the ``r2:``-resolving chdir moves cwd
+    out of the git tree, so it legitimately falls back to ``"unknown"``.
+
+    :param cfg_train_lance: CPU-cheap Lance train cfg, run for two steps so a checkpoint exists.
+    :param tmp_path: Hosts the dataset, fake R2 root, offline run dir, and outputs.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and the local-backed ``r2:`` remote.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    r2_root = tmp_path / "fake-r2"
+    r2_root.mkdir()
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.chdir(r2_root)
+    wandb.teardown()
+
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.max_epochs = 1
+        cfg_train_lance.trainer.max_steps = 2
+        cfg_train_lance.trainer.limit_train_batches = 2
+        cfg_train_lance.trainer.limit_val_batches = 2
+        cfg_train_lance.trainer.val_check_interval = 2
+        cfg_train_lance.trainer.check_val_every_n_epoch = 1
+        cfg_train_lance.test = False
+        # vst_ffn logs val/param_mse, not the group default's val/loss.
+        cfg_train_lance.callbacks.model_checkpoint.monitor = "val/param_mse"
+    _attach_offline_wandb_logger(cfg_train_lance, tmp_path)
+
+    train(cfg_train_lance)
+
+    uploaded = list(r2_root.rglob("model.ckpt"))
+    assert len(uploaded) == 1, f"expected one uploaded checkpoint, found {uploaded}"
+
+    offline_dirs = list((tmp_path / "wandb").glob("offline-run-*"))
+    binary = next(iter(offline_dirs[0].glob("run-*.wandb")))
+    payload = read_run_binary(binary, until=lambda data: b'"ckpt_bytes"' in data)
+    start = payload.find(b'{"git_sha"')
+    metadata = json.loads(payload[start : payload.find(b"}", start) + 1])
+
+    assert metadata["ckpt_uri"].startswith("r2://")
+    assert metadata["ckpt_bytes"] == uploaded[0].stat().st_size
+    assert metadata["global_step"] == 2
+    assert metadata["monitor"] == "val/param_mse"
+    assert isinstance(metadata["monitor_score"], float)
