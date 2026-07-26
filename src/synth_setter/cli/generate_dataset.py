@@ -94,6 +94,8 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _WORKER_VENV = "/venv/main"
 # Worker images install an unpacked package, so this module-relative script path is available.
 _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
+_BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
+_X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -474,7 +476,11 @@ def _log_badwindow_failure(loggers: list[Logger]) -> None:
         try:
             lg.log_metrics(payload)
         except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
-            logger.warning(f"log_metrics(badwindow) failed on {type(lg).__name__}: {exc}")
+            logger.warning(
+                "log_metrics(badwindow) failed on {}: {}",
+                type(lg).__name__,
+                exc,
+            )
 
 
 def _log_summary(
@@ -828,7 +834,7 @@ def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -
     output = error.output or b""
     if isinstance(output, str):
         output = output.encode()
-    return b"BadWindow (invalid Window parameter)" in output and b"20 (X_GetProperty)" in output
+    return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
 
 
 def _render_and_upload_shard(
