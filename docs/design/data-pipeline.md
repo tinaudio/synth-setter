@@ -1190,10 +1190,11 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str  # "torchsynth" selects the in-process backend; must agree with renderer_backend (RenderConfig._validate_torchsynth_backend)
-    plugin_state_path: str
+    plugin_path: str  # Plugin path or the sentinel exported for an interpreter-resolved backend
+    plugin_state_path: str  # Empty for backends with no preset file
     param_spec_name: str
     renderer_version: str
+    renderer_backend: RendererBackend
     sample_rate: int
     channels: int
     velocity: int
@@ -1259,6 +1260,14 @@ class DatasetSpec(BaseModel):
 ```
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
+
+`RendererBackend` and its sentinels in `src/synth_setter/renderer_backend.py`
+are the source of truth for backend selection. `dawdreamer_faust` accepts only
+the Faust sentinel and an empty plugin-state path; the worker resolves checked-in
+source by `param_spec_name`, compiles it, and dispatches renderer-native values by
+exact compiled address. Faust render groups recompile per row so DSP and voice
+state cannot cross sample boundaries. External Faust files and URIs are not
+supported.
 
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
 split masters. Each `ShardSpec` pairs its split master with a split-local
@@ -1414,7 +1423,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 
 1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` (a thin wrapper over `DatasetSpec.from_hydra_cfg`) masks the cfg to `DatasetSpec`'s own fields, resolves, and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) — the same model used for the on-R2 artifact.
-3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. The renderer subprocess receives the complete `RenderConfig` and dispatches through `make_audio_renderer`: VST backends load their plugin and verify pinned provenance, while `dawdreamer_faust` compiles registered checked-in source and validates its exact addresses against the registered spec.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
 6. Proceed with reconciliation.

@@ -173,6 +173,38 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
     assert spec.num_params == num_params
 
 
+@pytest.mark.parametrize(
+    ("name", "num_params", "channels"),
+    [
+        ("faust_bright_organ", 13, 2),
+        ("faust_bubble", 10, 2),
+        ("faust_church_organ", 16, 2),
+        ("faust_filter_osc", 6, 1),
+    ],
+)
+def test_render_faust_composes_into_valid_render_config(
+    name: str,
+    num_params: int,
+    channels: int,
+) -> None:
+    """Each Faust group resolves checked-in source/spec identity without paths.
+
+    :param name: Render group and Faust registry identity.
+    :param num_params: Expected encoded synth-and-note width.
+    :param channels: Native source output channel count.
+    """
+    spec = _spec_from_dataset_overrides([f"render={name}"])
+
+    assert spec.render.param_spec_name == name
+    assert spec.render.renderer_backend == "dawdreamer_faust"
+    assert spec.render.plugin_path == "faust"
+    assert spec.render.plugin_state_path == ""
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.channels == channels
+    assert spec.num_params == num_params
+
+
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["render=obxf"])

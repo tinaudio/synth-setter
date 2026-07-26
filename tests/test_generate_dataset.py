@@ -142,6 +142,25 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+def test_cfg_dataset_faust_resolves_production_renderer_contract(
+    cfg_dataset_faust: DictConfig,
+) -> None:
+    """The operator config resolves the production brightOrgan renderer contract.
+
+    The real worker subprocess and Lance artifact are exercised in
+    ``tests/data/vst/test_faust_dataset_e2e.py``.
+
+    :param cfg_dataset_faust: Composed production brightOrgan dataset config.
+    """
+    spec = spec_from_cfg(cfg_dataset_faust)
+
+    assert spec.render.renderer_backend == "dawdreamer_faust"
+    assert spec.render.plugin_path == "faust"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.num_params == 13
+
+
 def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     cfg_dataset_default_cadence: DictConfig,
 ) -> None:

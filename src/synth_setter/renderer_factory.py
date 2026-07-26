@@ -10,6 +10,7 @@ from typing import assert_never
 
 from synth_setter.data.vst.renderers import (
     AudioRenderer,
+    DawDreamerFaustRenderer,
     DawDreamerRenderer,
     PedalboardRenderer,
     TorchSynthRenderer,
@@ -24,6 +25,19 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
     """
     backend = render_config.renderer_backend
+    if backend == "dawdreamer_faust":
+        from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+
+        ensure_dawdreamer_runtime(backend, render_config.renderer_version)
+        return DawDreamerFaustRenderer(
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+            param_spec_name=render_config.param_spec_name,
+            reload_processor_each_render=render_config.plugin_reload_cadence == "render",
+        )
     if backend == "dawdreamer":
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
         from synth_setter.data.vst.param_map import load_param_map
