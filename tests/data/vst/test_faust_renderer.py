@@ -19,6 +19,7 @@ from synth_setter.data.vst.renderers import DawDreamerFaustRenderer
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 _SAMPLE_RATE = 44100
 _RENDER_SECONDS = 0.5
@@ -47,9 +48,12 @@ def _render_config(
     :returns: Validated Faust render configuration.
     """
     return RenderConfig(
-        plugin_path="faust",
-        plugin_state_path="",
-        param_spec_name=ParamSpecName(param_spec_name),
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path="faust",
+            plugin_state_path="",
+        ),
         renderer_version="0.8.3",
         renderer_backend="dawdreamer_faust",
         sample_rate=_SAMPLE_RATE,

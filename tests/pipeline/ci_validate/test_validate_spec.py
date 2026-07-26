@@ -34,9 +34,12 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "prefix": "data/test/test-20260328T120000000Z/",
         },
         "render": {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+            },
             "renderer_version": "1.3.4",
             "renderer_backend": "pedalboard",
             "sample_rate": 44100,
@@ -150,6 +153,8 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "mel_spec_dtype",
+            # Checked shape-aware instead, so pre-nesting specs still validate.
+            "synth",
         }
 
     def test_other_defaulted_render_field_remains_required(self) -> None:
@@ -191,3 +196,60 @@ class TestValidateTestValues:
         spec = _make_valid_spec(output_format="parquet")
         errors = validate_test_values(spec)
         assert any("output_format" in e and "parquet" in e for e in errors)
+
+
+class TestSynthIdentityShape:
+    """Identity is checked shape-aware so archived specs stay validatable.
+
+    ``validate-dataset-shards.yaml`` exposes a ``workflow_dispatch`` taking an
+    arbitrary ``spec_uri``, so operators can point this validator at a spec written
+    before identity was nested.
+    """
+
+    def _legacy_render(self) -> dict[str, object]:
+        """Return a render mapping in the pre-nesting flat identity shape.
+
+        :returns: A render dict whose identity keys are top-level.
+        """
+        spec = _make_valid_spec()
+        render = dict(spec["render"])
+        synth = render.pop("synth")
+        assert isinstance(synth, dict)
+        render["param_spec_name"] = synth["param_spec_name"]
+        render["plugin_path"] = synth["plugin_path"]
+        render["plugin_state_path"] = synth["plugin_state_path"]
+        return render
+
+    def test_a_pre_nesting_spec_still_validates(self) -> None:
+        """A spec carrying the flat identity keys passes structural validation."""
+        spec = _make_valid_spec()
+        spec["render"] = self._legacy_render()
+
+        assert validate_structure(spec) == []
+
+    def test_a_spec_with_no_identity_at_all_is_rejected(self) -> None:
+        """Neither shape present is an error, not a silently-accepted omission."""
+        spec = _make_valid_spec()
+        render = dict(spec["render"])
+        del render["synth"]
+        spec["render"] = render
+
+        errors = validate_structure(spec)
+
+        assert any("synth identity" in error for error in errors)
+
+    def test_test_values_read_the_param_spec_from_the_legacy_shape(self) -> None:
+        """The passthrough check reads identity from whichever shape the spec uses."""
+        spec = _make_valid_spec()
+        spec["render"] = self._legacy_render()
+
+        assert not [e for e in validate_test_values(spec) if "param_spec_name" in e]
+
+    def test_test_values_flag_a_wrong_param_spec_in_the_nested_shape(self) -> None:
+        """A nested identity naming the wrong spec is still caught."""
+        spec = _make_valid_spec()
+        render = dict(spec["render"])
+        render["synth"] = {**render["synth"], "param_spec_name": "surge_xt"}  # type: ignore[dict-item]
+        spec["render"] = render
+
+        assert any("param_spec_name" in e for e in validate_test_values(spec))

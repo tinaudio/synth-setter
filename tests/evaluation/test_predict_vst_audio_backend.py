@@ -13,6 +13,7 @@ from synth_setter.data.vst import param_specs
 from synth_setter.evaluation.predict_vst_audio import main
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 _SR = 22_050.0
 _DURATION_SECONDS = 4.0  # matches the spec note window — the midpoint note starts at 2.0s
@@ -58,9 +59,12 @@ def test_main_torchsynth_plugin_path_renders_without_plugin_host(tmp_path: Path)
     out_dir = tmp_path / "out"
 
     render_config = RenderConfig(
-        plugin_path="torchsynth",
-        plugin_state_path="",
-        param_spec_name=_PARAM_SPEC_NAME,
+        synth=SynthSpec(
+            name=SynthName("torchsynth_simple"),
+            param_spec_name=_PARAM_SPEC_NAME,
+            plugin_path="torchsynth",
+            plugin_state_path="",
+        ),
         renderer_version="1.0.2",
         renderer_backend="torchsynth",
         sample_rate=int(_SR),

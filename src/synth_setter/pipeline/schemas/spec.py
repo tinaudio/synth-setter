@@ -44,6 +44,7 @@ from synth_setter.renderer_backend import (
     TORCHSYNTH_PLUGIN_NAME,
     RendererBackend,
 )
+from synth_setter.synth_spec import SynthSpec
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -212,6 +213,10 @@ class ShardSpec(BaseModel):
     )
 
 
+# Identity keys as pre-nesting specs on R2 spell them, hoisted onto ``RenderConfig.synth``.
+_LEGACY_IDENTITY_KEYS = ("param_spec_name", "plugin_path", "plugin_state_path")
+
+
 class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
@@ -240,22 +245,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str = Field(
+    synth: SynthSpec = Field(
         description=(
-            "Filesystem path to the VST3 plugin bundle the worker loads, or a bare "
-            "backend sentinel for an interpreter-resolved synth."
-        )
-    )
-    plugin_state_path: str = Field(
-        description=(
-            "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
-            "random parameter override."
-        )
-    )
-    param_spec_name: ValidatedParamSpecName = Field(
-        description=(
-            "Key into the in-process param-spec registry; resolved inside the worker, "
-            "not the launcher."
+            "Synth identity: param spec, plugin bundle, and baseline preset. Accepts the "
+            "pre-nesting flat keys, which are lifted onto this field so specs already "
+            "written to R2 still parse."
         )
     )
     renderer_version: str = Field(
@@ -365,6 +359,63 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "first split-local row seed, so shard cadence is reproducible across runs (#884)."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_synth_identity(cls, data: Any) -> Any:
+        """Hoist pre-nesting flat identity keys onto ``synth``.
+
+        Specs already written to R2 carry ``param_spec_name`` / ``plugin_path`` /
+        ``plugin_state_path`` at the top level. They must be popped, not copied:
+        ``extra="forbid"`` rejects whatever is left over.
+
+        :param data: Raw input, mapping-shaped for a legacy payload.
+        :returns: The input with flat identity keys folded into ``synth``.
+        :raises ValueError: Both shapes are present, so identity is ambiguous.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy = {k: data.pop(k) for k in _LEGACY_IDENTITY_KEYS if k in data}
+        if not legacy:
+            return data
+        if "synth" in data:
+            raise ValueError(
+                "render carries both a nested 'synth' and legacy flat identity keys "
+                f"({sorted(legacy)}); provide exactly one"
+            )
+        param_spec_name = legacy.get("param_spec_name")
+        data["synth"] = {
+            # Flat payloads name no synth separately, so the key mirrors the spec.
+            "name": param_spec_name,
+            "param_spec_name": param_spec_name,
+            "plugin_path": legacy.get("plugin_path", ""),
+            "plugin_state_path": legacy.get("plugin_state_path", ""),
+        }
+        return data
+
+    @property
+    def param_spec_name(self) -> ValidatedParamSpecName:
+        """Key into the param-spec registry, resolved inside the worker.
+
+        :returns: The spec name this render's synth identity points at.
+        """
+        return self.synth.param_spec_name
+
+    @property
+    def plugin_path(self) -> str:
+        """Plugin bundle path, or the bare backend name for the in-process renderer.
+
+        :returns: The plugin path this render's synth identity declares.
+        """
+        return self.synth.plugin_path
+
+    @property
+    def plugin_state_path(self) -> str:
+        """Baseline preset applied before random parameter override.
+
+        :returns: The preset path this render's synth identity declares.
+        """
+        return self.synth.plugin_state_path
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:

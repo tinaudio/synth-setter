@@ -28,6 +28,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_sot,
     compute_wmfcc,
 )
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests._vst import (
@@ -85,9 +86,12 @@ def _render_cfg(
     :return: ``RenderConfig`` populated with the module's test defaults.
     """
     return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        plugin_state_path=_PRESET_PATH,
-        param_spec_name=ParamSpecName(_SPEC_NAME),
+        synth=SynthSpec(
+            name=SynthName(_SPEC_NAME),
+            param_spec_name=ParamSpecName(_SPEC_NAME),
+            plugin_path=PLUGIN_PATH,
+            plugin_state_path=_PRESET_PATH,
+        ),
         renderer_version=_RENDERER_VERSION,
         sample_rate=int(_SAMPLE_RATE),
         channels=_CHANNELS,

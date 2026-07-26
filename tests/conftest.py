@@ -23,10 +23,12 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
@@ -915,9 +917,10 @@ def _render_smoke_train_subprocess(
         sys.executable,
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
-        f"--plugin_path={PLUGIN_PATH}",
-        f"--plugin_state_path={plugin_state_paths[param_spec_name]}",
-        f"--param_spec_name={param_spec_name}",
+        f"--synth.name={param_spec_name}",
+        f"--synth.plugin_path={PLUGIN_PATH}",
+        f"--synth.plugin_state_path={plugin_state_paths[param_spec_name]}",
+        f"--synth.param_spec_name={param_spec_name}",
         f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
         f"--channels={_SURGE_FIXTURE_CHANNELS}",
@@ -967,9 +970,12 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
     """
     return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        plugin_state_path=str(plugin_state_paths[param_spec_name]),
-        param_spec_name=param_spec_name,
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=PLUGIN_PATH,
+            plugin_state_path=str(plugin_state_paths[param_spec_name]),
+        ),
         renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
         channels=_SURGE_FIXTURE_CHANNELS,

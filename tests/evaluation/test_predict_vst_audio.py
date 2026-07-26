@@ -38,6 +38,7 @@ from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
 )
 from synth_setter.param_spec_name import ParamSpecName  # noqa: E402
 from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.synth_spec import SynthName, SynthSpec  # noqa: E402
 from tests.helpers.audio_utils import noise as _noise  # noqa: E402
 from tests.helpers.audio_utils import sine  # noqa: E402
 
@@ -178,9 +179,12 @@ def _render_config(
     :returns: Validated config for the test renderer session.
     """
     return RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path="presets/surge-simple.vstpreset",
-        param_spec_name=_PARAM_SPEC_NAME,
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=_PARAM_SPEC_NAME,
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-simple.vstpreset",
+        ),
         renderer_version="1.3.4",
         sample_rate=int(_SR),
         channels=_CHANNELS,

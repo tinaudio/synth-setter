@@ -22,6 +22,7 @@ from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 from tests.helpers.lance_fixtures import write_lance_shard
 
 SURGE_SIMPLE = "surge_simple"
@@ -38,9 +39,12 @@ def _render_config(
     :returns: Validated renderer configuration.
     """
     return RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path=plugin_state_path,
-        param_spec_name=ParamSpecName(param_spec_name),
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path=plugin_state_path,
+        ),
         renderer_version="1.3.4",
         sample_rate=44100,
         channels=2,
@@ -1904,10 +1908,10 @@ class TestBuildPredictVstAudioArgv:
             platform="darwin",
         )
 
-        assert "--param-spec-name" in argv
-        assert argv[argv.index("--param-spec-name") + 1] == "custom_spec"
-        assert "--plugin-state-path" in argv
-        assert argv[argv.index("--plugin-state-path") + 1] == "presets/custom.vstpreset"
+        assert "--synth.param-spec-name" in argv
+        assert argv[argv.index("--synth.param-spec-name") + 1] == "custom_spec"
+        assert "--synth.plugin-state-path" in argv
+        assert argv[argv.index("--synth.plugin-state-path") + 1] == "presets/custom.vstpreset"
         assert argv[argv.index("--rerender-target") + 1] == "True"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(

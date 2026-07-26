@@ -17,6 +17,7 @@ from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import main as predict_vst_audio_main  # noqa: E402
 from synth_setter.param_spec_name import ParamSpecName  # noqa: E402
 from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.synth_spec import SynthName, SynthSpec  # noqa: E402
 
 _PARAM_SPEC_NAME = ParamSpecName("surge_simple")
 _CHANNELS = 2
@@ -57,9 +58,12 @@ def _render_config() -> RenderConfig:
     :returns: Validated config for the artifact-layout test renderer.
     """
     return RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path="presets/surge-simple.vstpreset",
-        param_spec_name=_PARAM_SPEC_NAME,
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=_PARAM_SPEC_NAME,
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-simple.vstpreset",
+        ),
         renderer_version="1.3.4",
         sample_rate=_SAMPLE_RATE,
         channels=_CHANNELS,

@@ -44,10 +44,49 @@ from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
 logger = logging.getLogger(__name__)
+
+
+def make_dataset_render_cfg(
+    *,
+    param_spec_name: str,
+    plugin_path: str,
+    plugin_state_path: str,
+    renderer_version: str,
+    samples_per_shard: int,
+) -> RenderConfig:
+    """Build the render config the captured-patch dataset is written with.
+
+    The audition session's render settings are fixed constants, so only the
+    synth identity, the plugin version pin, and the patch count vary per run.
+
+    :param param_spec_name: Registry key naming the spec the patches encode against.
+    :param plugin_path: Plugin bundle the patches were auditioned on.
+    :param plugin_state_path: Baseline preset applied before each patch.
+    :param renderer_version: Version read off the plugin bundle.
+    :param samples_per_shard: Number of captured patches, written as one shard.
+    :returns: Render config for :func:`make_lance_dataset`.
+    """
+    return RenderConfig(
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=plugin_path,
+            plugin_state_path=plugin_state_path,
+        ),
+        renderer_version=renderer_version,
+        sample_rate=SAMPLE_RATE,
+        channels=CHANNELS,
+        velocity=MAKE_DATASET_VELOCITY,
+        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
+        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
+        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
+        samples_per_shard=samples_per_shard,
+    )
 
 
 def _configure_logging() -> None:
@@ -1366,17 +1405,11 @@ def main(
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.lance"
-    render_cfg = RenderConfig(
+    render_cfg = make_dataset_render_cfg(
+        param_spec_name=param_spec_name,
         plugin_path=plugin_path,
         plugin_state_path=plugin_state_path,
-        param_spec_name=ParamSpecName(param_spec_name),
         renderer_version=extract_renderer_version(Path(plugin_path)),
-        sample_rate=SAMPLE_RATE,
-        channels=CHANNELS,
-        velocity=MAKE_DATASET_VELOCITY,
-        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
-        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
-        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
         samples_per_shard=len(synth_patches),
     )
     make_lance_dataset(

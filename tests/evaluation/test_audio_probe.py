@@ -24,11 +24,15 @@ from synth_setter.evaluation import audio_probe
 from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 _SETTINGS = RenderConfig(
-    param_spec_name=ParamSpecName("surge_4"),
-    plugin_state_path="presets/surge-mini.vstpreset",
-    plugin_path="plugins/Surge XT.vst3",
+    synth=SynthSpec(
+        name=SynthName("surge_4"),
+        param_spec_name=ParamSpecName("surge_4"),
+        plugin_path="plugins/Surge XT.vst3",
+        plugin_state_path="presets/surge-mini.vstpreset",
+    ),
     renderer_version="1.3.4",
     renderer_backend="dawdreamer",
     sample_rate=8000,
@@ -77,9 +81,9 @@ def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> N
     assert str(tmp_path / "audio") in argv
     assert argv[argv.index("--rerender-target") + 1] == "True"
     for flag, value in (
-        ("--param-spec-name", "surge_4"),
-        ("--plugin-state-path", "presets/surge-mini.vstpreset"),
-        ("--plugin-path", "plugins/Surge XT.vst3"),
+        ("--synth.param-spec-name", "surge_4"),
+        ("--synth.plugin-state-path", "presets/surge-mini.vstpreset"),
+        ("--synth.plugin-path", "plugins/Surge XT.vst3"),
         ("--renderer-backend", "dawdreamer"),
         ("--plugin-reload-cadence", "render"),
         ("--sample-rate", "8000"),

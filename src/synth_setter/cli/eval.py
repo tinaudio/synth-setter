@@ -208,11 +208,9 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             synth = SynthSpec.from_render_cfg(cfg.render)
             if synth is None:
                 raise ValueError("render group names no param spec; cannot re-render audio")
-            render_values.update(
-                plugin_path=synth.plugin_path,
-                plugin_state_path=synth.plugin_state_path,
-                param_spec_name=synth.param_spec_name,
-            )
+            for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
+                render_values.pop(legacy_key, None)
+            render_values["synth"] = synth.model_dump()
             render_config = RenderConfig.model_validate(render_values)
             args += [
                 sys.executable,

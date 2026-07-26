@@ -214,11 +214,9 @@ def _probe_render_settings(cfg: DictConfig) -> RenderConfig:
     synth = SynthSpec.from_render_cfg(cfg.render)
     if synth is None:
         raise ValueError("render group names no param spec; the audio probe cannot decode")
-    values.update(
-        plugin_path=synth.plugin_path,
-        plugin_state_path=synth.plugin_state_path,
-        param_spec_name=synth.param_spec_name,
-    )
+    for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
+        values.pop(legacy_key, None)
+    values["synth"] = synth.model_dump()
     return RenderConfig.model_validate(values)
 
 

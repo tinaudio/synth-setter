@@ -9,10 +9,13 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from pydantic_settings import CliApp
+
 from synth_setter.data.vst import generate_vst_dataset
 from synth_setter.data.vst.shapes import AUDIO_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 from tests._vst import VST_SUBPROCESS_TIMEOUT_SECONDS
 
 
@@ -24,9 +27,12 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     """
     shard = tmp_path / "faust.lance"
     config = RenderConfig(
-        plugin_path="faust",
-        plugin_state_path="",
-        param_spec_name=ParamSpecName("faust_bright_organ"),
+        synth=SynthSpec(
+            name=SynthName("faust_bright_organ"),
+            param_spec_name=ParamSpecName("faust_bright_organ"),
+            plugin_path="faust",
+            plugin_state_path="",
+        ),
         renderer_version="0.8.3",
         renderer_backend="dawdreamer_faust",
         sample_rate=44100,
@@ -42,12 +48,9 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
         gui_toggle_cadence="never",
     )
     script = Path(generate_vst_dataset.__file__)
-    render_args: list[str] = []
-    for key, value in config.model_dump().items():
-        render_args.extend((f"--{key}", str(value)))
 
     result = subprocess.run(  # noqa: S603
-        [sys.executable, str(script), str(shard), *render_args],
+        [sys.executable, str(script), str(shard), *CliApp.serialize(config)],
         cwd=Path(__file__).parents[3],
         capture_output=True,
         text=True,

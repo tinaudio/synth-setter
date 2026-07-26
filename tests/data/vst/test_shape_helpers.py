@@ -27,6 +27,7 @@ from synth_setter.data.vst.shapes import (
     mel_n_frames,
     param_array_dataset_shape,
 )
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -111,9 +112,12 @@ def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
 def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
     """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
     render = RenderConfig(
-        plugin_path="/fake/Plugin.vst3",
-        plugin_state_path="presets/fake.vstpreset",
-        param_spec_name=ParamSpecName("surge_simple"),
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="/fake/Plugin.vst3",
+            plugin_state_path="presets/fake.vstpreset",
+        ),
         renderer_version="1.0.0-test",
         sample_rate=44100,
         channels=2,

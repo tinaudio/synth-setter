@@ -260,8 +260,8 @@ def test_postprocessing_serializes_plugin_path(
     _run_predict_postprocessing(cfg)
 
     render_argv = captured_argv[0]
-    assert "--plugin-path" in render_argv
-    plugin_idx = render_argv.index("--plugin-path")
+    assert "--synth.plugin-path" in render_argv
+    plugin_idx = render_argv.index("--synth.plugin-path")
     assert render_argv[plugin_idx + 1] == plugin_path
 
 

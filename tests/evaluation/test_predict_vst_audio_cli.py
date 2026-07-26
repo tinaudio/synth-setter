@@ -7,6 +7,7 @@ from pydantic_settings import CliApp
 from synth_setter.evaluation.predict_vst_audio import _PredictAudioCliArgs
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 
 def _render_config() -> RenderConfig:
@@ -15,9 +16,12 @@ def _render_config() -> RenderConfig:
     :returns: Validated configuration for serialization.
     """
     return RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path="presets/surge-base.vstpreset",
-        param_spec_name=ParamSpecName("surge_simple"),
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-base.vstpreset",
+        ),
         renderer_version="1.3.4",
         renderer_backend="dawdreamer",
         sample_rate=44100,
