@@ -47,13 +47,13 @@ ______________________________________________________________________
 
 `artifact.metadata` holds properties of the artifact itself, never run hyperparameters (those go in `wandb.config`). Final metrics live in `wandb.summary`; the one exception is `eval-results`, which also copies a small **scalar summary** of its metrics into `artifact.metadata` (via `_eval_summary_metrics`) so a result set can be filtered without opening each run.
 
-| Artifact       | Metadata keys                                                |
-| -------------- | ------------------------------------------------------------ |
-| `dataset`      | `shard_count`, `n_samples`, `git_sha`                        |
-| `model`        | `git_sha`                                                    |
-| `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha` |
+| Artifact       | Metadata keys                                                          |
+| -------------- | ---------------------------------------------------------------------- |
+| `dataset`      | `shard_count`, `n_samples`, `git_sha`                                  |
+| `model`        | `git_sha`, plus `_checkpoint_metadata` keys when a checkpoint uploaded |
+| `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha`           |
 
-The `model` artifact carries only `git_sha`. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
+The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
 
 ______________________________________________________________________
 
@@ -78,16 +78,20 @@ The data-generation, training, and evaluation edges are landed; the `[promote wo
 ```python
 for lg in loggers:
     if isinstance(lg, WandbLogger):
-        lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
+        lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri, ckpt_metadata))
 ```
 
-**Consuming an input** — `use_input_artifacts` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_artifact`; it is `@rank_zero_only` so a DDP run records each edge once:
+`ckpt_metadata` (`_checkpoint_metadata`) carries `ckpt_uri`, `ckpt_bytes`, `epoch`, `global_step`, `monitor`, and `monitor_score` — W&B cannot reach R2's custom endpoint, so the `checksum=False` reference renders as a 0-byte entry and this metadata is the only in-UI way to identify the checkpoint it points at ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)).
+
+**Consuming an input** — `record_input_lineage` (`utils/logging_utils.py`) records each `(name, alias)` edge via `use_input_artifacts` (rank-zero-gated, so a DDP run records each edge once) and marks the run when any consumed input has no edge:
 
 ```python
-use_input_artifacts(loggers, _consumed_artifact_refs(cfg))  # e.g. [("data-diva-v1", "diva-v1-20260520T000000000Z")]
+record_input_lineage(loggers, *_consumed_artifact_refs(cfg))  # ([("data-diva-v1", "diva-v1-20260520T000000000Z")], [])
 ```
 
-Dataset edges are discovered from `input_spec.json` under `datamodule.download_dataset_root_uri` when configured, otherwise under `datamodule.dataset_root`. Its validated `task_name` and `run_id` resolve to the immutable `data-{task_name}:{run_id}` alias. A root without that frozen spec remains usable but records no dataset lineage.
+Dataset edges are discovered from `input_spec.json` under `datamodule.download_dataset_root_uri` when configured, otherwise under `datamodule.dataset_root`. Its validated `task_name` and `run_id` resolve to the immutable `data-{task_name}:{run_id}` alias.
+
+A root without a readable frozen spec, or a ref W&B rejects (a dataset finalized before the `run_id` alias landed in [#1881](https://github.com/tinaudio/synth-setter/issues/1881) has no such alias), still leaves the run usable — but no longer silently. `mark_lineage_incomplete` writes `summary.lineage_incomplete = true`, `summary.lineage_missing` naming each input with no edge, and the `lineage-incomplete` run tag ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)). To audit, filter runs on that tag.
 
 ______________________________________________________________________
 
@@ -125,7 +129,9 @@ ______________________________________________________________________
 | Best-checkpoint R2 upload        | `_upload_best_checkpoint` / `_derive_checkpoint_uri`         | `src/synth_setter/cli/train.py`            |
 | Eval-results artifact            | `build_eval_results_artifact` / `_log_eval_results_artifact` | `src/synth_setter/cli/eval.py`             |
 | Consumed-edge refs (training)    | `_consumed_artifact_refs`                                    | `src/synth_setter/cli/train.py`            |
-| Lineage edge recording           | `use_input_artifacts`                                        | `src/synth_setter/utils/logging_utils.py`  |
+| Lineage edge recording           | `record_input_lineage` / `use_input_artifacts`               | `src/synth_setter/utils/logging_utils.py`  |
+| Incomplete-lineage run marker    | `mark_lineage_incomplete`                                    | `src/synth_setter/utils/logging_utils.py`  |
+| Referenced-checkpoint metadata   | `_checkpoint_metadata`                                       | `src/synth_setter/cli/train.py`            |
 | `${wandb:…}` resolver            | `_resolve_wandb_checkpoint` / `register_resolvers`           | `src/synth_setter/utils/utils.py`          |
 | Run id / `job_type` pinning      | `pin_wandb_run_id`                                           | `src/synth_setter/utils/logging_utils.py`  |
 | Provenance fields (`github_sha`) | `log_wandb_provenance`                                       | `src/synth_setter/utils/logging_utils.py`  |

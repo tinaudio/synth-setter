@@ -19,18 +19,22 @@ every cfg-level train test no-ops past with ``logger=None``) fails here.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import pytest
+import torch
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import (
+    _checkpoint_metadata,
     _derive_checkpoint_uri,
     _log_model_artifact,
     _upload_best_checkpoint,
@@ -143,6 +147,103 @@ def test_build_model_artifact_without_ckpt_uri_adds_no_reference() -> None:
     """No ckpt URI (upload skipped) logs a lineage-only artifact with no reference."""
     artifact = build_model_artifact(_cfg())
     assert artifact.manifest.entries == {}
+
+
+def test_build_model_artifact_merges_checkpoint_metadata_alongside_git_sha() -> None:
+    """Checkpoint metadata joins ``git_sha`` so the 0-byte reference is identifiable (#2424)."""
+    artifact = build_model_artifact(_cfg(), _CKPT_URI, {"epoch": 7, "ckpt_bytes": 336})
+    assert artifact.metadata == {
+        "git_sha": artifact.metadata["git_sha"],
+        "epoch": 7,
+        "ckpt_bytes": 336,
+    }
+
+
+def _fake_trainer(
+    epoch: int = 3,
+    global_step: int = 4200,
+    monitor: str | None = "val/loss",
+    best_model_score: Any = None,
+) -> Any:
+    """Build a finished-trainer stand-in exposing what ``_checkpoint_metadata`` reads.
+
+    :param epoch: Value returned as ``trainer.current_epoch``.
+    :param global_step: Value returned as ``trainer.global_step``.
+    :param monitor: The checkpoint callback's monitored metric name, or ``None``.
+    :param best_model_score: The checkpoint callback's best score (a tensor in real runs).
+    :returns: A namespace with ``current_epoch``, ``global_step``, and ``checkpoint_callback``.
+    """
+    return SimpleNamespace(
+        current_epoch=epoch,
+        global_step=global_step,
+        checkpoint_callback=SimpleNamespace(monitor=monitor, best_model_score=best_model_score),
+    )
+
+
+def test_checkpoint_metadata_records_uri_epoch_step_and_size(tmp_path: Path) -> None:
+    """The referenced checkpoint's URI, position in training, and byte size are recorded.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x" * 17)
+
+    metadata = _checkpoint_metadata(_fake_trainer(), str(ckpt), _CKPT_URI)
+
+    assert metadata["ckpt_uri"] == _CKPT_URI
+    assert metadata["epoch"] == 3
+    assert metadata["global_step"] == 4200
+    assert metadata["ckpt_bytes"] == 17
+
+
+def test_checkpoint_metadata_records_monitored_metric_as_float(tmp_path: Path) -> None:
+    """The monitored metric and its tensor score are recorded as a JSON-encodable float.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x")
+
+    metadata = _checkpoint_metadata(
+        _fake_trainer(best_model_score=torch.tensor(0.327)), str(ckpt), _CKPT_URI
+    )
+
+    assert metadata["monitor"] == "val/loss"
+    assert metadata["monitor_score"] == pytest.approx(0.327)
+
+
+def test_checkpoint_metadata_without_score_omits_the_key(tmp_path: Path) -> None:
+    """An unscored checkpoint omits ``monitor_score`` rather than recording ``None``.
+
+    :param tmp_path: Holds the local checkpoint whose size is read.
+    """
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x")
+
+    metadata = _checkpoint_metadata(_fake_trainer(monitor=None), str(ckpt), _CKPT_URI)
+
+    assert "monitor" not in metadata
+    assert "monitor_score" not in metadata
+
+
+def test_checkpoint_metadata_unreadable_path_omits_size_without_raising(tmp_path: Path) -> None:
+    """A vanished local checkpoint still yields metadata — size is dropped, not fatal.
+
+    :param tmp_path: Supplies a path with no checkpoint written under it.
+    """
+    metadata = _checkpoint_metadata(_fake_trainer(), str(tmp_path / "gone.ckpt"), _CKPT_URI)
+
+    assert "ckpt_bytes" not in metadata
+    assert metadata["ckpt_uri"] == _CKPT_URI
+
+
+def test_log_model_artifact_forwards_checkpoint_metadata() -> None:
+    """``_log_model_artifact`` passes checkpoint metadata through to the logged artifact."""
+    logger = _RecordingWandbLogger()
+
+    _log_model_artifact([logger], _cfg(), _CKPT_URI, {"epoch": 9})
+
+    assert logger.logged[0].metadata["epoch"] == 9
 
 
 def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
@@ -326,3 +427,63 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     )
     assert b"model" in payload, "artifact type 'model' not recorded"
     assert b"git_sha" in payload, "artifact metadata 'git_sha' not recorded in offline run binary"
+
+
+@pytest.mark.slow
+def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
+    cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real uploaded checkpoint is identifiable from the logged artifact's metadata (#2424).
+
+    Runs the real entrypoint through a real ``rclone`` upload (``r2:`` resolved
+    against the local filesystem, the ``fake_r2_remote`` pattern) and a real
+    ``WandbLogger``, then decodes the artifact metadata out of wandb's own
+    datastore binary and cross-checks ``ckpt_bytes`` against the uploaded
+    object. ``git_sha`` is not asserted — the ``r2:``-resolving chdir moves cwd
+    out of the git tree, so it legitimately falls back to ``"unknown"``.
+
+    :param cfg_train_lance: CPU-cheap Lance train cfg, run for two steps so a checkpoint exists.
+    :param tmp_path: Hosts the dataset, fake R2 root, offline run dir, and outputs.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env and the local-backed ``r2:`` remote.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    r2_root = tmp_path / "fake-r2"
+    r2_root.mkdir()
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.chdir(r2_root)
+    wandb.teardown()
+
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.max_epochs = 1
+        cfg_train_lance.trainer.max_steps = 2
+        cfg_train_lance.trainer.limit_train_batches = 2
+        cfg_train_lance.trainer.limit_val_batches = 2
+        cfg_train_lance.trainer.val_check_interval = 2
+        cfg_train_lance.trainer.check_val_every_n_epoch = 1
+        cfg_train_lance.test = False
+        # vst_ffn logs val/param_mse, not the group default's val/loss.
+        cfg_train_lance.callbacks.model_checkpoint.monitor = "val/param_mse"
+    _attach_offline_wandb_logger(cfg_train_lance, tmp_path)
+
+    train(cfg_train_lance)
+
+    uploaded = list(r2_root.rglob("model.ckpt"))
+    assert len(uploaded) == 1, f"expected one uploaded checkpoint, found {uploaded}"
+
+    offline_dirs = list((tmp_path / "wandb").glob("offline-run-*"))
+    binary = next(iter(offline_dirs[0].glob("run-*.wandb")))
+    payload = read_run_binary(binary, until=lambda data: b'"ckpt_bytes"' in data)
+    start = payload.find(b'{"git_sha"')
+    metadata = json.loads(payload[start : payload.find(b"}", start) + 1])
+
+    assert metadata["ckpt_uri"].startswith("r2://")
+    assert metadata["ckpt_bytes"] == uploaded[0].stat().st_size
+    assert metadata["global_step"] == 2
+    assert metadata["monitor"] == "val/param_mse"
+    assert isinstance(metadata["monitor_score"], float)
