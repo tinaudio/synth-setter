@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import structlog
@@ -183,6 +184,11 @@ def load_t5gemma_text_encoder(checkpoint: str, device: str) -> TextEncodeFn:
         subfolder=config.subfolder,
     )
     conditioner.padding_embedding.data.copy_(_load_padding_embedding(checkpoint_dir, device))
+    # The checkpoint declares bfloat16, whose SDPA kernels differ enough between torch
+    # releases to shift these embeddings by up to 11.5 (std 1.75). float32 is bitwise
+    # identical across torch 2.7.1 and 2.12.0, so a stored column stays reproducible.
+    # SA3 stashes the frozen encoder in __dict__, so it reads as the class, not an instance.
+    cast("torch.nn.Module", conditioner.model).to(torch.float32)
     conditioner = conditioner.to(device).eval().requires_grad_(False)
 
     @torch.no_grad()

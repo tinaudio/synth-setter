@@ -2,9 +2,11 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
+import torch
 
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline.data.t5gemma import (
@@ -210,6 +212,48 @@ def test_encode_overlong_prompt_truncates_to_the_same_first_tokens(t5gemma_encod
     """
     overlong = "cutoff, resonance, " * 200
 
-    embeddings = t5gemma_encoder([overlong, overlong + " ignored trailing text"])
+    # Encoded separately: batch position perturbs SDPA reductions by ~2e-4, which
+    # would mask the exact equality truncation is supposed to produce.
+    truncated = t5gemma_encoder([overlong])
+    with_suffix = t5gemma_encoder([overlong + " ignored trailing text"])
 
-    np.testing.assert_array_equal(embeddings[0], embeddings[1])
+    np.testing.assert_array_equal(truncated, with_suffix)
+
+
+@pytest.mark.slow
+@_NEEDS_WEIGHTS
+def test_encode_matches_upstream_conditioner_in_float32(t5gemma_encoder: TextEncodeFn) -> None:
+    """Embeddings reproduce SA3's own conditioner run at float32, transposed.
+
+    Pinned at float32 because the checkpoint's declared bfloat16 is not stable across torch
+    releases, which a persisted column cannot tolerate.
+
+    :param t5gemma_encoder: Loaded prompt conditioner.
+    """
+    from stable_audio_3.models.conditioners import T5GemmaConditioner
+
+    from synth_setter.pipeline.data.t5gemma import (
+        _T5GEMMA_MODEL_NAME,
+        _load_padding_embedding,
+        _read_conditioner_config,
+    )
+
+    prompts = ["warm analog pad", "", "cutoff, resonance, " * 200]
+    config = _read_conditioner_config(_CHECKPOINT_DIR)
+    reference = T5GemmaConditioner(
+        output_dim=config.cond_dim,
+        model_name=_T5GEMMA_MODEL_NAME,
+        max_length=config.max_length,  # pyright: ignore[reportArgumentType]
+        padding_mode=config.padding_mode,
+        model_path=str(_CHECKPOINT_DIR),
+        subfolder=config.subfolder,
+    )
+    reference.padding_embedding.data.copy_(_load_padding_embedding(_CHECKPOINT_DIR, "cpu"))
+    cast("torch.nn.Module", reference.model).to(torch.float32)
+    reference = reference.eval().requires_grad_(False)
+    with torch.no_grad():
+        expected, _ = reference(prompts, "cpu")
+
+    embeddings = t5gemma_encoder(prompts)
+
+    np.testing.assert_array_equal(embeddings, expected.float().numpy().transpose(0, 2, 1))
