@@ -13,7 +13,7 @@ from synth_setter.conditioning import (
     resolve_embedding_conditioning,
     select_conditioning,
 )
-from synth_setter.metrics import BestSwapParamMSE
+from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 
 
 def call_with_cfg(
@@ -230,6 +230,7 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
+        per_param_mse_best_swap = best_swap_per_param_mse(pred_params, batch["params"])
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -241,7 +242,12 @@ class VSTFlowMatchingModule(LightningModule):
             on_epoch=True,
         )
 
-        return {"param_mse": param_mse, "per_param_mse": per_param_mse, "preds": pred_params}
+        return {
+            "param_mse": param_mse,
+            "per_param_mse": per_param_mse,
+            "per_param_mse_best_swap": per_param_mse_best_swap,
+            "preds": pred_params,
+        }
 
     def on_validation_epoch_end(self):
         pass
