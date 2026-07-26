@@ -36,8 +36,12 @@ jobs:
             pattern: synth_setter.evaluation.shuffle_pred_audio.*
           - name: tools
             pattern: synth_setter.tools.*
-          - name: pipeline-add
-            pattern: synth_setter.pipeline.data.add_*
+          - name: pipeline-add-public
+            pattern: synth_setter.pipeline.data.add_*.x_[!_]*
+          - name: pipeline-add-private-a-m
+            pattern: synth_setter.pipeline.data.add_*.x__[a-m]*
+          - name: pipeline-add-private-n-z
+            pattern: synth_setter.pipeline.data.add_*.x__[n-z]*
           - name: pipeline-lance
             pattern: synth_setter.pipeline.data.lance_*
           - name: pipeline-stats

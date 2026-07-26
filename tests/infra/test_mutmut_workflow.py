@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import json
 import subprocess
@@ -29,7 +30,18 @@ _MUTANT_SHARDS = [
         "pattern": "synth_setter.evaluation.shuffle_pred_audio.*",
     },
     {"name": "tools", "pattern": "synth_setter.tools.*"},
-    {"name": "pipeline-add", "pattern": "synth_setter.pipeline.data.add_*"},
+    {
+        "name": "pipeline-add-public",
+        "pattern": "synth_setter.pipeline.data.add_*.x_[!_]*",
+    },
+    {
+        "name": "pipeline-add-private-a-m",
+        "pattern": "synth_setter.pipeline.data.add_*.x__[a-m]*",
+    },
+    {
+        "name": "pipeline-add-private-n-z",
+        "pattern": "synth_setter.pipeline.data.add_*.x__[n-z]*",
+    },
     {"name": "pipeline-lance", "pattern": "synth_setter.pipeline.data.lance_*"},
     {"name": "pipeline-stats", "pattern": "synth_setter.pipeline.data.stats.*"},
     {
@@ -49,7 +61,7 @@ def _workflow() -> dict[Any, Any]:
 
 
 def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
-    """Each mutable module has one parallel job bounded to 40 minutes."""
+    """Each mutation selector maps to one job bounded to 40 minutes."""
     with (_REPO_ROOT / "pyproject.toml").open("rb") as file:
         mutation_paths = tomllib.load(file)["tool"]["mutmut"]["paths_to_mutate"]
     job = _workflow()["jobs"]["mutmut_run"]
@@ -70,7 +82,15 @@ def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
             relative_path = source_path.relative_to(_REPO_ROOT).with_suffix("")
             parts = relative_path.parts
             module = ".".join(parts[1:] if parts[0] == "src" else parts)
-            assert sum(fnmatch.fnmatchcase(f"{module}.x", pattern) for pattern in patterns) == 1
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            function_names = [
+                node.name
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            ]
+            selectors = [f"{module}.x_{name}" for name in function_names] or [f"{module}.x"]
+            for selector in selectors:
+                assert sum(fnmatch.fnmatchcase(selector, pattern) for pattern in patterns) == 1
     assert job["timeout-minutes"] == 40
     run_step = next(step for step in job["steps"] if step["name"] == "Run mutmut")
     assert run_step["run"] == 'uv run mutmut run --max-children 4 "${{ matrix.pattern }}"'
