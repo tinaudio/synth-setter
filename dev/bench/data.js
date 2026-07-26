@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785085529607,
+  "lastUpdate": 1785085531474,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -17910,6 +17910,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.813041673999987,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5854decf2a7013e558aeb2d85957ab6c47e1ae46",
+          "message": "internal-feat(pipeline): add SynthSpec as the synth identity table (#2438)\n\nA synth's identity — which ParamSpec, which plugin, which baseline preset — was\nrestated across the two param_spec_registry dicts, the configs/render groups,\nthe registration scaffolder and the packaged parameter maps, with nothing\ncross-checking any pair. A right spec with a wrong preset renders\nsilently-wrong audio on the pedalboard path.\n\nAdd synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only\nlike param_spec_name and renderer_backend: it holds no ParamSpec and imports no\ndata.vst module, so pipeline.schemas.spec can depend on it without pulling\npedalboard onto the launcher's import path.\n\nname and param_spec_name are separate fields so preset variants can share one\nParamSpec; every shipped entry currently has them equal, so the split is inert\nuntil the first variant is registered.\n\nRoute the raw-DictConfig identity reads in cli/train.py and cli/eval.py through\nSynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read\nthe composed cfg directly and need a shared accessor of their own.\n\nplugin_state_paths stays a literal dict for now because\nregistration.registry_with_spec rewrites it by line anchor; a test pins it\nagainst SYNTHS until that transform learns to write the new table.\n\nRefs #2434",
+          "timestamp": "2026-07-26T09:24:11-07:00",
+          "tree_id": "7dbd7879e8b95414f0bc45e72dd85155c26f9809",
+          "url": "https://github.com/tinaudio/synth-setter/commit/5854decf2a7013e558aeb2d85957ab6c47e1ae46"
+        },
+        "date": 1785085531222,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.749126434326172,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.752490661293269,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10013223439455032,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003974258899688721,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1302757263183594,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.326374364200024,
             "unit": "seconds"
           }
         ]
