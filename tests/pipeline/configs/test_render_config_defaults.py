@@ -226,6 +226,7 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
         ("surge_xt_surgepy", "surge_xt", "presets/surge-base.fxp"),
     ],
 )
+@pytest.mark.requires_surgepy
 def test_surgepy_render_groups_compose_to_validated_isolated_configs(
     group: str,
     param_spec_name: str,
@@ -237,10 +238,13 @@ def test_surgepy_render_groups_compose_to_validated_isolated_configs(
     :param param_spec_name: Expected Surge parameter specification.
     :param plugin_state_path: Expected FXP patch resource.
     """
+    import surgepy
+
     config = RenderConfig.model_validate(
         OmegaConf.to_container(_compose_render_group(group), resolve=True)
     )
 
+    assert config.synth.synth_version == surgepy.getVersion()
     assert config.renderer_backend == "surgepy"
     assert config.plugin_path == "surgepy"
     assert config.param_spec_name == param_spec_name

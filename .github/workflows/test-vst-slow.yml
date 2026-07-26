@@ -37,7 +37,8 @@ on:
     # the ``gh-pages`` benchmark chart from this PR before merging to main.
     # Revert to ``[main]`` once the chart exists.
     branches: [main, test/vst-roundtrip-xfail-tests]
-    # Keep these paths in sync with the pull_request trigger below.
+    # GitHub Actions rejects YAML anchors, so the pull_request trigger repeats this
+    # list; `tests/infra/test_vst_slow_workflow_triggers.py` fails on any divergence.
     paths:
       - "src/synth_setter/data/vst/**"
       - "src/synth_setter/renderer_backend.py"
@@ -64,7 +65,7 @@ on:
   # render-matrix gated these paths at PR time; preserve that by running the
   # suite (incl. the parallel-render cadence cells) pre-merge. The benchmark
   # publish step is push/dispatch-only, so PRs never touch gh-pages (#1354).
-  # Keep this path list in sync with the push trigger above.
+  # Mirrors the push paths above; the trigger-parity test is the enforcement.
   pull_request:
     paths:
       - "src/synth_setter/data/vst/**"

@@ -7,9 +7,30 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from synth_setter.data.vst.generate_vst_dataset import (
+    AudioAmplitudeError,
+    _reject_clipped_audio,
+)
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import SurgePyRenderer
 from synth_setter.data.vst.surgepy_runtime import surge_component_state
+
+
+def _simple_renderer() -> SurgePyRenderer:
+    """Build the checked-in minimal SurgePy renderer.
+
+    :returns: Renderer configured for a short stereo signal.
+    """
+    return SurgePyRenderer(
+        plugin_path="surgepy",
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=0.1,
+        plugin_state_path="presets/surge-simple.fxp",
+        parameter_map=load_param_map(
+            Path("src/synth_setter/data/vst/surge_simple_param_map.json")
+        ),
+    )
 
 
 def test_surge_component_state_rejects_unstructured_marker_bytes(tmp_path: Path) -> None:
@@ -25,6 +46,7 @@ def test_surge_component_state_rejects_unstructured_marker_bytes(tmp_path: Path)
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_real_patch_produces_finite_non_silent_audio() -> None:
     """A real Surge patch and note produce the shared renderer output contract."""
     renderer = SurgePyRenderer(
@@ -52,6 +74,35 @@ def test_surgepy_renderer_real_patch_produces_finite_non_silent_audio() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_render_rejects_unknown_parameter_key() -> None:
+    """The public render contract rejects parameters absent from the joint map."""
+    with pytest.raises(KeyError, match=r"unknown SurgePy parameter key\(s\): not_mapped"):
+        _simple_renderer().render({"not_mapped": 0.5}, 60, 100, (0.0, 0.05))
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+@pytest.mark.parametrize(
+    "note_interval",
+    [
+        pytest.param((0.05, 0.05), id="start-equals-end"),
+        pytest.param((0.0, 0.100_001), id="end-after-signal"),
+    ],
+)
+def test_surgepy_renderer_render_rejects_malformed_note_interval(
+    note_interval: tuple[float, float],
+) -> None:
+    """The public render contract enforces an ordered, in-signal note interval.
+
+    :param note_interval: Invalid note interval under test.
+    """
+    with pytest.raises(ValueError, match="note times must satisfy"):
+        _simple_renderer().render({}, 60, 100, note_interval)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_mono_downmix_preserves_sample_count() -> None:
     """The native stereo output can satisfy the shared mono contract."""
     renderer = SurgePyRenderer(
@@ -72,8 +123,29 @@ def test_surgepy_renderer_mono_downmix_preserves_sample_count() -> None:
 
 
 @pytest.mark.slow
-def test_surgepy_renderer_matches_surge_discrete_normalization() -> None:
-    """Integer and Boolean boundaries reproduce Surge host automation semantics."""
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_defers_clipped_audio_to_the_generation_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Amplitude acceptance stays with generation, which retries the draw (#2001).
+
+    :param monkeypatch: Replaces the native block-render seam with clipped output.
+    """
+    renderer = _simple_renderer()
+    clipped = np.full((2, 4_410), 1.01, dtype=np.float32)
+    monkeypatch.setattr(SurgePyRenderer, "_render_note_blocks", lambda *_, **__: clipped)
+
+    rendered = renderer.render({}, 60, 100, (0.0, 0.05))
+
+    assert np.array_equal(rendered, clipped)
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(rendered)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_matches_surge_native_normalization() -> None:
+    """Float, integer, and Boolean values reproduce Surge automation semantics."""
     renderer = SurgePyRenderer(
         plugin_path="surgepy",
         sample_rate=44_100,
@@ -84,24 +156,36 @@ def test_surgepy_renderer_matches_surge_discrete_normalization() -> None:
             Path("src/synth_setter/data/vst/surge_xt_param_map.json")
         ),
     )
-    renderer._initialize_synth()
-
-    octave = renderer._parameter_ids["a_osc_1_octave"]
-    mute = renderer._parameter_ids["a_osc_1_mute"]
-
-    assert renderer._native_parameter_value(octave, 0.0) == -3.0
-    assert renderer._native_parameter_value(octave, 0.084) == -3.0
-    assert renderer._native_parameter_value(octave, 1.0) == 3.0
-    assert renderer._native_parameter_value(mute, 0.0) == 0.0
-    assert renderer._native_parameter_value(mute, 0.5) == 0.0
-    assert renderer._native_parameter_value(mute, 0.500_001) == 1.0
-    assert renderer._native_parameter_value(mute, 1.0) == 1.0
+    # Continuous cutoff spans [-60, 70] dB-scaled native units; integer octave and
+    # Boolean mute round through Surge's legacy automation grid.
+    assert renderer.native_parameter_values(
+        {
+            "a_filter_1_cutoff": 0.0,
+            "a_osc_1_octave": 0.0,
+            "a_osc_1_mute": 0.0,
+        }
+    ) == {"a_filter_1_cutoff": -60.0, "a_osc_1_octave": -3.0, "a_osc_1_mute": 0.0}
+    assert renderer.native_parameter_values(
+        {
+            "a_filter_1_cutoff": 0.5,
+            "a_osc_1_octave": 0.084,
+            "a_osc_1_mute": 0.5,
+        }
+    ) == {"a_filter_1_cutoff": 5.0, "a_osc_1_octave": -3.0, "a_osc_1_mute": 0.0}
+    assert renderer.native_parameter_values(
+        {
+            "a_filter_1_cutoff": 1.0,
+            "a_osc_1_octave": 1.0,
+            "a_osc_1_mute": 0.500_001,
+        }
+    ) == {"a_filter_1_cutoff": 70.0, "a_osc_1_octave": 3.0, "a_osc_1_mute": 1.0}
     for invalid in (-0.001, 1.001, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="finite and in"):
-            renderer._native_parameter_value(octave, invalid)
+            renderer.native_parameter_values({"a_osc_1_octave": invalid})
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_rejects_undersized_native_output_buffer() -> None:
     """Native block processing fails before writing beyond the output buffer."""
     renderer = SurgePyRenderer(
@@ -122,6 +206,7 @@ def test_surgepy_renderer_rejects_undersized_native_output_buffer() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_short_note_window_spans_a_processing_block() -> None:
     """Sub-block MIDI windows cannot collapse before native processing."""
     renderer = SurgePyRenderer(
@@ -141,6 +226,7 @@ def test_surgepy_renderer_short_note_window_spans_a_processing_block() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_rechecks_patch_hash_before_each_render(tmp_path: Path) -> None:
     """A patch replaced after construction cannot bypass mapped provenance.
 

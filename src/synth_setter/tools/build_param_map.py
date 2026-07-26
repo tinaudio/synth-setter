@@ -57,68 +57,39 @@ _SURGE_DAWDREAMER_OSCILLATOR_NAMES = {
         ("triangle", "Width 2"),
     )
 }
-_SURGEPY_FX_NAMES = {
-    "fx_a1_delay_feedback": "FX A1 Feedback",
-    "fx_a1_delay_time": "FX A1 Time",
-    "fx_a1_eq_high_cut": "FX A1 High Cut",
-    "fx_a1_eq_low_cut": "FX A1 Low Cut",
-    "fx_a1_modulation_depth": "FX A1 Depth",
-    "fx_a1_modulation_rate": "FX A1 Rate",
-    "fx_a1_output_mix": "FX A1 Mix",
-    "fx_a1_output_width": "FX A1 Width",
-    "fx_a2_delay_time_left": "FX A2 Left",
-    "fx_a2_delay_time_right": "FX A2 Right",
-    "fx_a2_feedback_eq_crossfeed": "FX A2 Crossfeed",
-    "fx_a2_feedback_eq_feedback": "FX A2 Feedback",
-    "fx_a2_feedback_eq_high_cut": "FX A2 High Cut",
-    "fx_a2_feedback_eq_low_cut": "FX A2 Low Cut",
-    "fx_a2_input_channel": "FX A2 Channel",
-    "fx_a2_modulation_depth": "FX A2 Depth",
-    "fx_a2_modulation_rate": "FX A2 Rate",
-    "fx_a2_output_mix": "FX A2 Mix",
-    "fx_a2_output_width": "FX A2 Width",
-    "fx_a3_eq_hf_damping": "FX A3 HF Damping",
-    "fx_a3_eq_lf_damping": "FX A3 LF Damping",
-    "fx_a3_output_mix": "FX A3 Mix",
-    "fx_a3_output_width": "FX A3 Width",
-    "fx_a3_pre_delay_pre_delay": "FX A3 Pre-Delay",
-    "fx_a3_reverb_buildup": "FX A3 Buildup",
-    "fx_a3_reverb_decay_time": "FX A3 Decay Time",
-    "fx_a3_reverb_diffusion": "FX A3 Diffusion",
-    "fx_a3_reverb_modulation": "FX A3 Modulation",
-    "fx_a3_reverb_room_size": "FX A3 Room Size",
+_SURGE_FX_LABELS = {
+    "fx_a1_delay_time": ("FX A1 Param 1", "FX A1 Time"),
+    "fx_a1_modulation_rate": ("FX A1 Param 2", "FX A1 Rate"),
+    "fx_a1_modulation_depth": ("FX A1 Param 3", "FX A1 Depth"),
+    "fx_a1_delay_feedback": ("FX A1 Param 4", "FX A1 Feedback"),
+    "fx_a1_eq_low_cut": ("FX A1 Param 5", "FX A1 Low Cut"),
+    "fx_a1_eq_high_cut": ("FX A1 Param 6", "FX A1 High Cut"),
+    "fx_a1_output_mix": ("FX A1 Param 7", "FX A1 Mix"),
+    "fx_a1_output_width": ("FX A1 Param 8", "FX A1 Width"),
+    "fx_a2_delay_time_left": ("FX A2 Param 1", "FX A2 Left"),
+    "fx_a2_delay_time_right": ("FX A2 Param 2", "FX A2 Right"),
+    "fx_a2_feedback_eq_feedback": ("FX A2 Param 3", "FX A2 Feedback"),
+    "fx_a2_feedback_eq_crossfeed": ("FX A2 Param 4", "FX A2 Crossfeed"),
+    "fx_a2_feedback_eq_low_cut": ("FX A2 Param 5", "FX A2 Low Cut"),
+    "fx_a2_feedback_eq_high_cut": ("FX A2 Param 6", "FX A2 High Cut"),
+    "fx_a2_modulation_rate": ("FX A2 Param 7", "FX A2 Rate"),
+    "fx_a2_modulation_depth": ("FX A2 Param 8", "FX A2 Depth"),
+    "fx_a2_input_channel": ("FX A2 Param 9", "FX A2 Channel"),
+    "fx_a2_output_mix": ("FX A2 Param 11", "FX A2 Mix"),
+    "fx_a2_output_width": ("FX A2 Param 12", "FX A2 Width"),
+    "fx_a3_pre_delay_pre_delay": ("FX A3 Param 1", "FX A3 Pre-Delay"),
+    "fx_a3_reverb_room_size": ("FX A3 Param 2", "FX A3 Room Size"),
+    "fx_a3_reverb_decay_time": ("FX A3 Param 3", "FX A3 Decay Time"),
+    "fx_a3_reverb_diffusion": ("FX A3 Param 4", "FX A3 Diffusion"),
+    "fx_a3_reverb_buildup": ("FX A3 Param 5", "FX A3 Buildup"),
+    "fx_a3_reverb_modulation": ("FX A3 Param 6", "FX A3 Modulation"),
+    "fx_a3_eq_lf_damping": ("FX A3 Param 7", "FX A3 LF Damping"),
+    "fx_a3_eq_hf_damping": ("FX A3 Param 8", "FX A3 HF Damping"),
+    "fx_a3_output_width": ("FX A3 Param 9", "FX A3 Width"),
+    "fx_a3_output_mix": ("FX A3 Param 10", "FX A3 Mix"),
 }
-_SURGE_FX_NAMES = {
-    "fx_a1_delay_time": "FX A1 Param 1",
-    "fx_a1_modulation_rate": "FX A1 Param 2",
-    "fx_a1_modulation_depth": "FX A1 Param 3",
-    "fx_a1_delay_feedback": "FX A1 Param 4",
-    "fx_a1_eq_low_cut": "FX A1 Param 5",
-    "fx_a1_eq_high_cut": "FX A1 Param 6",
-    "fx_a1_output_mix": "FX A1 Param 7",
-    "fx_a1_output_width": "FX A1 Param 8",
-    "fx_a2_delay_time_left": "FX A2 Param 1",
-    "fx_a2_delay_time_right": "FX A2 Param 2",
-    "fx_a2_feedback_eq_feedback": "FX A2 Param 3",
-    "fx_a2_feedback_eq_crossfeed": "FX A2 Param 4",
-    "fx_a2_feedback_eq_low_cut": "FX A2 Param 5",
-    "fx_a2_feedback_eq_high_cut": "FX A2 Param 6",
-    "fx_a2_modulation_rate": "FX A2 Param 7",
-    "fx_a2_modulation_depth": "FX A2 Param 8",
-    "fx_a2_input_channel": "FX A2 Param 9",
-    "fx_a2_output_mix": "FX A2 Param 11",
-    "fx_a2_output_width": "FX A2 Param 12",
-    "fx_a3_pre_delay_pre_delay": "FX A3 Param 1",
-    "fx_a3_reverb_room_size": "FX A3 Param 2",
-    "fx_a3_reverb_decay_time": "FX A3 Param 3",
-    "fx_a3_reverb_diffusion": "FX A3 Param 4",
-    "fx_a3_reverb_buildup": "FX A3 Param 5",
-    "fx_a3_reverb_modulation": "FX A3 Param 6",
-    "fx_a3_eq_lf_damping": "FX A3 Param 7",
-    "fx_a3_eq_hf_damping": "FX A3 Param 8",
-    "fx_a3_output_width": "FX A3 Param 9",
-    "fx_a3_output_mix": "FX A3 Param 10",
-}
+_SURGE_FX_NAMES = {key: generic_name for key, (generic_name, _) in _SURGE_FX_LABELS.items()}
+_SURGEPY_FX_NAMES = {key: surgepy_name for key, (_, surgepy_name) in _SURGE_FX_LABELS.items()}
 
 
 class HostParam(BaseModel):  # noqa: DOC601, DOC603
@@ -366,6 +337,7 @@ def _index_surgepy(
 
 def _resolve_surgepy_param(
     semantic_key: str,
+    *,
     pedalboard_name: str,
     by_name: dict[str, list[SurgePyHostParam]],
     errors: list[str],
@@ -495,7 +467,10 @@ def _resolve_param_identity(
     surgepy_ref = None
     if surgepy_by_name is not None:
         surgepy_param = _resolve_surgepy_param(
-            semantic_key, pedalboard_param.name, surgepy_by_name, errors
+            semantic_key,
+            pedalboard_name=pedalboard_param.name,
+            by_name=surgepy_by_name,
+            errors=errors,
         )
         if surgepy_param is None:
             return None

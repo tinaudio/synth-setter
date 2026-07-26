@@ -18,6 +18,7 @@ import pytest
 from scipy.io import wavfile
 
 from synth_setter.data.vst.param_map import load_param_map
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.surgepy_runtime import surge_component_state
 from synth_setter.data.vst.writers import make_lance_dataset
@@ -355,6 +356,7 @@ def _write_comparison_directory(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
+@pytest.mark.requires_surgepy
 def test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks(
     tmp_path: Path,
 ) -> None:
@@ -374,11 +376,16 @@ def test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks(
     }
     config = _config("pedalboard")
     expected_samples = int(config.sample_rate * config.signal_duration_seconds)
+    expected_param_width = resolve_param_spec(config.param_spec_name).encoded_width
     for result in results.values():
         assert result.audio.shape == (_RENDER_COUNT, 2, expected_samples)
         assert result.mel.shape == (_RENDER_COUNT, 2, 128, 401)
+        assert result.params.shape == (_RENDER_COUNT, expected_param_width)
+        assert result.params.dtype == np.float32
         assert np.isfinite(result.audio).all()
         assert np.isfinite(result.mel).all()
+        assert np.isfinite(result.params).all()
+        assert np.all((result.params >= 0.0) & (result.params <= 1.0))
         assert np.max(np.abs(result.audio)) > 1e-4
         assert np.max(np.abs(result.audio)) <= 1.0
     np.testing.assert_array_equal(results["pedalboard"].params, results["dawdreamer"].params)

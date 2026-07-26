@@ -421,15 +421,41 @@ class SurgePyRenderer(AudioRenderer):
     def _apply_parameters(self, params: dict[str, float]) -> None:
         """Apply repository-normalized values to the fresh native synth.
 
+        Unmapped keys raise ``KeyError`` and invalid values ``ValueError``,
+        both before any native write.
+
+        :param params: Normalized values keyed by repository parameter name.
+        """
+        self._reject_unknown_parameters(params)
+        for name, value in params.items():
+            parameter = self._parameter_ids[name]
+            self.synth.setParamVal(parameter, self._native_parameter_value(parameter, value))
+
+    def _reject_unknown_parameters(self, params: dict[str, float]) -> None:
+        """Fail before writing to the engine when a key has no mapped identity.
+
         :param params: Normalized values keyed by repository parameter name.
         :raises KeyError: If a requested parameter has no mapped native identity.
         """
         unknown = sorted(params.keys() - self._parameter_ids.keys())
         if unknown:
             raise KeyError(f"unknown SurgePy parameter key(s): {', '.join(unknown)}")
-        for name, value in params.items():
-            parameter = self._parameter_ids[name]
-            self.synth.setParamVal(parameter, self._native_parameter_value(parameter, value))
+
+    def native_parameter_values(self, params: dict[str, float]) -> dict[str, float]:
+        """Resolve normalized values on a fresh verified engine, without rendering.
+
+        Shares the render path's validation: unmapped keys raise ``KeyError``,
+        out-of-range or non-finite values ``ValueError``.
+
+        :param params: Normalized values keyed by repository parameter name.
+        :returns: Surge-native values keyed by repository parameter name.
+        """
+        self._initialize_synth()
+        self._reject_unknown_parameters(params)
+        return {
+            name: self._native_parameter_value(self._parameter_ids[name], value)
+            for name, value in params.items()
+        }
 
     def _render_note_blocks(
         self,

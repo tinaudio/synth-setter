@@ -65,6 +65,7 @@ def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_make_audio_renderer_surgepy_returns_real_renderer() -> None:
     """The public factory constructs SurgePy with its packaged parameter map."""
     config = _render_config(

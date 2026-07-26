@@ -11,16 +11,10 @@ import pytest
 from click.testing import CliRunner
 
 from synth_setter.data.vst.clap_introspect import ClapParamInfo, ClapPluginInfo
-from synth_setter.data.vst.param_map import SynthParamMap, load_param_map
+from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter, ParamSpec
 from synth_setter.tools import build_param_map
-from synth_setter.tools.build_param_map import (
-    HostDump,
-    HostParam,
-)
-from synth_setter.tools.build_param_map import (
-    join_param_map as _join_param_map,
-)
+from synth_setter.tools.build_param_map import HostDump, HostParam, join_param_map
 
 
 def test_surgepy_provenance_rejects_different_native_component_state(tmp_path: Path) -> None:
@@ -54,28 +48,6 @@ def test_introspection_constants_pin_shared_host_configuration() -> None:
     assert build_param_map.INTROSPECTION_BLOCK_SIZE == 2_048
     assert build_param_map.PEDALBOARD_FLUSH_DURATION_SECONDS == 32.0
     assert build_param_map.PEDALBOARD_FLUSH_CHANNELS == 2
-
-
-def join_param_map(
-    param_spec_name: str,
-    pedalboard: HostDump,
-    clap: ClapPluginInfo,
-    dawdreamer: HostDump,
-) -> SynthParamMap:
-    """Call the keyword-only production join from concise test fixtures.
-
-    :param param_spec_name: Registered test parameter spec.
-    :param pedalboard: Pedalboard host dump.
-    :param clap: CLAP host dump.
-    :param dawdreamer: DawDreamer host dump.
-    :returns: Validated joint map.
-    """
-    return _join_param_map(
-        param_spec_name,
-        pedalboard=pedalboard,
-        clap=clap,
-        dawdreamer=dawdreamer,
-    )
 
 
 def _host_dump(*params: HostParam, plugin: str = "Test Synth", version: str = "1.0") -> HostDump:
@@ -166,7 +138,7 @@ def test_join_param_map_preserves_verified_host_identities(registry: dict[str, P
     """
     pedalboard, clap, dawdreamer = _valid_inputs()
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     identity = result.params["cutoff"]
     assert identity.pedalboard.index == 0
@@ -198,7 +170,7 @@ def test_join_param_map_resolves_each_backend_after_independent_permutations(
         HostParam(index=300, name="Cutoff"),
     )
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["cutoff"].pedalboard.index == 37
     assert result.params["cutoff"].clap is not None
@@ -230,7 +202,9 @@ def test_join_param_map_resolves_separate_clap_and_dawdreamer_oscillator_aliases
     clap = _clap(_clap_param(800, "CLAP Shape"))
     dawdreamer = _host_dump(HostParam(index=300, name="DD Shape"))
 
-    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+    identity = join_param_map(
+        "test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer
+    ).params[semantic_key]
 
     assert identity.clap is not None
     assert identity.clap.clap_param_id == 800
@@ -256,7 +230,9 @@ def test_join_param_map_resolves_fx_host_name_from_semantic_key(
     clap = _clap(_clap_param(700, "Independent Host FX"))
     dawdreamer = _host_dump(HostParam(index=46, name="Independent Host FX"))
 
-    identity = join_param_map("test", pedalboard, clap, dawdreamer).params[semantic_key]
+    identity = join_param_map(
+        "test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer
+    ).params[semantic_key]
 
     assert identity.clap is not None
     assert identity.clap.clap_param_id == 700
@@ -275,7 +251,7 @@ def test_join_param_map_resolves_fx_slot_without_bank_anchor(
     clap = _clap(_clap_param(7, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["fx_a1_delay_time"].dawdreamer.index == 41
 
@@ -292,7 +268,7 @@ def test_join_param_map_resolves_dynamic_fx_from_semantic_key_not_pedalboard_nam
     clap = _clap(_clap_param(700, "FX A1 Param 1"))
     dawdreamer = _host_dump(HostParam(index=41, name="FX A1 Param 1"))
 
-    result = join_param_map("test", pedalboard, clap, dawdreamer)
+    result = join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert result.params["fx_a1_delay_time"].pedalboard.name == "My Delay Time"
     assert result.params["fx_a1_delay_time"].clap is not None
@@ -354,7 +330,7 @@ def test_join_param_map_rejects_provenance_drift(
     pedalboard, clap, dawdreamer = mutation(*_valid_inputs())
 
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 @pytest.mark.parametrize(
@@ -403,7 +379,7 @@ def test_join_param_map_rejects_duplicate_host_identities(
     :param expected: Required diagnostic text.
     """
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_duplicate_clap_ids(registry: dict[str, ParamSpec]) -> None:
@@ -415,7 +391,7 @@ def test_join_param_map_rejects_duplicate_clap_ids(registry: dict[str, ParamSpec
     clap = _clap(_clap_param(7, "Cutoff"), _clap_param(7, "Resonance"))
 
     with pytest.raises(ValueError, match="duplicate CLAP parameter ids"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpec]) -> None:
@@ -427,7 +403,7 @@ def test_join_param_map_rejects_ambiguous_clap_name(registry: dict[str, ParamSpe
     clap = _clap(_clap_param(7, "Cutoff"), _clap_param(8, "cut_off"))
 
     with pytest.raises(ValueError, match="CLAP name 'cutoff' is missing or ambiguous"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_rejects_ambiguous_dawdreamer_fx_name(
@@ -448,7 +424,7 @@ def test_join_param_map_rejects_ambiguous_dawdreamer_fx_name(
     with pytest.raises(
         ValueError, match="DawDreamer name 'FX A1 Param 1' is missing or ambiguous"
     ):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 @pytest.mark.parametrize(
@@ -497,7 +473,7 @@ def test_join_param_map_rejects_unresolvable_parameter_identities(
     :param expected: Required diagnostic text.
     """
     with pytest.raises(ValueError, match=expected):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_aggregates_independent_errors(registry: dict[str, ParamSpec]) -> None:
@@ -514,7 +490,7 @@ def test_join_param_map_aggregates_independent_errors(registry: dict[str, ParamS
     dawdreamer = _host_dump()
 
     with pytest.raises(ValueError) as caught:
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
     assert "plugin identities disagree" in str(caught.value)
     assert "DawDreamer name 'cutoff' is missing or ambiguous" in str(caught.value)
@@ -534,7 +510,7 @@ def test_join_param_map_rejects_invalid_categorical_grid(registry: dict[str, Par
     dawdreamer = _host_dump(HostParam(index=11, name="Mode"))
 
     with pytest.raises(ValueError, match="categorical grid does not match CLAP steps"):
-        join_param_map("test", pedalboard, clap, dawdreamer)
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
 
 
 def test_join_param_map_accepts_matching_categorical_grid(registry: dict[str, ParamSpec]) -> None:
@@ -549,7 +525,11 @@ def test_join_param_map_accepts_matching_categorical_grid(registry: dict[str, Pa
     clap = _clap(_clap_param(7, "Mode", stepped=True))
     dawdreamer = _host_dump(HostParam(index=11, name="Mode"))
 
-    clap_reference = join_param_map("test", pedalboard, clap, dawdreamer).params["mode"].clap
+    clap_reference = (
+        join_param_map("test", pedalboard=pedalboard, clap=clap, dawdreamer=dawdreamer)
+        .params["mode"]
+        .clap
+    )
     assert clap_reference is not None
     assert clap_reference.is_stepped
 
@@ -612,6 +592,7 @@ def test_build_command_writes_map_consumable_by_runtime(
 
 
 @pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_dump_surgepy_reads_real_patch_and_native_identities(tmp_path: Path) -> None:
     """The SurgePy dump records real engine provenance and unique synth-side IDs.
 

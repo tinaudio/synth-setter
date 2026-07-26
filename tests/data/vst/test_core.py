@@ -82,6 +82,7 @@ class TestExtractRendererVersion:
         )
 
     @pytest.mark.slow
+    @pytest.mark.requires_surgepy
     def test_surgepy_backend_name_reads_live_engine_version(self) -> None:
         """SurgePy provenance records the native engine version, not package 0.1.0."""
         import surgepy
