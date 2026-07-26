@@ -21,6 +21,7 @@ from synth_setter.evaluation.audio_probe import ProbeRenderSettings, run_audio_p
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -183,7 +184,8 @@ def _validate_probe_spec_match(cfg: DictConfig) -> None:
     :param cfg: Hydra config carrying the render and datamodule specs.
     :raises ValueError: If a VST datamodule's spec differs from the render spec.
     """
-    render_spec = OmegaConf.select(cfg, "render.param_spec_name")
+    render_synth = SynthSpec.from_render_cfg(OmegaConf.select(cfg, "render"))
+    render_spec = None if render_synth is None else render_synth.param_spec_name
     datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
     if datamodule_spec is None or datamodule_spec == render_spec:
         return
@@ -202,11 +204,15 @@ def _probe_render_settings(cfg: DictConfig) -> ProbeRenderSettings:
 
     :param cfg: Hydra config carrying the composed render group.
     :returns: Settings consumed by the audio-probe subprocess.
+    :raises ValueError: The render group declares no synth identity.
     """
+    synth = SynthSpec.from_render_cfg(cfg.render)
+    if synth is None:
+        raise ValueError("render group names no param spec; the audio probe cannot decode")
     return ProbeRenderSettings(
-        param_spec_name=cfg.render.param_spec_name,
-        plugin_state_path=cfg.render.plugin_state_path,
-        plugin_path=cfg.render.get("plugin_path"),
+        param_spec_name=synth.param_spec_name,
+        plugin_state_path=synth.plugin_state_path,
+        plugin_path=synth.plugin_path or None,
         sample_rate=cfg.render.get("sample_rate"),
         channels=cfg.render.get("channels"),
         velocity=cfg.render.get("velocity"),

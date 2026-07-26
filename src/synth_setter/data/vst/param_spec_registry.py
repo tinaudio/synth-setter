@@ -44,6 +44,9 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
 }
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
+# Kept literal because ``registration.registry_with_spec`` rewrites this dict by
+# line anchor; ``synth_setter.synth_spec.SYNTHS`` is the authoring source and
+# ``tests/test_synth_spec.py`` pins the two to agree.
 plugin_state_paths: dict[str, str] = {
     "surge_xt": "presets/surge-base.vstpreset",
     "surge_simple": "presets/surge-simple.vstpreset",

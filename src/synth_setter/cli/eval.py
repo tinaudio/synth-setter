@@ -30,6 +30,7 @@ from synth_setter.pipeline.schemas.spec import _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -202,6 +203,9 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             if sys.platform == "linux":
                 wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
                 args.append(str(wrapper_path))
+            synth = SynthSpec.from_render_cfg(cfg.render)
+            if synth is None:
+                raise ValueError("render group names no param spec; cannot re-render audio")
             args += [
                 sys.executable,
                 "-m",
@@ -209,12 +213,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
                 str(predictions_dir),
                 str(audio_dir),
                 "--param_spec",
-                cfg.render.param_spec_name,
+                synth.param_spec_name,
                 "--plugin_state_path",
-                cfg.render.plugin_state_path,
+                synth.plugin_state_path,
             ]
-            if cfg.render.get("plugin_path"):
-                args += ["--plugin_path", cfg.render.plugin_path]
+            if synth.plugin_path:
+                args += ["--plugin_path", synth.plugin_path]
             # Forward the remaining render fields predict_vst_audio renders with so the
             # re-render matches the dataset's generation render rather than this module's
             # CLI defaults. Gated like plugin_path so a partial render cfg still works.
