@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785085531474,
+  "lastUpdate": 1785088741436,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10410,6 +10410,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.031813204288482666,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16c447a8e56cc32df39e791f5b346f7dfabdbd50",
+          "message": "internal-feat(pipeline): nest synth identity in RenderConfig (#2440)\n\n* internal-feat(pipeline): add SynthSpec as the synth identity table\n\nA synth's identity — which ParamSpec, which plugin, which baseline preset — was\nrestated across the two param_spec_registry dicts, the configs/render groups,\nthe registration scaffolder and the packaged parameter maps, with nothing\ncross-checking any pair. A right spec with a wrong preset renders\nsilently-wrong audio on the pedalboard path.\n\nAdd synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only\nlike param_spec_name and renderer_backend: it holds no ParamSpec and imports no\ndata.vst module, so pipeline.schemas.spec can depend on it without pulling\npedalboard onto the launcher's import path.\n\nname and param_spec_name are separate fields so preset variants can share one\nParamSpec; every shipped entry currently has them equal, so the split is inert\nuntil the first variant is registered.\n\nRoute the raw-DictConfig identity reads in cli/train.py and cli/eval.py through\nSynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read\nthe composed cfg directly and need a shared accessor of their own.\n\nplugin_state_paths stays a literal dict for now because\nregistration.registry_with_spec rewrites it by line anchor; a test pins it\nagainst SYNTHS until that transform learns to write the new table.\n\nRefs #2434\n\n* internal-feat(pipeline): nest synth identity in RenderConfig\n\nRenderConfig carried param_spec_name, plugin_path and plugin_state_path as\nthree independent flat fields, so nothing tied them together and a right spec\nwith a wrong preset validated cleanly. Replace them with one nested SynthSpec.\n\nRead access is preserved by plain properties, leaving the ~125 read sites\nuntouched. They must be plain properties rather than computed_field: the worker\nargv is built by flattening model_dump(), and _GenerateCliArgs is\nextra=\"forbid\", so re-emitted flat keys would hard-fail the renderer subprocess\nat parse.\n\nSpecs already written to R2 carry the flat keys, so a mode=\"before\" validator\nlifts them onto synth. It pops rather than copies, since extra=\"forbid\" rejects\nleftovers, and refuses a payload carrying both shapes instead of silently\npreferring one. Code that constructs a RenderConfig now passes synth= — pyright\nenforces that, keeping the lift scoped to deserializing old JSON.\n\nWorker argv JSON-encodes non-scalars. Every field was scalar before, so\nstr(value) happened to round-trip; a nested model would emit a single-quoted\nPython repr that CliSettingsSource's json.loads rejects. bool is an int\nsubclass, so flags keep their existing spelling and all 22 scalar fields are\nbyte-identical in argv.\n\nvalidate_spec checks identity shape-aware rather than by presence:\nvalidate-dataset-shards.yaml has a workflow_dispatch taking an arbitrary\nspec_uri, so archived specs must still validate. Exempting synth outright would\nhave made identity optional in both shapes.\n\nRefs #2434\n\n* test(pipeline): cover the shape-aware synth identity check\n\nThe legacy-shape branch of validate_spec's identity read and the shape-aware\npresence check were both uncovered, so the back-compat path this change claims\nto preserve was unverified. Switch the shared spec fixture to the nested shape\nthe pipeline now writes and add a flat variant alongside it, so both are\nexercised.\n\nRefs #2434\n\n* test(tooling): cover the captured-patch render config\n\nThe RenderConfig construction in vst_interactive sat inline in a long main()\nin a file with no coverage at all, so migrating it to the nested synth field\nlanded unverified. Extract it as make_dataset_render_cfg and pin what it\nrecords: the auditioned synth identity, the patch count as the shard size, the\nsession audio settings, and that identity validation still runs.\n\nRefs #2434\n\n* test(data-pipeline): nest synth identity in MPS fixtures",
+          "timestamp": "2026-07-26T10:30:36-07:00",
+          "tree_id": "40ccf8c57f6b8f72ac03c181d9f9b6690e8a595a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/16c447a8e56cc32df39e791f5b346f7dfabdbd50"
+        },
+        "date": 1785088740338,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.096900939941406,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.693935437109321,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.026105869561433792,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.026829779148101807,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4974732398986816,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.495750943916667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.384799480438232,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.706382762019057,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.030259061604738235,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.041517555713653564,
             "unit": "1-cos"
           },
           {
