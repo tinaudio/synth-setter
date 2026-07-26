@@ -94,6 +94,9 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _WORKER_VENV = "/venv/main"
 # Worker images install an unpacked package, so this module-relative script path is available.
 _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
+_BADWINDOW_FAILURE_METRIC = "generation/badwindow_detected"
+_BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
+_X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -466,6 +469,27 @@ def _log_shard_metrics(
             logger.warning(f"log_metrics(shard) failed on {type(lg).__name__}: {exc}")
 
 
+def _log_badwindow_failure(loggers: list[Logger]) -> None:
+    """Record one fatal X11 ``BadWindow`` renderer failure.
+
+    W&B keeps the maximum event marker so the run summary reports whether any attempt failed.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    """
+    payload = {_BADWINDOW_FAILURE_METRIC: 1.0}
+    for lg in loggers:
+        try:
+            if isinstance(lg, WandbLogger):
+                lg.experiment.define_metric(_BADWINDOW_FAILURE_METRIC, summary="max")
+            lg.log_metrics(payload)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(
+                "log_metrics(badwindow) failed on {}: {}",
+                type(lg).__name__,
+                exc,
+            )
+
+
 def _log_summary(
     loggers: list[Logger],
     *,
@@ -763,7 +787,7 @@ def _render_one_owned_shard(
         )
         return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir)
+    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
         "shard {} render rejections: silent={} clipped={}",
         shard_id,
@@ -808,10 +832,22 @@ def _load_render_rejections(metrics_path: Path, shard_id: int) -> RenderRejectio
         ) from exc
 
 
+def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -> bool:
+    """Identify the fatal X11 warmup signature emitted by Xlib.
+
+    :param error: Failed renderer subprocess with its bounded output tail attached.
+    :returns: Whether the output identifies ``BadWindow`` during ``X_GetProperty``.
+    """
+    output = error.output or b""
+    return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
+
+
 def _render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
+    *,
+    loggers: list[Logger],
 ) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2; shards are retained at ``work_dir``.
 
@@ -825,6 +861,7 @@ def _render_and_upload_shard(
     :param spec: Validated dataset spec; provides the render config and R2 URIs.
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
+    :param loggers: Receive a metric before a recognized X11 failure propagates.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -855,7 +892,9 @@ def _render_and_upload_shard(
             try:
                 _check_call_streamed(args)
                 break
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as exc:
+                if _is_badwindow_x_get_property_failure(exc):
+                    _log_badwindow_failure(loggers)
                 if attempt + 1 == max_attempts:
                     raise
                 logger.warning(
