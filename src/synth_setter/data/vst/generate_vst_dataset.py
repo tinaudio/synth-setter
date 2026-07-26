@@ -113,7 +113,7 @@ class AudioAmplitudeError(ValueError):
 def _reject_clipped_audio(audio: np.ndarray) -> None:
     """Reject audio outside the dataset's normalized storage range.
 
-    :param audio: Rendered audio accepted by the backend contract.
+    :param audio: Channel-leading renderer output shaped ``(channels, samples)``.
     :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
     """
     if np.any(np.abs(audio) > 1.0):

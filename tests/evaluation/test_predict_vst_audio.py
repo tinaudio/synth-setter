@@ -16,6 +16,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
+from typing import Literal  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 
 import matplotlib.pyplot as plt  # noqa: E402
@@ -23,7 +24,6 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 import torch  # noqa: E402
-from click.testing import CliRunner  # noqa: E402
 from pydantic_settings import CliApp  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
@@ -168,9 +168,12 @@ def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> N
 # ---------- main (process CLI) ----------
 
 
-def _render_config() -> RenderConfig:
+def _render_config(
+    gui_toggle_cadence: Literal["never", "once", "render"] = "never",
+) -> RenderConfig:
     """Return the complete render config transported to the process CLI.
 
+    :param gui_toggle_cadence: GUI warm-up lifecycle under test.
     :returns: Validated config for the test renderer session.
     """
     return RenderConfig(
@@ -186,7 +189,7 @@ def _render_config() -> RenderConfig:
         samples_per_render_batch=2,
         samples_per_shard=4,
         plugin_reload_cadence="render",
-        gui_toggle_cadence="never",
+        gui_toggle_cadence=gui_toggle_cadence,
     )
 
 
@@ -232,15 +235,6 @@ def _write_batch(
 
 
 @pytest.fixture()
-def runner() -> CliRunner:
-    """Fresh click ``CliRunner`` per test.
-
-    :return: A fresh ``CliRunner`` instance.
-    """
-    return CliRunner()
-
-
-@pytest.fixture()
 def pred_dir(tmp_path: Path) -> Path:
     """Empty ``preds/`` subdirectory ready for ``_write_batch`` calls.
 
@@ -273,26 +267,33 @@ def fake_renderer(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """
     renderer = MagicMock(name="renderer")
     renderer.render.side_effect = _fake_render
-    monkeypatch.setattr(predict_vst_audio, "make_audio_renderer", lambda _config: renderer)
+    renderer.factory_configs = []
+
+    def capture_config(config: RenderConfig) -> MagicMock:
+        renderer.factory_configs.append(config)
+        return renderer
+
+    monkeypatch.setattr(predict_vst_audio, "make_audio_renderer", capture_config)
     return renderer
 
 
 def _invoke_main(
-    _runner: CliRunner,
     pred_dir: Path,
     out_dir: Path,
     operation_flags: tuple[str, ...],
+    render_config: RenderConfig | None = None,
 ) -> SimpleNamespace:
     """Invoke ``main`` with a serialized complete render config.
 
-    :param _runner: Retained fixture parameter while the surrounding tests migrate from Click.
     :param pred_dir: Directory passed as the first CLI positional.
     :param out_dir: Directory passed as the second CLI positional.
-    :param operation_flags: Legacy spellings enabled for this invocation.
+    :param operation_flags: Operation flags enabled for this invocation.
+    :param render_config: Optional non-default renderer lifecycle under test.
     :returns: Success result compatible with the existing artifact assertions.
     """
     enabled = set(operation_flags)
-    argv = [str(pred_dir), str(out_dir), *CliApp.serialize(_render_config())]
+    config = render_config if render_config is not None else _render_config()
+    argv = [str(pred_dir), str(out_dir), *CliApp.serialize(config)]
     for flag in ("--rerender-target", "--no-params", "--skip-spectrogram"):
         if flag in enabled:
             argv.extend([flag, "True"])
@@ -301,17 +302,16 @@ def _invoke_main(
 
 
 def test_main_no_params_writes_pred_target_csv_and_spectrogram(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
+    pred_dir: Path, out_dir: Path
 ) -> None:
     """``--no-params`` path produces pred.wav, target.wav, spec.png, and params.csv per sample.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--no-params",))
+    result = _invoke_main(pred_dir, out_dir, ("--no-params",))
 
     assert result.exit_code == 0, result.output
     for j in range(2):
@@ -320,19 +320,16 @@ def test_main_no_params_writes_pred_target_csv_and_spectrogram(
             assert (sample_dir / name).is_file(), f"missing {name} under {sample_dir}"
 
 
-def test_main_skip_spectrogram_suppresses_png(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
-) -> None:
+def test_main_skip_spectrogram_suppresses_png(pred_dir: Path, out_dir: Path) -> None:
     """``--skip-spectrogram`` keeps the wav/csv outputs but skips the matplotlib render.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
     _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
     plt.close("all")
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+    result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
 
     assert result.exit_code == 0, result.output
     sample = out_dir / "sample_0"
@@ -345,14 +342,12 @@ def test_main_skip_spectrogram_suppresses_png(
 
 
 def test_main_rerender_target_renders_pred_and_target_per_sample(
-    runner: CliRunner,
     pred_dir: Path,
     out_dir: Path,
     fake_renderer: MagicMock,
 ) -> None:
     """Target rerendering uses the same configured renderer session as prediction.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     :param fake_renderer: Renderer installed at the native-host factory boundary.
@@ -360,9 +355,13 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
     batch_size = 3
     _write_batch(pred_dir, index=0, batch_size=batch_size, with_target_params=True)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--rerender-target", "--skip-spectrogram"))
+    result = _invoke_main(pred_dir, out_dir, ("--rerender-target", "--skip-spectrogram"))
 
     assert result.exit_code == 0, result.output
+    assert len(fake_renderer.factory_configs) == 1
+    factory_config = fake_renderer.factory_configs[0]
+    assert factory_config.renderer_backend == _render_config().renderer_backend
+    assert factory_config.plugin_reload_cadence == _render_config().plugin_reload_cadence
     assert fake_renderer.render.call_count == batch_size * 2
     for call in fake_renderer.render.call_args_list:
         assert call.args[2] == _render_config().velocity
@@ -372,12 +371,46 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(
         assert bool(df["target"].notna().all())
 
 
-def test_main_rerender_target_accepts_float64_target_params(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
+@pytest.mark.parametrize(
+    ("cadence", "expected_warmups"),
+    [
+        ("never", [False, False]),
+        ("once", [True, False]),
+        ("render", [True, True]),
+    ],
+)
+def test_main_forwards_gui_warmup_cadence_to_renderer(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+    cadence: Literal["never", "once", "render"],
+    expected_warmups: list[bool],
 ) -> None:
+    """Prediction and target renders honor capture-time GUI warm-up cadence.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param fake_renderer: Renderer recording production-interface calls.
+    :param cadence: Configured GUI lifecycle.
+    :param expected_warmups: Warm-up flags for prediction then target rendering.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True)
+
+    _invoke_main(
+        pred_dir,
+        out_dir,
+        ("--rerender-target", "--skip-spectrogram"),
+        _render_config(cadence),
+    )
+
+    assert [call.kwargs["warmup"] for call in fake_renderer.render.call_args_list] == (
+        expected_warmups
+    )
+
+
+def test_main_rerender_target_accepts_float64_target_params(pred_dir: Path, out_dir: Path) -> None:
     """A float64 target-params tensor still decodes — the call site casts to float32.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
@@ -386,7 +419,7 @@ def test_main_rerender_target_accepts_float64_target_params(
     target_path = pred_dir / "target-params-0.pt"
     torch.save(torch.load(target_path, weights_only=True).to(torch.float64), target_path)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--rerender-target", "--skip-spectrogram"))
+    result = _invoke_main(pred_dir, out_dir, ("--rerender-target", "--skip-spectrogram"))
 
     assert result.exit_code == 0, result.output
     df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
@@ -394,7 +427,7 @@ def test_main_rerender_target_accepts_float64_target_params(
 
 
 def test_main_target_params_on_disk_without_rerender_does_not_crash(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
+    pred_dir: Path, out_dir: Path
 ) -> None:
     """Targets-on-disk + ``rerender_target=False`` must complete without crashing.
 
@@ -404,13 +437,12 @@ def test_main_target_params_on_disk_without_rerender_does_not_crash(
     bound but were still referenced by the ``target_params is not None`` arm
     of the call-site conditional.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=True)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--skip-spectrogram",))
+    result = _invoke_main(pred_dir, out_dir, ("--skip-spectrogram",))
 
     assert result.exit_code == 0, result.output
     for j in range(2):
@@ -421,18 +453,17 @@ def test_main_target_params_on_disk_without_rerender_does_not_crash(
 
 
 def test_main_multiple_batches_produce_contiguous_sample_indices(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
+    pred_dir: Path, out_dir: Path
 ) -> None:
     """``current_offset`` accumulates across pred files so sample dirs don't collide.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
     _write_batch(pred_dir, index=1, batch_size=3, with_target_params=False)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+    result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
 
     assert result.exit_code == 0, result.output
     # Set compare avoids the lexicographic ``sample_10`` ordering trap once batches grow.
@@ -441,7 +472,7 @@ def test_main_multiple_batches_produce_contiguous_sample_indices(
 
 
 def test_main_rerender_target_tolerates_missing_target_audio_file(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
+    pred_dir: Path, out_dir: Path
 ) -> None:
     """``--rerender-target`` renders both wavs when no ``target-audio-*.pt`` was staged.
 
@@ -449,13 +480,12 @@ def test_main_rerender_target_tolerates_missing_target_audio_file(
     val batches carry no raw audio), so the rerender path must not require the
     target-audio file.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=True, with_target_audio=False)
 
-    result = _invoke_main(runner, pred_dir, out_dir, ("--rerender-target",))
+    result = _invoke_main(pred_dir, out_dir, ("--rerender-target",))
 
     assert result.exit_code == 0
     for sample in range(2):
@@ -465,12 +495,9 @@ def test_main_rerender_target_tolerates_missing_target_audio_file(
         assert (sample_dir / "spec.png").is_file()
 
 
-def test_main_missing_target_audio_without_rerender_fails(
-    runner: CliRunner, pred_dir: Path, out_dir: Path
-) -> None:
+def test_main_missing_target_audio_without_rerender_fails(pred_dir: Path, out_dir: Path) -> None:
     """Without ``--rerender-target`` there is no target source, so the CLI must fail loudly.
 
-    :param runner: Parametrized ``runner`` value under test.
     :param pred_dir: Parametrized ``pred_dir`` value under test.
     :param out_dir: Parametrized ``out_dir`` value under test.
     """

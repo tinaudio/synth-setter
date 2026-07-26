@@ -1,4 +1,8 @@
-"""Construct offline audio renderers from the shared render configuration."""
+"""Construct offline audio renderers from the shared render configuration.
+
+Typical usage passes the same validated ``RenderConfig`` to generation and
+evaluation before calling ``renderer.render(...)``.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
     """Construct one renderer session for the configured backend.
 
-    :param render_config: Validated renderer and generation configuration.
+    :param render_config: Backend identity and host lifecycle shared across pipeline stages.
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
     """
     backend = render_config.renderer_backend
