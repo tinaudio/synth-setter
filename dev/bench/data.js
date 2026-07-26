@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785075241078,
+  "lastUpdate": 1785075242967,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -17624,6 +17624,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.998748561700017,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea5c837c693cd98378bbe9524c44b577eb634ed7",
+          "message": "internal-fix(testing): source renderer_version from render configs (#2436)\n\n* internal-fix(testing): source renderer_version from the render configs\n\ntests/_vst.py mirrored renderer_version in a four-entry dict that nothing\nchecked against the shipped configs/render/<synth>.yaml groups, and that\ncovered only the VST synths — selecting a torchsynth backend via\nSYNTH_SETTER_TEST_SYNTH raised KeyError at import of the shared test helper.\n\nRead the pin through Hydra instead, so all seven registered synths resolve and\nthe constant cannot disagree with the group it claims to mirror.\n\nAdd tests pinning each group's renderer_version against the artifact it\ndescribes: the VST groups against the version read off the plugin bundle\n(requires_vst), the torchsynth groups against the installed package version.\ngenerate_dataset already cross-checks this at worker startup; checking it here\nfails a stale pin before a shard reaches a worker.\n\nRefs #2434\n\n* docs(testing): record the renderer-version pins in the testing primer\n\nThe testing primer's VST row implied everything under tests/data/vst/ is\nrequires_vst-gated; the new pin tests are mixed, with only the plugin-bundle\ncomparison needing a binary. Also extend the doc-map entry for tests/_vst.py,\nwhose TEST_RENDERER_VERSION now composes render/<synth>.yaml at import rather\nthan reading a static dict.\n\nRefs #2434",
+          "timestamp": "2026-07-26T06:24:38-07:00",
+          "tree_id": "7c66842daee0771a6af4073ebed1b2bba0baa7a9",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ea5c837c693cd98378bbe9524c44b577eb634ed7"
+        },
+        "date": 1785075242685,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.52242374420166,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.215693639665842,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08598347008228302,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004273056983947754,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.460008382797241,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.68439380079999,
             "unit": "seconds"
           }
         ]
