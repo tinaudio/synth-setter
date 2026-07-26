@@ -52,7 +52,8 @@ code**. See
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). The synth is selected by a `render`
    group override (e.g. `render=surge_xt` or `render=obxf`); each render config
-   names the registered `param_spec_name`, preset, and plugin path. Hydra
+   selects its `synth` group, which carries the registered param spec, preset,
+   and plugin path. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -135,11 +136,12 @@ synth-setter/
 
 ## Key Design Decisions
 
-**Synth-agnostic core, registry as the contract.** A synth is fully described
-by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
-preset (`plugin_state_paths[name]`), and a `RenderConfig`
-(`src/synth_setter/configs/render/<name>.yaml`)
-— keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
+**Synth-agnostic core, registry as the contract.** A synth's identity — which
+`ParamSpec`, which plugin, which baseline preset — is authored once in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and
+`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it,
+pinned against the table by `tests/test_synth_spec.py`. The `ParamSpec` objects
+themselves live in `src/synth_setter/data/vst/param_spec_registry.py`. The
 rendering, Lance storage, mel features, distributed workers, and models all
 read width and behavior from the resolved spec, never from a synth literal.
 Onboarding a new VST3 synth is additive: scaffold a spec with

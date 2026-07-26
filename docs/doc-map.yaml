@@ -91,6 +91,8 @@ docs:
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
     sources:
+      - pattern: "src/synth_setter/synth_spec.py"
+        covers: "RenderConfig.synth's SynthSpec model and the SYNTHS identity table it is drawn from"
       - pattern: "src/synth_setter/pipeline/schemas/prefix.py"
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
       - pattern: "src/synth_setter/configs/experiment/**"
@@ -559,7 +561,9 @@ docs:
       - pattern: "src/synth_setter/data/vst/introspect.py"
         covers: "Draft generation behind the CLI: parameter classification and emission of the draft spec module, baseline preset, and CSV triage table"
       - pattern: "src/synth_setter/data/vst/registration.py"
-        covers: "The --register wiring that registers a drafted spec into the checkout: registry entries, render config, and artifact paths"
+        covers: "The --register wiring that registers a drafted spec into the checkout: SYNTHS identity row, param-spec registry entry, render + synth config groups, and artifact paths"
+      - pattern: "src/synth_setter/synth_spec.py"
+        covers: "SynthSpec / SYNTHS — the authoring table for a synth's identity (param spec, plugin, baseline preset), plus the from_render_cfg Hydra bridge that cli/train.py and cli/eval.py read it through"
       - pattern: "src/synth_setter/data/vst/verification.py"
         covers: "The --verify post-draft battery that gates a freshly registered spec and fails on any BLOCK"
       - pattern: "src/synth_setter/data/vst/param_spec_registry.py"

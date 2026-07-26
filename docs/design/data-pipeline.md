@@ -1190,9 +1190,7 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str  # "torchsynth" selects the in-process backend; must agree with renderer_backend (RenderConfig._validate_torchsynth_backend)
-    plugin_state_path: str
-    param_spec_name: str
+    synth: SynthSpec  # param spec + plugin + baseline preset; see synth_setter/synth_spec.py
     renderer_version: str
     sample_rate: int
     channels: int
