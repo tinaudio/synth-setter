@@ -166,11 +166,10 @@ def get_labels(spec: str):
 
     param_spec = param_specs[spec]
 
-    synth_intervals = [(p.name, len(p)) for p in param_spec.synth_params]
-    note_intervals = [(p.name, len(p)) for p in param_spec.note_params]
-    intervals = synth_intervals + note_intervals
-
-    intervals = [(strip_scene_id(n), l) for n, l in intervals]
+    intervals = [
+        (strip_scene_id(param.name), span.stop - span.start)
+        for param, span in param_spec.encoded_slices()
+    ]
     true_intervals = []
 
     current_prefix = None

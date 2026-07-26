@@ -1,6 +1,6 @@
 """Synth/note parameter definitions, sampling, and encoding for VST param specs."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any, Literal, TypedDict, cast
 
 import numpy as np
@@ -258,6 +258,24 @@ class ParamSpec:
     def __len__(self) -> int:
         return self.encoded_width
 
+    def encoded_slices(self) -> Iterator[tuple[Parameter, slice]]:
+        """Pair each parameter with the columns it occupies in an encoded row.
+
+        Spans are contiguous from 0, ordered ``synth_params`` then ``note_params``
+        to match :meth:`encode`, and the final stop equals :attr:`encoded_width`.
+        Callers must index encoded rows through these spans: a parameter may own
+        several columns (onehot values, note start/end), so there is no positional
+        correspondence between :attr:`names` and encoded columns.
+
+        :yields: One ``(parameter, span)`` pair per parameter, in encoding order.
+        :ytype: tuple[Parameter, slice]
+        """
+        pointer = 0
+        for param in (*self.synth_params, *self.note_params):
+            width = len(param)
+            yield param, slice(pointer, pointer + width)
+            pointer += width
+
     def sample(
         self, rng: np.random.Generator | None = None
     ) -> tuple[dict[str, float], NoteParams]:
@@ -298,22 +316,14 @@ class ParamSpec:
         :param params: Encoded row (output of :meth:`encode`), nominally ``len(self)`` wide.
         :returns: ``(synth_param_dict, note_params)``.
         """
-        synth_params_to_process = [(p, len(p)) for p in self.synth_params]
-        note_params_to_process = [(p, len(p)) for p in self.note_params]
+        # Split positionally, not by name: encoded_slices() yields synth spans first,
+        # and a synth and note parameter may legitimately share a name.
+        spans = list(self.encoded_slices())
+        synth_spans = spans[: len(self.synth_params)]
+        note_spans = spans[len(self.synth_params) :]
 
-        synth_params = {}
-        note_params = {}
-
-        pointer = 0
-        for param, length in synth_params_to_process:
-            param_value = param.decode(params[pointer : pointer + length])
-            synth_params[param.name] = param_value
-            pointer += length
-
-        for param, length in note_params_to_process:
-            param_value = param.decode(params[pointer : pointer + length])
-            note_params[param.name] = param_value
-            pointer += length
+        synth_params = {param.name: param.decode(params[span]) for param, span in synth_spans}
+        note_params = {param.name: param.decode(params[span]) for param, span in note_spans}
 
         # Same cast as sample(): keys come from runtime ``Parameter.name`` values,
         # so the checker can't prove the NoteParams key->type mapping.
