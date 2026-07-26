@@ -36,6 +36,12 @@ docs:
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/scripts/oci-docker-run.sh"
         covers: "--pid=host and the profiling env-var passthrough that make eBPF profiling work on OCI workers"
         scope: "profiling"
+      - pattern: ".env.example"
+        covers: "Grafana Cloud Pyroscope credential template entries and the collector knobs (SYNTH_SETTER_PROFILING_ENABLED, _SERVICE_NAME)"
+        scope: "profiling"
+      - pattern: ".devcontainer/*/devcontainer.json"
+        covers: "eBPF capability grants (BPF, PERFMON, SYS_PTRACE, SYS_RESOURCE, DAC_READ_SEARCH) beyond the existing SYS_ADMIN"
+        scope: "profiling"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference

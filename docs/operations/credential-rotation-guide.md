@@ -36,6 +36,7 @@ ______________________________________________________________________
 | `APPROVAL_BOT_PRIVATE_KEY`           | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `ANTHROPIC_API_KEY`                  | (currently unused; retained for possible revival) | GitHub Secrets             |
 | `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` + `claude-repo-review-full` workflows    | GitHub Secrets             |
+| `GRAFANA_CLOUD_PYROSCOPE_API_KEY`    | Continuous profiling (Alloy → Pyroscope)          | `.env`                     |
 
 ______________________________________________________________________
 
@@ -196,6 +197,40 @@ ______________________________________________________________________
 # Test RunPod API access (list pods)
 curl -s -H "Authorization: Bearer $RUNPOD_API_KEY" \
   https://api.runpod.io/v2/pods | python3 -m json.tool
+```
+
+______________________________________________________________________
+
+### Grafana Cloud Pyroscope (`GRAFANA_CLOUD_PYROSCOPE_API_KEY`)
+
+**What:** Access-policy token with the `profiles:write` scope, used by Grafana Alloy to ship
+continuous CPU profiles. Opt-in and never present in an image layer — see
+[profiling reference](../reference/profiling.md).
+
+**Where stored:**
+
+- Local `.env` files; forwarded to OCI workers by `oci-docker-run.sh`
+
+**Rotation steps:**
+
+1. Log in to [grafana.com](https://grafana.com/) and open the stack.
+2. Navigate to **Security > Access Policies**.
+3. Create a new access policy (or token under the existing policy) scoped to `profiles:write`.
+4. Copy the new token.
+5. Update local `.env` files on developer machines.
+6. Delete the old token in the Grafana Cloud UI.
+
+`GRAFANA_CLOUD_PYROSCOPE_ENDPOINT` and `GRAFANA_CLOUD_PYROSCOPE_USER` are non-secret identifiers
+(stack URL and numeric instance ID); they change only when the stack itself changes and need no
+rotation procedure.
+
+**Verification:**
+
+```bash
+# A 200 or 204 confirms the token is accepted for profile writes.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -u "$GRAFANA_CLOUD_PYROSCOPE_USER:$GRAFANA_CLOUD_PYROSCOPE_API_KEY" \
+  "$GRAFANA_CLOUD_PYROSCOPE_ENDPOINT/api/v1/status/buildinfo"
 ```
 
 ______________________________________________________________________

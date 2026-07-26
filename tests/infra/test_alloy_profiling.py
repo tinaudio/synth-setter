@@ -25,6 +25,10 @@ REQUIRED_CREDENTIAL_VARS = (
     "GRAFANA_CLOUD_PYROSCOPE_API_KEY",
 )
 
+# The kernel's PROC_PID_INIT_INO: /proc/self/ns/pid carries this inode only in the initial
+# (host) PID namespace, which is the one pyroscope.ebpf needs.
+INIT_PID_NAMESPACE_INODE = "4026531836"
+
 # eBPF unwinding needs these beyond the SYS_ADMIN the devcontainers already grant for FUSE.
 _EBPF_RUN_ARGS = (
     "--cap-add=BPF",
@@ -106,7 +110,7 @@ def _run_preflight(
     """Source the launcher and invoke its preflight directly with explicit host state.
 
     :param script: The launcher to source.
-    :param args: Preflight arguments as a shell word list: euid, NSpid field count, tracefs dir.
+    :param args: Preflight arguments as a shell word list: euid, PID-namespace inode, tracefs dir.
     :param env_overrides: Variables layered onto a credential-stripped copy of the environment.
     :returns: The completed process, with stdout and stderr captured as text.
     """
@@ -195,10 +199,50 @@ def test_preflight_in_nested_pid_namespace_reports_the_pid_host_requirement(
     :param launcher_script: The launcher whose preflight is invoked directly.
     """
     credentials: dict[str, str] = dict.fromkeys(REQUIRED_CREDENTIAL_VARS, "set")
-    # euid 0, two NSpid fields (nested), tracefs present.
-    result = _run_preflight(launcher_script, "0 2 /sys/kernel/tracing", credentials)
+    # euid 0, a PID-namespace inode that is not the host's, tracefs present.
+    result = _run_preflight(launcher_script, "0 4026534147 /sys/kernel/tracing", credentials)
 
     assert result.returncode != 0, "nested PID namespace must fail preflight"
+    assert "--pid=host" in result.stderr, f"diagnostic must name the remedy: {result.stderr}"
+
+
+@pytest.mark.infra
+@pytest.mark.skipif(
+    shutil.which("unshare") is None, reason="needs unshare to build a real PID namespace"
+)
+def test_launcher_inside_a_real_nested_pid_namespace_refuses_to_start(
+    launcher_script: Path, stub_alloy_bin: tuple[Path, Path]
+) -> None:
+    """Run in an actual nested PID namespace, the launcher refuses rather than collecting nothing.
+
+    The unshared process is uid 0 with credentials set, so only the namespace check can stop it.
+
+    :param launcher_script: The opt-in launcher under test.
+    :param stub_alloy_bin: PATH directory holding the `alloy` stub, and its marker file.
+    """
+    bin_dir, marker = stub_alloy_bin
+    env = dict(
+        os.environ,
+        PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        SYNTH_SETTER_PROFILING_ENABLED="1",
+        GRAFANA_CLOUD_PYROSCOPE_ENDPOINT="https://profiles-prod-001.grafana.net",
+        GRAFANA_CLOUD_PYROSCOPE_USER="123456",
+        GRAFANA_CLOUD_PYROSCOPE_API_KEY="glc_example",
+    )
+    unshare = shutil.which("unshare")
+    assert unshare is not None
+    result = subprocess.run(  # noqa: S603 — resolved unshare over a repo-owned script
+        [unshare, "-Urpf", "--mount-proc", _BASH, str(launcher_script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if "unshare failed" in result.stderr or result.returncode == 127:
+        pytest.skip(f"unprivileged namespaces unavailable: {result.stderr.strip()}")
+
+    assert result.returncode != 0, "launcher must refuse inside a nested PID namespace"
+    assert not marker.exists(), "launcher started Alloy inside a nested PID namespace"
     assert "--pid=host" in result.stderr, f"diagnostic must name the remedy: {result.stderr}"
 
 
@@ -209,7 +253,9 @@ def test_preflight_without_tracefs_reports_the_missing_mount(launcher_script: Pa
     :param launcher_script: The launcher whose preflight is invoked directly.
     """
     credentials: dict[str, str] = dict.fromkeys(REQUIRED_CREDENTIAL_VARS, "set")
-    result = _run_preflight(launcher_script, "0 1 /nonexistent/tracefs", credentials)
+    result = _run_preflight(
+        launcher_script, f"0 {INIT_PID_NAMESPACE_INODE} /nonexistent/tracefs", credentials
+    )
 
     assert result.returncode != 0, "missing tracefs must fail preflight"
     assert "/nonexistent/tracefs" in result.stderr, "diagnostic must name the absent mount point"
@@ -222,7 +268,7 @@ def test_preflight_with_every_precondition_met_reports_success(launcher_script: 
     :param launcher_script: The launcher whose preflight is invoked directly.
     """
     credentials: dict[str, str] = dict.fromkeys(REQUIRED_CREDENTIAL_VARS, "set")
-    result = _run_preflight(launcher_script, "0 1 /tmp", credentials)
+    result = _run_preflight(launcher_script, f"0 {INIT_PID_NAMESPACE_INODE} /tmp", credentials)
 
     assert result.returncode == 0, (
         f"preflight must pass when every precondition holds: {result.stderr}"
@@ -402,6 +448,18 @@ def test_every_devcontainer_grants_the_ebpf_profiling_capabilities(
         run_args = json.loads(path.read_text()).get("runArgs", [])
         missing = [arg for arg in _EBPF_RUN_ARGS if arg not in run_args]
         assert not missing, f"{path}: runArgs missing {missing} needed by pyroscope.ebpf"
+
+
+@pytest.mark.infra
+def test_no_devcontainer_repeats_a_run_arg(devcontainer_json_paths: list[Path]) -> None:
+    """RunArgs carry no duplicates — repeats are copy-paste artifacts, not intent.
+
+    :param devcontainer_json_paths: All .devcontainer/*/devcontainer.json files.
+    """
+    for path in devcontainer_json_paths:
+        run_args = json.loads(path.read_text()).get("runArgs", [])
+        duplicated = sorted({arg for arg in run_args if run_args.count(arg) > 1})
+        assert not duplicated, f"{path}: runArgs repeats {duplicated}"
 
 
 @pytest.mark.infra

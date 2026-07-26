@@ -15,6 +15,10 @@ SYMBOL_CACHE_DIR=/tmp/symb-cache
 # bind-mounted checkout; keep its state out of the working tree.
 STORAGE_DIR=/tmp/alloy-data
 TRACEFS_DIR=/sys/kernel/tracing
+# The kernel's PROC_PID_INIT_INO. /proc/self/ns/pid reports this inode only in the initial (host)
+# PID namespace; NSpid cannot be used instead, as it lists namespaces inward and so looks identical
+# from inside a nested one.
+INIT_PID_NAMESPACE_INODE=4026531836
 
 REQUIRED_CREDENTIAL_VARS=(
   GRAFANA_CLOUD_PYROSCOPE_ENDPOINT
@@ -34,11 +38,10 @@ profiling_is_enabled() {
 }
 
 # Decide whether pyroscope.ebpf can actually collect. Host state arrives as arguments so the
-# decision is exercisable without root. `nspid_fields` is the field count of the NSpid line in
-# /proc/<pid>/status: more than one means a nested PID namespace, where the profiler's host-side
-# PIDs never match the namespaced /proc entries and every target silently drops.
+# decision is exercisable without root. In a nested PID namespace the profiler's host-side PIDs
+# never match the namespaced /proc entries, so every target silently drops.
 alloy_profiling_preflight() {
-  local euid="$1" nspid_fields="$2" tracefs_dir="$3"
+  local euid="$1" pid_ns_inode="$2" tracefs_dir="$3"
 
   local missing=() var
   for var in "${REQUIRED_CREDENTIAL_VARS[@]}"; do
@@ -54,7 +57,7 @@ alloy_profiling_preflight() {
     return 1
   fi
 
-  if [[ "$nspid_fields" -ne 1 ]]; then
+  if [[ "$pid_ns_inode" != "$INIT_PID_NAMESPACE_INODE" ]]; then
     log "pyroscope.ebpf needs the host PID namespace; relaunch the container with --pid=host"
     return 1
   fi
@@ -81,13 +84,12 @@ main() {
     return 0
   fi
 
-  local nspid_fields
-  nspid_fields="$(awk '/^NSpid:/ {print NF - 1; exit}' /proc/self/status)"
-  # Kernels before 4.1 omit NSpid entirely; assume the host namespace rather than refusing on a
-  # field that cannot be read.
-  nspid_fields="${nspid_fields:-1}"
+  local pid_ns_link pid_ns_inode
+  pid_ns_link="$(readlink /proc/self/ns/pid || true)"
+  # "pid:[4026531836]" -> "4026531836"; empty if the link is unreadable, which fails the check.
+  pid_ns_inode="${pid_ns_link//[^0-9]/}"
 
-  alloy_profiling_preflight "$(id -u)" "$nspid_fields" "$TRACEFS_DIR"
+  alloy_profiling_preflight "$(id -u)" "$pid_ns_inode" "$TRACEFS_DIR"
 
   if [[ ! -r "$ALLOY_CONFIG" ]]; then
     log "Alloy config is not readable at ${ALLOY_CONFIG}"
