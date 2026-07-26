@@ -32,18 +32,28 @@ jobs:
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
-          - name: evaluation-predict-public
+          - name: evaluation-predict-misc
             patterns:
-              - synth_setter.evaluation.predict_vst_audio.x_[!_]*
-          - name: evaluation-predict-private-leading-1
-            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1?*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[5-9]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[5-9]?*
               - synth_setter.evaluation.predict_vst_audio.x__make_render_fn*
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1
-              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?*
-          - name: evaluation-predict-private-leading-2-9
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?
+          - name: evaluation-predict-render-audio-leading-2-4
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]?*
+          - name: evaluation-predict-render-artifacts-leading-2-9-and-100-149
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]?*
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[0-4]?
+          - name: evaluation-predict-render-artifacts-150-199
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[5-9]?
           - name: evaluation-shuffle
             patterns:
               - synth_setter.evaluation.shuffle_pred_audio.*
@@ -102,7 +112,10 @@ jobs:
         run: |
           set -euo pipefail
           patterns_json=$(jq -er 'if type == "array" and length > 0 and all(.[]; type == "string" and length > 0) then .[] else error("invalid mutation selector array") end' <<<"$MUTMUT_PATTERNS")
-          mapfile -t patterns <<<"$patterns_json"
+          patterns=()
+          while IFS= read -r pattern; do
+            patterns+=("$pattern")
+          done <<<"$patterns_json"
           uv run mutmut run --max-children 4 "${patterns[@]}"
 
       - name: Print results
