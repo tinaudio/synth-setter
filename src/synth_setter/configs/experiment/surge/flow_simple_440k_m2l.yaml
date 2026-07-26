@@ -7,6 +7,9 @@
 
 defaults:
   - /experiment/surge/flow_simple_440k
+  # Per-logical-parameter validation error, so the arms can be compared on
+  # discrete spans separately from continuous ones.
+  - /callbacks/log_per_param_mse@callbacks
   - override /conditioning: m2l
   - _self_
 
