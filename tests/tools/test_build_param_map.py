@@ -11,10 +11,41 @@ import pytest
 from click.testing import CliRunner
 
 from synth_setter.data.vst.clap_introspect import ClapParamInfo, ClapPluginInfo
-from synth_setter.data.vst.param_map import load_param_map
+from synth_setter.data.vst.param_map import SynthParamMap, load_param_map
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter, ParamSpec
 from synth_setter.tools import build_param_map
-from synth_setter.tools.build_param_map import HostDump, HostParam, join_param_map
+from synth_setter.tools.build_param_map import (
+    HostDump,
+    HostParam,
+)
+from synth_setter.tools.build_param_map import (
+    join_param_map as _join_param_map,
+)
+
+
+def test_surgepy_provenance_rejects_different_native_component_state(tmp_path: Path) -> None:
+    """Equivalent container metadata cannot hide different native Surge state.
+
+    :param tmp_path: Temporary VST and FXP containers.
+    """
+    vst_preset = tmp_path / "baseline.vstpreset"
+    fxp_preset = tmp_path / "baseline.fxp"
+    vst_preset.write_bytes(Path("presets/surge-base.vstpreset").read_bytes())
+    fxp_data = bytearray(Path("presets/surge-base.fxp").read_bytes())
+    fxp_data[64] ^= 1
+    fxp_preset.write_bytes(fxp_data)
+    pedalboard = _host_dump().model_copy(update={"preset_resource": str(vst_preset)})
+    surgepy = build_param_map.SurgePyDump(
+        engine_version="1.0",
+        preset_resource=str(fxp_preset),
+        preset_sha256="b" * 64,
+        parameter_count=0,
+        params=[],
+    )
+
+    errors = build_param_map._validate_surgepy_provenance(pedalboard, surgepy)
+
+    assert errors == ["SurgePy and VST preset component states disagree"]
 
 
 def test_introspection_constants_pin_shared_host_configuration() -> None:
@@ -23,6 +54,28 @@ def test_introspection_constants_pin_shared_host_configuration() -> None:
     assert build_param_map.INTROSPECTION_BLOCK_SIZE == 2_048
     assert build_param_map.PEDALBOARD_FLUSH_DURATION_SECONDS == 32.0
     assert build_param_map.PEDALBOARD_FLUSH_CHANNELS == 2
+
+
+def join_param_map(
+    param_spec_name: str,
+    pedalboard: HostDump,
+    clap: ClapPluginInfo,
+    dawdreamer: HostDump,
+) -> SynthParamMap:
+    """Call the keyword-only production join from concise test fixtures.
+
+    :param param_spec_name: Registered test parameter spec.
+    :param pedalboard: Pedalboard host dump.
+    :param clap: CLAP host dump.
+    :param dawdreamer: DawDreamer host dump.
+    :returns: Validated joint map.
+    """
+    return _join_param_map(
+        param_spec_name,
+        pedalboard=pedalboard,
+        clap=clap,
+        dawdreamer=dawdreamer,
+    )
 
 
 def _host_dump(*params: HostParam, plugin: str = "Test Synth", version: str = "1.0") -> HostDump:
@@ -510,13 +563,24 @@ def test_build_command_writes_map_consumable_by_runtime(
     :param tmp_path: Temporary CLI workspace.
     """
     pedalboard, clap, dawdreamer = _valid_inputs()
+    pedalboard = pedalboard.model_copy(update={"preset_resource": "presets/surge-base.vstpreset"})
+    dawdreamer = dawdreamer.model_copy(update={"preset_resource": "presets/surge-base.vstpreset"})
+    surgepy = build_param_map.SurgePyDump(
+        engine_version="1.3.test",
+        preset_resource="presets/surge-base.fxp",
+        preset_sha256="b" * 64,
+        parameter_count=1,
+        params=[build_param_map.SurgePyHostParam(synth_side_id=19, name="Cutoff")],
+    )
     pedalboard_path = tmp_path / "pedalboard.json"
     clap_path = tmp_path / "clap.json"
     dawdreamer_path = tmp_path / "dawdreamer.json"
+    surgepy_path = tmp_path / "surgepy.json"
     output_path = tmp_path / "map.json"
     pedalboard_path.write_text(pedalboard.model_dump_json(), encoding="utf-8")
     clap_path.write_text(clap.model_dump_json(), encoding="utf-8")
     dawdreamer_path.write_text(dawdreamer.model_dump_json(), encoding="utf-8")
+    surgepy_path.write_text(surgepy.model_dump_json(), encoding="utf-8")
 
     result = CliRunner().invoke(
         build_param_map.main,
@@ -528,6 +592,8 @@ def test_build_command_writes_map_consumable_by_runtime(
             str(clap_path),
             "--dawdreamer-dump",
             str(dawdreamer_path),
+            "--surgepy-dump",
+            str(surgepy_path),
             "--param-spec-name",
             "test",
             "--out",
@@ -537,7 +603,41 @@ def test_build_command_writes_map_consumable_by_runtime(
     )
 
     assert result.exit_code == 0, result.output
-    assert load_param_map(output_path).params["cutoff"].dawdreamer.index == 11
+    parameter_map = load_param_map(output_path)
+    assert parameter_map.params["cutoff"].dawdreamer.index == 11
+    assert parameter_map.params["cutoff"].surgepy is not None
+    assert parameter_map.params["cutoff"].surgepy.synth_side_id == 19
+    assert parameter_map.surgepy is not None
+    assert parameter_map.surgepy.plugin_version == "1.3.test"
+
+
+@pytest.mark.slow
+def test_dump_surgepy_reads_real_patch_and_native_identities(tmp_path: Path) -> None:
+    """The SurgePy dump records real engine provenance and unique synth-side IDs.
+
+    :param tmp_path: Temporary command workspace.
+    """
+    output_path = tmp_path / "surgepy.json"
+
+    result = CliRunner().invoke(
+        build_param_map.main,
+        [
+            "dump-surgepy",
+            "--preset",
+            "presets/surge-base.fxp",
+            "--preset-resource",
+            "presets/surge-base.fxp",
+            "--out",
+            str(output_path),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    dump = build_param_map.SurgePyDump.model_validate_json(output_path.read_text())
+    assert dump.engine_version == "1.3.master.f7b97c68"
+    assert dump.parameter_count == 762
+    assert len({parameter.synth_side_id for parameter in dump.params}) == 762
 
 
 def test_dump_dawdreamer_writes_raw_host_names(

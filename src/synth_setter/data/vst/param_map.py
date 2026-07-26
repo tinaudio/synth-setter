@@ -35,6 +35,15 @@ class DawDreamerParamRef(BaseModel):  # noqa: DOC601, DOC603
     name: str
 
 
+class SurgePyParamRef(BaseModel):  # noqa: DOC601, DOC603
+    """Synth-side identifier and display name from SurgePy's loaded patch."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    synth_side_id: int
+    name: str
+
+
 class BackendSnapshot(BaseModel):  # noqa: DOC601, DOC603
     """Plugin version and enumeration size observed in one host."""
 
@@ -52,6 +61,7 @@ class ParamIdentity(BaseModel):  # noqa: DOC601, DOC603
     pedalboard: PedalboardParamRef
     clap: ClapParamRef | None
     dawdreamer: DawDreamerParamRef
+    surgepy: SurgePyParamRef | None = None
 
 
 class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
@@ -66,19 +76,43 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     pedalboard: BackendSnapshot
     clap: BackendSnapshot
     dawdreamer: BackendSnapshot
+    surgepy_preset_resource: str | None = None
+    surgepy_preset_sha256: str | None = None
+    surgepy: BackendSnapshot | None = None
     params: dict[str, ParamIdentity]
 
     @model_validator(mode="after")
     def _unique_host_indices(self) -> SynthParamMap:
-        """Reject maps that alias two model parameters in either indexed host.
+        """Reject incomplete SurgePy provenance and aliased host identities.
 
-        :returns: This map after indexed-host uniqueness validation.
-        :raises ValueError: If Pedalboard or DawDreamer indices are duplicated.
+        :returns: This map after provenance and indexed-host uniqueness validation.
+        :raises ValueError: If SurgePy provenance is partial or host indices are duplicated.
         """
+        surgepy_provenance = (
+            self.surgepy,
+            self.surgepy_preset_resource,
+            self.surgepy_preset_sha256,
+        )
+        if any(value is not None for value in surgepy_provenance) and not all(
+            value is not None for value in surgepy_provenance
+        ):
+            raise ValueError("SurgePy snapshot and preset provenance must be provided together")
+        identity_flags = [identity.surgepy is not None for identity in self.params.values()]
+        if identity_flags and (any(identity_flags) != (self.surgepy is not None)):
+            raise ValueError("SurgePy identities require snapshot and preset provenance")
+        if any(identity_flags) and not all(identity_flags):
+            raise ValueError("SurgePy identities must cover every mapped parameter")
         for host in ("pedalboard", "dawdreamer"):
             indices = [getattr(identity, host).index for identity in self.params.values()]
             if len(indices) != len(set(indices)):
                 raise ValueError(f"duplicate {host} parameter indices")
+        surgepy_ids = [
+            identity.surgepy.synth_side_id
+            for identity in self.params.values()
+            if identity.surgepy is not None
+        ]
+        if len(surgepy_ids) != len(set(surgepy_ids)):
+            raise ValueError("duplicate surgepy synth-side parameter IDs")
         return self
 
     def clap_projection(self) -> PluginFormatMap:
@@ -102,6 +136,23 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
         :returns: Repository parameter names mapped to DawDreamer host indices.
         """
         return {name: identity.dawdreamer.index for name, identity in self.params.items()}
+
+    def surgepy_params(self) -> dict[str, SurgePyParamRef]:
+        """Return the complete repository-name to SurgePy identity projection.
+
+        :returns: Repository parameter names mapped to native Surge identities.
+        :raises ValueError: If the map lacks SurgePy provenance or any identity.
+        """
+        if self.surgepy is None:
+            raise ValueError("parameter map has no SurgePy snapshot")
+        missing = sorted(name for name, identity in self.params.items() if identity.surgepy is None)
+        if missing:
+            raise ValueError(f"parameters missing SurgePy identities: {', '.join(missing)}")
+        return {
+            name: identity.surgepy
+            for name, identity in self.params.items()
+            if identity.surgepy is not None
+        }
 
 
 def load_param_map(path: Path) -> SynthParamMap:

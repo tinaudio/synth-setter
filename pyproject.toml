@@ -194,6 +194,7 @@ audio = [
   "pedalboard",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
+  "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "torchsynth==1.0.2",
 ]
 metrics = [
@@ -252,6 +253,7 @@ dev = [
 ]
 
 [tool.uv]
+build-constraint-dependencies = ["cmake<4"]
 # Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
 # heavy stack), so local onboarding and the ~15 full-install sites are unchanged
 # by the #1139 base trim. pip never installs PEP 735 groups and `uv pip` only

@@ -8,6 +8,7 @@ import pytest
 from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
+    SurgePyRenderer,
     TorchSynthRenderer,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -61,6 +62,24 @@ def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
     assert isinstance(renderer, TorchSynthRenderer)
     assert (renderer.sample_rate, renderer.channels) == (22050, 2)
     assert renderer.signal_duration_seconds == 0.5
+
+
+@pytest.mark.slow
+def test_make_audio_renderer_surgepy_returns_real_renderer() -> None:
+    """The public factory constructs SurgePy with its packaged parameter map."""
+    config = _render_config(
+        renderer_backend="surgepy",
+        plugin_path="surgepy",
+        plugin_state_path="presets/surge-simple.fxp",
+        param_spec_name="surge_simple",
+        renderer_version="1.3.master.f7b97c68",
+        plugin_reload_cadence="render",
+    )
+
+    renderer = make_audio_renderer(config)
+
+    assert isinstance(renderer, SurgePyRenderer)
+    assert renderer.parameter_map.param_spec_name == "surge_simple"
 
 
 def test_make_audio_renderer_pedalboard_render_cadence_stays_lazy() -> None:

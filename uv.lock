@@ -16,6 +16,7 @@ conflicts = [[
 ]]
 
 [manifest]
+build-constraints = [{ name = "cmake", specifier = "<4" }]
 
 [[manifest.dependency-metadata]]
 name = "stable-audio-3"
@@ -4561,6 +4562,14 @@ wheels = [
 ]
 
 [[package]]
+name = "surgepy"
+version = "0.1.0"
+source = { git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d#f7b97c682ade0b87da85ca5968b63d5c7c98e68d" }
+dependencies = [
+    { name = "numpy", marker = "sys_platform == 'linux' or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+
+[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4615,6 +4624,7 @@ audio = [
     { name = "pedalboard" },
     { name = "pyloudnorm" },
     { name = "scipy" },
+    { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "torchsynth" },
 ]
 compute = [
@@ -4690,6 +4700,7 @@ dev = [
     { name = "skypilot", extra = ["kubernetes", "oci", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
     { name = "structlog" },
+    { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },
@@ -4759,6 +4770,7 @@ runtime = [
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "oci", "runpod", "vast"] },
     { name = "structlog" },
+    { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },
@@ -4838,6 +4850,7 @@ audio = [
     { name = "pedalboard" },
     { name = "pyloudnorm" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
+    { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
     { name = "torchsynth", specifier = "==1.0.2" },
 ]
 compute = [
@@ -4913,6 +4926,7 @@ dev = [
     { name = "skypilot", extras = ["runpod", "oci", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
     { name = "structlog" },
+    { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },
@@ -4976,6 +4990,7 @@ runtime = [
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "oci", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "structlog" },
+    { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },

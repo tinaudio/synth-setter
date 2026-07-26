@@ -41,6 +41,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     RendererBackend,
 )
@@ -435,6 +436,31 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError("dawdreamer_faust does not accept plugin_state_path")
         if self.gui_toggle_cadence != "never":
             raise ValueError('dawdreamer_faust requires gui_toggle_cadence="never"')
+        return self
+
+    @model_validator(mode="after")
+    def _validate_surgepy_backend(self) -> RenderConfig:
+        """Require isolated Surge rendering with a registered Surge patch identity.
+
+        :return: ``self`` unchanged for other backends or valid SurgePy configuration.
+        :raises ValueError: If SurgePy uses an incompatible identity or lifecycle cadence.
+        """
+        if self.plugin_path == SURGEPY_PLUGIN_NAME and self.renderer_backend != "surgepy":
+            raise ValueError('plugin_path="surgepy" requires renderer_backend="surgepy"')
+        if self.renderer_backend != "surgepy":
+            return self
+        if self.plugin_path != SURGEPY_PLUGIN_NAME:
+            raise ValueError('surgepy requires plugin_path="surgepy"')
+        if self.param_spec_name not in {"surge_xt", "surge_simple", "surge_4"}:
+            raise ValueError("surgepy requires a Surge parameter spec")
+        if not self.plugin_state_path.casefold().endswith(".fxp"):
+            raise ValueError("surgepy requires an .fxp plugin_state_path")
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('surgepy requires gui_toggle_cadence="never"')
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('surgepy requires plugin_reload_cadence="render"')
+        if self.channels not in (1, 2):
+            raise ValueError("surgepy supports one or two channels")
         return self
 
     @model_validator(mode="after")
