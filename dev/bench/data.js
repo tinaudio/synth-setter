@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785105496914,
+  "lastUpdate": 1785105499497,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18768,6 +18768,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.588101532300016,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a5ae04ed7417eaaa571a2e90bdd56989e909b32",
+          "message": "test: improve feed-forward cached-conditioning test coverage\n\n* test(training): cover cached-conditioning gaps from the #2508 review\n\nAdds the behavioral coverage the multi-skill review of #2508 flagged as\nmissing for feed-forward cached-embedding conditioning:\n\n- an eval-entrypoint regression loading a feed-forward\n  `conditioning=t5gemma` checkpoint through `evaluate(mode=validate)`\n- single-batch overfit tests, so a model that cannot learn the mapping\n  no longer passes on a finite first-step loss alone\n- a decode-domain test proving unbounded cached predictions still land\n  inside the param-spec domain at the `decode_model_output` boundary\n- `predict_step` coverage for a cached-only batch, plus input-dependence\n  and full-gradient assertions a disconnected encoder would fail\n\nTest-length findings are addressed by extracting the T5Gemma compose\nhelper in `test_configs.py` and the feed-forward train/validate phase in\n`test_train.py`.\n\nThe repo-wide pyright hook blocks every commit off current main, so the\nstale `spec.render.renderer_version` stub is pointed at the synth\nidentity alongside its four siblings in the same file.\n\n* test(training): tighten cached-conditioning test structure\n\nSplits the gradient-reach assertions out of the finite-loss test, shares the\nflow/feed-forward parametrization through one marker, and extracts the eval-side\ncompose helper so the new regression stays inside the length guide.\n\n* test(training): bind the overfit loss before the training loop\n\nA zero-step loop raised UnboundLocalError instead of failing the near-zero\nassertion, hiding what the test actually pins.",
+          "timestamp": "2026-07-26T14:40:18-07:00",
+          "tree_id": "dbbbef064de03c83c61af4c855e12ade2b0a2417",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0a5ae04ed7417eaaa571a2e90bdd56989e909b32"
+        },
+        "date": 1785105499169,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.488703727722168,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.782527424693107,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08895274996757507,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0025798678398132324,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3263742923736572,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 9.758209521599985,
             "unit": "seconds"
           }
         ]
