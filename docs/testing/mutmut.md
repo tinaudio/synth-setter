@@ -4,7 +4,9 @@
 modules listed under `[tool.mutmut].paths_to_mutate` in `pyproject.toml`.
 This is the authoritative entry point — the CI workflow
 `.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
-cron).
+cron). CI partitions the configured mutation roots across four parallel jobs;
+each job retains its own results and `mutants/` artifact even when another
+shard fails.
 
 ## Requires Python 3.12
 
@@ -26,6 +28,15 @@ Only revisit the `[tool.mutmut]` config when adding a *new* top-level mutate
 path under `src/`. All other `synth_setter.*` imports are covered
 automatically — `also_copy` already pulls in any module added outside
 `paths_to_mutate`.
+
+## Pytest capture must stay disabled
+
+mutmut embeds pytest in its own process. W&B patches the active stdout and
+stderr objects when imported, while Click's `CliRunner` replaces and closes
+those objects. Pytest capture adds another stream replacement layer, which can
+leave W&B writing to a closed Click stream during mutmut's clean test. The
+`--capture=no` entry in `pytest_add_cli_args` avoids that incompatible stream
+lifecycle without excluding tests or mutations.
 
 ## Keep mutmut-target tests in-process
 

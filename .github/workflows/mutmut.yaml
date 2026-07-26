@@ -21,7 +21,19 @@ permissions:
 jobs:
   mutmut_run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: evaluation
+            pattern: synth_setter.evaluation.*
+          - name: tools
+            pattern: synth_setter.tools.*
+          - name: pipeline-data
+            pattern: synth_setter.pipeline.data.*
+          - name: ci-scripts
+            pattern: scripts.ci.*
 
     steps:
       - name: Checkout
@@ -46,7 +58,7 @@ jobs:
       - name: Run mutmut
         env:
           HYDRA_FULL_ERROR: "1"
-        run: uv run mutmut run
+        run: uv run mutmut run --max-children 4 "${{ matrix.pattern }}"
 
       - name: Print results
         if: always()
@@ -56,7 +68,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutmut-mutants
+          name: mutmut-${{ matrix.name }}-mutants
           path: mutants/
           retention-days: 14
           if-no-files-found: warn
