@@ -40,7 +40,7 @@ _DEFAULT_T5GEMMA_CACHE_NAMES: dict[str, str] = {
     DEFAULT_T5GEMMA_CHECKPOINT: "sa3-small-music",
 }
 
-type TextEncodeFn = Callable[[list[str]], np.ndarray]
+type TextEncodeFn = Callable[[list[str]], Float[np.ndarray, "batch dim seq"]]
 
 
 @dataclass(frozen=True)
@@ -192,11 +192,13 @@ def load_t5gemma_text_encoder(checkpoint: str, device: str) -> TextEncodeFn:
     conditioner = conditioner.to(device).eval().requires_grad_(False)
 
     @torch.no_grad()
-    def _encode_chunk(chunk: list[str]) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def _encode_chunk(chunk: list[str]) -> Float[np.ndarray, "chunk seq dim"]:
         embeddings, _ = conditioner(chunk, device)
         return embeddings.float().cpu().numpy()
 
-    def encode(prompts: list[str]) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def encode(prompts: list[str]) -> Float[np.ndarray, "batch dim seq"]:
         chunks = [
             _encode_chunk(prompts[start : start + T5GEMMA_ENCODE_MAX_BATCH])
             for start in range(0, len(prompts), T5GEMMA_ENCODE_MAX_BATCH)
