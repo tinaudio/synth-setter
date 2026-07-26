@@ -369,10 +369,24 @@ class KSinFlowMatchingModule(LightningModule):
                 param.requires_grad = True
 
         loss, penalty = self._train_step(batch)
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch[0].shape[0],
+        )
 
         if penalty is not None:
-            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
+            self.log(
+                "train/penalty",
+                penalty,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=batch[0].shape[0],
+            )
 
         return loss + penalty
 
@@ -432,8 +446,22 @@ class KSinFlowMatchingModule(LightningModule):
         self.val_chamfer(preds, targets)
         # self.val_lad(preds, targets)
 
-        self.log("val/lsd", self.val_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "val/lsd",
+            self.val_lsd,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=preds.shape[0],
+        )
+        self.log(
+            "val/chamfer",
+            self.val_chamfer,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=preds.shape[0],
+        )
         # self.log("val/lad", self.val_lad, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self):
@@ -449,20 +477,42 @@ class KSinFlowMatchingModule(LightningModule):
         self.test_chamfer(preds, targets)
         self.test_lad(preds, targets)
         param_mse = (preds - targets).square().mean()
-        self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "test/param_mse",
+            param_mse,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=preds.shape[0],
+        )
+        self.log(
+            "test/lsd",
+            self.test_lsd,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=preds.shape[0],
+        )
         self.log(
             "test/chamfer",
             self.test_chamfer,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
+            batch_size=preds.shape[0],
         )
-        self.log("test/lad", self.test_lad, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "test/lad",
+            self.test_lad,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=preds.shape[0],
+        )
 
     def on_test_epoch_end(self) -> None:
         # TODO: implement metrics
-        # self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True, batch_size=preds.shape[0])
         # etc...
         pass
 
