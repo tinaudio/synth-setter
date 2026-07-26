@@ -48,6 +48,24 @@ def dataset_artifact_ref(
     return _artifact_ref_from_root(dataset_root)
 
 
+def describe_unresolved_dataset_root(
+    dataset_root: str | Path | None, download_dataset_root_uri: str | None = None
+) -> str | None:
+    """Name the configured dataset root that :func:`dataset_artifact_ref` could not resolve.
+
+    Callers use this only after that function returned ``None``, to say in the
+    run's durable lineage marker *which* input has no edge (#2424).
+
+    :param dataset_root: Optional local finalized dataset directory.
+    :param download_dataset_root_uri: Optional R2 or file URI, preferred as the
+        root lineage discovery reads.
+    :returns: A human-readable description of the configured root, or ``None``
+        when no root is configured at all (nothing was expected to resolve).
+    """
+    root = download_dataset_root_uri or dataset_root
+    return f"dataset root {root}" if root else None
+
+
 def _artifact_ref_from_root(dataset_root: str | Path | None) -> tuple[str, str] | None:
     """Load an immutable dataset artifact reference from one local or remote root.
 

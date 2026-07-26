@@ -19,6 +19,7 @@ DISPATCH_PROVIDER = "runpod"
 
 CPU_SLOW_PR_PATHS: frozenset[str] = frozenset(
     {
+        ".github/actions/install-rclone/**",
         ".github/workflows/cpu-slow.yml",
         "Makefile",
         "pyproject.toml",
@@ -201,8 +202,8 @@ def test_cpu_slow_pr_paths_cover_owned_surfaces(workflows: WorkflowSet) -> None:
     assert CPU_SLOW_PR_PATHS <= _pull_request_paths(workflows["cpu-slow.yml"])
 
 
-def test_cpu_slow_pr_lane_excludes_r2_without_setup(workflows: WorkflowSet) -> None:
-    """Pull requests run slow CPU tests without R2 credentials or setup.
+def test_cpu_slow_pr_lane_installs_rclone_without_r2_setup(workflows: WorkflowSet) -> None:
+    """Pull requests install rclone without R2 credentials or configuration.
 
     :param workflows: Four parsed workflow documents keyed by filename.
     """
@@ -213,6 +214,14 @@ def test_cpu_slow_pr_lane_excludes_r2_without_setup(workflows: WorkflowSet) -> N
         if step.get("uses") == "./.github/actions/setup-r2"
     )
     assert "github.event_name != 'pull_request'" in _string(setup_r2, "if")
+
+    install_rclone = next(
+        step
+        for step in _steps(workflow, "run_slow_tests")
+        if step.get("uses") == "./.github/actions/install-rclone"
+    )
+    assert "github.event_name == 'pull_request'" in _string(install_rclone, "if")
+    assert "secrets." not in str(install_rclone)
 
     pr_step = _named_step(workflow, "run_slow_tests", "Run slow PR tests")
     assert "github.event_name == 'pull_request'" in _string(pr_step, "if")

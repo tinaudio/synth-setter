@@ -42,7 +42,12 @@ on:
       - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
+      - "tests/conftest.py"
+      - "tests/test_train.py"
+      - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
       - "src/synth_setter/data/render_config.py"
@@ -64,7 +69,12 @@ on:
       - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
+      - "tests/conftest.py"
+      - "tests/test_train.py"
+      - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
@@ -111,19 +121,46 @@ jobs:
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
               tests/integration/test_parallel_shard_render_linux.py
+            uv_extra_args: --extra same --extra sa3
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
           - synth: cardinal
             plugin_path: /usr/lib/vst3/CardinalSynth.vst3
             pytest_targets: tests/data/vst/test_cardinal_preset.py
+            uv_extra_args: ""
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+      RUN_EMBEDDING_E2E: ${{ matrix.synth == 'surge_xt' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up R2 for gated embedding checkpoints
+        if: env.RUN_EMBEDDING_E2E == 'true'
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+
+      # The all-embedding E2E preflights gated weights before spending time on a VST render.
+      - name: Hydrate gated embedding checkpoints
+        if: env.RUN_EMBEDDING_E2E == 'true'
+        run: |
+          set -euo pipefail
+          cache="${GITHUB_WORKSPACE}/.ci-model-cache/synth-setter/models/embeddings"
+          mkdir -p "${cache}"
+          for model in same-s same-l sa3-small-music; do
+            rclone copy --checksum "r2:intermediate-data/models/${model}" "${cache}/${model}"
+          done
+          test -f "${cache}/same-s/model.safetensors"
+          test -f "${cache}/same-l/model.safetensors"
+          test -f "${cache}/sa3-small-music/model.safetensors"
+          test -f "${cache}/sa3-small-music/t5gemma-b-b-ul2/model.safetensors"
 
       # Reset preloaded Docker state and use separate storage when the runner provides it.
       - name: Prepare Docker storage capacity
@@ -180,6 +217,7 @@ jobs:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
           PYTEST_TARGETS: ${{ matrix.pytest_targets }}
+          UV_EXTRA_ARGS: ${{ matrix.uv_extra_args }}
         run: |
           mkdir -p /tmp/bench
           docker run --rm \
@@ -190,13 +228,18 @@ jobs:
             -e "SYNTH_SETTER_PLUGIN_PATH=$PLUGIN_PATH" \
             -e "SYNTH_SETTER_TEST_SYNTH=$TEST_SYNTH" \
             -e "PYTEST_TARGETS=$PYTEST_TARGETS" \
+            -e "RUN_EMBEDDING_E2E=$RUN_EMBEDDING_E2E" \
+            -e "SYNTH_SETTER_REQUIRE_EMBEDDING_E2E=$RUN_EMBEDDING_E2E" \
+            -e "UV_EXTRA_ARGS=$UV_EXTRA_ARGS" \
+            -e XDG_CACHE_HOME=/home/build/synth-setter/.ci-model-cache \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
+              read -ra uv_extra_args <<< "$UV_EXTRA_ARGS"
               UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
-                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+                uv sync --frozen --extra cu128 "${uv_extra_args[@]}" --no-default-groups --group dev --no-install-project
               uv pip install --no-deps -e .
               if [[ "$SYNTH_SETTER_TEST_SYNTH" == cardinal && ! -e "$SYNTH_SETTER_PLUGIN_PATH" ]]; then
                 make install-cardinal
@@ -209,6 +252,9 @@ jobs:
                 ln -sfn "$SYNTH_SETTER_PLUGIN_PATH" "$plugin_link"
               fi
               read -ra targets <<< "$PYTEST_TARGETS"
+              if [ "$RUN_EMBEDDING_E2E" = "true" ]; then
+                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_real_e2e)
+              fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
