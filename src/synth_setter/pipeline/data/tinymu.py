@@ -47,6 +47,7 @@ DEFAULT_TINYMU_CHECKPOINT = (
 )
 
 TINYMU_ENCODE_MAX_BATCH = 16
+TINYMU_GIT_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -277,19 +278,17 @@ def resolve_tinymu_checkpoint(checkpoint: str = DEFAULT_TINYMU_CHECKPOINT) -> Pa
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     r2_io.ensure_r2_env_loaded()
-    temporary_path: Path | None = None
+    with tempfile.NamedTemporaryFile(
+        dir=cache_dir, prefix=f".{TINYMU_CHECKPOINT_NAME}.", delete=False
+    ) as temporary:
+        temporary_path = Path(temporary.name)
     try:
-        with tempfile.NamedTemporaryFile(
-            dir=cache_dir, prefix=f".{TINYMU_CHECKPOINT_NAME}.", delete=False
-        ) as temporary:
-            temporary_path = Path(temporary.name)
         # The canonical R2 helper owns bounded retries and transfer I/O timeouts.
         r2_io.download_to_path(checkpoint, temporary_path)
         _verified_checkpoint(temporary_path)
         os.replace(temporary_path, destination)
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
     return _verified_checkpoint(destination)
 
 
@@ -301,12 +300,19 @@ def _git_output(source_dir: Path, *arguments: str) -> str:
     :returns: Stripped stdout.
     :raises ValueError: Git cannot resolve the requested identity.
     """
-    result = subprocess.run(  # noqa: S603 — executable and arguments are fixed identity probes
-        ["git", "-C", str(source_dir), *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — executable and arguments are fixed probes
+            ["git", "-C", str(source_dir), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=TINYMU_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"TinyMU source identity probe timed out after {TINYMU_GIT_TIMEOUT_SECONDS} "
+            f"seconds in {source_dir}"
+        ) from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise ValueError(f"TinyMU source identity probe failed in {source_dir}: {detail}")
