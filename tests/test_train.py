@@ -1908,6 +1908,56 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
 _ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
 
 
+def _assert_t5gemma_feed_forward_checkpoint_validates(
+    output_dir: Path, dataset_root: Path, param_spec_name: str
+) -> None:
+    """Train the T5Gemma feed-forward model, then validate the checkpoint it produced.
+
+    :param output_dir: Training output dir; evaluation runs from its ``evaluation`` child.
+    :param dataset_root: Lance root already carrying the real ``t5gemma`` column.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    cfg = build_surge_xt_embedding_train_cfg(
+        output_dir,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="t5gemma",
+        architecture="feed_forward",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    trainer = object_dict["trainer"]
+    assert isinstance(object_dict["model"], VSTFeedForwardModule)
+    assert trainer.global_step >= 1, (
+        f"T5Gemma feed-forward trainer did not advance: global_step={trainer.global_step}"
+    )
+    assert_finite_train_loss(metric_dict)
+
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_all_embedding_conditioning_real_e2e(
@@ -1949,43 +1999,6 @@ def test_train_all_embedding_conditioning_real_e2e(
         )
         assert_finite_train_loss(metric_dict)
 
-    ff_output_dir = tmp_path / "t5gemma-feed-forward"
-    ff_cfg = build_surge_xt_embedding_train_cfg(
-        ff_output_dir,
-        dataset_root,
-        param_spec_name=param_spec_name,
-        conditioning="t5gemma",
-        architecture="feed_forward",
+    _assert_t5gemma_feed_forward_checkpoint_validates(
+        tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name
     )
-    HydraConfig().set_config(ff_cfg)
-    try:
-        ff_metric_dict, ff_object_dict = train(ff_cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    ff_trainer = ff_object_dict["trainer"]
-    assert isinstance(ff_object_dict["model"], VSTFeedForwardModule)
-    assert ff_trainer.global_step >= 1, (
-        f"T5Gemma feed-forward trainer did not advance: global_step={ff_trainer.global_step}"
-    )
-    assert_finite_train_loss(ff_metric_dict)
-
-    checkpoint_path = ff_output_dir / "checkpoints" / "last.ckpt"
-    assert checkpoint_path.is_file()
-
-    ff_eval_cfg = ff_cfg.copy()
-    eval_output_dir = ff_output_dir / "evaluation"
-    with open_dict(ff_eval_cfg):
-        ff_eval_cfg.paths.output_dir = str(eval_output_dir)
-        ff_eval_cfg.paths.log_dir = str(eval_output_dir)
-        ff_eval_cfg.ckpt_path = str(checkpoint_path)
-        ff_eval_cfg.mode = "validate"
-        ff_eval_cfg.trainer.limit_val_batches = 1
-    HydraConfig().set_config(ff_eval_cfg)
-    try:
-        eval_metric_dict, eval_object_dict = evaluate(ff_eval_cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
-    assert torch.isfinite(eval_metric_dict["val/param_mse"])

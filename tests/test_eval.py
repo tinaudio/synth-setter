@@ -36,6 +36,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -1434,6 +1435,94 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     finally:
         GlobalHydra.instance().clear()
     assert datamodule.num_workers == 4
+
+
+def _compose_fake_t5gemma_ffn_eval_cfg(
+    output_dir: Path, param_spec_name: str, checkpoint_path: Path
+) -> DictConfig:
+    """Compose the eval-side counterpart of the feed-forward T5Gemma train cfg.
+
+    :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param param_spec_name: Param spec driving model width and callback labels.
+    :param checkpoint_path: Train-produced checkpoint loaded by ``evaluate``.
+    :returns: Resolved ``mode=validate`` DictConfig over synthetic T5Gemma batches.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "model=vst_ffn",
+                "conditioning=t5gemma",
+                "datamodule=surge_lance",
+                "trainer=cpu",
+                "mode=validate",
+                "model.compile=false",
+                # eval's trainer has no max_steps for the scheduler interpolation.
+                "model.scheduler=null",
+                "model.net.d_model=16",
+                "model.net.n_heads=1",
+                "model.net.n_layers=1",
+                "model.net.patch_size=128",
+                "model.net.patch_stride=64",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(output_dir)
+        cfg.paths.log_dir = str(output_dir)
+        cfg.datamodule.fake = True
+        cfg.datamodule.dataset_root = str(output_dir)
+        cfg.datamodule.param_spec_name = param_spec_name
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.trainer.limit_val_batches = 1
+        cfg.ckpt_path = str(checkpoint_path)
+        cfg.logger = None
+    return cfg
+
+
+def test_evaluate_validate_mode_feed_forward_cached_conditioning_ckpt_returns_finite_metric(
+    tmp_path: Path,
+    param_spec_name: str,
+) -> None:
+    """``model=vst_ffn conditioning=t5gemma`` composes in eval and validates its checkpoint.
+
+    Feed-forward cached conditioning is reachable from the eval entrypoint, so the
+    checkpoint a training run produces is loaded back through ``evaluate`` here rather
+    than only inside ``tests/test_train.py``. Synthetic batches at the profile's shapes
+    keep the regression on the CPU-fast lane.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir`` for both stages.
+    :param param_spec_name: Param spec driving model width and callback labels.
+    """
+    cfg_train = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        tmp_path,
+        param_spec_name=param_spec_name,
+        conditioning="t5gemma",
+        architecture="feed_forward",
+        fake=True,
+    )
+    HydraConfig().set_config(cfg_train)
+    try:
+        train(cfg_train)
+    finally:
+        GlobalHydra.instance().clear()
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    cfg_eval = _compose_fake_t5gemma_ffn_eval_cfg(
+        tmp_path / "evaluation", param_spec_name, checkpoint_path
+    )
+    HydraConfig().set_config(cfg_eval)
+    try:
+        metric_dict, object_dict = evaluate(cfg_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], VSTFeedForwardModule)
+    assert math.isfinite(metric_dict["val/param_mse"].item())
 
 
 _EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")

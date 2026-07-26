@@ -1191,22 +1191,26 @@ def build_surge_xt_embedding_train_cfg(
     param_spec_name: str,
     conditioning: str,
     architecture: Literal["flow", "feed_forward"] = "flow",
+    fake: bool = False,
 ) -> DictConfig:
     """Compose a one-step CPU train cfg wired to an embedding-conditioning profile.
 
     Composes the selected shipped Surge architecture with ``conditioning=<profile>``
-    over the map-style ``surge_lance`` datamodule, pinned to a real (``fake=False``)
+    over the map-style ``surge_lance`` datamodule, pinned by default to a real
     dataset augmented with the profile's Lance column. Lives here (not inline in
     ``tests/test_train.py``) because that module is barred from importing Hydra
     config-initializers (see ``tests/_meta/test_entrypoint_e2e_only.py``).
 
     :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; the checkpoint
         callback writes ``last.ckpt`` beneath it.
-    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits.
+    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits;
+        unread when ``fake`` is set.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         model width and per-parameter callback labels.
     :param conditioning: Conditioning profile group.
     :param architecture: Shipped flow or feed-forward VST model; defaults to flow.
+    :param fake: Whether the datamodule synthesizes batches at the profile's shapes
+        instead of reading Lance, keeping checkpoint-consumer tests off the VST lane.
     :returns: Resolved one-step embedding-conditioning train DictConfig.
     """
     experiment = {
@@ -1254,7 +1258,7 @@ def build_surge_xt_embedding_train_cfg(
             cfg.trainer.enable_model_summary = False
             cfg.trainer.deterministic = True
 
-            cfg.datamodule.fake = False
+            cfg.datamodule.fake = fake
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.predict_file = str(dataset_root / "test.lance")
             cfg.datamodule.param_spec_name = param_spec_name
