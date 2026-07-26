@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785083836984,
+  "lastUpdate": 1785085529607,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10326,6 +10326,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03868371248245239,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5854decf2a7013e558aeb2d85957ab6c47e1ae46",
+          "message": "internal-feat(pipeline): add SynthSpec as the synth identity table (#2438)\n\nA synth's identity — which ParamSpec, which plugin, which baseline preset — was\nrestated across the two param_spec_registry dicts, the configs/render groups,\nthe registration scaffolder and the packaged parameter maps, with nothing\ncross-checking any pair. A right spec with a wrong preset renders\nsilently-wrong audio on the pedalboard path.\n\nAdd synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only\nlike param_spec_name and renderer_backend: it holds no ParamSpec and imports no\ndata.vst module, so pipeline.schemas.spec can depend on it without pulling\npedalboard onto the launcher's import path.\n\nname and param_spec_name are separate fields so preset variants can share one\nParamSpec; every shipped entry currently has them equal, so the split is inert\nuntil the first variant is registered.\n\nRoute the raw-DictConfig identity reads in cli/train.py and cli/eval.py through\nSynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read\nthe composed cfg directly and need a shared accessor of their own.\n\nplugin_state_paths stays a literal dict for now because\nregistration.registry_with_spec rewrites it by line anchor; a test pins it\nagainst SYNTHS until that transform learns to write the new table.\n\nRefs #2434",
+          "timestamp": "2026-07-26T09:24:11-07:00",
+          "tree_id": "7dbd7879e8b95414f0bc45e72dd85155c26f9809",
+          "url": "https://github.com/tinaudio/synth-setter/commit/5854decf2a7013e558aeb2d85957ab6c47e1ae46"
+        },
+        "date": 1785085528657,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.4202473163604736,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.192387637249194,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.022656535729765892,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01947498321533203,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.9477758407592773,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.275967156416678,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.119876861572266,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.671361285559833,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02757934480905533,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.031813204288482666,
             "unit": "1-cos"
           },
           {
