@@ -27,7 +27,8 @@ FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
     return {
         "plugin_path": plugin_path,
-        "plugin_state_path": "presets/surge-base.vstpreset",
+        # The in-process backend has no preset file, and SynthSpec rejects one.
+        "plugin_state_path": "" if plugin_path == "torchsynth" else "presets/surge-base.vstpreset",
         "param_spec_name": "surge_simple",
         "renderer_version": "1.3.4",
         "sample_rate": 44100,
@@ -132,7 +133,9 @@ class TestRenderConfig:
         """The domain identifier preserves the registry key's JSON shape."""
         cfg = RenderConfig(**_valid_render_kwargs())
 
-        assert json.loads(cfg.model_dump_json())["param_spec_name"] == "surge_simple"
+        synth = json.loads(cfg.model_dump_json())["synth"]
+
+        assert synth["param_spec_name"] == "surge_simple"
 
     def test_param_spec_name_preserves_nonblank_boundary_whitespace(self) -> None:
         """Nonblank registry keys retain surrounding whitespace."""

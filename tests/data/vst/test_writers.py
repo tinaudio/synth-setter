@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -143,12 +144,16 @@ def _cli_argv(data_file: str) -> list[str]:
         data_file,
         "--shard_id",
         "7",
-        "--plugin_path",
-        "plugins/Surge XT.vst3",
-        "--plugin_state_path",
-        "presets/surge-base.vstpreset",
-        "--param_spec_name",
-        "surge_simple",
+        # Identity arrives as one JSON-encoded nested field, not three flat flags.
+        "--synth",
+        json.dumps(
+            {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+            }
+        ),
         "--renderer_version",
         "1.3.4",
         "--sample_rate",

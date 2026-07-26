@@ -16,6 +16,7 @@ instead of composing one.
 
 from __future__ import annotations
 
+import json
 import platform
 import re
 import shlex
@@ -263,7 +264,11 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     ]
     render_args = spec.render_for_shard(shard).model_dump()
     for key, value in render_args.items():
-        args.extend([f"--{key}", str(value)])
+        # Non-scalars (``synth``) reach the worker's CliSettingsSource via json.loads;
+        # str() would emit a single-quoted Python repr it rejects. bool is an int
+        # subclass, so flags keep their existing "True"/"False" spelling.
+        encoded = str(value) if isinstance(value, str | int | float) else json.dumps(value)
+        args.extend([f"--{key}", encoded])
     args.extend(["--shard_id", str(shard.shard_id)])
 
     return args

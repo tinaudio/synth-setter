@@ -59,6 +59,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
+from synth_setter.synth_spec import SYNTHS, SynthName
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
@@ -2839,13 +2840,9 @@ class TestMainDispatchBranches:
         for name in ("train.lance", "val.lance", "stats.npz"):
             (dataset_root / name).touch()
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
-        render = spec.render.model_copy(
-            update={
-                "param_spec_name": "surge_xt",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "plugin_path": "plugins/Surge XT.vst3",
-            }
-        )
+        # Identity is one nested field; updating the read-only flat properties
+        # through model_copy would be silently ignored.
+        render = spec.render.model_copy(update={"synth": SYNTHS[SynthName("surge_xt")]})
         predict_file = dataset_root / "test.lance"
         n_samples = 4
         _write_lance_split(predict_file, n_samples)

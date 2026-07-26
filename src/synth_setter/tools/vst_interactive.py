@@ -43,6 +43,7 @@ from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -1390,9 +1391,12 @@ def main(
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.lance"
     render_cfg = RenderConfig(
-        plugin_path=plugin_path,
-        plugin_state_path=plugin_state_path,
-        param_spec_name=ParamSpecName(param_spec_name),
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=plugin_path,
+            plugin_state_path=plugin_state_path,
+        ),
         renderer_version=extract_renderer_version(Path(plugin_path)),
         sample_rate=SAMPLE_RATE,
         channels=CHANNELS,

@@ -150,6 +150,8 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "mel_spec_dtype",
+            # Checked shape-aware instead, so pre-nesting specs still validate.
+            "synth",
         }
 
     def test_other_defaulted_render_field_remains_required(self) -> None:

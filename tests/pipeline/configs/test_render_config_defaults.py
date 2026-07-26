@@ -8,6 +8,7 @@ from omegaconf import DictConfig
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
     "audio_dtype",
@@ -87,9 +88,12 @@ def test_vst_render_group_accepts_appended_synth_identity() -> None:
 def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -> None:
     """Render configuration exposes the pedalboard state file as plugin_state_path."""
     config = RenderConfig(
-        plugin_path="plugin.vst3",
-        plugin_state_path="state.vstpreset",
-        param_spec_name=ParamSpecName("surge_xt"),
+        synth=SynthSpec(
+            name=SynthName("surge_xt"),
+            param_spec_name=ParamSpecName("surge_xt"),
+            plugin_path="plugin.vst3",
+            plugin_state_path="state.vstpreset",
+        ),
         renderer_version="1.0.0",
         sample_rate=44100,
         channels=2,

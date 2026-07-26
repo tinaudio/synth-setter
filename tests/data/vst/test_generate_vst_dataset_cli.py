@@ -14,6 +14,7 @@ from pydantic_settings import CliApp
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
 
@@ -46,9 +47,12 @@ def test_cli_args_class_adds_only_launcher_fields_beyond_render_config() -> None
 def _smoke_spec() -> DatasetSpec:
     """Build a minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
     render_cfg = RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path="presets/surge-base.vstpreset",
-        param_spec_name=ParamSpecName("surge_simple"),
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-base.vstpreset",
+        ),
         renderer_version="1.3.4",
         sample_rate=44100,
         channels=2,

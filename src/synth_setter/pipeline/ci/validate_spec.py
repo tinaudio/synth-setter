@@ -25,9 +25,29 @@ _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
 )
 _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset({"audio_dtype", "mel_spec_dtype"})
+# ``synth`` is checked shape-aware below instead of by presence: specs written before
+# identity was nested carry the flat keys, and ``workflow_dispatch`` accepts any
+# archived spec URI. Exempting it outright would make identity optional in both shapes.
 _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
-    sorted(set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS)
+    sorted(
+        set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS - {"synth"}
+    )
 )
+_LEGACY_IDENTITY_KEYS = frozenset({"param_spec_name", "plugin_path", "plugin_state_path"})
+
+
+def _render_param_spec_name(render: dict[str, Any]) -> str | None:
+    """Read the param-spec name from either the nested or the legacy flat shape.
+
+    :param render: Raw ``render`` mapping from a spec dict.
+    :returns: The declared param-spec name, or ``None`` when identity is absent.
+    """
+    synth = render.get("synth")
+    if isinstance(synth, dict):
+        name = synth.get("param_spec_name")
+        return None if name is None else str(name)
+    name = render.get("param_spec_name")
+    return None if name is None else str(name)
 
 
 def _parse_output_format(value: Any) -> OutputFormat | None:
@@ -65,6 +85,9 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
     missing_render = [f for f in _REQUIRED_RENDER_FIELDS if f not in render]
     if missing_render:
         errors.append(f"missing required render fields: {missing_render}")
+
+    if "synth" not in render and not _LEGACY_IDENTITY_KEYS <= render.keys():
+        errors.append("render: missing synth identity (no 'synth' and no legacy flat keys)")
 
     cv = spec.get("git_sha", "")
     if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
@@ -121,11 +144,13 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
         "base_seed": 42,
     }
     render_passthrough = {
-        "param_spec_name": "surge_simple",
         "sample_rate": 44100,
         "samples_per_shard": 32,
         "velocity": 100,
     }
+    actual_spec_name = _render_param_spec_name(render)
+    if actual_spec_name != "surge_simple":
+        errors.append(f"render.param_spec_name: expected 'surge_simple', got {actual_spec_name!r}")
     for field, expected in top_passthrough.items():
         actual = spec.get(field)
         if actual != expected:
