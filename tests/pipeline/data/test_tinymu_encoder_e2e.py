@@ -26,7 +26,7 @@ from synth_setter.pipeline.data.lance_shard import (  # noqa: E402
     write_lance_dataset,
 )
 from synth_setter.pipeline.data.tinymu import (  # noqa: E402
-    TINYMU_EMBEDDING_DIM,
+    TINYMU_FRONTEND,
     TINYMU_SOURCE_DIR_ENV,
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
@@ -52,7 +52,7 @@ def _tinymu_source_dir() -> Path:
 
 
 def _write_real_audio_lance(source_dir: Path, destination: Path) -> tuple[int, int]:
-    """Persist four seconds of upstream's real example audio as a production Lance tensor.
+    """Persist two distinct real four-second clips as production Lance tensors.
 
     :param source_dir: Pinned TinyMU checkout containing the example WAV.
     :param destination: Local Lance dataset destination.
@@ -67,7 +67,10 @@ def _write_real_audio_lance(source_dir: Path, destination: Path) -> tuple[int, i
     clip_samples = sample_rate * _CLIP_SECONDS
     if len(audio) < clip_samples:
         raise ValueError(f"real TinyMU audio has only {len(audio)} samples, need {clip_samples}")
-    batch = np.ascontiguousarray(audio[:clip_samples].T[None], dtype=np.float16)
+    batch = np.ascontiguousarray(
+        np.stack([audio[:clip_samples].T, audio[-clip_samples:].T]),
+        dtype=np.float16,
+    )
     tensor = tensor_array(batch, np.dtype("float16"), batch.shape[1:])
     metadata = ShardMetadata(
         velocity=100,
@@ -166,12 +169,12 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
     )
 
     dataset = lance.dataset(dataset_path)
-    assert dataset.count_rows() == 1
+    assert dataset.count_rows() == 2
     assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
     values = dataset.to_table(columns=[TINYMU_FIELD, f"{TINYMU_FIELD}_vec"])
     sequence = values.column(TINYMU_FIELD).combine_chunks().to_numpy_ndarray()
     expected_frames = tinymu_num_latent_frames(clip_samples, sample_rate)
-    assert sequence.shape == (1, TINYMU_EMBEDDING_DIM, expected_frames)
+    assert sequence.shape == (2, TINYMU_FRONTEND.embedding_dim, expected_frames)
     assert sequence.dtype == np.float32
     assert np.isfinite(sequence).all()
     assert sequence.std() > 0.0
@@ -182,5 +185,6 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
     encoder = _tinymu_conditioning_encoder()
     with torch.inference_mode():
         conditioned = encoder(torch.from_numpy(sequence))
-    assert conditioned.shape == (1, 512)
+    assert conditioned.shape == (2, 512)
     assert torch.isfinite(conditioned).all()
+    assert not torch.allclose(conditioned[0], conditioned[1])

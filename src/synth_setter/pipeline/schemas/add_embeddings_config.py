@@ -19,7 +19,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     DEFAULT_NUM_SUB_VECTORS,
     EMBEDDING_REGISTRY,
-    TINYMU_EMBEDDING_DIM,
+    TINYMU_FRONTEND,
 )
 
 if TYPE_CHECKING:
@@ -245,7 +245,10 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: Validated config unchanged.
         :raises ValueError: The count cannot evenly split a selected known vector width.
         """
-        fixed_widths = {"clap": CLAP_EMBEDDING_DIM, "tinymu": TINYMU_EMBEDDING_DIM}
+        fixed_widths = {
+            "clap": CLAP_EMBEDDING_DIM,
+            "tinymu": TINYMU_FRONTEND.embedding_dim,
+        }
         for name in self.embeddings:
             width = fixed_widths.get(name)
             if width is not None and width % self.num_sub_vectors != 0:

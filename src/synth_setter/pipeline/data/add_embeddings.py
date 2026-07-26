@@ -40,7 +40,7 @@ from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
-    TINYMU_EMBEDDING_DIM,
+    TINYMU_FRONTEND,
     TinyMUEncodeFn,
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
@@ -423,7 +423,7 @@ def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     embeddings = _finite_embedding(TINYMU_FIELD, encode(audio, sample_rate))
     expected_shape = (
         len(audio),
-        TINYMU_EMBEDDING_DIM,
+        TINYMU_FRONTEND.embedding_dim,
         tinymu_num_latent_frames(audio.shape[-1], sample_rate),
     )
     if embeddings.shape != expected_shape:

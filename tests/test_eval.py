@@ -1626,17 +1626,19 @@ def test_train_eval_embedding_conditioning_real_e2e(
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
+    tinymu_source_dir: Path,
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
     """Train and validate real TinyMU tensors through the generic pooler.
 
+    :param tinymu_source_dir: Pinned external TinyMU checkout.
     :param tmp_path: Shared train/eval output directory.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
     :param param_spec_name: Parameter specification driving model width.
     """
-    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets)
+    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets, tinymu_source_dir)
     _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,

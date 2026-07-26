@@ -2,7 +2,10 @@
 
 TinyMU has no detected license file, so this module does not redistribute its source. Runtime
 loading requires an external checkout at the exact recorded commit plus the hash-pinned checkpoint.
-Set ``TINYMU_SOURCE_DIR``, then call ``load_tinymu_audio_encoder()`` with ``(B, C, T)`` audio.
+Usage::
+
+    encoder = load_tinymu_audio_encoder(source_dir=Path(os.environ["TINYMU_SOURCE_DIR"]))
+    embeddings = encoder(audio_batch, sample_rate)
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, Self, cast
@@ -42,18 +46,76 @@ DEFAULT_TINYMU_CHECKPOINT = (
     f"{TINYMU_CHECKPOINT_REVISION}/{TINYMU_CHECKPOINT_NAME}"
 )
 
-TINYMU_SAMPLE_RATE = 16_000
-TINYMU_N_FFT = 400
-TINYMU_HOP_LENGTH = 160
-TINYMU_PATCH_SIZE = 16
-TINYMU_N_MELS = 80
-TINYMU_BASE_EMBEDDING_DIM = 768
-TINYMU_FREQUENCY_PATCHES = TINYMU_N_MELS // TINYMU_PATCH_SIZE
-TINYMU_EMBEDDING_DIM = TINYMU_FREQUENCY_PATCHES * TINYMU_BASE_EMBEDDING_DIM
-TINYMU_UNIT_FRAMES = 992
-TINYMU_ENCODER_DEPTH = 12
 TINYMU_ENCODE_MAX_BATCH = 16
-TINYMU_MIN_INPUT_SAMPLES = TINYMU_N_FFT + (TINYMU_PATCH_SIZE - 1) * TINYMU_HOP_LENGTH
+
+
+@dataclass(frozen=True)
+class _TinyMUFrontendConfig:
+    """Shape-defining MATPAC frontend contract.
+
+    .. attribute :: sample_rate
+
+        Model sample rate in Hz.
+
+    .. attribute :: n_fft
+
+        STFT window length in samples.
+
+    .. attribute :: hop_length
+
+        STFT hop length in samples.
+
+    .. attribute :: patch_size
+
+        Time/frequency patch width.
+
+    .. attribute :: n_mels
+
+        Mel-bin count.
+
+    .. attribute :: base_embedding_dim
+
+        Per-frequency-patch width.
+
+    .. attribute :: unit_frames
+
+        Precise-mode frame unit.
+
+    .. attribute :: encoder_depth
+
+        Transformer block count.
+    """
+
+    sample_rate: int
+    n_fft: int
+    hop_length: int
+    patch_size: int
+    n_mels: int
+    base_embedding_dim: int
+    unit_frames: int
+    encoder_depth: int
+
+    @property
+    def embedding_dim(self) -> int:
+        """Return the concatenated frequency-patch width."""
+        return self.n_mels // self.patch_size * self.base_embedding_dim
+
+    @property
+    def min_input_samples(self) -> int:
+        """Return the shortest waveform producing one complete patch."""
+        return self.n_fft + (self.patch_size - 1) * self.hop_length
+
+
+TINYMU_FRONTEND = _TinyMUFrontendConfig(
+    sample_rate=16_000,
+    n_fft=400,
+    hop_length=160,
+    patch_size=16,
+    n_mels=80,
+    base_embedding_dim=768,
+    unit_frames=992,
+    encoder_depth=12,
+)
 
 _TINYMU_MODULE_NAME = "_synth_setter_external_tinymu_matpac"
 _EXPECTED_UNPERSISTED_BUFFERS = frozenset(
@@ -221,6 +283,7 @@ def resolve_tinymu_checkpoint(checkpoint: str = DEFAULT_TINYMU_CHECKPOINT) -> Pa
             dir=cache_dir, prefix=f".{TINYMU_CHECKPOINT_NAME}.", delete=False
         ) as temporary:
             temporary_path = Path(temporary.name)
+        # The canonical R2 helper owns bounded retries and transfer I/O timeouts.
         r2_io.download_to_path(checkpoint, temporary_path)
         _verified_checkpoint(temporary_path)
         os.replace(temporary_path, destination)
@@ -334,12 +397,12 @@ def _validate_model_contract(model: _MatpacModel) -> None:
         "sample_rate": cfg.sr,
     }
     expected = {
-        "depth": TINYMU_ENCODER_DEPTH,
-        "embed_dim": TINYMU_BASE_EMBEDDING_DIM,
-        "n_freq": TINYMU_N_MELS,
-        "n_t": TINYMU_UNIT_FRAMES,
-        "patch_size": TINYMU_PATCH_SIZE,
-        "sample_rate": TINYMU_SAMPLE_RATE,
+        "depth": TINYMU_FRONTEND.encoder_depth,
+        "embed_dim": TINYMU_FRONTEND.base_embedding_dim,
+        "n_freq": TINYMU_FRONTEND.n_mels,
+        "n_t": TINYMU_FRONTEND.unit_frames,
+        "patch_size": TINYMU_FRONTEND.patch_size,
+        "sample_rate": TINYMU_FRONTEND.sample_rate,
     }
     if actual != expected:
         raise ValueError(f"TinyMU MATPAC architecture is {actual}, expected {expected}")
@@ -355,14 +418,16 @@ def tinymu_num_latent_frames(num_samples: int, sample_rate: int) -> int:
     """
     if num_samples < 1 or sample_rate < 1:
         raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
-    resampled_samples = math.ceil(num_samples * TINYMU_SAMPLE_RATE / sample_rate)
-    if resampled_samples < TINYMU_MIN_INPUT_SAMPLES:
+    resampled_samples = math.ceil(num_samples * TINYMU_FRONTEND.sample_rate / sample_rate)
+    if resampled_samples < TINYMU_FRONTEND.min_input_samples:
         raise ValueError(
-            f"TinyMU needs at least {TINYMU_MIN_INPUT_SAMPLES} samples after resampling, "
-            f"got {resampled_samples}"
+            f"TinyMU needs at least {TINYMU_FRONTEND.min_input_samples} samples after "
+            f"resampling, got {resampled_samples}"
         )
-    mel_frames = 1 + (resampled_samples - TINYMU_N_FFT) // TINYMU_HOP_LENGTH
-    return math.ceil(mel_frames / TINYMU_PATCH_SIZE)
+    mel_frames = 1 + (
+        resampled_samples - TINYMU_FRONTEND.n_fft
+    ) // TINYMU_FRONTEND.hop_length
+    return math.ceil(mel_frames / TINYMU_FRONTEND.patch_size)
 
 
 def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -391,13 +456,15 @@ def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
     tinymu_num_latent_frames(audio.shape[-1], sample_rate)
     mono = np.ascontiguousarray(audio.mean(axis=1, dtype=np.float32))
-    if sample_rate == TINYMU_SAMPLE_RATE:
+    if sample_rate == TINYMU_FRONTEND.sample_rate:
         return mono
 
     import torch
     import torchaudio.functional as audio_fn
 
-    resampled = audio_fn.resample(torch.from_numpy(mono), sample_rate, TINYMU_SAMPLE_RATE)
+    resampled = audio_fn.resample(
+        torch.from_numpy(mono), sample_rate, TINYMU_FRONTEND.sample_rate
+    )
     return np.ascontiguousarray(resampled.numpy(), dtype=np.float32)
 
 
@@ -445,8 +512,8 @@ def _encode_tinymu_chunk(
         embeddings, _ = model(torch.from_numpy(chunk).to(device))
     expected = (
         len(chunk),
-        tinymu_num_latent_frames(chunk.shape[-1], TINYMU_SAMPLE_RATE),
-        TINYMU_EMBEDDING_DIM,
+        tinymu_num_latent_frames(chunk.shape[-1], TINYMU_FRONTEND.sample_rate),
+        TINYMU_FRONTEND.embedding_dim,
     )
     if tuple(embeddings.shape) != expected:
         raise ValueError(f"TinyMU encoder produced shape {tuple(embeddings.shape)}, expected {expected}")
