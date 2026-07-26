@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785075242967,
+  "lastUpdate": 1785083834609,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10242,6 +10242,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03690791130065918,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6923dca64702a2188fa7a4e42103dbc0ed43fa3",
+          "message": "internal-fix(training): align per-param MSE labels to encoded columns (#2435)\n\n* internal-fix(training): index per-param metrics by encoded column\n\nLogPerParamMSE zipped ParamSpec.names (one entry per Parameter) against the\nmodules' per_param_mse vector (one entry per encoded column). Those widths\nnever match: note_start_and_end alone spans two columns, so every spec has\nlen(names) == encoded_width - 1 at minimum, and each onehot parameter widens\nthe gap further (surge_xt 164 vs 300, obxf 96 vs 187, surge_4 6 vs 7).\nNon-strict zip truncated silently, dropping trailing columns and shifting\nevery label past the first multi-column parameter onto the wrong parameter.\n\nAdd ParamSpec.encoded_slices() as the single name-to-column-span accessor and\nroute the three existing hand-rolled pointer walks (ParamSpec.decode,\nvae.param_loss, plot_param2tok.get_labels) through it, so no caller can index\nencoded columns by name position again.\n\nRefs #2434\n\n* test(training): cover get_labels' encoded-column interval layout\n\nplot_param2tok had no test coverage at all, so routing get_labels through\nParamSpec.encoded_slices() landed unverified. Pin the invariant the function\nexists to satisfy: the (label, width) intervals must tile the encoded row\nexactly, since a short or long total misaligns every label after the gap.\n\nRefs #2434\n\n* internal-fix(training): defer param loss slice routing",
+          "timestamp": "2026-07-26T09:08:29-07:00",
+          "tree_id": "41fbad7f8d39b869abc7d94eb64ea78c794ef955",
+          "url": "https://github.com/tinaudio/synth-setter/commit/a6923dca64702a2188fa7a4e42103dbc0ed43fa3"
+        },
+        "date": 1785083833625,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.7184715270996094,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.481012229670305,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.023945758119225502,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.0226670503616333,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.9296205043792725,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.460633903499996,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.442391872406006,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.925458424091339,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02919023670256138,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03868371248245239,
             "unit": "1-cos"
           },
           {
