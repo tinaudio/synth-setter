@@ -249,6 +249,35 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
+def _compose_t5gemma_cached_train_cfg(
+    model_name: str, model_overrides: Sequence[str]
+) -> DictConfig:
+    """Compose a one-step CPU train cfg reading synthetic T5Gemma batches.
+
+    :param model_name: VST model config selected for the training step.
+    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
+    :returns: The composed config.
+    """
+    return _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            "conditioning=t5gemma",
+            "trainer=cpu",
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            *model_overrides,
+        ],
+    )
+
+
 @pytest.mark.parametrize(
     ("model_name", "model_overrides", "expected_output_dim"),
     [
@@ -288,24 +317,7 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     :param expected_output_dim: Model-owned cached encoder output width.
     :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
     """
-    cfg = _compose(
-        "train.yaml",
-        [
-            "datamodule=surge_lance",
-            "datamodule.param_spec_name=surge_xt",
-            f"model={model_name}",
-            "conditioning=t5gemma",
-            "trainer=cpu",
-            "+trainer.max_steps=1",
-            "paths.output_dir=/tmp/synth-setter-test",
-            "+datamodule.fake=true",
-            "datamodule.batch_size=2",
-            "datamodule.num_workers=0",
-            "datamodule.persistent_workers=false",
-            "model.compile=false",
-            *model_overrides,
-        ],
-    )
+    cfg = _compose_t5gemma_cached_train_cfg(model_name, model_overrides)
     datamodule = hydra.utils.instantiate(cfg.datamodule)
     model = hydra.utils.instantiate(cfg.model)
     monkeypatch.setattr(model, "log", lambda *args, **kwargs: None)
