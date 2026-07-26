@@ -6,6 +6,10 @@ to verify both the skip-inserted and run-through branches for each marker.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -70,6 +74,65 @@ def test_same_e2e_selected_without_same_extra_errors_with_remediation(
 
 
 @pytest.mark.infra
+def test_same_e2e_selected_encoder_only_without_vst_runs_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An encoder-only SAME lane does not require an unrelated VST plugin.
+
+    :param monkeypatch: Simulates an available SAME extra and unavailable VST.
+    """
+    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
+    same_item = _FakeItem({"same_e2e": pytest.mark.same_e2e})
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("same_e2e")),
+        items=cast(list[pytest.Item], [same_item]),
+    )
+
+    assert same_item.added_markers == []
+
+
+@pytest.mark.infra
+def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Real pytest selection excludes VST-backed SAME tests before prerequisite validation.
+
+    :param monkeypatch: Supplies the optional SAME module to the child process.
+    :param tmp_path: Holds the module stub and guaranteed-absent plugin path.
+    """
+    (tmp_path / "stable_audio_tools.py").write_text("")
+    monkeypatch.setenv("PYTHONPATH", f"{tmp_path}{os.pathsep}{os.environ.get('PYTHONPATH', '')}")
+    monkeypatch.setenv("SYNTH_SETTER_PLUGIN_PATH", str(tmp_path / "absent.vst3"))
+    repo_root = Path(__file__).parents[2]
+
+    result = subprocess.run(  # noqa: S603 — interpreter and arguments are test-controlled
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-m",
+            "same_e2e and not requires_vst",
+            "tests/pipeline/data/test_same_encoder_e2e.py",
+            "tests/test_eval.py",
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "test_same_s_real_weights_encode_matches_contract" in result.stdout
+    assert "test_same_s_real_weights_encode_matches_golden_latents" in result.stdout
+    assert "test_train_eval_same_conditioning_real_e2e" not in result.stdout
+
+
+@pytest.mark.infra
 def test_same_e2e_selected_without_vst_errors_with_remediation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,9 +142,17 @@ def test_same_e2e_selected_without_vst_errors_with_remediation(
     """
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
 
+    item = _FakeItem(
+        {
+            "requires_vst": pytest.mark.requires_vst,
+            "same_e2e": pytest.mark.same_e2e,
+        }
+    )
+
     with pytest.raises(pytest.UsageError, match="SYNTH_SETTER_PLUGIN_PATH") as error:
         conftest_module.pytest_collection_modifyitems(
-            config=cast(pytest.Config, _FakeConfig("same_e2e")), items=[]
+            config=cast(pytest.Config, _FakeConfig("same_e2e")),
+            items=cast(list[pytest.Item], [item]),
         )
 
     assert conftest_module.PLUGIN_PATH in str(error.value)
