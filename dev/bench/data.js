@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785090461327,
+  "lastUpdate": 1785090464053,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18196,6 +18196,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.740184841599994,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aed7f2dffafdb30ecb78b196d8d5769e45d38f05",
+          "message": "refactor: compose synth identity as a Hydra group (#2441)\n\n* internal-feat(pipeline): add SynthSpec as the synth identity table\n\nA synth's identity — which ParamSpec, which plugin, which baseline preset — was\nrestated across the two param_spec_registry dicts, the configs/render groups,\nthe registration scaffolder and the packaged parameter maps, with nothing\ncross-checking any pair. A right spec with a wrong preset renders\nsilently-wrong audio on the pedalboard path.\n\nAdd synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only\nlike param_spec_name and renderer_backend: it holds no ParamSpec and imports no\ndata.vst module, so pipeline.schemas.spec can depend on it without pulling\npedalboard onto the launcher's import path.\n\nname and param_spec_name are separate fields so preset variants can share one\nParamSpec; every shipped entry currently has them equal, so the split is inert\nuntil the first variant is registered.\n\nRoute the raw-DictConfig identity reads in cli/train.py and cli/eval.py through\nSynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read\nthe composed cfg directly and need a shared accessor of their own.\n\nplugin_state_paths stays a literal dict for now because\nregistration.registry_with_spec rewrites it by line anchor; a test pins it\nagainst SYNTHS until that transform learns to write the new table.\n\nRefs #2434\n\n* internal-feat(pipeline): nest synth identity in RenderConfig\n\nRenderConfig carried param_spec_name, plugin_path and plugin_state_path as\nthree independent flat fields, so nothing tied them together and a right spec\nwith a wrong preset validated cleanly. Replace them with one nested SynthSpec.\n\nRead access is preserved by plain properties, leaving the ~125 read sites\nuntouched. They must be plain properties rather than computed_field: the worker\nargv is built by flattening model_dump(), and _GenerateCliArgs is\nextra=\"forbid\", so re-emitted flat keys would hard-fail the renderer subprocess\nat parse.\n\nSpecs already written to R2 carry the flat keys, so a mode=\"before\" validator\nlifts them onto synth. It pops rather than copies, since extra=\"forbid\" rejects\nleftovers, and refuses a payload carrying both shapes instead of silently\npreferring one. Code that constructs a RenderConfig now passes synth= — pyright\nenforces that, keeping the lift scoped to deserializing old JSON.\n\nWorker argv JSON-encodes non-scalars. Every field was scalar before, so\nstr(value) happened to round-trip; a nested model would emit a single-quoted\nPython repr that CliSettingsSource's json.loads rejects. bool is an int\nsubclass, so flags keep their existing spelling and all 22 scalar fields are\nbyte-identical in argv.\n\nvalidate_spec checks identity shape-aware rather than by presence:\nvalidate-dataset-shards.yaml has a workflow_dispatch taking an arbitrary\nspec_uri, so archived specs must still validate. Exempting synth outright would\nhave made identity optional in both shapes.\n\nRefs #2434\n\n* test(pipeline): cover the shape-aware synth identity check\n\nThe legacy-shape branch of validate_spec's identity read and the shape-aware\npresence check were both uncovered, so the back-compat path this change claims\nto preserve was unverified. Switch the shared spec fixture to the nested shape\nthe pipeline now writes and add a flat variant alongside it, so both are\nexercised.\n\nRefs #2434\n\n* test(tooling): cover the captured-patch render config\n\nThe RenderConfig construction in vst_interactive sat inline in a long main()\nin a file with no coverage at all, so migrating it to the nested synth field\nlanded unverified. Extract it as make_dataset_render_cfg and pin what it\nrecords: the auditioned synth identity, the patch count as the shard size, the\nsession audio settings, and that identity validation still runs.\n\nRefs #2434\n\n* internal-feat(pipeline): compose synth identity as a Hydra group\n\nThe render groups restated a synth's identity as three literal fields each,\nduplicating SYNTHS with nothing checking the two agreed. Replace them with a\nconfigs/render/synth group that each render group selects.\n\nThe group YAML is a checked-in generated artifact of SYNTHS, not a second\nauthoring point: a parametrized test asserts every shipped group equals its\ntable entry, and that the two cover the same set of names. It stays as YAML\nrather than being registered from SYNTHS at startup because the --register flow\ncomposes render groups from a temp checkout without importing its Python.\n\nThe composed node is a mapping, not a scalar, so every existing override is a\nmechanical rename rather than a lost capability: the dataset tests still swap in\na stub bundle via render.synth.plugin_path to pass the renderer-version gate\nwithout a real install.\n\nThe two cadence sweeps now select render=<synth> instead of poking two of the\nthree identity fields, which could previously disagree with the third.\n\nfrom_render_cfg reads the nested node, falling back to the flat keys so a\nhand-written or archived config still resolves.\n\nRefs #2434\n\n* internal-fix(testing): rename the integration render overrides\n\nTwo Hydra override strings still used the flat render.plugin_path path, so the\nspec-URI and wandb e2e jobs failed at compose with \"Could not override\n'render.plugin_path'\". Both live in integration tests that only run in their own\nCI jobs, so the local suites did not reach them.\n\nRefs #2434\n\n* internal-fix(testing): route renderer fixtures through --synth\n\nThe conftest renderer-argv fixture and the torchsynth e2e still spelled identity\nas three flat flags, so every test shelling out to generate_vst_dataset exited 2\nat argument parse. Encode it as the JSON --synth value build_generate_args\nemits, behind a helper that names why.\n\nTwo composed-cfg reads also still used the flat keys: the inline oracle-eval\nconfig assertion and the eval render-group composition test. Both read a\nDictConfig rather than a RenderConfig, so the back-compat properties do not\nreach them.\n\nThese only run under slow / requires_vst marks, which the default loop\ndeselects; found by CI.\n\nRefs #2434",
+          "timestamp": "2026-07-26T10:54:37-07:00",
+          "tree_id": "634d8ab20f69c788cd966f5c4d6a1276fb6b9482",
+          "url": "https://github.com/tinaudio/synth-setter/commit/aed7f2dffafdb30ecb78b196d8d5769e45d38f05"
+        },
+        "date": 1785090463662,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.90314769744873,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.86908931851387,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08961223810911179,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002261638641357422,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.303791046142578,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.552073382100001,
             "unit": "seconds"
           }
         ]
