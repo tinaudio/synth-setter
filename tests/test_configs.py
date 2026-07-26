@@ -13,6 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationToMissingValueError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -202,11 +203,21 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         GlobalHydra.instance().clear()
 
 
-@pytest.mark.parametrize("profile", ["same_s", "same_l"])
-def test_same_conditioning_profile_fake_batch_pools_through_encoder(profile: str) -> None:
-    """A SAME profile routes a (256, 44) fake batch end-to-end into the encoder.
+@pytest.mark.parametrize(
+    ("profile", "input_shape"),
+    [
+        pytest.param("same_s", (256, 44), id="same-s"),
+        pytest.param("same_l", (256, 44), id="same-l"),
+        pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
+    ],
+)
+def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
+    profile: str, input_shape: tuple[int, int]
+) -> None:
+    """A sequence profile routes its declared fake batch through the encoder.
 
     :param profile: Conditioning profile under test.
+    :param input_shape: Per-row shape expected from the profile.
     """
     cfg = _compose(
         "train.yaml",
@@ -229,10 +240,10 @@ def test_same_conditioning_profile_fake_batch_pools_through_encoder(profile: str
 
     assert datamodule.embedding_conditioning is not None
     assert datamodule.embedding_conditioning.column == profile
-    assert datamodule.embedding_conditioning.input_shape == (256, 44)
+    assert datamodule.embedding_conditioning.input_shape == input_shape
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    assert batch["conditioning"].shape == (2, 256, 44)
+    assert batch["conditioning"].shape == (2, *input_shape)
     pooled = encoder(batch["conditioning"])
     assert pooled.shape == (2, cfg.model.vector_field.d_model)
     assert cfg.model.conditioning.column == profile

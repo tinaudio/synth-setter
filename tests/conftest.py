@@ -57,6 +57,7 @@ _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
     "same_s": embedding_model_dir("same-s"),
+    "t5gemma": embedding_model_dir("sa3-small-music"),
 }
 
 
@@ -1068,14 +1069,24 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
 
 @pytest.fixture(scope="function")
-def local_embedding_checkpoints(require_same_extra: None) -> dict[str, str]:
+def local_embedding_checkpoints(
+    require_sa3_extra: None, require_same_extra: None
+) -> dict[str, str]:
     """Return complete local checkpoints or skip before rendering the E2E fixture.
 
+    :param require_sa3_extra: Ensures the real SA3 conditioner is installed.
     :param require_same_extra: Ensures the real SAME model implementation is installed.
     :returns: Local checkpoint directories keyed by embedding registry name.
     """
-    del require_same_extra
-    from music2latent.inference import load_path_inference_default
+    del require_sa3_extra, require_same_extra
+    from huggingface_hub import snapshot_download
+    from music2latent.inference import download_model, load_path_inference_default
+
+    download_model()
+    snapshot_download(
+        "laion/clap-htsat-unfused",
+        local_dir=_EMBEDDING_E2E_CHECKPOINTS["clap"],
+    )
 
     required_files = {
         _EMBEDDING_E2E_CHECKPOINTS["clap"]: (
@@ -1085,6 +1096,13 @@ def local_embedding_checkpoints(require_same_extra: None) -> dict[str, str]:
         ),
         _EMBEDDING_E2E_CHECKPOINTS["same_s"]: ("model_config.json", "model.safetensors"),
         _EMBEDDING_E2E_CHECKPOINTS["same_l"]: ("model_config.json", "model.safetensors"),
+        _EMBEDDING_E2E_CHECKPOINTS["t5gemma"]: (
+            "model_config.json",
+            "model.safetensors",
+            "t5gemma-b-b-ul2/config.json",
+            "t5gemma-b-b-ul2/model.safetensors",
+            "t5gemma-b-b-ul2/tokenizer.json",
+        ),
     }
     missing = [
         directory / filename
@@ -1096,7 +1114,10 @@ def local_embedding_checkpoints(require_same_extra: None) -> dict[str, str]:
     if not m2l_checkpoint.is_file():
         missing.append(m2l_checkpoint)
     if missing:
-        pytest.skip(f"local embedding checkpoints missing: {[str(path) for path in missing]}")
+        message = f"local embedding checkpoints missing: {[str(path) for path in missing]}"
+        if os.environ.get("SYNTH_SETTER_REQUIRE_EMBEDDING_E2E") == "true":
+            pytest.fail(message)
+        pytest.skip(message)
     return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
 
 
@@ -1442,26 +1463,29 @@ def cfg_surge_fake_train(
 
 
 def augment_lance_splits_with_all_embeddings(
-    dataset_root: Path, checkpoints: dict[str, str]
+    dataset_root: Path, checkpoints: dict[str, str], param_spec_name: str
 ) -> Path:
-    """Add every real embedding to one rendered dataset and clone its splits.
+    """Run the Hydra CLI for every real embedding and clone its output splits.
 
     :param dataset_root: Directory holding finalized local Lance splits.
     :param checkpoints: Complete local checkpoint directories from preflight.
+    :param param_spec_name: Parameter spec used to render the source rows.
     :returns: Augmented dataset root.
     """
-    from synth_setter.pipeline.data.add_embeddings import add_embeddings
-    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
-
     train_uri = dataset_root / "train.lance"
-    add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(train_uri),
-            embeddings=("clap", "m2l", "same_s", "same_l"),
-            checkpoints=checkpoints,
-            device="cpu",
-            build_index=False,
-        )
+    command = [
+        sys.executable,
+        "-m",
+        "synth_setter.pipeline.data.add_embeddings",
+        f"lance_uri={train_uri}",
+        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
+        f"param_spec_name={param_spec_name}",
+        "device=cpu",
+        "build_index=false",
+        *(f"checkpoints.{name}={checkpoint}" for name, checkpoint in checkpoints.items()),
+    ]
+    subprocess.run(  # noqa: S603 — validated local paths passed to the project CLI
+        command, check=True, timeout=3600
     )
     for split in ("val", "test"):
         destination = dataset_root / f"{split}.lance"
@@ -1471,7 +1495,7 @@ def augment_lance_splits_with_all_embeddings(
 
 
 def assert_all_embedding_columns(dataset_root: Path) -> None:
-    """Assert every real embedding is finite, shaped, and input-dependent.
+    """Assert every real embedding is finite and follows its row semantics.
 
     :param dataset_root: Directory holding the augmented train split.
     """
@@ -1485,13 +1509,15 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
         SAME_S_FIELD,
+        T5GEMMA_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+    from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l"}
+    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
@@ -1500,11 +1526,12 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         M2L_FIELD,
         SAME_S_FIELD,
         SAME_L_FIELD,
+        T5GEMMA_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
     table = dataset.to_table(
-        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD]
+        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD, T5GEMMA_FIELD]
     )
     for column in table.columns:
         assert column.null_count == 0
@@ -1514,6 +1541,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+    t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
@@ -1531,12 +1559,28 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         assert flat.std(axis=1).min() > 0, f"{name} contains a constant row"
         assert not np.array_equal(values[0], values[1]), f"{name} collapsed distinct inputs"
 
+    assert t5gemma.shape == (
+        _EMBEDDING_E2E_ROWS,
+        T5GEMMA_EMBEDDING_DIM,
+        T5GEMMA_MAX_LENGTH,
+    )
+    assert t5gemma.dtype == np.float32
+    assert np.isfinite(t5gemma).all()
+    assert np.linalg.norm(t5gemma.reshape(_EMBEDDING_E2E_ROWS, -1), axis=1).min() > 0
+    np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
+
 
 # Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
 _SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
     "same_s": "stabilityai/SAME-S",
     "same_l": "stabilityai/SAME-L",
 }
+
+
+@pytest.fixture(scope="function")
+def require_sa3_extra() -> None:
+    """Resolve the SA3 import before expensive VST rendering starts."""
+    pytest.importorskip("stable_audio_3")
 
 
 @pytest.fixture(scope="function")

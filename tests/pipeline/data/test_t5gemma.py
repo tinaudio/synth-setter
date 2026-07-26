@@ -1,5 +1,6 @@
 """Checkpoint resolution, config parsing, and real-weight behavior of the SA3 T5Gemma encoder."""
 
+import importlib.util
 import json
 import sys
 import types
@@ -15,7 +16,6 @@ from synth_setter.pipeline.data.t5gemma import (
     DEFAULT_T5GEMMA_CHECKPOINT,
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
-    T5GEMMA_ENCODE_MAX_BATCH,
     _PADDING_EMBEDDING_KEY,
     _load_padding_embedding,
     _read_conditioner_config,
@@ -26,23 +26,30 @@ from synth_setter.pipeline.data.t5gemma import (
 
 _CHECKPOINT_DIR = embedding_model_dir("sa3-small-music")
 _NEEDS_WEIGHTS = pytest.mark.skipif(
-    not (_CHECKPOINT_DIR / "model_config.json").is_file(),
+    not (_CHECKPOINT_DIR / "model_config.json").is_file()
+    or importlib.util.find_spec("stable_audio_3") is None,
     reason=(
-        f"SA3 checkpoint absent at {_CHECKPOINT_DIR}; hydrate it with "
+        "SA3 extra or checkpoint absent; install with `uv sync --extra sa3` and hydrate with "
         f"`rclone copy --checksum {DEFAULT_T5GEMMA_CHECKPOINT} {_CHECKPOINT_DIR}`"
     ),
 )
 
 
 def _write_model_config(
-    directory: Path, *, padding_mode: str = "learned", max_length: int = 256
-) -> Path:
+    directory: Path,
+    *,
+    conditioner_type: str = "t5gemma",
+    cond_dim: int = T5GEMMA_EMBEDDING_DIM,
+    padding_mode: str = "learned",
+    max_length: int = T5GEMMA_MAX_LENGTH,
+) -> None:
     """Write a minimal SA3 ``model_config.json`` carrying a prompt conditioner.
 
     :param directory: Directory receiving the config.
+    :param conditioner_type: Conditioner implementation recorded in the config.
+    :param cond_dim: Conditioner output width recorded in the config.
     :param padding_mode: Padding mode recorded on the prompt conditioner.
     :param max_length: Token budget recorded on the prompt conditioner.
-    :returns: Path to the written config.
     """
     config = {
         "model": {
@@ -50,7 +57,7 @@ def _write_model_config(
                 "configs": [
                     {
                         "id": "prompt",
-                        "type": "t5gemma",
+                        "type": conditioner_type,
                         "config": {
                             "max_length": max_length,
                             "padding_mode": padding_mode,
@@ -60,13 +67,11 @@ def _write_model_config(
                     },
                     {"id": "seconds_total", "type": "number", "config": {"min_val": 0}},
                 ],
-                "cond_dim": 768,
+                "cond_dim": cond_dim,
             }
         }
     }
-    path = directory / "model_config.json"
-    path.write_text(json.dumps(config))
-    return path
+    (directory / "model_config.json").write_text(json.dumps(config))
 
 
 def test_resolve_t5gemma_checkpoint_dir_with_default_r2_source_uses_canonical_cache(
@@ -117,6 +122,31 @@ def test_read_conditioner_config_returns_prompt_conditioner_settings(tmp_path: P
         "t5gemma-b-b-ul2",
         768,
     )
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_error"),
+    [
+        ({"conditioner_type": "t5"}, "type"),
+        ({"cond_dim": T5GEMMA_EMBEDDING_DIM // 2}, "cond_dim"),
+        ({"cond_dim": float(T5GEMMA_EMBEDDING_DIM)}, "cond_dim"),
+        ({"max_length": T5GEMMA_MAX_LENGTH // 2}, "max_length"),
+        ({"max_length": float(T5GEMMA_MAX_LENGTH)}, "max_length"),
+    ],
+)
+def test_read_conditioner_config_with_noncanonical_shape_contract_raises(
+    tmp_path: Path, override: dict[str, object], expected_error: str
+) -> None:
+    """Reject checkpoints that change the persisted T5Gemma column contract.
+
+    :param tmp_path: Directory holding the written config.
+    :param override: Noncanonical conditioner setting.
+    :param expected_error: Setting named by the validation error.
+    """
+    _write_model_config(tmp_path, **override)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=expected_error):
+        _read_conditioner_config(tmp_path)
 
 
 def test_read_conditioner_config_with_zero_padding_mode_raises(tmp_path: Path) -> None:
@@ -238,9 +268,7 @@ def test_encode_matches_upstream_conditioner_in_float32(t5gemma_encoder: TextEnc
 
     from synth_setter.pipeline.data.t5gemma import (
         _T5GEMMA_MODEL_NAME,
-        T5GEMMA_ENCODE_MAX_BATCH,
-    _PADDING_EMBEDDING_KEY,
-    _load_padding_embedding,
+        _load_padding_embedding,
         _read_conditioner_config,
     )
 
@@ -258,7 +286,7 @@ def test_encode_matches_upstream_conditioner_in_float32(t5gemma_encoder: TextEnc
     cast("torch.nn.Module", reference.model).to(torch.float32)
     reference = reference.eval().requires_grad_(False)
     with torch.no_grad():
-        expected, _ = reference(prompts, "cpu")
+        expected = torch.cat([reference([prompt], "cpu")[0] for prompt in prompts])
 
     embeddings = t5gemma_encoder(prompts)
 
@@ -328,7 +356,7 @@ class _FakeConditioner(torch.nn.Module):
         self.model = torch.nn.Linear(1, 1)
         self.output_dim = output_dim
         self.max_length = max_length
-        self.init_kwargs = (model_name, padding_mode, model_path, subfolder)
+        del model_name, padding_mode, model_path, subfolder
         self.batches: list[list[str]] = []
 
     def forward(self, prompts: list[str], device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -348,12 +376,10 @@ class _FakeConditioner(torch.nn.Module):
         return embeddings, torch.ones(rows, self.max_length, dtype=torch.bool)
 
 
-def _fake_checkpoint(directory: Path, *, cond_dim: int = 4, max_length: int = 3) -> torch.Tensor:
+def _fake_checkpoint(directory: Path) -> torch.Tensor:
     """Write a config and safetensors carrying a learned padding embedding.
 
     :param directory: Checkpoint directory to populate.
-    :param cond_dim: Embedding width recorded in the config.
-    :param max_length: Token budget recorded in the config.
     :returns: The padding embedding written to the checkpoint.
     """
     from safetensors.torch import save_file
@@ -364,19 +390,20 @@ def _fake_checkpoint(directory: Path, *, cond_dim: int = 4, max_length: int = 3)
                 "configs": [
                     {
                         "id": "prompt",
+                        "type": "t5gemma",
                         "config": {
-                            "max_length": max_length,
+                            "max_length": T5GEMMA_MAX_LENGTH,
                             "padding_mode": "learned",
                             "subfolder": "t5gemma-b-b-ul2",
                         },
                     }
                 ],
-                "cond_dim": cond_dim,
+                "cond_dim": T5GEMMA_EMBEDDING_DIM,
             }
         }
     }
     (directory / "model_config.json").write_text(json.dumps(config))
-    padding = torch.arange(cond_dim, dtype=torch.float32) + 0.5
+    padding = torch.arange(T5GEMMA_EMBEDDING_DIM, dtype=torch.float32) + 0.5
     save_file({_PADDING_EMBEDDING_KEY: padding}, str(directory / "model.safetensors"))
     return padding
 
@@ -433,23 +460,61 @@ def test_load_padding_embedding_without_the_key_raises(tmp_path: Path) -> None:
         _load_padding_embedding(tmp_path, "cpu")
 
 
-def test_load_t5gemma_text_encoder_chunks_prompts_and_returns_dim_major(
+def test_load_t5gemma_text_encoder_returns_canonical_dim_major_embeddings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Prompts encode in bounded chunks and come back dim-major for Lance.
+    """Return canonical dim-major Lance embeddings from singleton encodes.
 
     :param tmp_path: Checkpoint directory.
     :param monkeypatch: Fixture installing a stand-in conditioner class.
     """
-    _fake_checkpoint(tmp_path, cond_dim=4, max_length=3)
+    _fake_checkpoint(tmp_path)
     built: list[_FakeConditioner] = []
     _install_fake_conditioner_module(monkeypatch, built)
-    prompts = [f"prompt {index}" for index in range(T5GEMMA_ENCODE_MAX_BATCH + 4)]
+    prompts = [f"prompt {index}" for index in range(20)]
 
     embeddings = load_t5gemma_text_encoder(str(tmp_path), "cpu")(prompts)
 
-    assert embeddings.shape == (len(prompts), 4, 3)
-    assert [len(batch) for batch in built[0].batches] == [T5GEMMA_ENCODE_MAX_BATCH, 4]
+    assert embeddings.shape == (
+        len(prompts),
+        T5GEMMA_EMBEDDING_DIM,
+        T5GEMMA_MAX_LENGTH,
+    )
+
+
+def test_load_t5gemma_text_encoder_with_no_prompts_returns_empty_canonical_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve the canonical shape for an empty prompt batch.
+
+    :param tmp_path: Checkpoint directory.
+    :param monkeypatch: Fixture installing a stand-in conditioner class.
+    """
+    _fake_checkpoint(tmp_path)
+    built: list[_FakeConditioner] = []
+    _install_fake_conditioner_module(monkeypatch, built)
+
+    embeddings = load_t5gemma_text_encoder(str(tmp_path), "cpu")([])
+
+    assert embeddings.shape == (0, T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH)
+
+
+def test_load_t5gemma_text_encoder_with_duplicate_prompts_returns_identical_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reuse one singleton encoding for duplicate prompts.
+
+    :param tmp_path: Checkpoint directory.
+    :param monkeypatch: Fixture installing a stand-in conditioner class.
+    """
+    _fake_checkpoint(tmp_path)
+    built: list[_FakeConditioner] = []
+    _install_fake_conditioner_module(monkeypatch, built)
+
+    embeddings = load_t5gemma_text_encoder(str(tmp_path), "cpu")(["same", "other", "same"])
+
+    np.testing.assert_array_equal(embeddings[0], embeddings[2])
+    assert built[0].batches == [["same"], ["other"]]
 
 
 def test_load_t5gemma_text_encoder_substitutes_the_checkpoint_padding_embedding(

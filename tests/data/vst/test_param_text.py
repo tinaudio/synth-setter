@@ -43,6 +43,64 @@ def test_param_names_normalizer_joins_synth_then_note_names_with_commas() -> Non
     assert captions[0] == "cutoff, resonance, pitch"
 
 
+@pytest.mark.parametrize(
+    ("parameter_names", "expected_caption"),
+    [
+        pytest.param(
+            [
+                "oscillator_one_wavetable_position",
+                "oscillator_one_frequency_modulation_depth",
+                "oscillator_two_unison_voice_detune_amount",
+                "filter_one_frequency_modulation_envelope_amount",
+                "filter_two_key_tracking_modulation_amount",
+                "amplifier_envelope_release_time_in_seconds",
+            ],
+            "oscillator_one_wavetable_position, "
+            "oscillator_one_frequency_modulation_depth, "
+            "oscillator_two_unison_voice_detune_amount, "
+            "filter_one_frequency_modulation_envelope_amount, "
+            "filter_two_key_tracking_modulation_amount, "
+            "amplifier_envelope_release_time_in_seconds",
+            id="long-synth-parameter-names",
+        ),
+        pytest.param(
+            [
+                "macro_control_brightness_and_harmonic_complexity",
+                "macro_control_movement_and_modulation_intensity",
+                "effect_chain_pre_delay_time_and_tempo_synchronization",
+                "effect_chain_reverb_room_size_and_diffusion_amount",
+                "effect_chain_stereo_width_and_mid_side_balance",
+                "note_expression_polyphonic_aftertouch_pressure_amount",
+            ],
+            "macro_control_brightness_and_harmonic_complexity, "
+            "macro_control_movement_and_modulation_intensity, "
+            "effect_chain_pre_delay_time_and_tempo_synchronization, "
+            "effect_chain_reverb_room_size_and_diffusion_amount, "
+            "effect_chain_stereo_width_and_mid_side_balance, "
+            "note_expression_polyphonic_aftertouch_pressure_amount",
+            id="long-macro-effect-and-note-names",
+        ),
+    ],
+)
+def test_param_names_normalizer_with_long_names_returns_exact_caption(
+    parameter_names: list[str], expected_caption: str
+) -> None:
+    """Long captions preserve every name, delimiter, and input position.
+
+    :param parameter_names: Ordered names used to build a parameter spec.
+    :param expected_caption: Complete caption expected from the normalizer.
+    """
+    spec = ParamSpec(
+        synth_params=[ContinuousParameter(name=name) for name in parameter_names[:-1]],
+        note_params=[ContinuousParameter(name=parameter_names[-1])],
+    )
+    rows = np.zeros((2, spec.encoded_width), dtype=np.float32)
+
+    captions = param_names_normalizer(spec, rows)
+
+    assert captions == [expected_caption, expected_caption]
+
+
 def test_param_names_normalizer_with_differing_values_returns_identical_captions() -> None:
     """This normalizer describes the parameter space, so values do not change it."""
     rows = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, 0.25]], dtype=np.float32)
