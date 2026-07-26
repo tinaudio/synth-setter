@@ -13,6 +13,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -40,8 +41,8 @@ class RenderWorkerLeaked(RuntimeError):
 def extract_renderer_version(plugin_path: Path) -> str:
     """Extract the version string from a VST3 plugin bundle or Python backend.
 
-    The bare Python-backend name (``torchsynth``) resolves to the installed
-    package version (propagating ``importlib.metadata.PackageNotFoundError``
+    Bare Python-backend names resolve to their installed package versions
+    (propagating ``importlib.metadata.PackageNotFoundError``
     when the package is missing). Otherwise, tries the static-metadata files first
     (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
     falls back to loading the plugin via pedalboard and reading
@@ -56,6 +57,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises json.JSONDecodeError: moduleinfo.json is malformed.
     :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
+    if str(plugin_path) == FAUST_PLUGIN_NAME:
+        return importlib.metadata.version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if not plugin_path.exists():

@@ -448,6 +448,33 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with the production brightOrgan render group.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: Faust cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "render=faust_bright_organ",
+                "render.gui_toggle_cadence=never",
+            ],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose the torchsynth smoke experiment with temporary local paths.
 
@@ -1272,6 +1299,33 @@ def surge_smoke_variant(request: pytest.FixtureRequest) -> _SurgeSmokeVariant:
     return request.param
 
 
+def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[str, object]:
+    """Build the complete renderer transport used by train/eval smoke fixtures.
+
+    :param param_spec_name: Registered spec identity for prediction decoding.
+    :param plugin_path: Real or test plugin path used by the fixture.
+    :returns: JSON-compatible validated render configuration.
+    """
+    config = RenderConfig.model_validate(
+        {
+            "plugin_path": plugin_path,
+            "plugin_state_path": plugin_state_paths[param_spec_name],
+            "param_spec_name": param_spec_name,
+            "renderer_version": "1.3.4",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 1,
+            "samples_per_shard": 5,
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
+        }
+    )
+    return config.model_dump(mode="json")
+
+
 def _apply_smoke_train_paths(
     cfg: DictConfig, dataset_root: Path, variant: _SurgeSmokeVariant, tmp_path: Path
 ) -> None:
@@ -1287,6 +1341,9 @@ def _apply_smoke_train_paths(
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
+        cfg.render = _surge_smoke_render_config(
+            str(cfg.datamodule.param_spec_name), variant.plugin_path
+        )
 
 
 @pytest.fixture(scope="function")
@@ -1575,11 +1632,7 @@ def _configure_surge_xt_eval_cfg(
             "rerender_target": rerender_target,
             "num_workers": 1,
         }
-        cfg.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_state_path": plugin_state_paths[param_spec_name],
-            "plugin_path": plugin_path,
-        }
+        cfg.render = _surge_smoke_render_config(param_spec_name, plugin_path)
 
 
 @pytest.fixture(scope="function")

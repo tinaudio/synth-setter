@@ -9,7 +9,12 @@ from typing import cast
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.generate_vst_dataset import audio_uuid, generate_sample
+from synth_setter.data.vst.generate_vst_dataset import (
+    AudioAmplitudeError,
+    _reject_clipped_audio,
+    audio_uuid,
+    generate_sample,
+)
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -175,22 +180,14 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
     }
 
 
-@pytest.mark.parametrize(
-    "audio",
-    [
-        np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32),
-        np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32),
-    ],
-)
-def test_pedalboard_renderer_rejects_invalid_audio(
+def test_pedalboard_renderer_rejects_nonfinite_audio(
     monkeypatch: pytest.MonkeyPatch,
-    audio: np.ndarray,
 ) -> None:
-    """The shared renderer contract rejects unsafe Pedalboard output.
+    """The shared renderer contract rejects nonfinite Pedalboard output.
 
     :param monkeypatch: Patches the Pedalboard render seam.
-    :param audio: Invalid backend output under test.
     """
+    audio = np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32)
     monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *args, **kwargs: audio)
     renderer = PedalboardRenderer(
         plugin_path="plugin.vst3",
@@ -201,6 +198,29 @@ def test_pedalboard_renderer_rejects_invalid_audio(
 
     with pytest.raises(ValueError, match="rendered audio"):
         renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+
+def test_pedalboard_renderer_accepts_clipping_that_dataset_generation_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Amplitude acceptance belongs to generation rather than the renderer contract.
+
+    :param monkeypatch: Patches the Pedalboard render seam.
+    """
+    audio = np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *args, **kwargs: audio)
+    renderer = PedalboardRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=2,
+        channels=2,
+        signal_duration_seconds=1.0,
+    )
+
+    rendered = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+    assert rendered is audio
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(rendered)
 
 
 def test_dawdreamer_renderer_loads_graph_and_renders_audio(
@@ -768,7 +788,6 @@ def test_dawdreamer_renderer_once_cadence_reuses_loaded_plugin(
         (np.zeros((2, 3), dtype=np.float32), "sample count"),
         (np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32), "finite"),
         (np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32), "finite"),
-        (np.array([[0.0, 1.0001], [0.0, 0.0]], dtype=np.float32), r"\[-1, 1\]"),
     ],
 )
 def test_dawdreamer_renderer_rejects_invalid_audio(
@@ -776,7 +795,7 @@ def test_dawdreamer_renderer_rejects_invalid_audio(
     audio: np.ndarray,
     message: str,
 ) -> None:
-    """Malformed or unsafe backend audio fails before reaching dataset writers.
+    """Malformed backend audio fails before reaching dataset writers.
 
     :param monkeypatch: Installs a fake DawDreamer module.
     :param audio: Invalid backend output under test.

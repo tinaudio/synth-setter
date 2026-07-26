@@ -1518,15 +1518,13 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
     with open_dict(cfg_surge_fake_train):
-        cfg_surge_fake_train.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_state_path": "presets/fake.vstpreset",
-            "plugin_path": "plugins/fake.vst3",
-            "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
-            "channels": _SURGE_FIXTURE_CHANNELS,
-            "velocity": 100,
-            "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
-        }
+        cfg_surge_fake_train.render.param_spec_name = param_spec_name
+        cfg_surge_fake_train.render.plugin_state_path = "presets/fake.vstpreset"
+        cfg_surge_fake_train.render.plugin_path = "plugins/fake.vst3"
+        cfg_surge_fake_train.render.sample_rate = _SURGE_FIXTURE_SAMPLE_RATE
+        cfg_surge_fake_train.render.channels = _SURGE_FIXTURE_CHANNELS
+        cfg_surge_fake_train.render.velocity = 100
+        cfg_surge_fake_train.render.signal_duration_seconds = _SURGE_FIXTURE_DURATION_SECONDS
         cfg_surge_fake_train.datamodule.param_spec_name = param_spec_name
         cfg_surge_fake_train.training.val_audio_probe_samples = 1
         cfg_surge_fake_train.trainer.val_check_interval = 1

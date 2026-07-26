@@ -39,7 +39,11 @@ from synth_setter.pipeline.schemas.shard_metadata import (
     DEFAULT_ATTEMPTS_PER_SAMPLE,
     ShardMetadata,
 )
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME, RendererBackend
+from synth_setter.renderer_backend import (
+    FAUST_PLUGIN_NAME,
+    TORCHSYNTH_PLUGIN_NAME,
+    RendererBackend,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -238,8 +242,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     plugin_path: str = Field(
         description=(
-            "Filesystem path to the VST3 plugin bundle the worker loads, or the bare "
-            'backend name ``"torchsynth"`` for the in-process backend.'
+            "Filesystem path to the VST3 plugin bundle the worker loads, or a bare "
+            "backend sentinel for an interpreter-resolved synth."
         )
     )
     plugin_state_path: str = Field(
@@ -260,8 +264,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     renderer_backend: RendererBackend = Field(
         default="pedalboard",
         description=(
-            "Audio host used to render each sample; ``torchsynth`` renders in-process "
-            "with no plugin host."
+            "Audio host used to render each sample; Faust compiles checked-in source "
+            "through DawDreamer and torchsynth renders in-process."
         ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
@@ -393,6 +397,25 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
                 "call blocks the main thread and exposes no close-event API"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_faust_backend(self) -> RenderConfig:
+        """Require registry-only Faust source resolution without external resources.
+
+        :return: ``self`` unchanged for other backends or valid Faust configuration.
+        :raises ValueError: Faust uses a path/state/editor or its sentinel selects another backend.
+        """
+        if self.plugin_path == FAUST_PLUGIN_NAME and self.renderer_backend != "dawdreamer_faust":
+            raise ValueError('plugin_path="faust" requires renderer_backend="dawdreamer_faust"')
+        if self.renderer_backend != "dawdreamer_faust":
+            return self
+        if self.plugin_path != FAUST_PLUGIN_NAME:
+            raise ValueError('dawdreamer_faust requires plugin_path="faust"')
+        if self.plugin_state_path:
+            raise ValueError("dawdreamer_faust does not accept plugin_state_path")
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('dawdreamer_faust requires gui_toggle_cadence="never"')
         return self
 
     @model_validator(mode="after")
