@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import platform
+import sys
 from typing import Literal
 
 import numpy as np
@@ -25,7 +27,10 @@ _MIDI_VELOCITY = 100
 _NOTE_WINDOW = (0.05, 0.3)
 _MIN_AUDIBLE_PEAK = 1e-4
 
-pytestmark = pytest.mark.slow
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux" or platform.machine().lower() not in {"x86_64", "amd64"},
+    reason="DawDreamer Faust wheels support Linux x86_64",
+)
 
 
 def _render_config(
