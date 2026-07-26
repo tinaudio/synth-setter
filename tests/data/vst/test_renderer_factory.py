@@ -71,6 +71,16 @@ def test_make_audio_renderer_pedalboard_render_cadence_stays_lazy() -> None:
     assert renderer.plugin is None
 
 
+def test_make_audio_renderer_pedalboard_preserves_process_reset_mode() -> None:
+    """The factory forwards the host reset policy to Pedalboard renders."""
+    renderer = make_audio_renderer(
+        _render_config(plugin_reload_cadence="render", process_reset_mode="preserve")
+    )
+
+    assert isinstance(renderer, PedalboardRenderer)
+    assert renderer.process_reset_mode == "preserve"
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_make_audio_renderer_pedalboard_once_loads_real_plugin_session() -> None:

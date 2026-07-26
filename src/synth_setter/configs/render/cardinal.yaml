@@ -1,0 +1,6 @@
+defaults:
+  - vst
+  - synth: cardinal
+  - _self_
+
+process_reset_mode: preserve

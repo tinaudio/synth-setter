@@ -77,5 +77,6 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
             plugin=plugin,
+            process_reset_mode=render_config.process_reset_mode,
         )
     assert_never(backend)

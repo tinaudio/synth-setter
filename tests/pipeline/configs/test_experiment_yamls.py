@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # inherit ``smoke-shard``'s task_name via ``@_global_`` defaults chaining.
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
+    "generate_dataset/cardinal-smoke": "cardinal-smoke",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
@@ -92,6 +93,18 @@ def test_dataset_experiments_use_independent_split_seed_streams() -> None:
     spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
 
     assert spec.train_val_test_seeds == (42, 43, 44)
+
+
+def test_cardinal_smoke_experiment_covers_every_split_with_real_plugin_state() -> None:
+    """The Cardinal completion signal renders one shard for every split."""
+    spec = _compose_dataset_spec("generate_dataset/cardinal-smoke")
+
+    assert spec.render.param_spec_name == "cardinal"
+    assert spec.render.process_reset_mode == "preserve"
+    assert spec.render.samples_per_shard == 2
+    assert spec.render.samples_per_render_batch == 2
+    assert spec.train_val_test_sizes == (2, 2, 2)
+    assert spec.num_shards == 3
 
 
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:

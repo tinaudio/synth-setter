@@ -1,11 +1,6 @@
 name: Test Generate Dataset Shards (Real R2 + VST)
 
-# Runs the `integration_r2`-gated end-to-end test in
-# `tests/test_generate_dataset.py` against real Cloudflare R2 inside
-# the `tinaudio/synth-setter:dev-snapshot` Docker image so the real Surge XT
-# render path (Xvfb + xsettingsd + dbus) runs against the live R2 bucket.
-# Mirrors `test-local-launcher-roundtrip.yml`'s R2 secrets + fork-PR gate
-# and `test-vst-slow.yml`'s Docker + headless-X11 wrapper.
+# Exercises real VST rendering and R2 shard I/O in the CI container.
 
 on:
   workflow_dispatch:
@@ -23,12 +18,16 @@ on:
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
+      - "presets/**"
+      - "docker/ubuntu22_04/Dockerfile"
+      - "Makefile"
+      - "src/synth_setter/cli/finalize_dataset.py"
       - "src/synth_setter/cli/generate_dataset.py"
-      - "src/synth_setter/data/vst/generate_vst_dataset.py"
-      - "src/synth_setter/data/vst/shapes.py"
-      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/data/vst/**"
       - "src/synth_setter/pipeline/ci/validate_shard.py"
-      - "src/synth_setter/pipeline/data/lance_shard.py"
+      - "src/synth_setter/pipeline/data/**"
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/pipeline/schemas/**"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
@@ -71,14 +70,7 @@ jobs:
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
 
-      # `run-linux-vst-headless.sh` wraps pytest because pedalboard imports
-      # load the VST host which needs a live X display, so the headless
-      # wrapper has to apply at the pytest level (not the entire container).
-      # `ensure_plugin_symlinks.sh` recreates the in-image
-      # `plugins/Surge XT.vst3` symlink that the workspace bind-mount shadows;
-      # without it the worker resolves `plugin_path: plugins/Surge XT.vst3`
-      # (from `src/synth_setter/configs/render/surge_xt.yaml`) to a missing
-      # host file.
+      # Run pytest under headless X11 after restoring plugin links hidden by the workspace mount.
       - name: Run generate-dataset-shards e2e in Docker
         run: |
           docker run --rm \
@@ -100,6 +92,11 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              if [[ -d /usr/lib/vst3/CardinalSynth.vst3 ]]; then
+                ln -sfn /usr/lib/vst3/CardinalSynth.vst3 plugins/CardinalSynth.vst3
+              else
+                make install-cardinal
+              fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest tests/test_generate_dataset.py \
                   -m "integration_r2" \

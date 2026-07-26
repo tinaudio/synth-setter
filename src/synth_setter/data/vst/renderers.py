@@ -29,7 +29,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     PARAM_INDEX,
 )
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, PluginProcessResetMode
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -243,9 +243,14 @@ class PedalboardRenderer(AudioRenderer):
     .. attribute :: plugin
 
        Optional preloaded pedalboard plugin instance.
+
+    .. attribute :: process_reset_mode
+
+       Whether pedalboard resets or preserves plugin state for each process call.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
+    process_reset_mode: PluginProcessResetMode = "reset"
 
     def render(
         self,
@@ -280,6 +285,7 @@ class PedalboardRenderer(AudioRenderer):
                 plugin_state_path=self.plugin_state_path,
                 plugin=self.plugin,
                 warmup=warmup,
+                process_reset_mode=self.process_reset_mode,
             ),
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),

@@ -5,8 +5,9 @@ import importlib.util
 import plistlib
 import threading
 import time
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -394,6 +395,58 @@ class TestRenderParamsPreloadedPlugin:
         assert preset_calls == []
         # Non-silent audio proves the pre-loaded plugin ran the note-on render.
         assert np.any(output)
+
+    @pytest.mark.parametrize(
+        ("process_reset_mode", "expected_reset"),
+        [("reset", True), ("preserve", False)],
+    )
+    def test_process_reset_mode_is_forwarded_to_every_process_call(
+        self,
+        process_reset_mode: Literal["reset", "preserve"],
+        expected_reset: bool,
+    ) -> None:
+        """The named reset mode applies to flushes and the audible render.
+
+        :param process_reset_mode: Reset behavior under test.
+        :param expected_reset: Pedalboard boolean expected at the host boundary.
+        """
+        reset_flags: list[bool] = []
+
+        class _RecordingPlugin(FakeVST3Plugin):
+            def process(
+                self,
+                midi_events: Iterable[tuple[Sequence[int], float]],
+                duration_seconds: float,
+                sample_rate: float,
+                channels: int,
+                block_size: int,
+                tail: bool,
+            ) -> np.ndarray:
+                reset_flags.append(tail)
+                return super().process(
+                    midi_events,
+                    duration_seconds,
+                    sample_rate,
+                    channels,
+                    block_size,
+                    tail,
+                )
+
+        output = render_params(
+            "plugins/CardinalSynth.vst3",
+            params={},
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 1.0),
+            signal_duration_seconds=1.0,
+            sample_rate=44100,
+            channels=2,
+            plugin=cast("VST3Plugin", _RecordingPlugin("plugins/CardinalSynth.vst3")),
+            process_reset_mode=process_reset_mode,
+        )
+
+        assert np.any(output)
+        assert reset_flags == [expected_reset] * 4
 
     def test_no_plugin_kwarg_reloads_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.

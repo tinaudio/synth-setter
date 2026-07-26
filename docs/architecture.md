@@ -13,11 +13,12 @@ on these datasets, and evaluates how well the models recover the original
 parameters.
 
 The pipeline is **synth-agnostic**: rendering, storage, features, distributed
-workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
-`RenderConfig` (backend and synth identity) looked up from a registry by name.
-Surge XT is the default, OB-Xf is registered as a second VST3 synth, and Faust
-identities compile checked-in source through DawDreamer. VST3 plugins can be
-onboarded with **no edits to core pipeline, storage, or model code**. See
+workers, and models are driven by a `ParamSpec` and a `RenderConfig` (backend
+and synth identity) selected by name. Surge XT is the default; OB-Xf and
+Cardinal Synth are registered VST3 integrations, while Faust identities compile
+checked-in source through DawDreamer. New VST3 plugins compose through the same
+registry, renderer, storage, and model contracts without per-synth pipeline
+branches. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 ## System Diagram
@@ -51,10 +52,11 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt`, `render=obxf`, or
-   `render=faust_bright_organ`); each render config names the backend, selects
-   its `synth` group, and declares any backend-specific resources. The synth
-   group carries the registered parameter spec, preset, and plugin path. Hydra
+   group override (for example, `render=surge_xt`, `render=obxf`,
+   `render=cardinal`, or `render=faust_bright_organ`). Each render config names
+   the backend, selects its `synth` group, and declares backend-specific
+   resources. The synth group carries the registered parameter spec, preset,
+   and plugin path. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -63,7 +65,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    backend, producing Lance
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
    and ground-truth parameter arrays. Workers are fully parallel with no shared
-   state.
+   state. Cardinal's committed preset maps its generic host slots to a curated
+   Rack patch; its smoke experiment assigns one shard to each of three workers
+   so every worker process owns one Cardinal instance.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments

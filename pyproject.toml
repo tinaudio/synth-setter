@@ -229,6 +229,7 @@ runtime = [
   { include-group = "util" },
 ]
 dev = [
+  "backports-zstd",
   "hypothesis",
   "mutmut==3.5.*",
   "nflows",

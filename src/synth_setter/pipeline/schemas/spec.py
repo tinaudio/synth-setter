@@ -42,6 +42,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
+    PluginProcessResetMode,
     RendererBackend,
 )
 from synth_setter.synth_spec import SynthSpec
@@ -311,6 +312,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "pool size = min(max(1, available_cpus() // 2), len(my_range)). "
             "Applies on both local-run and SkyPilot-worker contexts; peak "
             "local disk scales with pool size."
+        ),
+    )
+    process_reset_mode: PluginProcessResetMode = Field(
+        default="reset",
+        description=(
+            "Whether pedalboard resets or preserves plugin state before each process call. "
+            'Use ``"preserve"`` when reset clears host-parameter automation.'
         ),
     )
     plugin_reload_cadence: _PluginReloadCadence = Field(

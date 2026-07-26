@@ -155,6 +155,23 @@ def test_test_synth_selects_registry_entry_from_env_override(
 
 
 @pytest.mark.infra
+def test_test_synth_selects_cardinal_registry_entry(
+    monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
+) -> None:
+    """The Cardinal CI cell resolves its preset and synth version.
+
+    :param monkeypatch: Pins ``SYNTH_SETTER_TEST_SYNTH`` to ``cardinal``.
+    :param reload_vst: Re-resolves the module constants under the patched env.
+    """
+    monkeypatch.setenv(_SYNTH_ENV_VAR, "cardinal")
+    mod = reload_vst()
+    assert mod.TEST_SYNTH == "cardinal"
+    assert mod.TEST_PARAM_SPEC_NAME == "cardinal"
+    assert mod.TEST_PRESET_PATH == "presets/cardinal-base.vstpreset"
+    assert mod.TEST_SYNTH_VERSION == "0.26.2"
+
+
+@pytest.mark.infra
 def test_test_synth_falls_back_to_surge_xt_when_env_empty(
     monkeypatch: pytest.MonkeyPatch, reload_vst: Callable[[], ModuleType]
 ) -> None:

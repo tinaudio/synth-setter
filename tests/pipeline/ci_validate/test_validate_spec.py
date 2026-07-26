@@ -60,6 +60,7 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "sample_offset": 0,
             "attempts_per_sample": 100,
             "parallel": False,
+            "process_reset_mode": "reset",
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
             "param_sample_cadence": "sample",

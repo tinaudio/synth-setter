@@ -208,6 +208,11 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 
 # Plugin pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
 # tests/infra/test_install_plugins_targets.py fails when either side drifts.
+CARDINAL_VERSION := 26.02
+CARDINAL_ASSET_X86_64 := Cardinal-linux-x86_64-26.02.tar.gz
+CARDINAL_SHA256_X86_64 := 657df0beeec04184de7359cbd3e173a36eeab78077e1e26da81405632f98ec25
+CARDINAL_ASSET_AARCH64 := Cardinal-linux-aarch64-26.02.tar.gz
+CARDINAL_SHA256_AARCH64 := b36b6d5b04e55bb808bc4b99ac3e08007b1dc48df7e75dbda25664ab974f7a98
 DEXED_VERSION := 0.9.8
 DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
 OBXF_VERSION := v1.0.3
@@ -231,29 +236,46 @@ if [ -e "$$DEST" ]; then \
 	exit 0; \
 fi; \
 OS=$$(uname -s); ARCH=$$(uname -m); \
-if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
+if [ "$$OS" != "Linux" ]; then \
+	echo "skipping $(1): Linux assets only (host: $$OS/$$ARCH)."; \
 	exit 0; \
 fi; \
+case "$$ARCH" in \
+	x86_64) URL="$(2)"; SHA256="$(3)" ;; \
+	aarch64|arm64) \
+		if [ -z "$(4)" ]; then \
+			echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; exit 0; \
+		fi; \
+		URL="$(4)"; SHA256="$(5)" ;; \
+	*) echo "skipping $(1): unsupported Linux architecture $$ARCH."; exit 0 ;; \
+esac; \
 CACHE="$(HOME)/.cache/synth-setter"; \
-ASSET="$(notdir $(2))"; \
+ASSET="$${URL##*/}"; \
 mkdir -p "$$CACHE" plugins; \
 ARCHIVE="$$CACHE/$$ASSET"; \
 if [ ! -f "$$ARCHIVE" ]; then \
-	echo "Downloading $(2)"; \
-	curl -fSL -o "$$ARCHIVE" "$(2)"; \
+	echo "Downloading $$URL"; \
+	if command -v curl >/dev/null 2>&1; then \
+		curl -fSL -o "$$ARCHIVE" "$$URL"; \
+	elif command -v python3 >/dev/null 2>&1; then \
+		python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$$URL" "$$ARCHIVE"; \
+	else \
+		echo "ERROR: curl or python3 is required to download $$URL" >&2; exit 1; \
+	fi; \
 else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \
 command -v sha256sum >/dev/null 2>&1 || { \
 	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
+echo "$$SHA256  $$ARCHIVE" | sha256sum -c - || { \
 	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
 TMP="$$(mktemp -d)"; \
 trap 'rm -rf "$$TMP"' EXIT; \
 case "$$ASSET" in \
 	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
-	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
+	*.tgz|*.tar.gz) \
+		if [ -n "$(6)" ]; then tar -xzf "$$ARCHIVE" -C "$$TMP" "$(6)"; \
+		else tar -xzf "$$ARCHIVE" -C "$$TMP"; fi ;; \
 	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
 esac; \
 SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
@@ -263,6 +285,9 @@ fi; \
 mv "$$SRC" "$$DEST"; \
 echo "Installed $$DEST"
 endef
+
+install-cardinal: ## Download Cardinal Synth VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,CardinalSynth,https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_X86_64),$(CARDINAL_SHA256_X86_64),https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_AARCH64),$(CARDINAL_SHA256_AARCH64),CardinalSynth.vst3)
 
 install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256))
@@ -309,7 +334,7 @@ install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipp
 	cp -a "$$SRC_BUNDLE" "$$DEST"; \
 	echo "Installed $$DEST"
 
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
+install-plugins: install-surge-xt install-cardinal install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \

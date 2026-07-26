@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-12
+> **Last verified:** 2026-07-24
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -67,12 +67,12 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 ### First build (dev-snapshot)
 
 The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref, plus prebuilt VST3 synths (Dexed, OB-Xf, Six Sines) fetched by
-the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
-only; versions and SHA256 pins live there as `ARG`s). Each synth is
-load-validated at build time by
-`src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
-symlinked into `plugins/`.
+specific git ref. The `vst3-synths-fetch` stage adds Cardinal Synth on amd64
+and arm64, plus Dexed, OB-Xf, and Six Sines on amd64; a separate source stage
+builds Ultramaster KR-106 on amd64. Versions and integrity pins live in the
+Dockerfile `ARG`s. Every installed synth is load-validated under headless X11
+with `src/synth_setter/scripts/load_vst3_check.py`; Surge XT and Cardinal also
+have checkout-relative links under `plugins/` for their render configs.
 
 ```bash
 make docker-build-dev-snapshot \
@@ -124,8 +124,8 @@ make docker-build-devcontainer-tools-dev-user \
 ```
 
 The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
-build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
-the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
+build `FROM dev-base`, the shared parent that holds the installed VST3 bundles,
+the venv, and the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
 the npm CLI tree layered onto the Node binary `dev-base` already bakes for its
 own pytest run, the `@anthropic-ai/claude-code`,
@@ -161,9 +161,9 @@ mirrors the first. The `synth-setter-zellij-cache` and
 and `/root/.cache/zellij` persist zellij's serialized (resurrectable) sessions
 across rebuilds for the same two users. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
-baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
-without it, the host's gitignored `plugins/` would shadow the baked file and
-VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
+baked `plugins/` links survive the workspace bind mount — without it, the
+host's gitignored directory would shadow them and VST-dependent tests would
+fail. `.devcontainer/Dockerfile` consumes the
 non-root sibling via `FROM tinaudio/synth-setter:devcontainer-tools-dev-user`.
 
 ### Build variables

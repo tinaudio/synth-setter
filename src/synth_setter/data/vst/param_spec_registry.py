@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import cast
 
+from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
@@ -36,6 +37,7 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("cardinal"): CARDINAL_PARAM_SPEC,
     ParamSpecName("faust_bright_organ"): resolve_faust_param_spec(
         ParamSpecName("faust_bright_organ")
     ),

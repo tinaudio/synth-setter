@@ -174,6 +174,20 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
     assert spec.num_params == num_params
 
 
+def test_render_cardinal_composes_into_valid_render_config() -> None:
+    """``render=cardinal`` selects the mapped Rack patch and preserves automation."""
+    spec = _spec_from_dataset_overrides(["render=cardinal"])
+
+    assert spec.render.synth.name == "cardinal"
+    assert spec.render.param_spec_name == "cardinal"
+    assert spec.render.synth.synth_version == "0.26.2"
+    assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
+    assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
+    assert spec.render.process_reset_mode == "preserve"
+    assert spec.num_params == 13
+    assert spec.render.plugin_reload_cadence == "once"
+
+
 @pytest.mark.parametrize(
     ("name", "num_params", "channels"),
     [

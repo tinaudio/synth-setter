@@ -99,6 +99,15 @@ class TestSynthSpecValidation:
 class TestSynthsTable:
     """Cross-registry invariants that previously had no enforcement."""
 
+    def test_cardinal_identity_is_registered(self) -> None:
+        """Cardinal participates in the shared synth identity table."""
+        cardinal = SYNTHS[SynthName("cardinal")]
+
+        assert cardinal.param_spec_name == "cardinal"
+        assert cardinal.plugin_path == "plugins/CardinalSynth.vst3"
+        assert cardinal.plugin_state_path == "presets/cardinal-base.vstpreset"
+        assert cardinal.synth_version == "0.26.2"
+
     @pytest.mark.parametrize("name", _ALL_SYNTHS)
     def test_every_entry_names_a_registered_param_spec(self, name: str) -> None:
         """Each identity points at a ParamSpec the registry can resolve.
