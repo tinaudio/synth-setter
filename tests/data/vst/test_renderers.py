@@ -9,7 +9,12 @@ from typing import cast
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.generate_vst_dataset import audio_uuid, generate_sample
+from synth_setter.data.vst.generate_vst_dataset import (
+    AudioAmplitudeError,
+    _reject_clipped_audio,
+    audio_uuid,
+    generate_sample,
+)
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -195,7 +200,7 @@ def test_pedalboard_renderer_rejects_nonfinite_audio(
         renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
 
 
-def test_pedalboard_renderer_accepts_finite_audio_outside_unit_range(
+def test_pedalboard_renderer_accepts_clipping_that_dataset_generation_rejects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Amplitude acceptance belongs to generation rather than the renderer contract.
@@ -211,7 +216,11 @@ def test_pedalboard_renderer_accepts_finite_audio_outside_unit_range(
         signal_duration_seconds=1.0,
     )
 
-    assert renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25)) is audio
+    rendered = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+    assert rendered is audio
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(rendered)
 
 
 def test_dawdreamer_renderer_loads_graph_and_renders_audio(

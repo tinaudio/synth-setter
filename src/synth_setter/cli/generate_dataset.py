@@ -175,6 +175,7 @@ def _run_oracle_eval_subprocess(
         f"+render.renderer_version={render.renderer_version}",
         f"render.renderer_backend={render.renderer_backend}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
+        f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
