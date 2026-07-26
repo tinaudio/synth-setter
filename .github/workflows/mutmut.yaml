@@ -27,31 +27,53 @@ jobs:
       matrix:
         include:
           - name: evaluation-audio
-            pattern: synth_setter.evaluation.a*
+            patterns:
+              - synth_setter.evaluation.a*
           - name: evaluation-metrics
-            pattern: synth_setter.evaluation.compute_audio_metrics.*
-          - name: evaluation-predict
-            pattern: synth_setter.evaluation.predict_vst_audio.*
+            patterns:
+              - synth_setter.evaluation.compute_audio_metrics.*
+          - name: evaluation-predict-public
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_[!_]*
+          - name: evaluation-predict-private-leading-1
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x__make_render_fn*
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?*
+          - name: evaluation-predict-private-leading-2-9
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]?*
           - name: evaluation-shuffle
-            pattern: synth_setter.evaluation.shuffle_pred_audio.*
+            patterns:
+              - synth_setter.evaluation.shuffle_pred_audio.*
           - name: tools
-            pattern: synth_setter.tools.*
+            patterns:
+              - synth_setter.tools.*
           - name: pipeline-add-public
-            pattern: synth_setter.pipeline.data.add_*.x_[!_]*
+            patterns:
+              - synth_setter.pipeline.data.add_*.x_[!_]*
           - name: pipeline-add-private-a-m
-            pattern: synth_setter.pipeline.data.add_*.x__[a-m]*
+            patterns:
+              - synth_setter.pipeline.data.add_*.x__[a-m]*
           - name: pipeline-add-private-n-z
-            pattern: synth_setter.pipeline.data.add_*.x__[n-z]*
+            patterns:
+              - synth_setter.pipeline.data.add_*.x__[n-z]*
           - name: pipeline-lance
-            pattern: synth_setter.pipeline.data.lance_*
+            patterns:
+              - synth_setter.pipeline.data.lance_*
           - name: pipeline-stats
-            pattern: synth_setter.pipeline.data.stats.*
+            patterns:
+              - synth_setter.pipeline.data.stats.*
           - name: pipeline-finalize
-            pattern: synth_setter.pipeline.data.finalize_progress.*
+            patterns:
+              - synth_setter.pipeline.data.finalize_progress.*
           - name: pipeline-t5gemma
-            pattern: synth_setter.pipeline.data.t5gemma.*
+            patterns:
+              - synth_setter.pipeline.data.t5gemma.*
           - name: ci-scripts
-            pattern: scripts.ci.*
+            patterns:
+              - scripts.ci.*
 
     steps:
       - name: Checkout
@@ -76,7 +98,12 @@ jobs:
       - name: Run mutmut
         env:
           HYDRA_FULL_ERROR: "1"
-        run: uv run mutmut run --max-children 4 "${{ matrix.pattern }}"
+          MUTMUT_PATTERNS: ${{ toJson(matrix.patterns) }}
+        run: |
+          set -euo pipefail
+          patterns_json=$(jq -er 'if type == "array" and length > 0 and all(.[]; type == "string" and length > 0) then .[] else error("invalid mutation selector array") end' <<<"$MUTMUT_PATTERNS")
+          mapfile -t patterns <<<"$patterns_json"
+          uv run mutmut run --max-children 4 "${patterns[@]}"
 
       - name: Print results
         if: always()
