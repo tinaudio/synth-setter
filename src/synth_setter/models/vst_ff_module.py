@@ -25,8 +25,6 @@ class VSTFeedForwardModule(LightningModule):
         warmup_steps: int = 0,
         conditioning: Conditioning = "mel",
         encoder: torch.nn.Module | None = None,
-        encoder_num_heads: int | None = None,
-        encoder_output_dim: int | None = None,
     ):
         """Wire the regression net and persist the optimizer/scheduler hyperparameters.
 
@@ -39,8 +37,6 @@ class VSTFeedForwardModule(LightningModule):
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param encoder: Profile-selected embedding encoder. When configured, it replaces
             the legacy mel network for cached conditioning.
-        :param encoder_num_heads: Model-owned attention head count for sequence encoders.
-        :param encoder_output_dim: Configured cached-encoder output width.
         :raises ValueError: If cached conditioning has no encoder.
         """
         super().__init__()

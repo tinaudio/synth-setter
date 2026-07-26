@@ -59,8 +59,6 @@ class VSTFlowMatchingModule(LightningModule):
         *,
         num_params: int,
         conditioning: Conditioning = "mel",
-        encoder_num_heads: int | None = None,
-        encoder_output_dim: int | None = None,
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
@@ -79,8 +77,6 @@ class VSTFlowMatchingModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
-        :param encoder_num_heads: Model-owned attention head count for sequence encoders.
-        :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
         :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
