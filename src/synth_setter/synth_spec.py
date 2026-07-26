@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, NewType
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -105,58 +105,35 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         )
 
 
-def _synth(name: str, param_spec_name: str, plugin_path: str, preset: str) -> SynthSpec:
-    """Build one table entry, keeping the literal rows below readable.
-
-    :param name: Registry key and render group name.
-    :param param_spec_name: Key into the ``ParamSpec`` registry.
-    :param plugin_path: VST3 bundle path or bare backend name.
-    :param preset: Baseline preset path; ``""`` for preset-less backends.
-    :returns: The validated identity.
-    """
-    return SynthSpec(
-        name=SynthName(name),
-        param_spec_name=ParamSpecName(param_spec_name),
-        plugin_path=plugin_path,
-        plugin_state_path=preset,
-    )
-
-
-_SURGE_XT_PLUGIN = "plugins/Surge XT.vst3"
-
-_synths: dict[SynthName, SynthSpec] = {
-    SynthName("faust_bright_organ"): _synth(
-        "faust_bright_organ", "faust_bright_organ", FAUST_PLUGIN_NAME, ""
-    ),
-    SynthName("faust_bubble"): _synth("faust_bubble", "faust_bubble", FAUST_PLUGIN_NAME, ""),
-    SynthName("faust_church_organ"): _synth(
-        "faust_church_organ", "faust_church_organ", FAUST_PLUGIN_NAME, ""
-    ),
-    SynthName("faust_filter_osc"): _synth(
-        "faust_filter_osc", "faust_filter_osc", FAUST_PLUGIN_NAME, ""
-    ),
-    SynthName("surge_xt"): _synth(
-        "surge_xt", "surge_xt", _SURGE_XT_PLUGIN, "presets/surge-base.vstpreset"
-    ),
-    SynthName("surge_simple"): _synth(
-        "surge_simple", "surge_simple", _SURGE_XT_PLUGIN, "presets/surge-simple.vstpreset"
-    ),
-    SynthName("surge_4"): _synth(
-        "surge_4", "surge_4", _SURGE_XT_PLUGIN, "presets/surge-mini.vstpreset"
-    ),
-    SynthName("obxf"): _synth("obxf", "obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset"),
-    SynthName("torchsynth_adsr"): _synth(
-        "torchsynth_adsr", "torchsynth_adsr", TORCHSYNTH_PLUGIN_NAME, ""
-    ),
-    SynthName("torchsynth_full"): _synth(
-        "torchsynth_full", "torchsynth_full", TORCHSYNTH_PLUGIN_NAME, ""
-    ),
-    SynthName("torchsynth_simple"): _synth(
-        "torchsynth_simple", "torchsynth_simple", TORCHSYNTH_PLUGIN_NAME, ""
-    ),
+# One row per registered synth: name -> (param_spec_name, plugin_path, preset).
+# Kept as flat one-line literals because ``synth-setter-introspect-plugin --register``
+# extends this dict by line anchor (``registration.synths_with_spec``); a nested
+# constructor call would reflow under ruff-format and break that transform.
+_synth_rows: dict[str, tuple[str, str, str]] = {
+    "faust_bright_organ": ("faust_bright_organ", "faust", ""),
+    "faust_bubble": ("faust_bubble", "faust", ""),
+    "faust_church_organ": ("faust_church_organ", "faust", ""),
+    "faust_filter_osc": ("faust_filter_osc", "faust", ""),
+    "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset"),
+    "surge_simple": ("surge_simple", "plugins/Surge XT.vst3", "presets/surge-simple.vstpreset"),
+    "surge_4": ("surge_4", "plugins/Surge XT.vst3", "presets/surge-mini.vstpreset"),
+    "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset"),
+    "torchsynth_adsr": ("torchsynth_adsr", "torchsynth", ""),
+    "torchsynth_full": ("torchsynth_full", "torchsynth", ""),
+    "torchsynth_simple": ("torchsynth_simple", "torchsynth", ""),
 }
 
-SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(_synths)
+SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
+    {
+        SynthName(name): SynthSpec(
+            name=SynthName(name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=plugin_path,
+            plugin_state_path=preset,
+        )
+        for name, (param_spec_name, plugin_path, preset) in _synth_rows.items()
+    }
+)
 
 
 def resolve_synth(name: SynthName) -> SynthSpec:
@@ -167,6 +144,6 @@ def resolve_synth(name: SynthName) -> SynthSpec:
     :raises KeyError: If the name is not registered.
     """
     try:
-        return _synths[name]
+        return SYNTHS[name]
     except KeyError:
         raise KeyError(name) from None

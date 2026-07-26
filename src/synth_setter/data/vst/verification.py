@@ -237,8 +237,10 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         import json
 
         from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+        from synth_setter.synth_spec import SYNTHS
 
         spec = param_specs[{spec_name!r}]
+        assert {spec_name!r} in SYNTHS, "missing SYNTHS identity row"
         assert {spec_name!r} in plugin_state_paths, "missing plugin_state_paths entry"
         spec.sample()
 

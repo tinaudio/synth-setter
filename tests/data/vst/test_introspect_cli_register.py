@@ -67,6 +67,8 @@ def checkout(tmp_path: Path) -> Path:
     vst_dir = root / "src/synth_setter/data/vst"
     vst_dir.mkdir(parents=True)
     shutil.copy(_REAL_PKG_DIR / "data/vst/param_spec_registry.py", vst_dir)
+    # --register extends the identity table alongside the param-spec registry.
+    shutil.copy(_REAL_PKG_DIR / "synth_spec.py", vst_dir.parents[1])
     render_dir = root / "src/synth_setter/configs/render"
     render_dir.mkdir(parents=True)
     shutil.copy(_REAL_PKG_DIR / "configs/render/vst.yaml", render_dir)
@@ -124,7 +126,7 @@ def test_register_writes_all_artifacts_into_the_checkout_layout(
 def test_register_adds_spec_to_the_registry_module(
     checkout: Path, fake_plugin: IntrospectFakePlugin
 ) -> None:
-    """The checkout's registry gains the import and both dict entries, format-clean.
+    """The checkout's registry gains the import and the param-spec entry, format-clean.
 
     :param checkout: Skeleton checkout fixture.
     :param fake_plugin: Patches the plugin-load boundary.
@@ -136,8 +138,12 @@ def test_register_adds_spec_to_the_registry_module(
         registry
     )
     assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,' in registry
-    assert '"fake_synth": "presets/fake_synth-base.vstpreset",' in registry
     assert_ruff_format_clean(registry)
+
+    synths = (checkout / "src/synth_setter/synth_spec.py").read_text()
+    assert '"fake_synth": ("fake_synth", "plugins/fake.vst3",' in synths
+    assert "presets/fake_synth-base.vstpreset" in synths
+    assert_ruff_format_clean(synths)
 
 
 def test_register_render_config_pins_relative_plugin_path_and_version(
@@ -151,10 +157,11 @@ def test_register_render_config_pins_relative_plugin_path_and_version(
     _register(checkout)
 
     cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
-    assert cfg.plugin_path == "plugins/fake.vst3"
-    assert cfg.param_spec_name == "fake_synth"
-    assert cfg.plugin_state_path == "presets/fake_synth-base.vstpreset"
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
     assert cfg.renderer_version == "9.9.9"
+    assert synth.plugin_path == "plugins/fake.vst3"
+    assert synth.param_spec_name == "fake_synth"
+    assert synth.plugin_state_path == "presets/fake_synth-base.vstpreset"
 
 
 def test_register_reports_the_generate_dataset_next_step(

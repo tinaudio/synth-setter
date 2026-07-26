@@ -21,7 +21,10 @@ from synth_setter.data.vst.registration import (
     checkout_relative_path,
     find_repo_root,
     registration_paths,
+    preset_repo_path,
     registry_with_spec,
+    synth_group_yaml,
+    synths_with_spec,
     render_config_yaml,
 )
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
@@ -66,19 +69,17 @@ def _dict_keys(source: str, name: str) -> list[str]:
     raise AssertionError(f"no module-level dict named {name} in source")
 
 
-def test_registry_with_spec_adds_key_to_both_dicts() -> None:
-    """The transform registers the spec in ``_param_specs`` and ``plugin_state_paths``."""
+def test_registry_with_spec_adds_the_param_spec_key() -> None:
+    """The transform registers the spec in ``_param_specs``.
+
+    ``plugin_state_paths`` is derived from ``synth_spec.SYNTHS`` and is no longer
+    written here — ``synths_with_spec`` owns the preset path.
+    """
     result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
     assert "fake_synth" in _dict_keys(result, "_param_specs")
-    assert "fake_synth" in _dict_keys(result, "plugin_state_paths")
 
 
-def test_registry_with_spec_maps_preset_to_conventional_path() -> None:
-    """The ``plugin_state_paths`` entry points at ``presets/<name>-base.vstpreset``."""
-    result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
-
-    assert '"fake_synth": "presets/fake_synth-base.vstpreset",' in result
 
 
 def test_registry_with_spec_imports_the_generated_module() -> None:
@@ -148,20 +149,12 @@ def test_registry_with_spec_already_registered_identically_is_a_noop() -> None:
             "",
         ),
         (
-            '    "fake_synth": "presets/fake_synth-base.vstpreset",\n',
-            "",
-        ),
-        (
             "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC",
             "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC",
         ),
         (
             'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC',
             'ParamSpecName("fake_synth"): SURGE_XT_PARAM_SPEC',
-        ),
-        (
-            '"fake_synth": "presets/fake_synth-base.vstpreset"',
-            '"fake_synth": "presets/other.vstpreset"',
         ),
     ],
 )
@@ -311,32 +304,34 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_pins_synth_identity_over_vst_defaults() -> None:
-    """The emitted config inherits generic VST knobs and pins synth identity."""
-    text = render_config_yaml(
-        "fake_synth", plugin_path="plugins/fake.vst3", renderer_version="9.9.9"
-    )
+def test_render_config_yaml_selects_the_synth_group_over_vst_defaults() -> None:
+    """The emitted config inherits generic VST knobs and selects its synth group."""
+    text = render_config_yaml("fake_synth", renderer_version="9.9.9")
 
     cfg = yaml.safe_load(text)
-    assert cfg["defaults"] == ["vst"]
-    assert cfg["plugin_path"] == "plugins/fake.vst3"
-    assert cfg["plugin_state_path"] == "presets/fake_synth-base.vstpreset"
-    assert cfg["param_spec_name"] == "fake_synth"
+    assert cfg["defaults"] == ["vst", {"synth": "fake_synth"}, "_self_"]
     assert cfg["renderer_version"] == "9.9.9"
 
 
-def test_render_config_yaml_quotes_arbitrary_plugin_path() -> None:
+def test_render_config_yaml_states_no_identity_of_its_own() -> None:
+    """Identity lives in the synth group, so the render config cannot restate it."""
+    cfg = yaml.safe_load(render_config_yaml("fake_synth", renderer_version="1.0"))
+
+    assert not {"plugin_path", "plugin_state_path", "param_spec_name"} & cfg.keys()
+
+
+def test_synth_group_yaml_quotes_arbitrary_plugin_path() -> None:
     """A plugin path with YAML-hostile characters round-trips through safe_load."""
     hostile = '/tmp/odd: "name" #1.vst3'  # noqa: S108 — literal fixture path, never opened
 
-    text = render_config_yaml("fake_synth", plugin_path=hostile, renderer_version="1.0")
+    text = synth_group_yaml("fake_synth", plugin_path=hostile)
 
     assert yaml.safe_load(text)["plugin_path"] == hostile
 
 
-def test_render_config_yaml_preserves_reserved_word_spec_name_as_string() -> None:
+def test_synth_group_yaml_preserves_reserved_word_spec_name_as_string() -> None:
     """A spec name that is a YAML 1.1 boolean literal stays a string after parsing."""
-    text = render_config_yaml("on", plugin_path="plugins/on.vst3", renderer_version="1.0")
+    text = synth_group_yaml("on", plugin_path="plugins/fake.vst3")
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
 
@@ -348,7 +343,7 @@ def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: s
     :param spec_name: Exact or case-variant reserved group name.
     """
     with pytest.raises(ValueError, match="reserved for a render config"):
-        render_config_yaml(spec_name, plugin_path="plugins/fake.vst3", renderer_version="1.0")
+        render_config_yaml(spec_name, renderer_version="1.0")
 
 
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
@@ -459,3 +454,72 @@ def test_find_repo_root_outside_a_checkout_returns_none(tmp_path: Path) -> None:
     :param tmp_path: A bare directory that is not a checkout.
     """
     assert find_repo_root(tmp_path) is None
+
+
+_SYNTH_SPEC_SOURCE = '''"""Doc."""
+
+from types import MappingProxyType
+
+_synth_rows: dict[str, tuple[str, str, str]] = {
+    "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset"),
+}
+
+SYNTHS = MappingProxyType({})
+'''
+
+
+def test_synths_with_spec_adds_one_row_for_a_new_synth() -> None:
+    """A newly registered synth gains an identity row in the table."""
+    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    assert '    "fake_synth": ("fake_synth", "plugins/fake.vst3",' in result
+
+
+def test_synths_with_spec_row_stays_on_one_line() -> None:
+    """Rows are single-line so the line-anchor transform survives ruff-format."""
+    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    row = next(line for line in result.splitlines() if '"fake_synth"' in line)
+
+    assert row.rstrip().endswith(",")
+    assert len(row) <= 99
+
+
+def test_synths_with_spec_records_the_conventional_preset_path() -> None:
+    """The row's preset matches what registration writes to disk."""
+    result = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    assert preset_repo_path("fake_synth") in result
+
+
+def test_synths_with_spec_reapplied_identically_is_a_noop() -> None:
+    """``--force`` re-runs converge instead of duplicating or raising."""
+    once = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    twice = synths_with_spec(once, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    assert twice == once
+
+
+def test_synths_with_spec_conflicting_wiring_raises() -> None:
+    """Re-registering a name against a different plugin is refused, not silently kept."""
+    once = synths_with_spec(_SYNTH_SPEC_SOURCE, "fake_synth", plugin_path="plugins/fake.vst3")
+
+    with pytest.raises(ValueError, match="already registered"):
+        synths_with_spec(once, "fake_synth", plugin_path="plugins/other.vst3")
+
+
+def test_synths_with_spec_without_the_table_anchor_raises() -> None:
+    """A table whose dict anchor is gone fails loudly rather than silently no-op."""
+    with pytest.raises(ValueError, match="_synth_rows"):
+        synths_with_spec('"""Doc."""\n', "fake_synth", plugin_path="plugins/fake.vst3")
+
+
+def test_synth_group_yaml_states_the_full_identity() -> None:
+    """The generated group carries every field ``SynthSpec`` requires."""
+    yaml_text = synth_group_yaml("fake_synth", plugin_path="plugins/fake.vst3")
+
+    assert yaml.safe_load(yaml_text)["name"] == "fake_synth"
+    assert yaml.safe_load(yaml_text)["param_spec_name"] == "fake_synth"
+    assert '"plugins/fake.vst3"' in yaml_text
+    assert preset_repo_path("fake_synth") in yaml_text

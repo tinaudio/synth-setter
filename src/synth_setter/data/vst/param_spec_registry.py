@@ -33,6 +33,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     TORCHSYNTH_SIMPLE_PARAM_SPEC,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("faust_bright_organ"): resolve_faust_param_spec(
@@ -53,23 +54,11 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
 }
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
-# Kept literal because ``registration.registry_with_spec`` rewrites this dict by
-# line anchor; ``synth_setter.synth_spec.SYNTHS`` is the authoring source and
-# ``tests/test_synth_spec.py`` pins the two to agree.
-plugin_state_paths: dict[str, str] = {
-    "faust_bright_organ": "",
-    "faust_bubble": "",
-    "faust_church_organ": "",
-    "faust_filter_osc": "",
-    "surge_xt": "presets/surge-base.vstpreset",
-    "surge_simple": "presets/surge-simple.vstpreset",
-    "surge_4": "presets/surge-mini.vstpreset",
-    "obxf": "presets/obxf-base.vstpreset",
-    # Python backends have no preset file; the baseline patch lives in the spec module.
-    "torchsynth_adsr": "",
-    "torchsynth_full": "",
-    "torchsynth_simple": "",
-}
+# Projection of the identity table, not a second source: keeping it derived is what
+# stops a preset path drifting between here and ``synth_setter.synth_spec``.
+plugin_state_paths: Mapping[str, str] = MappingProxyType(
+    {synth.name: synth.plugin_state_path for synth in SYNTHS.values()}
+)
 
 
 def resolve_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
