@@ -268,7 +268,7 @@ def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
     spec = _build_spec(dataset_spec_factory)
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
