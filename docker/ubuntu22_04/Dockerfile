@@ -544,6 +544,11 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
+# The in-image pytest runs the Pi hook suite, which needs a Node that strips
+# TypeScript inline (--experimental-strip-types, Node >= 22.6). npm/npx are not
+# needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
+COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+
 # Run not-slow unit tests: no VST or R2 needed, but the infra-marked
 # install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
@@ -603,9 +608,8 @@ RUN case "${TARGETARCH:-}" in \
     rm "/tmp/${package}" && \
     infisical --version
 
-# Install Node.js and the system Codex CLI.
+# Install npm and the system Codex CLI; `node` itself comes from `dev-base`.
 ARG CODEX_VERSION=latest
-COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:22-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
