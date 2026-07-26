@@ -28,7 +28,7 @@ from tests.helpers.same_reference import (
 
 pytestmark = [pytest.mark.slow, pytest.mark.network, pytest.mark.same_e2e]
 
-_PARITY_ATOL = 1e-4
+_PARITY_ATOL = 3e-4
 _PARITY_RTOL = 1e-4
 
 
@@ -125,6 +125,6 @@ def test_same_hydra_main_writes_legacy_matching_lance_column(
     assert np.isfinite(actual).all()
     assert actual.std() > 0.0
     assert not np.array_equal(actual[0], actual[1])
-    # Local SA3 output is exact; 1e-4 covers the measured 9.5e-5 cross-Torch
-    # SAME-S drift from #2283.
+    # Local output is exact; 3e-4 covers the 2.13e-4 cross-runner SAME-S drift
+    # measured in PR #2537 while remaining far below the latent scale.
     np.testing.assert_allclose(actual, reference, rtol=_PARITY_RTOL, atol=_PARITY_ATOL)
