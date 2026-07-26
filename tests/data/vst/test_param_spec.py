@@ -47,6 +47,43 @@ def test_encoded_width_counts_onehot_and_note_columns() -> None:
     assert len(spec) == 6
 
 
+class TestEncodedSlices:
+    """The name-to-column-span contract callers need to index an encoded row."""
+
+    def test_spans_cover_every_column_in_encoding_order(self) -> None:
+        """Slices are contiguous from 0 and ordered synth-then-note, matching ``encode``."""
+        spans = [(param.name, sl.start, sl.stop) for param, sl in _tiny_spec().encoded_slices()]
+
+        assert spans == [
+            ("cutoff", 0, 1),
+            ("mode", 1, 3),
+            ("pitch", 3, 4),
+            ("note_start_and_end", 4, 6),
+        ]
+
+    def test_multi_column_parameter_span_is_wider_than_one(self) -> None:
+        """A onehot parameter claims one column per raw value, not a single column."""
+        spans = dict((param.name, sl) for param, sl in _tiny_spec().encoded_slices())
+
+        assert spans["mode"] == slice(1, 3)
+
+    def test_final_stop_equals_encoded_width(self) -> None:
+        """The walk consumes exactly the encoded row — no trailing columns are unclaimed."""
+        spec = _tiny_spec()
+
+        *_, (_, last) = spec.encoded_slices()
+
+        assert last.stop == spec.encoded_width
+
+    def test_slice_indexes_the_column_the_parameter_encoded(self) -> None:
+        """Indexing an encoded row by a parameter's slice returns that parameter's columns."""
+        spec = _tiny_spec()
+        row = spec.encode({"cutoff": 0.5, "mode": 0.75}, {"pitch": 60, "note_start_and_end": (0, 1)})
+        spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+
+        assert row[spans["mode"]].tolist() == [0.0, 1.0]
+
+
 class TestDecodeModelOutput:
     """The rescale-then-clip contract, pinned independently of any caller."""
 

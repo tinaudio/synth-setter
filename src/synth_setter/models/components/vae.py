@@ -356,38 +356,17 @@ def compute_individual_parameter_loss(
 
 
 def param_loss(x_hat: torch.Tensor, x: torch.Tensor, param_spec: str) -> torch.Tensor:
-    param_spec = param_specs[param_spec]
+    spec = param_specs[param_spec]
 
-    synth_params = [(p, len(p)) for p in param_spec.synth_params]
-    note_params = [(p, len(p)) for p in param_spec.note_params]
+    assert spec.encoded_width == x.shape[1]
 
-    pointer = 0
+    spans = list(spec.encoded_slices())
+    loss = sum(
+        compute_individual_parameter_loss(x_hat[:, span], x[:, span], param)
+        for param, span in spans
+    )
 
-    loss = 0.0
-
-    for param, length in synth_params:
-        x_param = x[:, pointer : pointer + length]
-        x_hat_param = x_hat[:, pointer : pointer + length]
-
-        this_loss = compute_individual_parameter_loss(x_hat_param, x_param, param)
-
-        loss += this_loss
-
-        pointer += length
-
-    for param, length in note_params:
-        x_param = x[:, pointer : pointer + length]
-        x_hat_param = x_hat[:, pointer : pointer + length]
-
-        this_loss = compute_individual_parameter_loss(x_hat_param, x_param, param)
-
-        loss += this_loss
-
-        pointer += length
-
-    assert pointer == x.shape[1]
-
-    return loss / (len(synth_params) + len(note_params))
+    return loss / len(spans)
 
 
 def compute_flowvae_loss(
