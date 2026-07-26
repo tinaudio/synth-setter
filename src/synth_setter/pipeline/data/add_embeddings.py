@@ -70,13 +70,14 @@ PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
-SAME_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
+SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
+type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
@@ -232,18 +233,39 @@ def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
 
 
-def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME's padded latent-frame count after resampling to 44.1 kHz.
+def _same_resampled_samples(num_samples: int, sample_rate: int) -> int:
+    """Return the ceiling sample count after resampling to SAME's 44.1 kHz input rate.
 
     :param num_samples: Positive source clip length in samples.
     :param sample_rate: Positive source sample rate in Hz.
-    :returns: Even latent-frame count after resampling and two-hop padding.
+    :returns: Resampled clip length in samples.
     :raises ValueError: Either input is non-positive.
     """
     if num_samples < 1 or sample_rate < 1:
         raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
-    resampled = math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
-    return 2 * math.ceil(resampled / SAME_PAD_BLOCK_SAMPLES)
+    return math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
+
+
+def same_s_num_latent_frames(num_samples: int, sample_rate: int) -> int:
+    """Return SAME-S's even frame count after resampling and two-hop padding.
+
+    :param num_samples: Positive source clip length in samples.
+    :param sample_rate: Positive source sample rate in Hz.
+    :returns: Two frames per complete or partial 8192-sample block.
+    """
+    resampled = _same_resampled_samples(num_samples, sample_rate)
+    return 2 * math.ceil(resampled / SAME_S_PAD_BLOCK_SAMPLES)
+
+
+def same_l_num_latent_frames(num_samples: int, sample_rate: int) -> int:
+    """Return SAME-L's frame count after resampling to its 4096-sample hop.
+
+    :param num_samples: Positive source clip length in samples.
+    :param sample_rate: Positive source sample rate in Hz.
+    :returns: One frame per complete or partial 4096-sample block.
+    """
+    resampled = _same_resampled_samples(num_samples, sample_rate)
+    return math.ceil(resampled / SAME_DOWNSAMPLING_RATIO)
 
 
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -272,13 +294,21 @@ def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return prepared
 
 
-def _encode_same_column(field: str, audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-    """Encode one audio batch as a fixed-shape SAME tensor column.
+def _encode_same_column(
+    audio: np.ndarray,
+    sample_rate: int,
+    encoder: Encoder,
+    *,
+    field: str,
+    frame_count: SameFrameCountFn,
+) -> pa.Array:
+    """Encode one audio batch under the selected SAME model's frame contract.
 
-    :param field: SAME target column.
     :param audio: ``(B, C, T)`` source audio.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME encoder over prepared stereo audio.
+    :param field: SAME target column.
+    :param frame_count: Model-specific latent-frame calculation.
     :returns: Fixed-shape tensor array.
     :raises ValueError: The encoder returns the wrong shape or non-finite values.
     """
@@ -290,7 +320,7 @@ def _encode_same_column(field: str, audio: np.ndarray, sample_rate: int, encoder
     expected_shape = (
         len(audio),
         SAME_EMBEDDING_DIM,
-        same_num_latent_frames(prepared.shape[-1], SAME_SAMPLE_RATE),
+        frame_count(prepared.shape[-1], SAME_SAMPLE_RATE),
     )
     if latents.shape != expected_shape:
         raise ValueError(f"{field} encoder produced shape {latents.shape}, expected {expected_shape}")
@@ -305,7 +335,13 @@ def _encode_same_s_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     :param encoder: SAME-S encoder.
     :returns: Fixed-shape tensor array.
     """
-    return _encode_same_column(SAME_S_FIELD, audio, sample_rate, encoder)
+    return _encode_same_column(
+        audio,
+        sample_rate,
+        encoder,
+        field=SAME_S_FIELD,
+        frame_count=same_s_num_latent_frames,
+    )
 
 
 def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -316,7 +352,13 @@ def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     :param encoder: SAME-L encoder.
     :returns: Fixed-shape tensor array.
     """
-    return _encode_same_column(SAME_L_FIELD, audio, sample_rate, encoder)
+    return _encode_same_column(
+        audio,
+        sample_rate,
+        encoder,
+        field=SAME_L_FIELD,
+        frame_count=same_l_num_latent_frames,
+    )
 
 
 def _load_m2l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -636,19 +678,26 @@ def _write_columns(
     :raises ValueError: Policies are empty or dataset write preconditions fail.
     """
     import lance
+    import torch
 
     if not specs:
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
     input_fields = sorted({spec.input_field for spec in specs})
     total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
-    encoders = _load_encoders(specs, config)
+    # Model construction must not consume the seed governing stochastic encoders.
+    with torch.random.fork_rng():
+        encoders = _load_encoders(specs, config)
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)
     sample = next(dataset.to_batches(columns=input_fields, limit=1))
-    sample_output = _encode_columns(_decoded_sources(sample, input_fields), sample_rate, specs, encoders)
+    # Schema probing must not perturb stochastic encoders' persisted outputs.
+    with torch.random.fork_rng():
+        sample_output = _encode_columns(
+            _decoded_sources(sample, input_fields), sample_rate, specs, encoders
+        )
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(

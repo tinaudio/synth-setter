@@ -106,8 +106,8 @@ def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "test_same_sa3_loader_matches_legacy_reference[same_s]" in result.stdout
-    assert "test_same_sa3_loader_matches_legacy_reference[same_l]" in result.stdout
+    assert "test_same_hydra_main_writes_legacy_matching_lance_column[same_s-12]" in result.stdout
+    assert "test_same_hydra_main_writes_legacy_matching_lance_column[same_l-11]" in result.stdout
     assert "test_train_eval_same_conditioning_real_e2e" not in result.stdout
 
 

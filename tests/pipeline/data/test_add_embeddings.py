@@ -66,7 +66,8 @@ from synth_setter.pipeline.data.add_embeddings import (
     load_m2l_audio_encoder,
     load_same_audio_encoder,
     same_encoder_input,
-    same_num_latent_frames,
+    same_l_num_latent_frames,
+    same_s_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
@@ -126,15 +127,19 @@ def _temporal_m2l(audio: np.ndarray) -> np.ndarray:
     return vectors[:, :, None] + offsets[None, None, :]
 
 
-def _fake_same(fill: float) -> Callable[[np.ndarray], np.ndarray]:
-    """Build a deterministic SAME encoder.
+def _fake_same(
+    fill: float,
+    frame_count: Callable[[int, int], int] = same_s_num_latent_frames,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Build a deterministic SAME encoder with the selected model's frame contract.
 
     :param fill: Constant value used for every latent cell.
+    :param frame_count: SAME model's latent-frame calculation.
     :returns: Encoder over prepared stereo audio.
     """
 
     def encode(stereo: np.ndarray) -> np.ndarray:
-        frames = same_num_latent_frames(stereo.shape[2], SAME_SAMPLE_RATE)
+        frames = frame_count(stereo.shape[2], SAME_SAMPLE_RATE)
         return np.full((len(stereo), SAME_EMBEDDING_DIM, frames), fill, dtype=np.float32)
 
     return encode
@@ -150,7 +155,9 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_m2l
     if name == "clap":
         return _fake_clap
-    return _fake_same(0.25 if name == "same_s" else 0.75)
+    if name == "same_s":
+        return _fake_same(0.25)
+    return _fake_same(0.75, same_l_num_latent_frames)
 
 
 def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
@@ -489,6 +496,11 @@ def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
             "same_s",
             lambda stereo: np.zeros((len(stereo), 128, 1), dtype=np.float32),
             r"expected \(2, 256, 2\)",
+        ),
+        (
+            "same_l",
+            lambda stereo: np.zeros((len(stereo), 256, 2), dtype=np.float32),
+            r"expected \(2, 256, 1\)",
         ),
     ],
 )
@@ -1081,7 +1093,7 @@ def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
         gc.collect()
         assert first_encoder is not None
         assert first_encoder() is None
-        return _fake_same(0.75)
+        return _fake_same(0.75, same_l_num_latent_frames)
 
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
@@ -1435,9 +1447,27 @@ def test_same_encoder_input_with_more_than_two_channels_raises() -> None:
         same_encoder_input(surround, SAME_SAMPLE_RATE)
 
 
-def test_same_num_latent_frames_for_standard_render_returns_44() -> None:
-    """The standard four-second render produces the conditioning profile width."""
-    assert same_num_latent_frames(4 * SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 44
+def test_same_s_num_latent_frames_for_one_second_returns_12() -> None:
+    """SAME-S pads one second to six two-frame blocks."""
+    assert same_s_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 12
+
+
+def test_same_l_num_latent_frames_for_one_second_returns_11() -> None:
+    """SAME-L emits one frame per complete or partial 4096-sample hop."""
+    assert same_l_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 11
+
+
+@pytest.mark.parametrize(
+    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
+)
+def test_same_num_latent_frames_for_four_second_conditioning_returns_44(
+    frame_count: Callable[[int, int], int],
+) -> None:
+    """Both SAME models retain the 44-frame conditioning profile contract.
+
+    :param frame_count: SAME model's latent-frame calculation.
+    """
+    assert frame_count(4 * SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 44
     assert SAME_LATENT_FRAMES == 44
 
 
@@ -1445,30 +1475,33 @@ def test_same_num_latent_frames_for_standard_render_returns_44() -> None:
     ("num_samples", "sample_rate", "expected"),
     [
         (2 * SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE // 2, 4),
-        (SAME_SAMPLE_RATE, SAME_SAMPLE_RATE, 12),
         (SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE, 2),
     ],
 )
-def test_same_num_latent_frames_resamples_and_pads_even_blocks(
+def test_same_s_num_latent_frames_resamples_and_pads_two_frame_blocks(
     num_samples: int, sample_rate: int, expected: int
 ) -> None:
-    """SAME frame math follows resampling and two-hop padding.
+    """SAME-S frame math follows resampling and two-hop padding.
 
     :param num_samples: Source clip length.
     :param sample_rate: Source rate in Hz.
     :param expected: Expected even latent-frame count.
     """
-    assert same_num_latent_frames(num_samples, sample_rate) == expected
+    assert same_s_num_latent_frames(num_samples, sample_rate) == expected
 
 
+@pytest.mark.parametrize(
+    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
+)
 @pytest.mark.parametrize(
     ("num_samples", "sample_rate"), [(0, SAME_SAMPLE_RATE), (SAME_SAMPLE_RATE, 0)]
 )
 def test_same_num_latent_frames_with_nonpositive_input_raises(
-    num_samples: int, sample_rate: int
+    frame_count: Callable[[int, int], int], num_samples: int, sample_rate: int
 ) -> None:
-    """Zero clip lengths and rates fail with both received values.
+    """Both SAME frame contracts reject non-positive lengths and rates.
 
+    :param frame_count: SAME model's latent-frame calculation.
     :param num_samples: Invalid source length candidate.
     :param sample_rate: Invalid source rate candidate.
     """
@@ -1476,7 +1509,7 @@ def test_same_num_latent_frames_with_nonpositive_input_raises(
         ValueError,
         match=f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}",
     ):
-        same_num_latent_frames(num_samples, sample_rate)
+        frame_count(num_samples, sample_rate)
 
 
 def test_same_profile_shape_feeds_embedding_pool() -> None:

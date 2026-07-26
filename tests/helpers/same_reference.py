@@ -1,6 +1,8 @@
 """Inputs and provenance shared by SAME parity tests and regeneration."""
 
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 
@@ -8,16 +10,18 @@ SAME_REFERENCE_DIR = Path(__file__).parents[1] / "fixtures" / "same"
 SAME_REFERENCE_RANDOM_SEED = 0
 SAME_REFERENCE_ROWS = 2
 
-SAME_HF_CHECKPOINTS: dict[str, tuple[str, str]] = {
-    "same_s": (
-        "stabilityai/SAME-S",
-        "fbeb3dcf53a326e5682f38e22e7f740202d44232",
-    ),
-    "same_l": (
-        "stabilityai/SAME-L",
-        "41acf79dd242877d6499a1108ca5dba5d5eecfc5",
-    ),
-}
+SAME_HF_CHECKPOINTS: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        "same_s": (
+            "stabilityai/SAME-S",
+            "fbeb3dcf53a326e5682f38e22e7f740202d44232",
+        ),
+        "same_l": (
+            "stabilityai/SAME-L",
+            "41acf79dd242877d6499a1108ca5dba5d5eecfc5",
+        ),
+    }
+)
 
 
 def same_reference_audio(sample_rate: int) -> np.ndarray:

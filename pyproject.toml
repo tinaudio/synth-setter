@@ -253,17 +253,8 @@ conflicts = [
     { extra = "cu128" },
   ],
 ]
-# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. This
-# static metadata replaces ONLY that package's declared deps, relaxing the two
-# pins to floors so the existing lock (and cpu/cu128 index routing) keeps
-# choosing the torch version; a global
-# override-dependencies would rewrite the project's own extra-conditioned torch
-# requirements and collapse the cpu/cu128 fork. Every other floor it declares
-# is already satisfied by the lock. The T5Gemma prompt-conditioner path is
-# bitwise identical across torch 2.7.1 and the locked torch at float32
-# (max_abs_diff 0.0 over 22 prompts, embedding std 1.75; scripts/dev/
-# sa3_t5gemma_parity.py). At the checkpoint's declared bfloat16 the same
-# comparison diverges by 11.5, which is why the encoder is pinned to float32.
+# Package-scoped metadata relaxes SA3's torch pins without collapsing cpu/cu128 routing;
+# float32 parity evidence lives in scripts/dev/sa3_t5gemma_parity.py.
 [[tool.uv.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +60,8 @@ def main() -> None:
             hf_revision=np.array(revision),
             reference_runtime=np.array("stable-audio-tools==0.0.20"),
             torch_version=np.array(torch.__version__),
+            platform_system=np.array(platform.system()),
+            platform_machine=np.array(platform.machine()),
             random_seed=np.array(SAME_REFERENCE_RANDOM_SEED),
         )
         logger.info("wrote %s shape=%s torch=%s", output, latents.shape, torch.__version__)

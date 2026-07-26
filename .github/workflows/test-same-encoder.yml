@@ -76,7 +76,15 @@ jobs:
       - name: Run ${{ matrix.model }} parity (real weights, CPU)
         env:
           PYTEST_SESSION_BUDGET_SECONDS: "2400"
-        run: uv run --no-sync pytest -m same_e2e tests/pipeline/data/test_same_encoder_e2e.py -k "${{ matrix.model }}" -vv --cov=src --cov-branch --cov-report=xml
+        run: |
+          uv run --no-sync pytest \
+            -m same_e2e \
+            tests/pipeline/data/test_same_encoder_e2e.py \
+            -k "${{ matrix.model }}" \
+            -vv \
+            --cov=src \
+            --cov-branch \
+            --cov-report=xml
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''
