@@ -43,6 +43,7 @@ _MUTANT_SHARDS = [
         "pattern": "synth_setter.pipeline.data.add_*.x__[n-z]*",
     },
     {"name": "pipeline-lance", "pattern": "synth_setter.pipeline.data.lance_*"},
+    {"name": "pipeline-t5gemma", "pattern": "synth_setter.pipeline.data.t5gemma.*"},
     {"name": "pipeline-stats", "pattern": "synth_setter.pipeline.data.stats.*"},
     {
         "name": "pipeline-finalize",
