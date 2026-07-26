@@ -265,6 +265,36 @@ def test_postprocessing_serializes_plugin_path(
     assert render_argv[plugin_idx + 1] == plugin_path
 
 
+def test_postprocessing_rejects_torchsynth_preset_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A torchsynth render cannot carry a plugin-host preset.
+
+    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so no wrapper is materialized.
+    :param predictions_tree: Output tree satisfying the prediction existence guard.
+    :param captured_argv: Captured subprocess calls; remains empty on validation failure.
+    """
+    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={
+            "param_spec_name": "torchsynth_full",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "presets/invalid.vstpreset",
+            "renderer_backend": "torchsynth",
+        },
+    )
+
+    with pytest.raises(ValueError, match="has no preset"):
+        _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []
+
+
 def test_postprocessing_forwards_render_audio_fields(
     monkeypatch: pytest.MonkeyPatch,
     predictions_tree: Path,

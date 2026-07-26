@@ -115,6 +115,21 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
     assert probe.probe_root == Path("/runs/out") / "val_audio_probe"
 
 
+def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
+    """The callback receives both synth identity and renderer settings."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    settings = probe._probe_fn.keywords["settings"]  # noqa: SLF001
+    assert settings.param_spec_name == "surge_xt"
+    assert settings.plugin_state_path == "presets/surge-base.vstpreset"
+    assert settings.renderer_version == "1.3.4"
+    assert settings.sample_rate == 44100
+
+
 def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:
     """Enabling the probe without a render group fails with a directed error."""
     with pytest.raises(ValueError, match="render"):

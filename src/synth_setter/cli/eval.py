@@ -31,6 +31,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -204,6 +205,14 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             render_values = OmegaConf.to_container(cfg.render, resolve=True)
             if not isinstance(render_values, dict):
                 raise TypeError("cfg.render must resolve to a mapping")
+            synth = SynthSpec.from_render_cfg(cfg.render)
+            if synth is None:
+                raise ValueError("render group names no param spec; cannot re-render audio")
+            render_values.update(
+                plugin_path=synth.plugin_path,
+                plugin_state_path=synth.plugin_state_path,
+                param_spec_name=synth.param_spec_name,
+            )
             render_config = RenderConfig.model_validate(render_values)
             args += [
                 sys.executable,
