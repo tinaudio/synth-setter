@@ -127,6 +127,16 @@ def _flow_embedding_batch() -> dict[str, torch.Tensor]:
     }
 
 
+_cached_embedding_arms = pytest.mark.parametrize(
+    ("module_factory", "batch_factory"),
+    [
+        (_flow_embedding_module, _flow_embedding_batch),
+        (_ff_embedding_module, _ff_embedding_batch),
+    ],
+    ids=["flow", "feed_forward"],
+)
+
+
 def test_ff_cached_conditioning_without_encoder_raises() -> None:
     """Cached feed-forward conditioning requires an explicit production encoder."""
     with pytest.raises(ValueError, match="cached conditioning requires an encoder"):
@@ -170,14 +180,7 @@ def test_ff_default_mel_conditioning_uses_legacy_network() -> None:
     assert torch.isfinite(loss)
 
 
-@pytest.mark.parametrize(
-    ("module_factory", "batch_factory"),
-    [
-        (_flow_embedding_module, _flow_embedding_batch),
-        (_ff_embedding_module, _ff_embedding_batch),
-    ],
-    ids=["flow", "feed_forward"],
-)
+@_cached_embedding_arms
 def test_vst_module_training_step_cached_embedding_returns_finite_loss(
     module_factory: _ModelFactory,
     batch_factory: _BatchFactory,
@@ -193,12 +196,28 @@ def test_vst_module_training_step_cached_embedding_returns_finite_loss(
     monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
 
     loss = module.training_step(batch_factory(), batch_idx=0)
-    loss.backward()
 
     assert loss.ndim == 0
     assert torch.isfinite(loss)
-    # Every arm must be reached: a disconnected projection or attention head would
-    # still yield a finite loss under a weaker any()/not-None assertion.
+
+
+@_cached_embedding_arms
+def test_vst_module_cached_embedding_backward_reaches_every_trainable_parameter(
+    module_factory: _ModelFactory,
+    batch_factory: _BatchFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disconnected encoder arm fails here rather than reporting a finite loss.
+
+    :param module_factory: Flow or feed-forward module factory under test.
+    :param batch_factory: Matching cached-conditioning batch factory.
+    :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
+    """
+    module = module_factory()
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+
+    module.training_step(batch_factory(), batch_idx=0).backward()
+
     gradients = {
         name: parameter.grad
         for name, parameter in module.named_parameters()
@@ -215,14 +234,7 @@ def test_vst_module_training_step_cached_embedding_returns_finite_loss(
     assert not unmoved, f"parameters with all-zero gradients: {unmoved}"
 
 
-@pytest.mark.parametrize(
-    ("module_factory", "batch_factory"),
-    [
-        (_flow_embedding_module, _flow_embedding_batch),
-        (_ff_embedding_module, _ff_embedding_batch),
-    ],
-    ids=["flow", "feed_forward"],
-)
+@_cached_embedding_arms
 def test_vst_module_training_step_zeroed_cached_embedding_changes_loss(
     module_factory: _ModelFactory,
     batch_factory: _BatchFactory,
@@ -250,14 +262,7 @@ def test_vst_module_training_step_zeroed_cached_embedding_changes_loss(
     assert not torch.isclose(conditioned_loss, zeroed_loss)
 
 
-@pytest.mark.parametrize(
-    ("module_factory", "batch_factory"),
-    [
-        (_flow_embedding_module, _flow_embedding_batch),
-        (_ff_embedding_module, _ff_embedding_batch),
-    ],
-    ids=["flow", "feed_forward"],
-)
+@_cached_embedding_arms
 def test_vst_module_cached_embedding_single_batch_overfits_to_near_zero_loss(
     module_factory: _ModelFactory,
     batch_factory: _BatchFactory,
