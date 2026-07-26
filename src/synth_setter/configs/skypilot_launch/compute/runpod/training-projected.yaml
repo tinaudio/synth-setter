@@ -1,0 +1,14 @@
+# RunPod pool for runs that hydrate a projected column subset rather than the
+# whole dataset. `download_dataset_txids` transfers only the columns the
+# loaders read (~10 GB for 440k Surge Simple rows of param_array + m2l), so the
+# 750 GB reservation runpod/training needs is both unnecessary and scarcer to
+# place.
+name: runpod-training-projected
+resources:
+  - cloud: runpod
+    accelerators:
+      RTX3090: 1
+      RTX4090: 1
+      A40: 1
+    use_spot: false
+    disk_size: 100

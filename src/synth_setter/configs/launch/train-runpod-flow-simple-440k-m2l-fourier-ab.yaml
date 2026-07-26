@@ -1,0 +1,27 @@
+# RunPod launch for the Fourier value-encoder A/B on the 440k Surge Simple
+# dataset. One config serves both arms: pass MODEL_ARM and RUN_NAME per launch
+# so the two jobs differ only in the parameter-value path.
+#
+# The surge/flow_simple_440k_m2l experiment owns the dataset pin, projected
+# hydration txids, and training cadence; the cmd carries only arm selection and
+# operational flags.
+#
+# predict_file is steered away from the test shard because the datamodule
+# otherwise treats test as the predict split and hydrates its audio column —
+# see #2519.
+
+compute: runpod/training-projected
+tier: mid
+worker_image_tag: devcontainer-tools
+env_file: .env
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  experiment=surge/flow_simple_440k_m2l
+  "model=${MODEL_ARM:-vst_flow}"
+  "run_name=${RUN_NAME:-m2l_fourier_ab}"
+  datamodule.predict_file=/home/build/synth-setter/train-run/data/unused-predict.lance
+  training.upload_checkpoints_during_training=true
+  hydra.run.dir=/home/build/synth-setter/train-run
