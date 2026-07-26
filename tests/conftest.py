@@ -1,6 +1,7 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
+import json
 import os
 import shutil
 import subprocess
@@ -852,6 +853,25 @@ def cfg_surge_xt_global(
     )
 
 
+def _synth_flag_value(param_spec_name: str) -> str:
+    """Encode one synth identity as the renderer CLI's ``--synth`` value.
+
+    Mirrors ``build_generate_args``: the nested field reaches the worker's
+    ``CliSettingsSource`` as JSON, not as a Python repr.
+
+    :param param_spec_name: Registry key selecting the spec and its preset.
+    :returns: JSON object string for the ``--synth`` flag.
+    """
+    return json.dumps(
+        {
+            "name": param_spec_name,
+            "param_spec_name": param_spec_name,
+            "plugin_path": PLUGIN_PATH,
+            "plugin_state_path": plugin_state_paths[param_spec_name],
+        }
+    )
+
+
 def _render_smoke_train_subprocess(
     output_path: Path,
     param_spec_name: str,
@@ -873,9 +893,8 @@ def _render_smoke_train_subprocess(
         sys.executable,
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
-        f"--plugin_path={PLUGIN_PATH}",
-        f"--plugin_state_path={plugin_state_paths[param_spec_name]}",
-        f"--param_spec_name={param_spec_name}",
+        # Identity is one JSON-encoded nested field, matching build_generate_args.
+        f"--synth={_synth_flag_value(param_spec_name)}",
         f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
         f"--channels={_SURGE_FIXTURE_CHANNELS}",
@@ -1007,8 +1026,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
-        and ``--plugin_state_path`` for ``generate_vst_dataset``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--synth``
+        identity for ``generate_vst_dataset``.
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """

@@ -1469,8 +1469,8 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         assert len(eval_configs) == 3
         for config_path in eval_configs:
             eval_cfg = OmegaConf.load(config_path)
-            assert eval_cfg.render.param_spec_name == "surge_simple"
-            assert eval_cfg.render.plugin_state_path == "presets/surge-simple.vstpreset"
+            assert eval_cfg.render.synth.param_spec_name == "surge_simple"
+            assert eval_cfg.render.synth.plugin_state_path == "presets/surge-simple.vstpreset"
             assert eval_cfg.render.renderer_version == "1.3.4"
             assert eval_cfg.render.sample_rate == 44100
 

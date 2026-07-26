@@ -1227,10 +1227,10 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
 def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> None:
     """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
 
-    ``_run_predict_postprocessing`` reads ``cfg.render.param_spec_name`` /
-    ``plugin_state_path`` / ``plugin_path`` to build the renderer argv. This composition
-    test pins that both shipped render groups supply all three keys, so a future
-    rename in a ``render/*.yaml`` surfaces here rather than mid-eval.
+    ``_run_predict_postprocessing`` resolves identity via ``SynthSpec.from_render_cfg``
+    to build the renderer argv. This composition test pins that both shipped render
+    groups supply the whole identity, so a future rename in a ``render/*.yaml``
+    surfaces here rather than mid-eval.
 
     :param render_group: Render config group composed into the eval cfg.
     """
@@ -1241,9 +1241,9 @@ def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> Non
             overrides=["experiment=surge/fake_oracle", f"render={render_group}"],
         )
     try:
-        assert cfg.render.param_spec_name
-        assert cfg.render.plugin_state_path
-        assert cfg.render.plugin_path
+        assert cfg.render.synth.param_spec_name
+        assert cfg.render.synth.plugin_state_path
+        assert cfg.render.synth.plugin_path
     finally:
         GlobalHydra.instance().clear()
 

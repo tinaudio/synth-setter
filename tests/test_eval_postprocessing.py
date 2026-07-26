@@ -216,7 +216,7 @@ def test_postprocessing_plugin_path_gate(
     predictions_tree: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``cfg.render.plugin_path`` adds ``--plugin_path <value>`` to the render argv only when set.
+    """The synth's plugin path adds ``--plugin_path <value>`` to the render argv only when set.
 
     :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the headless wrapper
         prefix doesn't shift argv indices the test asserts on.
