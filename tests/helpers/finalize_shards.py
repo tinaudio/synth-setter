@@ -148,13 +148,21 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     )
 
 
-def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | None = None) -> None:
+def write_minimal_lance_shard(
+    dest: Path,
+    spec: DatasetSpec,
+    num_rows: int | None = None,
+    *,
+    audio: np.ndarray | None = None,
+) -> None:
     """Write a structurally valid Lance shard for ``spec`` at ``dest``.
 
     :param dest: Filesystem path where the Lance file is written.
     :param spec: Lance spec whose render shape/dtypes define the shard contract.
     :param num_rows: Override the leading (row-count) dimension of every field;
         ``None`` keeps the spec's per-shard sample count.
+    :param audio: Source audio replacing the zero-filled fixture rows.
+    :raises ValueError: ``audio`` differs from the spec-derived audio shape.
     """
     from synth_setter.pipeline.data.lance_shard import (
         lance_schema,
@@ -174,8 +182,13 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
         smoke_shard_metadata(render),
         field_dtypes=field_dtypes,
     )
+    audio_values = np.zeros(shapes[AUDIO_FIELD], dtype=field_dtypes[AUDIO_FIELD])
+    if audio is not None:
+        if audio.shape != shapes[AUDIO_FIELD]:
+            raise ValueError(f"audio shape {audio.shape} does not match {shapes[AUDIO_FIELD]}")
+        audio_values = np.ascontiguousarray(audio, dtype=field_dtypes[AUDIO_FIELD])
     arrays = {
-        AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=field_dtypes[AUDIO_FIELD]),
+        AUDIO_FIELD: audio_values,
         MEL_SPEC_FIELD: (np.arange(np.prod(shapes[MEL_SPEC_FIELD]), dtype=np.float32) % 100)
         .astype(field_dtypes[MEL_SPEC_FIELD])
         .reshape(shapes[MEL_SPEC_FIELD]),

@@ -19,15 +19,27 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/mutmut.yaml"
 _PREDICT_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _PREDICT_SHARDS = {
-    "evaluation-predict-public": [f"{_PREDICT_MODULE}.x_[!_]*"],
-    "evaluation-predict-private-leading-1": [
+    "evaluation-predict-misc": [
+        f"{_PREDICT_MODULE}.x_[!_r]*",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1?*",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[5-9]",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[5-9]?*",
         f"{_PREDICT_MODULE}.x__make_render_fn*",
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1",
-        f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1?*",
+        f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1?",
     ],
-    "evaluation-predict-private-leading-2-9": [
+    "evaluation-predict-render-audio-leading-2-4": [
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[2-4]",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[2-4]?*",
+    ],
+    "evaluation-predict-render-artifacts-leading-2-9-and-100-149": [
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_[2-9]",
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_[2-9]?*",
+        f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1[0-4]?",
+    ],
+    "evaluation-predict-render-artifacts-150-199": [
+        f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1[5-9]?",
     ],
 }
 
@@ -98,7 +110,10 @@ def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
         'patterns_json=$(jq -er \'if type == "array" and length > 0 and '
         'all(.[]; type == "string" and length > 0) then .[] else error("invalid mutation '
         'selector array") end\' <<<"$MUTMUT_PATTERNS")\n'
-        'mapfile -t patterns <<<"$patterns_json"\n'
+        "patterns=()\n"
+        "while IFS= read -r pattern; do\n"
+        '  patterns+=("${pattern}")\n'
+        'done <<<"${patterns_json}"\n'
         'uv run mutmut run --max-children 4 "${patterns[@]}"\n'
     )
 
@@ -124,8 +139,9 @@ def _run_workflow_shell(
     run_step = next(
         step for step in _workflow()["jobs"]["mutmut_run"]["steps"] if step["name"] == "Run mutmut"
     )
+    bash_without_mapfile = "enable -n mapfile 2>/dev/null || true\n" + run_step["run"]
     result = subprocess.run(  # noqa: S603 — bash executes the checked-in workflow script
-        ["/bin/bash", "-c", run_step["run"]],
+        ["/bin/bash", "-c", bash_without_mapfile],
         capture_output=True,
         env=env,
         text=True,
@@ -140,7 +156,11 @@ def test_mutmut_workflow_run_step_expands_every_selector(tmp_path: Path) -> None
 
     :param tmp_path: Directory holding a recording ``uv`` executable.
     """
-    patterns = _PREDICT_SHARDS["evaluation-predict-private-leading-1"]
+    patterns = [
+        "selector with spaces",
+        r"selector\with\backslashes",
+        "selector;$(printf not-executed) [!_]*?",
+    ]
 
     result, uv_args_path = _run_workflow_shell(tmp_path, json.dumps(patterns))
 
@@ -207,7 +227,7 @@ def test_mutmut_multi_selector_shard_runs_only_matching_mutants(tmp_path: Path) 
     )
     patterns = [
         pattern.replace(_PREDICT_MODULE, synthetic_module)
-        for pattern in _PREDICT_SHARDS["evaluation-predict-private-leading-1"]
+        for pattern in _PREDICT_SHARDS["evaluation-predict-misc"]
     ]
 
     result = subprocess.run(  # noqa: S603 — sys.executable and argv are test-owned

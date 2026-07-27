@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from hydra import compose, initialize_config_module
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -216,6 +216,41 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     assert spec.render.plugin_state_path == "presets/obxf-base.vstpreset"
     assert spec.num_params == 187
     assert spec.render.plugin_reload_cadence == "once"
+
+
+@pytest.mark.parametrize(
+    ("group", "param_spec_name", "plugin_state_path"),
+    [
+        ("surge_4_surgepy", "surge_4", "presets/surge-mini.fxp"),
+        ("surge_simple_surgepy", "surge_simple", "presets/surge-simple.fxp"),
+        ("surge_xt_surgepy", "surge_xt", "presets/surge-base.fxp"),
+    ],
+)
+@pytest.mark.requires_surgepy
+def test_surgepy_render_groups_compose_to_validated_isolated_configs(
+    group: str,
+    param_spec_name: str,
+    plugin_state_path: str,
+) -> None:
+    """Shipped SurgePy groups satisfy the strict runtime lifecycle contract.
+
+    :param group: SurgePy render group.
+    :param param_spec_name: Expected Surge parameter specification.
+    :param plugin_state_path: Expected FXP patch resource.
+    """
+    import surgepy
+
+    config = RenderConfig.model_validate(
+        OmegaConf.to_container(_compose_render_group(group), resolve=True)
+    )
+
+    assert config.synth.synth_version == surgepy.getVersion()
+    assert config.renderer_backend == "surgepy"
+    assert config.plugin_path == "surgepy"
+    assert config.param_spec_name == param_spec_name
+    assert config.plugin_state_path == plugin_state_path
+    assert config.gui_toggle_cadence == "never"
+    assert config.plugin_reload_cadence == "render"
 
 
 @pytest.mark.parametrize(

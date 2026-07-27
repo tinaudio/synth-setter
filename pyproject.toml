@@ -50,29 +50,14 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# SAME (Stability AI) encoder runtime for the add_embeddings --same mode.
-# Pinned exactly: 0.0.20 is the release validated for numerical equivalence
-# between upstream's torch pin and this project's lock (see PR #2283). Its
-# stale transitive pins are relaxed in [[tool.uv.dependency-metadata]].
-same = [
-  "stable-audio-tools==0.0.20",
-]
-# Stable Audio 3 text conditioning for the add_embeddings `t5gemma` mode.
-# Commit-pinned: upstream has no PyPI release and no tags, so a branch ref
-# would silently re-resolve. Its torch==2.7.1 / torchaudio==2.7.1 pins are
-# relaxed in [[tool.uv.dependency-metadata]] so the cpu/cu128 index routing
-# keeps choosing this project's locked wheel.
-sa3 = [
-  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
-]
 # TinyMU source is intentionally external because upstream has no detected license file.
 # This extra installs only MATPAC's pinned third-party runtime dependency.
 tinymu = [
   "timm==0.4.12",
 ]
 
-# Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
-# on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
+# cpu/cu128 route backend wheels; tinymu remains opt-in for its external-source adapter.
+# Heavy runtime lives in [dependency-groups] (#1139).
 
 [project.scripts]
 synth-setter-train = "synth_setter.cli.train:main"
@@ -161,6 +146,9 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
+  # below relaxes its torch pins without changing cpu/cu128 wheel routing.
+  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
   # Shape-checked tensor annotations; jaxtyping only checks under a runtime
   # typechecker, so beartype is not optional here.
   "jaxtyping>=0.2.36",
@@ -177,12 +165,11 @@ config = [
 # keeps `uv sync --frozen` self-sufficient.
 # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
 compute = [
-  "skypilot[runpod,oci,kubernetes,vast]==0.12.0",
+  "skypilot[runpod,kubernetes,vast]==0.12.0",
   # Pin: vastai-sdk 1.x removes VastAI.api_key_access, which SkyPilot 0.12's Vast
   # provisioner still calls (sky/provision/vast/utils.py) — 1.x breaks every launch.
   "vastai-sdk==0.2.5",
   "runpod==1.8.1",
-  "oci",
   "kubernetes==35.0.0",
 ]
 data = [
@@ -199,6 +186,7 @@ audio = [
   "pedalboard",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
+  "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "torchsynth==1.0.2",
 ]
 metrics = [
@@ -257,6 +245,7 @@ dev = [
 ]
 
 [tool.uv]
+build-constraint-dependencies = ["cmake<4"]
 # Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
 # heavy stack), so local onboarding and the ~15 full-install sites are unchanged
 # by the #1139 base trim. pip never installs PEP 735 groups and `uv pip` only
@@ -271,53 +260,8 @@ conflicts = [
     { extra = "cu128" },
   ],
 ]
-# stable-audio-tools 0.0.20 hard-pins torch==2.7.1 / torchaudio==2.7.1, two
-# packages with no py3.12 wheels (sentencepiece 0.1.99, PyWavelets 1.4.1), and
-# importlib-resources==5.12.0 (collides with the dev group's semantic-release).
-# This static metadata replaces ONLY that package's declared deps, relaxing the
-# stale pins to floors so the existing lock (and cpu/cu128 index routing) keeps
-# choosing the torch version. A global override-dependencies would instead
-# rewrite the project's own extra-conditioned torch requirements and collapse
-# the cpu/cu128 fork. The SAME-S encode path is numerically equivalent across
-# torch 2.7.1 and the locked torch (max_abs_diff 9.5e-5 on latents with
-# std 1.8; see PR #2283).
-[[tool.uv.dependency-metadata]]
-name = "stable-audio-tools"
-version = "0.0.20"
-requires-dist = [
-  "alias-free-torch==0.0.6",
-  "dill",
-  "einops",
-  "einops-exts",
-  "huggingface_hub",
-  "importlib-resources>=6.0",
-  "nnAudio",
-  "PyWavelets>=1.6",
-  "safetensors",
-  "scipy",
-  "sentencepiece>=0.2.0",
-  "setuptools",
-  "soxr",
-  "torch>=2.0.0",
-  "torchaudio>=2.0.0",
-  "torchsde",
-  "tqdm",
-  "transformers",
-  "v-diffusion-pytorch==0.0.2",
-  "vector-quantize-pytorch==1.14.41",
-]
-
-# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. As with
-# stable-audio-tools above, this static metadata replaces ONLY that package's
-# declared deps, relaxing the two pins to floors so the existing lock (and the
-# cpu/cu128 index routing) keeps choosing the torch version; a global
-# override-dependencies would rewrite the project's own extra-conditioned torch
-# requirements and collapse the cpu/cu128 fork. Every other floor it declares
-# is already satisfied by the lock. The T5Gemma prompt-conditioner path is
-# bitwise identical across torch 2.7.1 and the locked torch at float32
-# (max_abs_diff 0.0 over 22 prompts, embedding std 1.75; scripts/dev/
-# sa3_t5gemma_parity.py). At the checkpoint's declared bfloat16 the same
-# comparison diverges by 11.5, which is why the encoder is pinned to float32.
+# Package-scoped metadata relaxes SA3's torch pins without collapsing cpu/cu128 routing;
+# float32 parity evidence lives in scripts/dev/sa3_t5gemma_parity.py.
 [[tool.uv.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"
@@ -422,13 +366,14 @@ markers = [
   "benchmark: performance benchmarks",
   "dataloader_multiprocess: exercises real DataLoader child processes and must share one xdist resource group",
   "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
+  "requires_surgepy: requires the pinned surgepy native extension (auto-skipped off Linux x86_64)",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
-  "same_e2e: SAME encoder tests needing the `same` extra + HF weight download (own GHA workflow)",
+  "same_e2e: real-weight SAME encoder tests with immutable HF checkpoints (own GHA workflow)",
 ]
 minversion = "6.0"
 pythonpath = ["src"]

@@ -41,7 +41,6 @@ def test_tinymu_registry_spec_pins_checkpoint_and_mean_pooling() -> None:
 
     assert spec.column == TINYMU_FIELD
     assert spec.default_checkpoint == DEFAULT_TINYMU_CHECKPOINT
-    assert spec.requires_extra == "tinymu"
     assert spec.co_resident is False
     assert spec.index == IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec")
 

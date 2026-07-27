@@ -94,6 +94,25 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def test_generate_dataset_removed_oci_compute_option_exits_nonzero() -> None:
+    """The real CLI rejects the removed OCI compute option before dispatch."""
+    result = subprocess.run(  # noqa: S603 — fixed module and Hydra overrides
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.generate_dataset",
+            "experiment=generate_dataset/smoke-shard",
+            "skypilot_launch/compute=oci/cpu",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Could not find 'skypilot_launch/compute/oci/cpu'" in result.stderr
+
+
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     cfg_dataset: DictConfig,
 ) -> None:
@@ -745,6 +764,62 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     assert captured_renderer_argv[backend_index + 1] == "dawdreamer"
     shard = spec.shards[0]
     # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
+def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SurgePy identity reaches the operator renderer subprocess contract.
+
+    :param cfg_dataset_dawdreamer: Dataset scaffold changed to the SurgePy backend.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.render.synth.plugin_path = "surgepy"
+        cfg_dataset_dawdreamer.render.synth.plugin_state_path = "presets/surge-base.fxp"
+        cfg_dataset_dawdreamer.render.renderer_backend = "surgepy"
+        cfg_dataset_dawdreamer.render.synth.synth_version = "1.3.master.f7b97c68"
+        cfg_dataset_dawdreamer.render.gui_toggle_cadence = "never"
+        cfg_dataset_dawdreamer.render.plugin_reload_cadence = "render"
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/surgepy-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_dawdreamer)
+
+    assert spec.render.renderer_backend == "surgepy"
+    assert spec.render.plugin_path == "surgepy"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "surgepy"
+    shard = spec.shards[0]
     staging = (
         fake_r2_remote
         / spec.r2.bucket

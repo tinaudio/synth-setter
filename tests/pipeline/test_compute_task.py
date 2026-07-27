@@ -74,7 +74,7 @@ class TestLoadComputeScript:
 
 
 class TestBuildTaskDocRunBlock:
-    """Cmd / run_wrapper / run_script resolution preserves legacy failure semantics."""
+    """Command and run-script resolution preserves failure semantics."""
 
     def test_cmd_becomes_run_block(self) -> None:
         """Cmd becomes run block."""
@@ -93,33 +93,6 @@ class TestBuildTaskDocRunBlock:
         task = _build_task(compute, cmd=None)
         assert task.run is not None
         assert "skypilot-debug job done" in task.run
-
-    def test_run_wrapper_substitutes_worker_cmd_sentinel(self) -> None:
-        """Run wrapper substitutes worker cmd sentinel."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
-        compute = ComputeConfig(
-            name="oci-cpu",
-            resources=[oci],
-            image_delivery="docker-in-run",
-            setup_scripts=["oci-install-docker.sh"],
-            run_wrapper="oci-docker-run.sh",
-        )
-        task = _build_task(compute, cmd="echo hello && exec foo")
-        assert task.run is not None
-        assert "${WORKER_CMD}" not in task.run
-        assert 'bash -c "echo hello && exec foo"' in task.run
-
-    def test_run_wrapper_without_cmd_raises(self) -> None:
-        """Run wrapper without cmd raises."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
-        compute = ComputeConfig(
-            name="oci-cpu",
-            resources=[oci],
-            image_delivery="docker-in-run",
-            run_wrapper="oci-docker-run.sh",
-        )
-        with pytest.raises(ValueError, match="cmd"):
-            _build_task(compute, cmd=None)
 
     def test_no_run_source_and_no_cmd_raises(self) -> None:
         """No run source and no cmd raises."""
@@ -142,18 +115,6 @@ class TestBuildTaskDocResources:
         task = _build_task(compute, cmd="echo hi")
         accels = sorted(str(res.accelerators) for res in task.resources)
         assert accels == ["{'A40': 1}", "{'RTX3090': 1}"]
-
-    def test_oci_docker_in_run_entries_get_no_image_id(self) -> None:
-        """Oci docker in run entries get no image id."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8", disk_size=50)
-        compute = ComputeConfig(
-            name="oci-cpu",
-            resources=[oci],
-            image_delivery="docker-in-run",
-            run_wrapper="oci-docker-run.sh",
-        )
-        task = _build_task(compute, cmd="echo hi")
-        assert [res.image_id for res in task.resources] == [None]
 
     def test_kubernetes_pod_config_round_trips_as_cluster_config_override(self) -> None:
         """Kubernetes pod config round trips as cluster config override."""
@@ -256,7 +217,6 @@ def _all_compute_option_names() -> list[str]:
         for path in root.rglob("*.yaml")
         if path.parent.name != "scripts"
     ]
-    assert len(names) == 17
     return sorted(names)
 
 
@@ -275,12 +235,12 @@ class TestComputeOptionCompose:
             assert load_compute_script(script)
         if compute.run_script is not None:
             assert load_compute_script(compute.run_script)
-        if compute.run_wrapper is not None:
-            assert "${WORKER_CMD}" in load_compute_script(compute.run_wrapper)
 
     def test_compute_option_names_lists_all_options(self) -> None:
-        """Compute option names lists all options."""
-        assert compute_option_names() == _all_compute_option_names()
+        """Compute option names lists all supported options and excludes OCI."""
+        option_names = _all_compute_option_names()
+        assert compute_option_names() == option_names
+        assert "oci/cpu" not in option_names
 
     @pytest.mark.parametrize(
         "debug_option",
@@ -305,10 +265,14 @@ class TestComputeOptionCompose:
         assert debug.resources == smoke.resources
         assert debug.run_script is not None
 
-    def test_unknown_option_raises_value_error(self) -> None:
-        """Unknown option raises value error."""
-        with pytest.raises(ValueError, match="no-such-option"):
-            load_compute_option("runpod/no-such-option")
+    @pytest.mark.parametrize("option", ["oci/cpu", "runpod/no-such-option"])
+    def test_unsupported_option_raises_value_error(self, option: str) -> None:
+        """Reject removed and unknown compute options.
+
+        :param option: Unsupported compute option name.
+        """
+        with pytest.raises(ValueError, match=option):
+            load_compute_option(option)
 
     def test_production_network_volume_options_mount_the_volume(self) -> None:
         """Production network volume options mount the volume."""

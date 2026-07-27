@@ -7,9 +7,16 @@ definition without pulling ``synth_setter.data.vst`` at import time.
 
 from typing import Literal
 
-type RendererBackend = Literal["pedalboard", "dawdreamer", "dawdreamer_faust", "torchsynth"]
+type RendererBackend = Literal[
+    "pedalboard",
+    "dawdreamer",
+    "dawdreamer_faust",
+    "surgepy",
+    "torchsynth",
+]
 
 # ``RenderConfig.plugin_path`` value that selects the in-process backend in
 # place of a plugin-bundle path (see ``core.extract_renderer_version``).
 TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 FAUST_PLUGIN_NAME = "faust"
+SURGEPY_PLUGIN_NAME = "surgepy"

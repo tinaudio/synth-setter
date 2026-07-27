@@ -35,6 +35,7 @@ from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
+from tests.helpers.same_reference import SAME_HF_CHECKPOINTS
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
 # These values must match the explicit RenderConfig fixture arguments.
@@ -133,39 +134,42 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
 
 
 _R2_AVAILABLE = r2_io.is_r2_reachable()
+# The pinned surgepy wheel builds only on Linux x86_64 (see pyproject markers), so
+# every real-engine test is dependency-gated the way ``requires_vst`` gates plugins.
+_SURGEPY_AVAILABLE = importlib.util.find_spec("surgepy") is not None
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Validate selected SAME e2e prerequisites and apply resource skip markers.
+    """Fail fast for selected SAME VST tests and apply resource skip markers.
 
     :param config: Active pytest configuration containing the marker expression.
     :param items: Mutated in place to insert skip markers for missing resources.
-    :raises pytest.UsageError: If an explicitly selected SAME lane lacks a prerequisite.
+    :raises pytest.UsageError: A selected SAME item requires an unavailable VST.
     """
-    if "same_e2e" in config.getoption("-m"):
-        missing = []
-        if importlib.util.find_spec("stable_audio_tools") is None:
-            missing.append("stable_audio_tools (install with `uv sync --extra same`)")
-        selected_lane_requires_vst = any("requires_vst" in item.keywords for item in items)
-        if selected_lane_requires_vst and not VST_AVAILABLE:
-            missing.append(
-                f"VST plugin at {PLUGIN_PATH!r} "
-                "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
-            )
-        if missing:
-            raise pytest.UsageError("same_e2e missing prerequisites:\n- " + "\n- ".join(missing))
+    same_e2e_selected = "same_e2e" in config.getoption("-m")
+    selected_requires_vst = any("requires_vst" in item.keywords for item in items)
+    if same_e2e_selected and selected_requires_vst and not VST_AVAILABLE:
+        raise pytest.UsageError(
+            f"same_e2e requires VST plugin at {PLUGIN_PATH!r} "
+            "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
+        )
 
     skip_vst = pytest.mark.skip(
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
     skip_r2 = pytest.mark.skip(reason="R2 remote is not reachable; run `rclone lsd r2:` to verify")
+    skip_surgepy = pytest.mark.skip(
+        reason="surgepy native extension is unavailable (pinned for Linux x86_64 only)"
+    )
     for item in items:
         if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)
         if "integration_r2" in item.keywords and not _R2_AVAILABLE:
             item.add_marker(skip_r2)
+        if "requires_surgepy" in item.keywords and not _SURGEPY_AVAILABLE:
+            item.add_marker(skip_surgepy)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
@@ -1085,16 +1089,11 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
 
 @pytest.fixture(scope="function")
-def local_embedding_checkpoints(
-    require_sa3_extra: None, require_same_extra: None
-) -> dict[str, str]:
+def local_embedding_checkpoints() -> dict[str, str]:
     """Return complete local checkpoints or skip before rendering the E2E fixture.
 
-    :param require_sa3_extra: Ensures the real SA3 conditioner is installed.
-    :param require_same_extra: Ensures the real SAME model implementation is installed.
     :returns: Local checkpoint directories keyed by embedding registry name.
     """
-    del require_sa3_extra, require_same_extra
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
 
@@ -1634,52 +1633,32 @@ def assert_licensed_embedding_columns(dataset_root: Path) -> None:
     np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
 
 
-# Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
-_SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
-    "same_s": "stabilityai/SAME-S",
-    "same_l": "stabilityai/SAME-L",
-}
-
-
-@pytest.fixture(scope="function")
-def require_sa3_extra() -> None:
-    """Resolve the SA3 import before expensive VST rendering starts."""
-    pytest.importorskip("stable_audio_3")
-
-
-@pytest.fixture(scope="function")
-def require_same_extra() -> None:
-    """Skip a test unless the optional ``same`` extra (``stable_audio_tools``) is installed.
-
-    Requested first by the SAME-e2e tests so the Surge render never runs when the
-    writer dependency is absent (a slow/VST lane without the ``same`` extra).
-    """
-    pytest.importorskip("stable_audio_tools")
-
-
 def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Path:
     """Add a real SAME (``same_s``/``same_l``) column to a rendered smoke dataset's splits.
 
     The SAME sibling of :func:`augment_lance_splits_with_embeddings`: runs the real
-    ``add_embeddings`` SAME dispatch (real ``stable_audio_tools`` encoder, public HF
-    checkpoint, no mocks) pinned at ``train.lance``, then clones the augmented
-    ``train.lance`` over the ``val``/``test`` clones so the encoder loads once.
-    Requires the optional ``same`` extra plus network access (HF weight download).
+    ``add_embeddings`` SAME dispatch with Stable Audio 3 and an immutable public HF
+    checkpoint, then clones the augmented ``train.lance`` over ``val``/``test`` so
+    the encoder loads once. Requires network access for the HF weight download.
 
     :param dataset_root: Dir holding ``{train,val,test}.lance`` from
         :func:`surge_xt_smoke_datasets`; each split is augmented in place.
     :param conditioning: SAME conditioning profile (``"same_s"`` / ``"same_l"``).
     :returns: ``dataset_root`` for call-site chaining.
     """
+    from huggingface_hub import snapshot_download
+
     from synth_setter.pipeline.data.add_embeddings import add_embeddings
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+    repo_id, revision = SAME_HF_CHECKPOINTS[conditioning]
+    checkpoint_dir = snapshot_download(repo_id, revision=revision)
     train_uri = dataset_root / "train.lance"
     add_embeddings(
         AddEmbeddingsConfig(
             lance_uri=str(train_uri),
             embeddings=(conditioning,),
-            checkpoints={conditioning: _SAME_E2E_HF_CHECKPOINTS[conditioning]},
+            checkpoints={conditioning: checkpoint_dir},
             device="cpu",
         )
     )

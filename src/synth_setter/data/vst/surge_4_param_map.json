@@ -32,6 +32,10 @@
       "dawdreamer": {
         "index": 329,
         "name": "A Amp EG Attack"
+      },
+      "surgepy": {
+        "synth_side_id": 320,
+        "name": "A Amp EG Attack"
       }
     },
     "a_filter_1_cutoff": {
@@ -49,6 +53,10 @@
       },
       "dawdreamer": {
         "index": 319,
+        "name": "A Filter 1 Cutoff"
+      },
+      "surgepy": {
+        "synth_side_id": 308,
         "name": "A Filter 1 Cutoff"
       }
     },
@@ -68,6 +76,10 @@
       "dawdreamer": {
         "index": 348,
         "name": "A LFO 1 Amplitude"
+      },
+      "surgepy": {
+        "synth_side_id": 339,
+        "name": "A LFO 1 Amplitude"
       }
     },
     "a_lfo_1_rate": {
@@ -86,7 +98,17 @@
       "dawdreamer": {
         "index": 346,
         "name": "A LFO 1 Rate"
+      },
+      "surgepy": {
+        "synth_side_id": 337,
+        "name": "A LFO 1 Rate"
       }
     }
+  },
+  "surgepy_preset_resource": "presets/surge-mini.fxp",
+  "surgepy_preset_sha256": "6674595b223ab156506b6ab0e1c2a573145e4af4252e7283df8f91d40f532eb7",
+  "surgepy": {
+    "plugin_version": "1.3.master.f7b97c68",
+    "parameter_count": 762
   }
 }

@@ -1,96 +1,88 @@
 name: GPU Tests
 
-# Runs only @pytest.mark.gpu tests inside the project's
-# `tinaudio/synth-setter:dev-snapshot` Docker image so the torch (cu128)
-# build, Surge XT VST3, and headless X11 stack match production. Mirrors
-# the Docker-in-CI pattern used by `test-vst-slow.yml`. Twice-weekly
-# schedule (Mon + Thu) and manual dispatch.
+# Dispatches the production CUDA and VST path through SkyPilot — see #2460.
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
-        required: false
-        default: "dev-snapshot"
   schedule:
     - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
 
 permissions:
   contents: read
 
+concurrency:
+  group: test-gpu-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  COVERAGE_KEY: ci/gpu/${{ github.run_id }}/${{ github.run_attempt }}/coverage.xml
+  LAUNCH_CONFIG: src/synth_setter/configs/launch/gpu-tests-runpod.yaml
+  R2_BUCKET: intermediate-data
+
 jobs:
   run_tests:
-    runs-on: gpu-x64
-
+    runs-on: ubuntu-latest
     timeout-minutes: 120
-
-    env:
-      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
 
-      - name: Pull image
-        run: docker pull "$IMAGE"
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: true
 
-      # Confirm the runner exposes a CUDA GPU to the container before the
-      # full pytest run; surfaces toolkit/driver issues with a clear error
-      # rather than a wall of skipped @RunIf(min_gpus=1) tests.
-      - name: Smoke-test GPU visibility inside container
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install SkyPilot dependencies
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      # The launcher runs cred bootstrap and the RunPod balance preflight itself,
+      # then tails the managed job so this step's exit code is the worker's.
+      - name: Dispatch GPU tests via SkyPilot
+        id: launch
+        timeout-minutes: 105
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WORKER_GIT_REF: ${{ github.sha }}
         run: |
-          docker run --rm --gpus all \
-            "$IMAGE" \
-            bash -c '
-              set -euo pipefail
-              nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
-              python -c "import torch; assert torch.cuda.is_available(), \"CUDA not available in container\"; print(\"cuda:\", torch.cuda.is_available(), \"count:\", torch.cuda.device_count())"
-            '
+          set -euo pipefail
+          uv run python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG" \
+            --extra-env COVERAGE_KEY "$COVERAGE_KEY" \
+            --extra-env R2_BUCKET "$R2_BUCKET"
 
-      # Mirrors the headless plugin-load smoke check in
-      # `docker/ubuntu22_04/Dockerfile:319-320` — fails fast if the plugin
-      # / image / mount layout is broken before the much-longer pytest run.
-      - name: Smoke-test Surge XT plugin load
+      # moveto, not copyto: retrieving the run-scoped object also cleans it up,
+      # so a skipped cleanup step can never leak coverage blobs into R2.
+      - name: Retrieve remote coverage
+        if: always()
+        env:
+          LAUNCH_OUTCOME: ${{ steps.launch.outcome }}
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
-            "$IMAGE" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              src/synth_setter/scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
-            '
-
-      # Mount the PR's tests + src into the container so we test THIS
-      # branch's code against the image's environment. The workspace mount
-      # shadows the in-image `plugins/Surge XT.vst3` symlink, so point
-      # SYNTH_SETTER_PLUGIN_PATH at the system VST3 path the image installs.
-      # `--gpus all` exposes the runner's CUDA device to the container; the
-      # dev-snapshot image's torch is built with cu128 wheels (see
-      # `src/synth_setter/configs/image/dev-snapshot.yaml`), matching the gpu-x64 runner's
-      # NVIDIA driver.
-      # coverage.xml written inside the container lands at
-      # ${{ github.workspace }}/coverage.xml via the workspace bind-mount.
-      # WANDB_API_KEY forwards into the container for the wandb_checkpoint round-trip
-      # tests; absent it those tests skip (see their skipif), leaving the suite green.
-      - name: Run GPU tests in Docker
-        run: |
-          docker run --rm --gpus all \
-            -v ${{ github.workspace }}:/home/build/synth-setter \
-            -e HYDRA_FULL_ERROR=1 \
-            -e "WANDB_API_KEY=${{ secrets.WANDB_API_KEY }}" \
-            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
-            "$IMAGE" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              src/synth_setter/scripts/run-linux-vst-headless.sh \
-                pytest -vv -s -m gpu \
-                  --cov=src --cov-branch --cov-report=xml --cov-report=term
-            '
+          set -euo pipefail
+          remote="r2:${R2_BUCKET}/${COVERAGE_KEY}"
+          if rclone moveto "$remote" coverage.xml --checksum && [[ -s coverage.xml ]]; then
+            echo "Retrieved remote coverage.xml"
+          elif [[ "$LAUNCH_OUTCOME" == "success" ]]; then
+            echo "::error::GPU worker succeeded without a retrievable coverage.xml"
+            exit 1
+          else
+            echo "No partial coverage artifact was produced before the worker failed"
+          fi
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != ''

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from synth_setter.metrics import BestSwapParamMSE
+from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 
 
 def _mse(pred: torch.Tensor, target: torch.Tensor) -> float:
@@ -21,6 +21,32 @@ def _mse(pred: torch.Tensor, target: torch.Tensor) -> float:
     :returns: Mean squared error as a float.
     """
     return (pred - target).square().mean().item()
+
+
+def test_best_swap_per_param_mse_attributes_errors_to_target_dimensions() -> None:
+    """Matched errors retain the target parameter identity after sorting."""
+    predicted = torch.tensor([[1.0, 4.0, 8.0], [2.0, 4.0, 7.0]])
+    target = torch.tensor([[7.0, 1.0, 3.0], [6.0, 1.0, 4.0]])
+
+    result = best_swap_per_param_mse(predicted, target)
+
+    assert torch.equal(result, torch.tensor([1.0, 0.5, 0.5]))
+
+
+def test_best_swap_per_param_mse_repeated_targets_use_stable_identity() -> None:
+    """Equal targets receive matches in their original order deterministically."""
+    predicted = torch.tensor([[0.0, 3.0, 5.0]])
+    target = torch.tensor([[2.0, 2.0, 4.0]])
+
+    result = best_swap_per_param_mse(predicted, target)
+
+    assert torch.equal(result, torch.tensor([4.0, 1.0, 1.0]))
+
+
+def test_best_swap_per_param_mse_invalid_shapes_raise_value_error() -> None:
+    """Per-parameter scoring rejects inputs the scalar metric rejects."""
+    with pytest.raises(ValueError, match="matching 2-D shapes"):
+        best_swap_per_param_mse(torch.zeros(2, 4), torch.zeros(2, 5))
 
 
 class TestBestSwapParamMSE:

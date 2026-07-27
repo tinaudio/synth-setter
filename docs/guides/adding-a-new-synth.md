@@ -73,8 +73,11 @@ audio = renderer.render(
 )
 ```
 
-`PedalboardRenderer` has the same constructor and `render` contract, and
-`TorchSynthRenderer` implements it for the in-process torchsynth backend
+`PedalboardRenderer` has the same constructor and `render` contract.
+`SurgePyRenderer` implements that contract specifically for Surge XT using an
+`.fxp` patch and native Surge parameter identities; its validated configs use
+the `surgepy` plugin sentinel, disable GUI toggling, and reload per render.
+`TorchSynthRenderer` implements the contract for the in-process torchsynth backend
 (`renderer_backend: torchsynth`, no `.vst3` bundle or preset — its param specs
 are defined in `torchsynth_param_spec.py` rather than introspected, so the
 steps below don't apply). DawDreamer

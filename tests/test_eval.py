@@ -1656,7 +1656,6 @@ _SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
 @pytest.mark.same_e2e
 @pytest.mark.parametrize("conditioning", _SAME_CONDITIONING_PROFILES)
 def test_train_eval_same_conditioning_real_e2e(
-    require_same_extra: None,
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
@@ -1665,13 +1664,11 @@ def test_train_eval_same_conditioning_real_e2e(
     """Train the flow model then validate its checkpoint over a real SAME dataset.
 
     The SAME sibling of :func:`test_train_eval_embedding_conditioning_real_e2e`:
-    renders a Surge XT dataset, appends the ``same_s``/``same_l`` column via the real
-    ``add_embeddings`` SAME endpoint (real ``stable_audio_tools`` encoder — no mocks),
-    trains ``experiment=surge/flow_simple`` one step to a checkpoint, then drives
-    ``evaluate(mode=validate)`` and asserts a finite ``val/param_mse``. Needs the
-    optional ``same`` extra, so it carries ``same_e2e`` and runs in that lane.
+    renders a Surge XT dataset, appends the ``same_s``/``same_l`` column through the
+    production Stable Audio 3 encoder, trains ``experiment=surge/flow_simple`` one
+    step to a checkpoint, then drives ``evaluate(mode=validate)`` and asserts a
+    finite ``val/param_mse``.
 
-    :param require_same_extra: Skips before the render when the ``same`` extra is absent.
     :param tmp_path: The temporary output/log path shared by train and eval.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
     :param param_spec_name: Param spec driving model width and callback labels.

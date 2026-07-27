@@ -1130,11 +1130,13 @@ a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `same_s`, `same_l`, and `tinymu`) stored as fixed-shape tensors, all derived from
 the audio column and selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
-are each loaded and written in their own sequential pass). Each sequence
-embedding also writes a mean-pooled `FixedSizeList<float32, D>` companion
-(`m2l_vec`, `same_s_vec`, `same_l_vec`, or `tinymu_vec`); when
-`build_index=true`, IVF_PQ indexes `clap` and the selected companion columns for
-`nearest=` search. An
+are each loaded and written in their own sequential pass). SAME-S and SAME-L
+use Stable Audio 3's autoencoder factory with strict safetensors state loading;
+local directories, R2 mirrors, and HuggingFace repo IDs retain the same
+checkpoint-resolution behavior. Each sequence embedding also writes a
+mean-pooled `FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`,
+`same_l_vec`, or `tinymu_vec`); when `build_index=true`, IVF_PQ indexes `clap`
+and the selected companion columns for `nearest=` search. An
 optional `resume_cache=<path>` caches per-batch encoder outputs so an
 interrupted run can resume without re-encoding already-processed rows (see
 `add_embeddings.py`). The default CLAP and SAME sources hydrate under
@@ -1154,8 +1156,9 @@ Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`
 renders each row to text through the `param_text_normalizer` strategy
 (`data/vst/param_text.py`; the shipped `param_names` joins the spec's parameter
 names with commas and ignores values), and encodes the captions with Stable
-Audio 3's frozen T5Gemma prompt conditioner behind the optional `sa3` extra
-(`pipeline/data/t5gemma.py`). `param_spec_name=` is required whenever it is
+Audio 3's frozen T5Gemma prompt conditioner (`pipeline/data/t5gemma.py`).
+Stable Audio 3 is part of the normal heavy runtime's `torch` dependency group.
+`param_spec_name=` is required whenever it is
 selected, and the encoded width must match that spec. Captions past the
 checkpoint's 256-token budget are truncated exactly as SA3 truncates them, so
 the wider specs keep only their leading names (`surge_simple` 31 of 91,

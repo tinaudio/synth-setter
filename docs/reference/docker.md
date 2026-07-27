@@ -262,8 +262,7 @@ docker run --rm -it --device /dev/fuse --cap-add SYS_ADMIN \
 ```
 
 The devcontainer variants pass `--device=/dev/fuse --cap-add=SYS_ADMIN` via
-`runArgs` (pinned by `tests/infra/test_fuse_support.py`); the OCI compute
-template already runs `--privileged`, which is a superset. RunPod pods cannot
+`runArgs` (pinned by `tests/infra/test_fuse_support.py`). RunPod pods cannot
 express these flags — SkyPilot creates them via `runpod.create_pod`, which
 has no device/capability parameters — so `rclone mount` does not work on
 RunPod workers; use `rclone copy`/`sync` there instead.
@@ -311,8 +310,8 @@ plus `WANDB_API_KEY`. `SYNTH_SETTER_STORAGE_PROVIDER` defaults to `r2`.
 
 ### Workflow artifact bundle (generate_dataset)
 
-When the test workflow runs, it uploads one artifact bundle per provider:
-`test-run-metadata-runpod` and `test-run-metadata-oci`. Each bundle
+When the test workflow runs, it uploads one artifact bundle per matrix cell,
+named `test-run-metadata-<provider>-<output_format>-<scenario>`. Each bundle
 contains two files:
 
 | File              | Contents                                                                 |
@@ -323,9 +322,8 @@ contains two files:
 **Download:**
 
 ```bash
-# Per-provider:
-gh run download <run_id> -n test-run-metadata-runpod
-gh run download <run_id> -n test-run-metadata-oci
+# One provider/output/scenario cell:
+gh run download <run_id> -n test-run-metadata-runpod-lance-static
 # Or grab everything for this run:
 gh run download <run_id>
 ```

@@ -336,6 +336,68 @@ class TestRenderConfig:
                 }
             )
 
+    def test_surgepy_backend_accepts_isolated_in_process_rendering(self) -> None:
+        """SurgePy accepts only its sentinel and per-render synth recreation."""
+        values = _valid_render_kwargs(plugin_path="surgepy")
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+        }
+        cfg = RenderConfig(
+            **{
+                **values,
+                "renderer_backend": "surgepy",
+                "gui_toggle_cadence": "never",
+                "plugin_reload_cadence": "render",
+            }
+        )
+
+        assert cfg.renderer_backend == "surgepy"
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"plugin_path": "plugin.vst3"}, 'requires plugin_path="surgepy"'),
+            ({"gui_toggle_cadence": "once"}, 'requires gui_toggle_cadence="never"'),
+            ({"plugin_reload_cadence": "once"}, 'requires plugin_reload_cadence="render"'),
+            ({"param_spec_name": "obxf"}, "requires a Surge parameter spec"),
+        ],
+    )
+    def test_surgepy_backend_rejects_unsafe_configuration(
+        self,
+        overrides: dict[str, str],
+        message: str,
+    ) -> None:
+        """SurgePy fails closed on incompatible synth identity or lifecycle settings.
+
+        :param overrides: Invalid field override under test.
+        :param message: Expected validation error fragment.
+        """
+        values = {
+            **_valid_render_kwargs(plugin_path="surgepy"),
+            "renderer_backend": "surgepy",
+            "gui_toggle_cadence": "never",
+            "plugin_reload_cadence": "render",
+        }
+        synth_keys = {"param_spec_name", "plugin_path", "plugin_state_path"}
+        synth_overrides = {key: value for key, value in overrides.items() if key in synth_keys}
+        values.update({key: value for key, value in overrides.items() if key not in synth_keys})
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+            **synth_overrides,
+        }
+
+        with pytest.raises(ValidationError, match=message):
+            RenderConfig(**values)
+
+    def test_surgepy_plugin_path_requires_surgepy_backend(self) -> None:
+        """The SurgePy sentinel cannot dispatch through the default VST host."""
+        with pytest.raises(ValidationError, match='requires renderer_backend="surgepy"'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="surgepy"))
+
     def test_torchsynth_backend_accepted_with_gui_toggle_never(self) -> None:
         """``renderer_backend="torchsynth"`` validates with its bare backend name."""
         cfg = RenderConfig(
