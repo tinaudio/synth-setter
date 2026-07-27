@@ -143,6 +143,18 @@ def test_zero_init_control_field_matches_base_loss_at_start() -> None:
     assert torch.allclose(loss, cast(torch.Tensor, metrics["base_loss"]), atol=1e-6)
 
 
+def test_sample_with_feedback_renders_only_in_control_window() -> None:
+    """Euler sampling renders once per row per control-window step and keeps shape."""
+    module, fake = _make_module(feedback_enabled=True)
+    batch = _fake_batch()
+
+    sample = module.sample_with_feedback(batch["mel_spec"], batch["noise"], steps=10)
+
+    assert sample.shape == batch["noise"].shape
+    # t_min=0.8 and 10 steps leave 2 control-window steps of _BATCH renders each.
+    assert fake.calls == 2 * _BATCH
+
+
 def test_configure_optimizers_trains_only_control_parameters() -> None:
     """The optimizer covers exactly the control encoder + field parameters."""
     module, _ = _make_module(feedback_enabled=True)
