@@ -228,6 +228,9 @@ def test_surgepy_renderer_exact_sample_boundary_precedes_next_float() -> None:
 
     assert _sample_index_at_or_after(boundary, sample_rate) == boundary_sample
     assert _sample_index_at_or_after(np.nextafter(boundary, np.inf), sample_rate) == 14
+    block_boundary = 64 / sample_rate
+    assert _sample_index_at_or_after(block_boundary, sample_rate) == 64
+    assert _sample_index_at_or_after(np.nextafter(block_boundary, np.inf), sample_rate) == 65
 
 
 @pytest.mark.slow
@@ -252,8 +255,26 @@ def test_surgepy_renderer_start_just_after_sample_boundary_rounds_up() -> None:
     assert audible[0] == boundary_sample + 1
 
 
-def test_surgepy_renderer_exact_block_note_releases_before_next_block() -> None:
-    """An exact-block note cannot remain active in the following block."""
+@pytest.mark.parametrize(
+    ("note_end", "second_block_value"),
+    [
+        pytest.param(64 / 44_100, -1.0, id="exact-boundary-released"),
+        pytest.param(
+            np.nextafter(64 / 44_100, np.inf),
+            1.0,
+            id="after-boundary-active",
+        ),
+    ],
+)
+def test_surgepy_renderer_note_duration_respects_block_boundary(
+    note_end: float,
+    second_block_value: float,
+) -> None:
+    """Exact and post-boundary note ends release in different blocks.
+
+    :param note_end: Requested note end in seconds.
+    :param second_block_value: Expected fake playing-state marker.
+    """
     block_size = 64
     state = {"is_playing": False}
     synth = Mock()
@@ -282,12 +303,15 @@ def test_surgepy_renderer_exact_block_note_releases_before_next_block() -> None:
         midi_note=60,
         velocity=100,
         samples=128,
-        start=23 / 44_100,
-        end=87 / 44_100,
+        start=0.0,
+        end=note_end,
     )
 
-    np.testing.assert_array_equal(audio[:, 23:87], np.ones((2, 64)))
-    np.testing.assert_array_equal(audio[:, 87:], -np.ones((2, 41)))
+    np.testing.assert_array_equal(audio[:, :64], np.ones((2, 64)))
+    np.testing.assert_array_equal(
+        audio[:, 64:],
+        np.full((2, 64), second_block_value),
+    )
 
 
 def test_surgepy_renderer_note_after_retained_samples_returns_silence() -> None:

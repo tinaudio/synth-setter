@@ -65,6 +65,7 @@ _CAUSAL_CENTROID_SHIFT_MIN = 1.0
 _CAUSAL_OCTAVE_FREQUENCY_RATIO_MIN = 6.0
 _DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _ONSET_AMPLITUDE = 1e-8
+_ONSET_CONTROL_LAG_TOLERANCE_SAMPLES = 2
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
 _HOST_PAIR_THRESHOLDS = {
     "mel_rmse_max": 3.5,
@@ -351,6 +352,22 @@ def _assert_no_onset_outliers(rows: list[dict[str, float | int | str]]) -> None:
     """
     early = [row for row in rows if int(row["onset_sample"]) < int(row["requested_sample"])]
     assert not early, f"early host onset(s): {early}"
+    onset_by_sample_backend = {
+        (int(row["sample"]), str(row["backend"])): int(row["onset_sample"])
+        for row in rows
+    }
+    late = []
+    for row in rows:
+        sample = int(row["sample"])
+        backend = str(row["backend"])
+        controls = (
+            onset_by_sample_backend[(sample, control)]
+            for control in ("pedalboard", "dawdreamer")
+            if control != backend
+        )
+        if int(row["onset_sample"]) > max(controls) + _ONSET_CONTROL_LAG_TOLERANCE_SAMPLES:
+            late.append(row)
+    assert not late, f"late host onset(s): {late}"
     outliers = [row for row in rows if float(row["modified_z"]) > _MODIFIED_Z_MAX]
     assert not outliers, f"host onset outlier(s): {outliers}"
 
@@ -562,6 +579,7 @@ def _manifest(
         },
         "container_image": os.environ.get("SYNTH_SETTER_BENCHMARK_IMAGE"),
         "git_sha": os.environ.get("GITHUB_SHA"),
+        "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "parameter_map": str(_PARAMETER_MAP_PATH),
         "parameter_map_preset_sha256": parameter_map.preset_sha256,
         "surgepy_preset": str(_SURGEPY_PRESET_PATH),
@@ -574,6 +592,7 @@ def _manifest(
         "onset_gate": {
             "amplitude": _ONSET_AMPLITUDE,
             "calibration_backends": ["pedalboard", "dawdreamer"],
+            "control_lag_tolerance_samples": _ONSET_CONTROL_LAG_TOLERANCE_SAMPLES,
             "modified_z_max": _MODIFIED_Z_MAX,
             "scale_floor_samples": _ONSET_SCALE_FLOOR_SAMPLES,
         },
@@ -1007,6 +1026,23 @@ def test_onset_gate_rejects_all_hosts_early_together() -> None:
     ]
 
     with pytest.raises(AssertionError, match="early host onset"):
+        _assert_no_onset_outliers(rows)
+
+
+def test_onset_gate_rejects_delayed_backend() -> None:
+    """Absolute timing rejects lateness hidden by one-sided early scores."""
+    rows = [
+        {
+            "backend": backend,
+            "sample": 0,
+            "onset_sample": 400 if backend == "surgepy" else 336,
+            "requested_sample": 336,
+            "modified_z": 0.0,
+        }
+        for backend in _BACKENDS
+    ]
+
+    with pytest.raises(AssertionError, match="late host onset"):
         _assert_no_onset_outliers(rows)
 
 

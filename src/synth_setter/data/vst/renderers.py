@@ -489,10 +489,8 @@ class SurgePyRenderer(AudioRenderer):
         block_size = self.synth.getBlockSize()
         num_blocks = (samples + block_size - 1) // block_size
         start_block = start_sample // block_size
-        duration_samples = math.ceil(
-            math.nextafter((end - start) * self.sample_rate, -math.inf)
-        )
-        note_samples = max(1, duration_samples)
+        end_sample = _sample_index_at_or_after(end, self.sample_rate)
+        note_samples = max(1, end_sample - start_sample)
         note_blocks = (note_samples + block_size - 1) // block_size
         end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)
