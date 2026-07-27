@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785112060949,
+  "lastUpdate": 1785112063633,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18911,6 +18911,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 9.758209521599985,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7950f7c096c8c142c9b1b7ead428f0a3f39b465",
+          "message": "internal-feat(data-pipeline): add SurgePy host parity backend (#2498)\n\n* internal-feat(data-pipeline): add SurgePy renderer parity\n\n* chore(ci): refresh checks after PR title fix\n\n* internal-fix(data-pipeline): align SurgePy synth identity\n\n* internal-fix(data-pipeline): address SurgePy backend review findings\n\nResolves the 11 findings from the multi-skill review of #2498:\n\n- gate every real-engine test behind a `requires_surgepy` marker with a\n  conftest auto-skip, so the CPU suite no longer imports a Linux-x86_64-only\n  extension on macOS or arm64\n- collapse the parallel Surge FX label tables into one semantic-key table and\n  derive the per-host projections from it\n- make `_resolve_surgepy_param`'s lookup context keyword-only and drop the\n  test-only positional wrapper around `join_param_map`\n- pin the duplicated `test-vst-slow.yml` push/pull_request path lists with a\n  trigger-parity test (GitHub Actions rejects YAML anchors)\n- assert continuous, integer, and Boolean normalization through a new public\n  `native_parameter_values` seam instead of three private helpers\n- cover malformed `render()` input: unknown parameter keys and note intervals\n  outside the signal\n- assert parameter-column shape, dtype, finiteness, and normalized range at the\n  Lance boundary of the three-host parity test\n- assert every shipped SurgePy render config's `synth_version` against the live\n  engine version, so a dependency bump cannot ship stale configs\n- pin that clipped SurgePy audio stays retryable at the generation gate (#2001)\n  rather than failing the shard in the renderer\n\nRefs #2469\n\n* internal-fix(testing): pin fixture plugin version in the BadWindow test\n\n`renderer_version` moved into the synth identity earlier in this branch, and the\nspec validator now drops the old top-level field, so this test's override no\nlonger reached the version guard: the composed spec kept the Surge default\n`1.3.4` while the fixture plugin reports `1.0.0-test`, failing\n`run_tests_ubuntu`, `run_tests_conda`, and `run_tests_macos`.\n\nSet `render.synth.synth_version`, matching every other fixture-plugin test.\n\nRefs #2469",
+          "timestamp": "2026-07-26T16:41:27-07:00",
+          "tree_id": "b4b00872cc1fa3fdaebf8136583c79ba951649d4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/d7950f7c096c8c142c9b1b7ead428f0a3f39b465"
+        },
+        "date": 1785112062913,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.251585960388184,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.984226059019566,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0894458219408989,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0023760199546813965,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4227561950683594,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.4561176219,
             "unit": "seconds"
           }
         ]
