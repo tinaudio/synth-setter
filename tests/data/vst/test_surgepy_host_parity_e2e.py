@@ -46,6 +46,7 @@ type MetricRow = dict[str, float | int]
 
 _BACKENDS: tuple[ParityBackend, ...] = ("pedalboard", "dawdreamer", "surgepy")
 _REPEATED_RENDER_COUNT = 30
+_PARITY_SYNTH_PARAMS = {**_HARDCODED_SYNTH_PARAMS, "a_osc_drift": 0.0}
 _DIVERSE_PATCH_VALUES = (
     (0.08, 0.12),
     (0.18, 0.24),
@@ -58,14 +59,15 @@ _DIVERSE_PATCH_VALUES = (
 )
 _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
+_DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
 _HOST_PAIR_THRESHOLDS = {
-    "mel_rmse_max": 8.5,
-    "mss_max": 5.0,
-    "rms_min": 0.95,
-    "sot_max": 0.045,
-    "wmfcc_max": 7.5,
+    "mel_rmse_max": 3.5,
+    "mss_max": 1.0,
+    "rms_min": 0.995,
+    "sot_max": 0.01,
+    "wmfcc_max": 2.0,
 }
 _PAIR_THRESHOLDS = {
     "dawdreamer-vs-surgepy": _HOST_PAIR_THRESHOLDS,
@@ -652,7 +654,35 @@ def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -
     parameters = json.loads((output_dir / "parameters.json").read_text())
     assert len(parameters) == render_count
     assert {row["sample"] for row in parameters} == set(range(render_count))
-    assert {row["midi_event"]["velocity"] for row in parameters} == {config.velocity}
+    expected_midi = {
+        "pitch": _HARDCODED_NOTE_PARAMS["pitch"],
+        "note_start_and_end": list(_HARDCODED_NOTE_PARAMS["note_start_and_end"]),
+        "velocity": config.velocity,
+    }
+    expected_width = resolve_param_spec(config.param_spec_name).encoded_width
+    expected_patch_keys = set(_HARDCODED_SYNTH_PARAMS)
+    for row in parameters:
+        assert set(row) == {
+            "sample",
+            "encoded_normalized_vector",
+            "midi_event",
+            "normalized_synth_parameters",
+        }
+        assert row["midi_event"] == expected_midi
+        vector = np.asarray(row["encoded_normalized_vector"])
+        assert vector.shape == (expected_width,)
+        assert np.issubdtype(vector.dtype, np.number)
+        assert np.isfinite(vector).all()
+        assert np.all((vector >= 0.0) & (vector <= 1.0))
+        patch = row["normalized_synth_parameters"]
+        assert set(patch) == expected_patch_keys
+        assert all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and 0.0 <= value <= 1.0
+            for value in patch.values()
+        )
 
     metrics = json.loads((output_dir / "metrics.json").read_text())
     assert len(metrics["onsets"]) == render_count * len(_BACKENDS)
@@ -711,6 +741,23 @@ def _assert_artifact_contract(
         assert np.max(np.abs(result.audio)) <= 1.0
     np.testing.assert_array_equal(results["pedalboard"].params, results["dawdreamer"].params)
     np.testing.assert_array_equal(results["pedalboard"].params, results["surgepy"].params)
+
+
+def _assert_directional_audio_diversity(
+    results: dict[ParityBackend, _BackendResult],
+) -> None:
+    """Require each backend to follow the diverse workload's upward spectral sweep.
+
+    :param results: Materialized diverse-patch artifacts keyed by backend.
+    """
+    for backend, result in results.items():
+        mel_bins = np.arange(result.mel.shape[2], dtype=np.float64)[None, :, None]
+        energy = np.power(10.0, result.mel.astype(np.float64) / 10.0)
+        centroids = np.sum(energy * mel_bins, axis=(1, 2, 3)) / np.sum(energy, axis=(1, 2, 3))
+        assert centroids[-1] - centroids[0] > _DIVERSE_CENTROID_SHIFT_MIN, (
+            backend,
+            centroids.tolist(),
+        )
 
 
 def _run_parity_workload(
@@ -827,7 +874,7 @@ def test_surge_hosts_repeated_patch_have_no_per_render_onset_outliers(
     :param tmp_path: Temporary destination for all three real Lance datasets.
     """
     _require_surge_xt()
-    synth_params = [_HARDCODED_SYNTH_PARAMS.copy() for _ in range(_REPEATED_RENDER_COUNT)]
+    synth_params = [_PARITY_SYNTH_PARAMS.copy() for _ in range(_REPEATED_RENDER_COUNT)]
 
     _run_parity_workload(tmp_path, "repeated-patch", synth_params)
 
@@ -845,7 +892,7 @@ def test_surge_hosts_diverse_patches_have_no_per_render_onset_outliers(
     _require_surge_xt()
     synth_params = [
         {
-            **_HARDCODED_SYNTH_PARAMS,
+            **_PARITY_SYNTH_PARAMS,
             "a_filter_1_cutoff": cutoff,
             "a_osc_1_pitch": pitch,
         }
@@ -855,3 +902,4 @@ def test_surge_hosts_diverse_patches_have_no_per_render_onset_outliers(
     results = _run_parity_workload(tmp_path, "diverse-patches", synth_params)
 
     assert np.unique(results["pedalboard"].params, axis=0).shape[0] == len(synth_params)
+    _assert_directional_audio_diversity(results)

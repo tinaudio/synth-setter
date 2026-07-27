@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -217,6 +218,60 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
 
     audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
     assert audible[0] == note_start_sample
+
+
+def test_surgepy_renderer_non_block_aligned_note_preserves_first_native_sample() -> None:
+    """Sub-block alignment delays, rather than discards, the native note attack."""
+
+    block_size = 64
+    state = {"is_playing": False, "note_age": 0}
+    synth = Mock()
+    synth.getBlockSize.return_value = block_size
+    synth.createMultiBlock.side_effect = lambda capacity: np.zeros(
+        (2, capacity * block_size), dtype=np.float32
+    )
+    synth.playNote.side_effect = lambda *_: state.__setitem__("is_playing", True)
+    synth.releaseNote.side_effect = lambda *_: state.__setitem__("is_playing", False)
+    synth.allNotesOff.side_effect = lambda: state.__setitem__("is_playing", False)
+
+    def process_blocks(
+        output: np.ndarray,
+        startBlock: int = 0,
+        nBlocks: int = -1,
+    ) -> None:
+        """Emit increasing note-age samples into active native blocks.
+
+        :param output: Stereo destination buffer.
+        :param startBlock: First destination block.
+        :param nBlocks: Number of blocks to process.
+        """
+        for block in range(nBlocks):
+            left = (startBlock + block) * block_size
+            if state["is_playing"]:
+                first_sample = state["note_age"] + 1
+                values = np.arange(
+                    first_sample,
+                    first_sample + block_size,
+                    dtype=np.float32,
+                )
+                output[:, left : left + block_size] = values
+                state["note_age"] += block_size
+
+    synth.processMultiBlock.side_effect = process_blocks
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 44_100
+    renderer.synth = synth
+
+    audio = renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=1_024,
+        start=336 / 44_100,
+        end=656 / 44_100,
+    )
+
+    expected_attack = np.tile(np.arange(1, 65, dtype=np.float32), (2, 1))
+    np.testing.assert_array_equal(audio[:, 336:400], expected_attack)
 
 
 @pytest.mark.slow

@@ -7,6 +7,7 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 
@@ -22,12 +23,13 @@ from synth_setter.evaluation.compute_audio_metrics import (
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.tools import build_param_map
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_SYNTH_VERSION,
     TEST_SYNTH,
+    TEST_SYNTH_VERSION,
 )
 from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_NOTE_PARAMS,
@@ -102,6 +104,99 @@ def test_dawdreamer_parameter_map_matches_live_plugin(
         signal_duration_seconds=config.signal_duration_seconds,
         plugin_state_path=str(Path(preset_path).resolve()),
         parameter_map=load_param_map(Path(parameter_map_path)),
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@pytest.mark.requires_surgepy
+def test_dawdreamer_dump_build_roundtrip_loads_real_settled_map(tmp_path: Path) -> None:
+    """Real host dumps build a map accepted by the settled DawDreamer renderer.
+
+    :param tmp_path: Temporary host-dump and map destinations.
+    """
+    if TEST_SYNTH != "surge_xt":
+        pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
+    clap_path = Path("/usr/lib/clap/Surge XT.clap")
+    if not clap_path.exists():
+        pytest.skip(f"Surge XT CLAP fixture is unavailable: {clap_path}")
+
+    pedalboard_dump = tmp_path / "pedalboard.json"
+    clap_dump = tmp_path / "clap.json"
+    dawdreamer_dump = tmp_path / "dawdreamer.json"
+    surgepy_dump = tmp_path / "surgepy.json"
+    output_map = tmp_path / "surge_xt_param_map.json"
+    runner = CliRunner()
+
+    def invoke(*args: str) -> None:
+        result = runner.invoke(build_param_map.main, list(args), catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+    invoke(
+        "dump-pedalboard",
+        "--plugin",
+        str(PLUGIN_PATH),
+        "--preset",
+        str(TEST_PRESET_PATH),
+        "--preset-resource",
+        "presets/surge-base.vstpreset",
+        "--out",
+        str(pedalboard_dump),
+    )
+    invoke("dump-clap", "--plugin", str(clap_path), "--out", str(clap_dump))
+    invoke(
+        "dump-dawdreamer",
+        "--plugin",
+        str(PLUGIN_PATH),
+        "--plugin-name",
+        "Surge XT",
+        "--plugin-version",
+        str(TEST_SYNTH_VERSION),
+        "--preset",
+        str(TEST_PRESET_PATH),
+        "--preset-resource",
+        "presets/surge-base.vstpreset",
+        "--out",
+        str(dawdreamer_dump),
+    )
+    invoke(
+        "dump-surgepy",
+        "--preset",
+        "presets/surge-base.fxp",
+        "--preset-resource",
+        "presets/surge-base.fxp",
+        "--out",
+        str(surgepy_dump),
+    )
+    invoke(
+        "build",
+        "--pedalboard-dump",
+        str(pedalboard_dump),
+        "--clap-dump",
+        str(clap_dump),
+        "--dawdreamer-dump",
+        str(dawdreamer_dump),
+        "--surgepy-dump",
+        str(surgepy_dump),
+        "--param-spec-name",
+        "surge_xt",
+        "--out",
+        str(output_map),
+    )
+
+    config = _dawdreamer_experiment_config()
+    generated_map = load_param_map(output_map)
+    DawDreamerRenderer(
+        plugin_path=str(Path(PLUGIN_PATH).resolve()),
+        sample_rate=config.sample_rate,
+        channels=config.channels,
+        signal_duration_seconds=config.signal_duration_seconds,
+        plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
+        parameter_map=generated_map,
+    )
+    assert all(
+        identity.dawdreamer.name == identity.pedalboard.name
+        for identity in generated_map.params.values()
     )
 
 

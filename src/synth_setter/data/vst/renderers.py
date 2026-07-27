@@ -473,10 +473,8 @@ class SurgePyRenderer(AudioRenderer):
         num_blocks = math.ceil(samples / block_size)
         start_sample = math.ceil(start * self.sample_rate)
         start_block = math.floor(start_sample / block_size)
-        end_block = min(
-            num_blocks,
-            max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
-        )
+        note_blocks = max(1, math.ceil((end - start) * self.sample_rate / block_size))
+        end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)
         try:
             self._process_blocks(audio, start_block=0, num_blocks=start_block)
@@ -494,9 +492,14 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        trimmed = np.asarray(audio[:, :samples], dtype=np.float32)
-        trimmed[:, :start_sample] = 0.0
-        return trimmed
+        rendered = np.asarray(audio, dtype=np.float32)
+        aligned = np.zeros((2, samples), dtype=np.float32)
+        source_start = start_block * block_size
+        aligned[:, start_sample:] = rendered[
+            :,
+            source_start : source_start + samples - start_sample,
+        ]
+        return aligned
 
     def render(
         self,

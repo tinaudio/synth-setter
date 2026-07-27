@@ -383,6 +383,7 @@ def _resolve_dawdreamer_param(
     semantic_key: str,
     pedalboard_name: str,
     by_name: dict[str, list[HostParam]],
+    *,
     errors: list[str],
 ) -> HostParam | None:
     """Resolve one preset-settled DawDreamer parameter identity.
@@ -472,7 +473,7 @@ def _resolve_param_identity(
         semantic_key,
         pedalboard_param.name,
         dawdreamer_by_name,
-        errors,
+        errors=errors,
     )
     if dawdreamer_param is None:
         return None

@@ -707,9 +707,9 @@ def test_dump_dawdreamer_writes_raw_host_names(
             return self.processor
 
         def load_graph(self, graph: object) -> None:
-            """Accept the plugin graph.
+            """No-op fake graph loader.
 
-            :param graph: Processor graph.
+            :param graph: Ignored fake processor graph.
             """
 
         def render(self, duration: float) -> None:

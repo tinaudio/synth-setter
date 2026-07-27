@@ -413,9 +413,9 @@ def test_dawdreamer_renderer_settles_dynamic_preset_before_parameter_dispatch(
             self.value = 0.0
 
         def load_vst3_preset(self, path: str) -> None:
-            """Accept the fake preset path.
+            """No-op fake preset loader.
 
-            :param path: Preset path.
+            :param path: Ignored fake preset location.
             """
 
         def get_parameters_description(self) -> list[dict[str, object]]:
@@ -468,9 +468,9 @@ def test_dawdreamer_renderer_settles_dynamic_preset_before_parameter_dispatch(
             return self.processor
 
         def load_graph(self, graph: object) -> None:
-            """Accept the fake graph.
+            """No-op fake graph loader.
 
-            :param graph: Processor graph.
+            :param graph: Ignored fake processor graph.
             """
 
         def render(self, duration: float) -> None:

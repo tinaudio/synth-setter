@@ -105,8 +105,11 @@ The two real tests in
 render matched Pedalboard, DawDreamer, and SurgePy datasets through the production
 Lance writer and reader. The repeated-patch workload renders one patch 30 times;
 the diverse-patch workload renders eight distinct filter and oscillator settings.
-Every host pair and matched render must satisfy mel RMSE ≤ 8.5, MSS ≤ 5.0,
-wMFCC ≤ 7.5, SOT ≤ 0.045, and RMS-envelope cosine ≥ 0.95. These bounds reject
+Both pin oscillator drift to zero so host scheduling and parameter dispatch, rather
+than randomized oscillator motion, determine differences. The diverse workload also
+requires each host to follow the intended upward spectral sweep.
+Every host pair and matched render must satisfy mel RMSE ≤ 3.5, MSS ≤ 1.0,
+wMFCC ≤ 2.0, SOT ≤ 0.01, and RMS-envelope cosine ≥ 0.995. These bounds reject
 an unsettled or wrong patch instead of allowing a looser VST-host comparison.
 
 Every render is also gated on onset timing. Each patch is scored by how many samples
