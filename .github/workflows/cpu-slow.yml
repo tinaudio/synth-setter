@@ -103,16 +103,20 @@ jobs:
           install-rclone: "true"
 
       # Marker filter + coverage flags live in `make test-ci-slow` — see #1353.
+      # WANDB__SERVICE_WAIT raises the SDK's 30s service-start budget, which a
+      # loaded runner exceeds even in offline mode (#2564).
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
         if: github.event_name != 'pull_request'
         env:
           HYDRA_FULL_ERROR: "1"
+          WANDB__SERVICE_WAIT: "120"
         run: make test-ci-slow
 
       - name: Run slow PR tests
         if: github.event_name == 'pull_request'
         env:
           HYDRA_FULL_ERROR: "1"
+          WANDB__SERVICE_WAIT: "120"
         run: make test-ci-slow-pr
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`
