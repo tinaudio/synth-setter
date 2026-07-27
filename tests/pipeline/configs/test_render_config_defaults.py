@@ -277,3 +277,16 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
     assert cfg.synth.synth_version == surge_xt.synth.synth_version
     assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence
+
+
+def test_render_cardinal_selects_dawdreamer_with_per_render_reload() -> None:
+    """``render=cardinal`` routes Cardinal through DawDreamer with a reproducible host lifetime."""
+    spec = _spec_from_dataset_overrides(["render=cardinal"])
+
+    assert spec.render.synth.name == "cardinal"
+    assert spec.render.param_spec_name == "cardinal"
+    assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
+    assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
+    assert spec.render.renderer_backend == "dawdreamer"
+    # Cardinal's Rack engine free-runs, so only a per-render instance is reproducible (#2544).
+    assert spec.render.plugin_reload_cadence == "render"

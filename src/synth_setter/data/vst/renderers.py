@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 # Both DawDreamer hosts pin the engine block size as a runtime invariant.
 DAWDREAMER_BLOCK_SIZE = 2048
+# Discarded audio rendered after a preset load so the restored graph is live (#2543).
+PRESET_SETTLE_SECONDS = 0.1
 # Surge's legacy automation scale is load-bearing for saved host parameter values.
 _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
@@ -975,10 +977,13 @@ class DawDreamerRenderer(AudioRenderer):
         )
 
     def _load_preset(self) -> None:
-        """Load the configured preset into the current fresh plugin instance."""
+        """Load the configured preset and settle it before any parameter dispatch."""
         if self.plugin_state_path is None:
             return
         if self.plugin_state_path.endswith(".vstpreset"):
             self.plugin.load_vst3_preset(self.plugin_state_path)
         else:
             self.plugin.load_preset(self.plugin_state_path)
+        # A preset can rebuild the plugin's internal graph, and hosts apply that on the
+        # audio thread; parameters dispatched before it is live are silently dropped.
+        self.engine.render(PRESET_SETTLE_SECONDS)

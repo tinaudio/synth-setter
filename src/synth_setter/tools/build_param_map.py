@@ -215,7 +215,10 @@ def _expected_dawdreamer_name(semantic_key: str) -> str:
     """
     if semantic_key in _SURGE_FX_NAMES:
         return _SURGE_FX_NAMES[semantic_key]
-    return _SURGE_DAWDREAMER_OSCILLATOR_NAMES.get(semantic_key, semantic_key)
+    if semantic_key in _SURGE_DAWDREAMER_OSCILLATOR_NAMES:
+        return _SURGE_DAWDREAMER_OSCILLATOR_NAMES[semantic_key]
+    # Pedalboard appends a ``_v`` value suffix that is not part of the host's own label.
+    return semantic_key.removesuffix("_v")
 
 
 def _validate_surgepy_provenance(
@@ -239,19 +242,21 @@ def _validate_surgepy_provenance(
 
 
 def _validate_provenance(
-    pedalboard: HostDump, clap: ClapPluginInfo, dawdreamer: HostDump
+    pedalboard: HostDump, clap: ClapPluginInfo | None, dawdreamer: HostDump
 ) -> list[str]:
     """Collect provenance mismatches across the three host snapshots.
 
     :param pedalboard: Pedalboard host dump.
-    :param clap: CLAP plugin dump.
+    :param clap: CLAP plugin dump, or ``None`` for a synth with no CLAP build.
     :param dawdreamer: DawDreamer host dump.
     :returns: All provenance mismatches.
     """
     errors: list[str] = []
-    if pedalboard.plugin != dawdreamer.plugin or pedalboard.plugin != clap.plugin_name:
+    clap_plugins = {clap.plugin_name} if clap else set()
+    clap_versions = {clap.version} if clap else set()
+    if pedalboard.plugin != dawdreamer.plugin or clap_plugins - {pedalboard.plugin}:
         errors.append("plugin identities disagree")
-    if len({pedalboard.plugin_version, clap.version, dawdreamer.plugin_version}) != 1:
+    if len({pedalboard.plugin_version, dawdreamer.plugin_version} | clap_versions) != 1:
         errors.append("host plugin versions disagree")
     if pedalboard.preset_resource != dawdreamer.preset_resource:
         errors.append("preset resources disagree")
@@ -429,7 +434,7 @@ def _categorical_grid_matches(spec_param: Parameter, clap_ref: ClapParamRef) -> 
 
 _JoinIndexes = tuple[
     dict[str, HostParam],
-    dict[str, list[ClapParamInfo]],
+    dict[str, list[ClapParamInfo]] | None,
     dict[str, list[HostParam]],
     dict[str, list[SurgePyHostParam]] | None,
 ]
@@ -454,15 +459,17 @@ def _resolve_param_identity(
     if pedalboard_param is None:
         errors.append(f"{semantic_key}: missing Pedalboard identity")
         return None
-    clap_param = _resolve_clap_param(semantic_key, clap_by_name, errors)
-    if clap_param is None:
-        return None
+    clap_ref = None
+    if clap_by_name is not None:
+        clap_param = _resolve_clap_param(semantic_key, clap_by_name, errors)
+        if clap_param is None:
+            return None
+        clap_ref = _clap_reference(clap_param)
+        if not _categorical_grid_matches(spec_param, clap_ref):
+            errors.append(f"{semantic_key}: categorical grid does not match CLAP steps")
+            return None
     dawdreamer_param = _resolve_dawdreamer_param(semantic_key, dawdreamer_by_name, errors)
     if dawdreamer_param is None:
-        return None
-    clap_ref = _clap_reference(clap_param)
-    if not _categorical_grid_matches(spec_param, clap_ref):
-        errors.append(f"{semantic_key}: categorical grid does not match CLAP steps")
         return None
     surgepy_ref = None
     if surgepy_by_name is not None:
@@ -490,7 +497,7 @@ def join_param_map(
     param_spec_name: str,
     *,
     pedalboard: HostDump,
-    clap: ClapPluginInfo,
+    clap: ClapPluginInfo | None = None,
     dawdreamer: HostDump,
     surgepy: SurgePyDump | None = None,
 ) -> SynthParamMap:
@@ -498,7 +505,7 @@ def join_param_map(
 
     :param param_spec_name: Registered parameter spec name.
     :param pedalboard: Preset-specific Pedalboard dump.
-    :param clap: Full CLAP dump.
+    :param clap: Full CLAP dump, or ``None`` for a synth with no CLAP build.
     :param dawdreamer: Preset-specific DawDreamer dump.
     :param surgepy: Optional preset-specific SurgePy dump for Surge specs.
     :returns: Validated joint map.
@@ -508,7 +515,7 @@ def join_param_map(
     if surgepy:
         errors.extend(_validate_surgepy_provenance(pedalboard, surgepy))
     pedalboard_by_key = _index_pedalboard(pedalboard.params, errors)
-    clap_by_name = _index_clap(clap, errors)
+    clap_by_name = _index_clap(clap, errors) if clap else None
     dawdreamer_by_name = _index_dawdreamer(dawdreamer.params, errors)
     surgepy_by_name = _index_surgepy(surgepy.params, errors) if surgepy else None
     if surgepy and surgepy.parameter_count != len(surgepy.params):
@@ -534,7 +541,11 @@ def join_param_map(
         pedalboard=BackendSnapshot(
             plugin_version=pedalboard.plugin_version, parameter_count=len(pedalboard.params)
         ),
-        clap=BackendSnapshot(plugin_version=clap.version, parameter_count=len(clap.params)),
+        clap=(
+            BackendSnapshot(plugin_version=clap.version, parameter_count=len(clap.params))
+            if clap
+            else None
+        ),
         dawdreamer=BackendSnapshot(
             plugin_version=dawdreamer.plugin_version, parameter_count=len(dawdreamer.params)
         ),

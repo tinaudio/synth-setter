@@ -215,11 +215,17 @@ OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
 SIX_SINES_VERSION := v1.1.0
 SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
 SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+CARDINAL_VERSION := 26.02
+CARDINAL_ASSET_X86_64 := Cardinal-linux-x86_64-26.02.tar.gz
+CARDINAL_SHA256_X86_64 := 657df0beeec04184de7359cbd3e173a36eeab78077e1e26da81405632f98ec25
+CARDINAL_ASSET_AARCH64 := Cardinal-linux-aarch64-26.02.tar.gz
+CARDINAL_SHA256_AARCH64 := b36b6d5b04e55bb808bc4b99ac3e08007b1dc48df7e75dbda25664ab974f7a98
 ULTRAMASTER_KR106_VERSION := v2.5.13
 ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
 
-# $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): fetch the pinned asset,
-# verify its sha256, extract plugins/<Bundle>.vst3; non-x86_64 hosts skip (the image's amd64 gate).
+# $(call install_fetched_synth,<Bundle>,<x86_64-url>,<x86_64-sha256>[,<aarch64-url>,<aarch64-sha256>]):
+# fetch the pinned asset, verify its sha256, extract plugins/<Bundle>.vst3. Hosts skip unless the
+# upstream project publishes an asset for their architecture (the image's amd64 gate).
 
 # Deliberately separate from install-surge-xt (per-OS assets, md5 upstream checksums there);
 # the cache is flat — no per-synth subdir — because asset filenames embed their version.
@@ -231,23 +237,32 @@ if [ -e "$$DEST" ]; then \
 	exit 0; \
 fi; \
 OS=$$(uname -s); ARCH=$$(uname -m); \
-if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
+if [ "$$OS" != "Linux" ]; then \
+	echo "skipping $(1): Linux assets only (host: $$OS/$$ARCH)."; \
 	exit 0; \
 fi; \
+case "$$ARCH" in \
+	x86_64) URL="$(2)"; SHA256="$(3)" ;; \
+	aarch64|arm64) \
+		if [ -z "$(4)" ]; then \
+			echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; exit 0; \
+		fi; \
+		URL="$(4)"; SHA256="$(5)" ;; \
+	*) echo "skipping $(1): unsupported Linux architecture $$ARCH."; exit 0 ;; \
+esac; \
 CACHE="$(HOME)/.cache/synth-setter"; \
-ASSET="$(notdir $(2))"; \
+ASSET="$${URL##*/}"; \
 mkdir -p "$$CACHE" plugins; \
 ARCHIVE="$$CACHE/$$ASSET"; \
 if [ ! -f "$$ARCHIVE" ]; then \
-	echo "Downloading $(2)"; \
-	curl -fSL -o "$$ARCHIVE" "$(2)"; \
+	echo "Downloading $$URL"; \
+	curl -fSL -o "$$ARCHIVE" "$$URL"; \
 else \
 	echo "Using cached $$ARCHIVE"; \
 fi; \
 command -v sha256sum >/dev/null 2>&1 || { \
 	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
+echo "$$SHA256  $$ARCHIVE" | sha256sum -c - || { \
 	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
 TMP="$$(mktemp -d)"; \
 trap 'rm -rf "$$TMP"' EXIT; \
@@ -265,13 +280,16 @@ echo "Installed $$DEST"
 endef
 
 install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256))
+	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256),,)
+
+install-cardinal: ## Download Cardinal Synth VST3 into plugins/ (skipped if already present)
+	$(call install_fetched_synth,CardinalSynth,https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_X86_64),$(CARDINAL_SHA256_X86_64),https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_AARCH64),$(CARDINAL_SHA256_AARCH64))
 
 install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256))
+	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256),,)
 
 install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256))
+	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256),,)
 
 install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipped if already present)
 	@set -e; \
@@ -309,7 +327,7 @@ install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipp
 	cp -a "$$SRC_BUNDLE" "$$DEST"; \
 	echo "Installed $$DEST"
 
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
+install-plugins: install-surge-xt install-cardinal install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Cardinal, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \

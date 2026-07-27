@@ -22,6 +22,7 @@ _SYNTH_SPEC_RELPATH = Path("src/synth_setter/synth_spec.py")
 # Registration writes configs/render; protect shipped groups from being overwritten.
 _RESERVED_RENDER_CONFIG_NAMES = frozenset(
     {
+        "cardinal",
         "obxf",
         "surge_4",
         "surge_simple",

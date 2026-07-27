@@ -1,0 +1,10 @@
+defaults:
+  - vst
+  - synth: cardinal
+  - _self_
+
+renderer_backend: dawdreamer
+# Cardinal's Rack engine free-runs, so only a per-render instance is reproducible (#2544).
+plugin_reload_cadence: render
+# DawDreamer's open_editor() blocks the main thread and exposes no close-event API.
+gui_toggle_cadence: never

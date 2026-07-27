@@ -146,7 +146,7 @@ class TestSynthsTable:
             files("synth_setter") / "data" / "vst" / f"{synth.param_spec_name}_param_map.json"
         ).is_file()
 
-        assert packaged == (name in {"surge_4", "surge_simple", "surge_xt"})
+        assert packaged == (name in {"cardinal", "surge_4", "surge_simple", "surge_xt"})
 
 
 class TestFromRenderCfg:
