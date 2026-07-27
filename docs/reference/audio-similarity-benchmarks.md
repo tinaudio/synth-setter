@@ -105,9 +105,9 @@ The two real tests in
 render matched Pedalboard, DawDreamer, and SurgePy datasets through the production
 Lance writer and reader. The repeated-patch workload renders one patch 30 times;
 the diverse-patch workload renders eight distinct filter and oscillator settings.
-MSS, wMFCC, SOT, RMS-envelope cosine, and persisted-mel RMSE have tighter
-host-pair-specific bounds, applied to every matched render rather than only an
-aggregate worst case.
+Every host pair and matched render must satisfy mel RMSE ≤ 8.5, MSS ≤ 5.0,
+wMFCC ≤ 7.5, SOT ≤ 0.045, and RMS-envelope cosine ≥ 0.95. These bounds reject
+an unsettled or wrong patch instead of allowing a looser VST-host comparison.
 
 Every render is also gated on onset timing. Each patch is scored by how many samples
 its audio precedes the requested MIDI start; matched Pedalboard and DawDreamer
@@ -131,7 +131,9 @@ receive R2 credentials. Artifact schema version 2 has one directory per workload
 then one directory per sample containing unambiguous `pedalboard.wav`,
 `dawdreamer.wav`, and `surgepy.wav` files. Each workload also includes backend-named
 mel arrays and previews, exact normalized parameters, per-render onset scores,
-pairwise diagnostics, threshold metadata, and provenance. Historical schema-version-1
+pairwise diagnostics, threshold metadata, and provenance. Consumption checks recompute
+each mel from its same-named WAV so backend labels cannot be exchanged silently.
+Historical schema-version-1
 objects use pair directories with `target.wav` and `pred.wav`; the pair directory
 name is required to identify those hosts.
 

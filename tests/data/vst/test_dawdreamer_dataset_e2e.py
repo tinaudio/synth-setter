@@ -70,10 +70,29 @@ def _dawdreamer_experiment_config() -> RenderConfig:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
-    """The committed DawDreamer identities match the preset-loaded plugin."""
+@pytest.mark.parametrize(
+    ("parameter_map_path", "preset_path"),
+    [
+        ("src/synth_setter/data/vst/surge_4_param_map.json", "presets/surge-mini.vstpreset"),
+        (
+            "src/synth_setter/data/vst/surge_simple_param_map.json",
+            "presets/surge-simple.vstpreset",
+        ),
+        ("src/synth_setter/data/vst/surge_xt_param_map.json", "presets/surge-base.vstpreset"),
+    ],
+    ids=("surge-4", "surge-simple", "surge-xt"),
+)
+def test_dawdreamer_parameter_map_matches_live_plugin(
+    parameter_map_path: str,
+    preset_path: str,
+) -> None:
+    """Each committed DawDreamer map matches its settled preset identities.
+
+    :param parameter_map_path: Joint parameter map under test.
+    :param preset_path: VST preset paired with the map.
+    """
     if TEST_SYNTH != "surge_xt":
-        pytest.skip("DawDreamer parameter map fixture uses the Surge XT plugin")
+        pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
 
     config = _dawdreamer_experiment_config()
     DawDreamerRenderer(
@@ -81,8 +100,8 @@ def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
         sample_rate=config.sample_rate,
         channels=config.channels,
         signal_duration_seconds=config.signal_duration_seconds,
-        plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
-        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
+        plugin_state_path=str(Path(preset_path).resolve()),
+        parameter_map=load_param_map(Path(parameter_map_path)),
     )
 
 

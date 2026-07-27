@@ -1,3 +1,5 @@
+"""Renderer backend contract tests."""
+
 from __future__ import annotations
 
 import sys
@@ -394,6 +396,115 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
     assert reloaded_plugin.midi == []
 
 
+def test_dawdreamer_renderer_settles_dynamic_preset_before_parameter_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preset-dependent parameter identities are ready before the first note render.
+
+    :param monkeypatch: Installs a fake DawDreamer module.
+    """
+
+    class FakeProcessor:
+        """Expose a parameter whose identity changes after preset processing."""
+
+        def __init__(self) -> None:
+            """Initialize the stale identity and empty MIDI state."""
+            self.identity = "A Osc 1 Shape"
+            self.value = 0.0
+
+        def load_vst3_preset(self, path: str) -> None:
+            """Accept the fake preset path.
+
+            :param path: Preset path.
+            """
+
+        def get_parameters_description(self) -> list[dict[str, object]]:
+            """Return the currently active host identity.
+
+            :returns: Single fake parameter description.
+            """
+            return [{"index": 0, "name": self.identity}]
+
+        def set_parameter(self, index: int, value: float) -> None:
+            """Store the semantic parameter value.
+
+            :param index: Host parameter index.
+            :param value: Normalized parameter value.
+            """
+            assert index == 0
+            self.value = value
+
+        def clear_midi(self) -> None:
+            """Accept MIDI cleanup."""
+
+        def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
+            """Accept one MIDI note.
+
+            :param pitch: MIDI pitch.
+            :param velocity: MIDI velocity.
+            :param start: Note start in seconds.
+            :param duration: Note duration in seconds.
+            """
+
+    class FakeEngine:
+        """Apply the asynchronous preset identity after two processing blocks."""
+
+        def __init__(self, sample_rate: float, block_size: int) -> None:
+            """Create the fake engine.
+
+            :param sample_rate: Render sample rate.
+            :param block_size: Processing block size.
+            """
+            self.processor = FakeProcessor()
+            self.render_count = 0
+
+        def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
+            """Return the engine-owned processor.
+
+            :param name: Processor name.
+            :param path: Plugin path.
+            :returns: Engine-owned processor.
+            """
+            return self.processor
+
+        def load_graph(self, graph: object) -> None:
+            """Accept the fake graph.
+
+            :param graph: Processor graph.
+            """
+
+        def render(self, duration: float) -> None:
+            """Advance preset state or render the requested note.
+
+            :param duration: Render duration in seconds.
+            """
+            self.render_count += 1
+            if self.render_count == 2:
+                self.processor.identity = "A Osc 1 Sawtooth"
+
+        def get_audio(self) -> np.ndarray:
+            """Return deterministic stereo audio.
+
+            :returns: One second of fake stereo audio.
+            """
+            return np.ones((2, 16), dtype=np.float32)
+
+    monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
+    renderer = DawDreamerRenderer(
+        plugin_path="Surge XT.vst3",
+        sample_rate=16,
+        channels=2,
+        signal_duration_seconds=1.0,
+        plugin_state_path="preset.vstpreset",
+        parameter_map=_test_param_map({"a_osc_1_sawtooth": (0, "A Osc 1 Sawtooth")}, 1),
+    )
+
+    audio = renderer.render({"a_osc_1_sawtooth": 0.75}, 60, 100, (0.0, 0.5))
+
+    assert audio.shape == (2, 16)
+    assert cast(FakeProcessor, renderer.plugin).value == 0.75
+
+
 def test_dawdreamer_renderer_rejects_invalid_parameter_dispatch_before_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -640,8 +751,16 @@ def test_dawdreamer_renderer_rejects_provenance_drift(
             :param graph: Graph definition.
             """
 
+        def render(self, duration: float) -> None:
+            """Accept preset-settling renders.
+
+            :param duration: Render duration in seconds.
+            """
+
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
-    monkeypatch.setattr("synth_setter.data.vst.core.extract_renderer_version", lambda path: "actual")
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.extract_renderer_version", lambda path: "actual"
+    )
     parameter_map = _test_param_map({"cutoff": (0, "Cutoff")}, 1)
     preset_path: str | None = None
     if drift == "count":

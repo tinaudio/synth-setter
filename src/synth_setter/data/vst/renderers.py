@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
 
+from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
@@ -843,7 +844,18 @@ class DawDreamerRenderer(AudioRenderer):
         """Create and validate one preset-loaded plugin graph."""
         self._create_graph()
         self._load_preset()
+        self._settle_preset()
         self._validate_parameter_map()
+
+    def _settle_preset(self) -> None:
+        """Process empty blocks until preset-dependent identities become active."""
+        if self.plugin_state_path is None:
+            return
+        settle_dawdreamer_preset(
+            self.engine,
+            sample_rate=self.sample_rate,
+            block_size=self.block_size,
+        )
 
     def _create_graph(self) -> None:
         """Create a fresh engine, plugin processor, graph, and parameter dispatch."""

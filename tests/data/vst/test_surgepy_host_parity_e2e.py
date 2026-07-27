@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 from scipy.io import wavfile
 
+from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import NoteParams
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
@@ -59,24 +60,17 @@ _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
-_CLOSE_PAIR_THRESHOLDS = {
-    "mel_rmse_max": 9.0,
-    "mss_max": 6.0,
-    "rms_min": 0.94,
-    "sot_max": 0.05,
-    "wmfcc_max": 8.0,
-}
-_VST_PAIR_THRESHOLDS = {
-    "mel_rmse_max": 24.0,
-    "mss_max": 21.0,
-    "rms_min": 0.8,
-    "sot_max": 0.34,
-    "wmfcc_max": 22.5,
+_HOST_PAIR_THRESHOLDS = {
+    "mel_rmse_max": 8.5,
+    "mss_max": 5.0,
+    "rms_min": 0.95,
+    "sot_max": 0.045,
+    "wmfcc_max": 7.5,
 }
 _PAIR_THRESHOLDS = {
-    "dawdreamer-vs-surgepy": _VST_PAIR_THRESHOLDS,
-    "pedalboard-vs-dawdreamer": _VST_PAIR_THRESHOLDS,
-    "pedalboard-vs-surgepy": _CLOSE_PAIR_THRESHOLDS,
+    "dawdreamer-vs-surgepy": _HOST_PAIR_THRESHOLDS,
+    "pedalboard-vs-dawdreamer": _HOST_PAIR_THRESHOLDS,
+    "pedalboard-vs-surgepy": _HOST_PAIR_THRESHOLDS,
 }
 _PARAMETER_MAP_PATH = Path("src/synth_setter/data/vst/surge_xt_param_map.json")
 _SURGEPY_PRESET_PATH = Path("presets/surge-base.fxp")
@@ -634,6 +628,7 @@ def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
     """
     mel_paths = sorted((output_dir / "mel").glob("sample_*/*.npy"))
     png_paths = sorted((output_dir / "mel").glob("sample_*/*.png"))
+    sample_rate = _config("pedalboard", render_count).sample_rate
     assert len(mel_paths) == render_count * len(_BACKENDS)
     assert len(png_paths) == render_count * len(_BACKENDS)
     for path in mel_paths:
@@ -641,6 +636,9 @@ def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
         assert mel.shape == (2, 128, 401)
         assert mel.dtype == np.float32
         assert np.isfinite(mel).all()
+        _, audio = wavfile.read(output_dir / "audio" / path.parent.name / f"{path.stem}.wav")
+        recomputed = make_spectrogram(audio.T, sample_rate)
+        np.testing.assert_allclose(mel, recomputed, rtol=1e-6, atol=1e-6)
 
 
 def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -> None:
