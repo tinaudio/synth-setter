@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -127,7 +128,7 @@ def test_gpu_worker_script_proves_cuda_and_vst_before_running_gpu_tests() -> Non
     assert "nvidia-smi" in script
     assert "torch.cuda.is_available()" in script
     assert "load_plugin" in script
-    assert "run-linux-vst-headless.sh pytest -vv -s -m gpu" in script
+    assert "pytest -vv -s -m gpu" in script
     assert "--cov=src --cov-branch --cov-report=xml" in script
 
 
@@ -139,13 +140,17 @@ def test_gpu_worker_script_failed_command_uploads_coverage_and_preserves_exit(
 
     :param tmp_path: Isolated worker directory and fake rclone installation.
     """
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_rclone = fake_bin / "rclone"
-    fake_rclone.write_text('#!/bin/bash\n/bin/cp "${2}" "${FAKE_R2_DEST}"\n')
-    fake_rclone.chmod(0o755)
+    rclone = shutil.which("rclone")
+    assert rclone is not None
     (tmp_path / "coverage.xml").write_text("partial coverage")
-    uploaded = tmp_path / "uploaded.xml"
+    r2_root = tmp_path / "r2"
+    coverage_key = "ci/gpu/test/coverage.xml"
+    env = {
+        "COVERAGE_KEY": coverage_key,
+        "PATH": str(Path(rclone).parent),
+        "R2_BUCKET": str(r2_root),
+        "RCLONE_CONFIG_R2_TYPE": "local",
+    }
 
     result = subprocess.run(  # noqa: S603 — invokes Bash against a checked-in script
         [
@@ -156,19 +161,29 @@ def test_gpu_worker_script_failed_command_uploads_coverage_and_preserves_exit(
             str(_WORKER_SCRIPT),
         ],
         cwd=tmp_path,
-        env={
-            "COVERAGE_KEY": "ci/gpu/test/coverage.xml",
-            "FAKE_R2_DEST": str(uploaded),
-            "PATH": str(fake_bin),
-            "R2_BUCKET": "test-bucket",
-        },
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 1
+    uploaded = r2_root / coverage_key
     assert uploaded.read_text() == "partial coverage"
+
+    retrieved = tmp_path / "retrieved.xml"
+    retrieve = subprocess.run(  # noqa: S603 — invokes the resolved rclone binary
+        [rclone, "moveto", f"r2:{uploaded}", str(retrieved), "--checksum"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert retrieve.returncode == 0, retrieve.stderr
+    assert retrieved.read_text() == "partial coverage"
+    assert not uploaded.exists()
 
 
 @pytest.mark.infra
@@ -231,7 +246,7 @@ def test_gpu_workflow_supplies_local_launcher_and_worker_credentials(project_roo
 
     assert step_env["R2_ACCOUNT_ID"] == "${{ secrets.R2_ACCOUNT_ID }}"
     assert step_env["WANDB_API_KEY"] == "${{ secrets.WANDB_API_KEY }}"
-    assert '--extra-env WANDB_API_KEY "$WANDB_API_KEY"' in cast(str, launch_step["run"])
+    assert "--extra-env WANDB_API_KEY" not in cast(str, launch_step["run"])
 
 
 @pytest.mark.infra

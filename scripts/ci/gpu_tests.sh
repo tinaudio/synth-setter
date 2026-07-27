@@ -12,6 +12,8 @@ upload_coverage() {
   exit "${rc}"
 }
 
+# Run CUDA, VST, and GPU pytest checks; arguments: none.
+# Globals: COVERAGE_KEY, PATH, R2_BUCKET; Outputs: diagnostics; Returns: test status.
 main() {
   set -euo pipefail
 
@@ -26,12 +28,27 @@ main() {
   trap upload_coverage EXIT
 
   nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
-  python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; assert torch.cuda.device_count() > 0; print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())'
+  python - <<'PY'
+import torch
+
+assert torch.cuda.is_available(), "CUDA not available"
+assert torch.cuda.device_count() > 0
+print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())
+PY
 
   # Loading the plugin before pytest separates a broken VST host from a failing test.
-  src/synth_setter/scripts/run-linux-vst-headless.sh python -X faulthandler -c 'from synth_setter.data.vst.core import load_plugin; plugin = load_plugin("/usr/lib/vst3/Surge XT.vst3"); assert plugin is not None; print("Surge XT loaded")'
+  src/synth_setter/scripts/run-linux-vst-headless.sh \
+    python -X faulthandler - <<'PY'
+from synth_setter.data.vst.core import load_plugin
 
-  src/synth_setter/scripts/run-linux-vst-headless.sh pytest -vv -s -m gpu --cov=src --cov-branch --cov-report=xml --cov-report=term
+plugin = load_plugin("/usr/lib/vst3/Surge XT.vst3")
+assert plugin is not None
+print("Surge XT loaded")
+PY
+
+  src/synth_setter/scripts/run-linux-vst-headless.sh \
+    pytest -vv -s -m gpu \
+    --cov=src --cov-branch --cov-report=xml --cov-report=term
   [[ -s coverage.xml ]]
 }
 
