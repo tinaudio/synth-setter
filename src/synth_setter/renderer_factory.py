@@ -13,6 +13,7 @@ from synth_setter.data.vst.renderers import (
     DawDreamerFaustRenderer,
     DawDreamerRenderer,
     PedalboardRenderer,
+    SurgePyRenderer,
     TorchSynthRenderer,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -54,6 +55,22 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             plugin_state_path=render_config.plugin_state_path,
             parameter_map=joint_map,
             reload_plugin_each_render=render_config.plugin_reload_cadence == "render",
+        )
+    if backend == "surgepy":
+        from synth_setter.data.vst.param_map import load_param_map
+        from synth_setter.data.vst.surgepy_runtime import ensure_surgepy_runtime
+        from synth_setter.resources import as_file, param_map
+
+        ensure_surgepy_runtime(backend, render_config.synth.synth_version)
+        with as_file(param_map(render_config.param_spec_name)) as path:
+            joint_map = load_param_map(path)
+        return SurgePyRenderer(
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+            parameter_map=joint_map,
         )
     if backend == "torchsynth":
         return TorchSynthRenderer(

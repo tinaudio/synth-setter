@@ -172,6 +172,25 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
     assert sorted(logged) == sorted(f"per_param_mse/{name}" for name in spec.names)
 
 
+def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
+    """Best-swap vectors use a separate per-parameter namespace when present."""
+    spec = param_specs["surge_4"]
+    callback = LogPerParamMSE("surge_4")
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+    outputs = {
+        "per_param_mse": torch.zeros(spec.encoded_width),
+        "per_param_mse_best_swap": torch.arange(spec.encoded_width, dtype=torch.float32),
+    }
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(trainer, pl_module, outputs, None, 0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged["per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
+
+
 def test_log_per_param_mse_averages_a_multi_column_parameter_over_its_span() -> None:
     """A parameter spanning several columns reports the mean of those columns.
 

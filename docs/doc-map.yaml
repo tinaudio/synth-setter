@@ -469,7 +469,7 @@ docs:
       - pattern: ".github/workflows/test-mps.yml"
         covers: "Pre-submit MPS lane on macos-latest (-m mps), triggered on src/synth_setter/configs/ PRs"
       - pattern: ".github/workflows/test-gpu.yml"
-        covers: "Twice-weekly GPU lane on gpu-x64 (-m gpu)"
+        covers: "SkyPilot-dispatched RunPod GPU lane (-m gpu)"
       - pattern: ".github/workflows/deflake-mps.yml"
         covers: "Manual-dispatch diagnostic loop on macos-latest — reruns a single pytest node N times via pytest-repeat (#1260 flake harness); uploads failed tmp_paths per iteration."
       - pattern: "pyproject.toml"

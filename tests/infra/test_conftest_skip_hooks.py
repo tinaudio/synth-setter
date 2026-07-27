@@ -1,4 +1,4 @@
-"""Tests for the conftest.py auto-skip hooks for requires_vst and integration_r2.
+"""Tests for conftest.py auto-skips for native and remote prerequisites.
 
 Exercises ``pytest_collection_modifyitems`` directly with a lightweight item double
 to verify both the skip-inserted and run-through branches for each marker.
@@ -223,6 +223,45 @@ def test_requires_vst_item_skipped_when_vst_absent(monkeypatch: pytest.MonkeyPat
     )
     assert len(item.added_markers) == 1
     assert "VST plugin not found" in item.added_markers[0].kwargs["reason"]
+
+
+@pytest.mark.infra
+def test_requires_surgepy_item_skipped_when_extension_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """requires_surgepy items skip when the platform-specific extension is absent.
+
+    :param monkeypatch: Rebinds the cached SurgePy capability.
+    """
+    monkeypatch.setattr(conftest_module, "_SURGEPY_AVAILABLE", False)
+    item = _FakeItem({"requires_surgepy": pytest.mark.requires_surgepy})
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
+
+    assert len(item.added_markers) == 1
+    assert "surgepy native extension is unavailable" in item.added_markers[0].kwargs["reason"]
+
+
+@pytest.mark.infra
+def test_requires_surgepy_item_not_skipped_when_extension_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """requires_surgepy items run when the native extension is installed.
+
+    :param monkeypatch: Rebinds the cached SurgePy capability.
+    """
+    monkeypatch.setattr(conftest_module, "_SURGEPY_AVAILABLE", True)
+    item = _FakeItem({"requires_surgepy": pytest.mark.requires_surgepy})
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
+
+    assert item.added_markers == []
 
 
 @pytest.mark.infra
