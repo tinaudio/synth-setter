@@ -104,7 +104,7 @@ name: Test SkyPilot Debug
 #   RUNPOD_API_KEY  — written to ~/.runpod/config.toml by
 #                     scripts/skypilot/write_provider_creds.sh so SkyPilot
 #                     can provision a pod. Skipped when
-#                     SKYPILOT_API_SERVER_ENDPOINT is set (see #785) — the
+#                     SKYPILOT_API_SERVER_ENDPOINT is set — the
 #                     remote API server holds provider creds and the local
 #                     SkyPilot client only needs the endpoint URL.
 #

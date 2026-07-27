@@ -39,7 +39,7 @@ name: Test Dataset Generation
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, the launcher skips
-#     the cred-bootstrap because the remote API server (#785) holds creds.
+#     the cred-bootstrap because the remote API server holds creds.
 
 on:
   # Two cron axes (#1164, #1170):

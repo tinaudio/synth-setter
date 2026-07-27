@@ -8,14 +8,13 @@ name: Check Auth
 #
 # Per provider the workflow:
 #   1. Runs scripts/skypilot/write_provider_creds.sh, which materializes
-#      ~/.cloudflare/ and, for RunPod, ~/.runpod/. The script emits no stdout
-#      by design so this workflow can run it without a leak surface.
+#      R2 and provider credentials. The script emits no stdout by design so
+#      this workflow can run it without a leak surface.
 #   2. Verifies the cred files exist with mode 600.
 #   3. R2 auth probe: `rclone lsd r2:` lists buckets at the account level —
 #      lightest call that exercises the access key + endpoint together.
-#   4. RunPod auth probe: `sky check runpod` exercises the SkyPilot adapter
-#      against the freshly-written cred file. `local` skips this because kind
-#      has no compute provider to check.
+#   4. Provider auth probe: `sky check <provider>` exercises the SkyPilot
+#      adapter against the freshly written RunPod or Vast.ai credential.
 #
 # When SKYPILOT_API_SERVER_ENDPOINT is set the bootstrap is skipped entirely
 # (the remote API server holds creds; nothing to validate locally) and the
@@ -25,6 +24,7 @@ name: Check Auth
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID                          — always.
 #   RUNPOD_API_KEY                                                    — runpod row.
+#   VAST_API_KEY                                                      — vast row.
 
 on:
   workflow_dispatch:
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [runpod, local]
+        provider: [runpod, vast]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -58,7 +58,7 @@ jobs:
           cache: pip
 
       - name: Install skypilot
-        run: pip install "skypilot[runpod]==0.12.0"
+        run: pip install "skypilot[runpod,vast]==0.12.0" "vastai-sdk==0.2.5"
 
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
@@ -84,6 +84,7 @@ jobs:
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
           PROVIDER: ${{ matrix.provider }}
         run: |
           set -euo pipefail
@@ -110,9 +111,8 @@ jobs:
             runpod)
               check_mode_600 "${HOME}/.runpod/config.toml"
               ;;
-            local)
-              test ! -e "${HOME}/.runpod/config.toml" \
-                || { echo "::error::~/.runpod/config.toml unexpectedly written for --provider local"; exit 1; }
+            vast)
+              check_mode_600 "${HOME}/.config/vastai/vast_api_key"
               ;;
           esac
 
@@ -129,7 +129,7 @@ jobs:
           rclone lsd r2:
 
       - name: Verify provider auth (sky check)
-        if: ${{ env.SKIP_CRED_CHECK != '1' && matrix.provider != 'local' }}
+        if: ${{ env.SKIP_CRED_CHECK != '1' }}
         env:
           PROVIDER: ${{ matrix.provider }}
         run: |

@@ -188,7 +188,7 @@ jobs:
           case "${PROVIDER}" in
             skypilot-local|runpod) ;;
             *)
-              echo "::error::unsupported provider: ${PROVIDER}"
+              echo "::error::unsupported provider: ${PROVIDER}" >&2
               exit 1
               ;;
           esac
@@ -564,7 +564,7 @@ jobs:
           fi
           echo "docker pull completed for ${IMAGE}"
 
-      # ----- runpod row: in-container synth-setter-generate-dataset
+      # Run the RunPod worker container.
       # Optional Hydra overrides are pre-rendered into env-var strings at the
       # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
