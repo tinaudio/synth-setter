@@ -279,8 +279,8 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence
 
 
-def test_render_cardinal_selects_dawdreamer_with_per_render_reload() -> None:
-    """``render=cardinal`` routes Cardinal through DawDreamer with a reproducible host lifetime."""
+def test_render_cardinal_selects_dawdreamer_with_a_shared_host() -> None:
+    """``render=cardinal`` routes Cardinal through DawDreamer on one editor-free host."""
     spec = _spec_from_dataset_overrides(["render=cardinal"])
 
     assert spec.render.synth.name == "cardinal"
@@ -288,5 +288,6 @@ def test_render_cardinal_selects_dawdreamer_with_per_render_reload() -> None:
     assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
     assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
     assert spec.render.renderer_backend == "dawdreamer"
-    # Cardinal's Rack engine free-runs, so only a per-render instance is reproducible (#2544).
-    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.gui_toggle_cadence == "never"
+    # Per-render reload segfaults between librosa mel computations (#2549).
+    assert spec.render.plugin_reload_cadence == "once"

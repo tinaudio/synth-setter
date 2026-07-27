@@ -4,7 +4,8 @@ defaults:
   - _self_
 
 renderer_backend: dawdreamer
-# Cardinal's Rack engine free-runs, so only a per-render instance is reproducible (#2544).
-plugin_reload_cadence: render
 # DawDreamer's open_editor() blocks the main thread and exposes no close-event API.
 gui_toggle_cadence: never
+# Per-render reload would isolate Cardinal's free-running Rack engine, but reloading
+# between librosa mel computations segfaults the worker (#2549), so rows share one host.
+plugin_reload_cadence: once

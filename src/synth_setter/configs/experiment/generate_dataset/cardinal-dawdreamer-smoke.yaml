@@ -1,0 +1,17 @@
+# @package _global_
+
+# One real Cardinal shard through DawDreamer. Minimal operator experiment for
+# validating the mapped Rack patch end to end before larger runs.
+
+defaults:
+  - override /datamodule: cardinal
+  - override /render: cardinal
+  - _self_
+
+task_name: cardinal-dawdreamer-smoke
+
+train_val_test_sizes: [4, 0, 0]
+
+render:
+  samples_per_render_batch: 1
+  samples_per_shard: 4
