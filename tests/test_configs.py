@@ -1037,7 +1037,7 @@ def test_ksin_ff_experiment_predicts_two_parameters_per_partial() -> None:
     """``ksin_ood/mlp_mse`` maps a waveform batch to the k-sinusoid parameter width.
 
     Pins the interpolations the restored ``model/ksin_ff`` carries: the net reads
-    ``datamodule.signal_length`` samples and emits amplitude and frequency per partial.
+    ``datamodule.signal_length`` samples and emits frequency and amplitude per partial.
     """
     cfg = _compose("train.yaml", ["experiment=ksin_ood/mlp_mse"])
     model = hydra.utils.instantiate(cfg.model)
