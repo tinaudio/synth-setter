@@ -1,9 +1,10 @@
 #!/bin/bash
 # Run the GPU test lane and return partial coverage through R2.
+set -euo pipefail
 
-# Upload coverage without hiding test failures; arguments: none.
+# Upload coverage without hiding test failures — see #2460.
 # Globals: COVERAGE_KEY, R2_BUCKET.
-# Outputs: rclone stdout/stderr; Returns: exits.
+# Arguments: none; Outputs: rclone output; Returns: exits with test status.
 upload_coverage() {
   local rc=$?
   trap - EXIT
@@ -14,12 +15,10 @@ upload_coverage() {
   exit "${rc}"
 }
 
-# Run CUDA, VST, and GPU pytest checks.
+# Run CUDA, VST, and GPU pytest checks — see #2460.
 # Globals: COVERAGE_KEY, PATH, R2_BUCKET, RCLONE_MOUNT_PATH, VST_RUNNER.
 # Arguments: none; Outputs: diagnostics; Returns: test status.
 main() {
-  set -euo pipefail
-
   : "${COVERAGE_KEY:?run-scoped R2 key to publish coverage.xml under}"
   : "${R2_BUCKET:?R2 bucket receiving the coverage artifact}"
   local rclone_mount_path="${RCLONE_MOUNT_PATH:-/tmp/synth-setter-tools/rclone}"
