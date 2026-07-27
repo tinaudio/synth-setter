@@ -79,8 +79,8 @@ def test_gpu_worker_script_prefers_the_mounted_rclone_over_the_image_one() -> No
     """The image's apt rclone fails first R2 writes, so the mounted binary must win $PATH."""
     script = _WORKER_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'export PATH="/tmp/synth-setter-tools:${PATH}"' in script
-    assert script.index("chmod u+x /tmp/synth-setter-tools/rclone") < script.index("export PATH=")
+    assert 'export PATH="${rclone_mount_path%/*}:${PATH}"' in script
+    assert script.index('chmod u+x "${rclone_mount_path}"') < script.index("export PATH=")
     assert script.index("export PATH=") < script.index("trap upload_coverage EXIT")
 
 
@@ -133,33 +133,42 @@ def test_gpu_worker_script_proves_cuda_and_vst_before_running_gpu_tests() -> Non
 
 
 @pytest.mark.infra
-def test_gpu_worker_script_failed_command_uploads_coverage_and_preserves_exit(
+def test_gpu_worker_script_failed_pytest_uploads_coverage_and_preserves_exit(
     tmp_path: Path,
 ) -> None:
-    """The EXIT trap publishes partial coverage without masking a test failure.
+    """The executable worker publishes partial coverage without masking pytest failure.
 
-    :param tmp_path: Isolated worker directory and fake rclone installation.
+    :param tmp_path: Isolated worker directory and command fixtures.
     """
     rclone = shutil.which("rclone")
     assert rclone is not None
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_rclone = fake_bin / "rclone"
+    fake_rclone.write_text(f'#!/bin/bash\nexec "{rclone}" "$@"\n')
+    fake_rclone.chmod(0o755)
+    for command in ("nvidia-smi", "python"):
+        fake_command = fake_bin / command
+        fake_command.write_text("#!/bin/bash\nexit 0\n")
+        fake_command.chmod(0o755)
+    vst_runner = fake_bin / "run-linux-vst-headless.sh"
+    vst_runner.write_text('#!/bin/bash\nif [[ "$*" == *pytest* ]]; then exit 42; fi\nexit 0\n')
+    vst_runner.chmod(0o755)
+
     (tmp_path / "coverage.xml").write_text("partial coverage")
     r2_root = tmp_path / "r2"
     coverage_key = "ci/gpu/test/coverage.xml"
     env = {
         "COVERAGE_KEY": coverage_key,
-        "PATH": str(Path(rclone).parent),
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
         "R2_BUCKET": str(r2_root),
         "RCLONE_CONFIG_R2_TYPE": "local",
+        "RCLONE_MOUNT_PATH": str(fake_rclone),
+        "VST_RUNNER": str(vst_runner),
     }
 
-    result = subprocess.run(  # noqa: S603 — invokes Bash against a checked-in script
-        [
-            "/bin/bash",
-            "-c",
-            'source "$1"; trap upload_coverage EXIT; false',
-            "bash",
-            str(_WORKER_SCRIPT),
-        ],
+    result = subprocess.run(  # noqa: S603 — executes the checked-in worker script
+        [str(_WORKER_SCRIPT)],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -167,7 +176,7 @@ def test_gpu_worker_script_failed_command_uploads_coverage_and_preserves_exit(
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 42
     uploaded = r2_root / coverage_key
     assert uploaded.read_text() == "partial coverage"
 
