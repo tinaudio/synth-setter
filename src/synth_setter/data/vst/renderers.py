@@ -469,9 +469,11 @@ class SurgePyRenderer(AudioRenderer):
         :param end: Requested note end in seconds.
         :returns: Native stereo output trimmed to ``samples``.
         """
+        start_sample = math.ceil(start * self.sample_rate)
+        if start_sample >= samples:
+            return np.zeros((2, samples), dtype=np.float32)
         block_size = self.synth.getBlockSize()
         num_blocks = math.ceil(samples / block_size)
-        start_sample = math.ceil(start * self.sample_rate)
         start_block = math.floor(start_sample / block_size)
         note_blocks = max(1, math.ceil((end - start) * self.sample_rate / block_size))
         end_block = min(num_blocks, start_block + note_blocks)

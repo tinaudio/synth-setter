@@ -707,13 +707,13 @@ def test_dump_dawdreamer_writes_raw_host_names(
             return self.processor
 
         def load_graph(self, graph: object) -> None:
-            """No-op fake graph loader.
+            """Leave graph state unchanged so render callbacks activate the preset.
 
             :param graph: Ignored fake processor graph.
             """
 
         def render(self, duration: float) -> None:
-            """Activate the preset-dependent identity after two cycles.
+            """Activate the preset-dependent identity after processing.
 
             :param duration: Render duration in seconds.
             """

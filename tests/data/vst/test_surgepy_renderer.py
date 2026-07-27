@@ -220,6 +220,26 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
     assert audible[0] == note_start_sample
 
 
+def test_surgepy_renderer_note_after_retained_samples_returns_silence() -> None:
+    """A valid fractional-duration note may start beyond the retained samples."""
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 10
+    renderer.synth = Mock()
+    renderer.synth.getBlockSize.return_value = 64
+    renderer.synth.createMultiBlock.return_value = np.zeros((2, 64), dtype=np.float32)
+
+    audio = renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=4,
+        start=0.41,
+        end=0.44,
+    )
+
+    np.testing.assert_array_equal(audio, np.zeros((2, 4), dtype=np.float32))
+    assert renderer.synth.method_calls == []
+
+
 def test_surgepy_renderer_non_block_aligned_note_preserves_first_native_sample() -> None:
     """Sub-block alignment delays, rather than discards, the native note attack."""
 

@@ -59,6 +59,7 @@ _DIVERSE_PATCH_VALUES = (
 )
 _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
+_ADJACENT_MEL_RMSE_MIN = 2.5
 _DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
@@ -554,6 +555,41 @@ def _manifest(
     }
 
 
+def _parameter_rows(
+    results: dict[ParityBackend, _BackendResult],
+    synth_params: list[dict[str, float]],
+) -> list[dict[str, object]]:
+    """Build the listening artifact's parameter rows.
+
+    :param results: Materialized artifacts keyed by backend.
+    :param synth_params: Exact normalized patches rendered by every backend.
+    :returns: JSON-compatible parameter records in render order.
+    """
+    velocity = _config("pedalboard", len(synth_params)).velocity
+    midi_event = {**_HARDCODED_NOTE_PARAMS, "velocity": velocity}
+    return [
+        {
+            "sample": index,
+            "encoded_normalized_vector": results["pedalboard"]
+            .params[index]
+            .astype(float)
+            .tolist(),
+            "midi_event": midi_event,
+            "normalized_synth_parameters": patch,
+        }
+        for index, patch in enumerate(synth_params)
+    ]
+
+
+def _write_json(path: Path, payload: object) -> None:
+    """Write one stable, newline-terminated JSON artifact.
+
+    :param path: Artifact destination.
+    :param payload: JSON-compatible value.
+    """
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
 def _write_workload(
     output_root: Path,
     workload: str,
@@ -574,30 +610,15 @@ def _write_workload(
     """
     output_dir = output_root / workload
     shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     _write_audio(output_dir, results)
     _write_mels(output_dir, results)
-    config = _config("pedalboard", len(synth_params))
-    midi_event = {**_HARDCODED_NOTE_PARAMS, "velocity": config.velocity}
-    parameters = [
-        {
-            "sample": index,
-            "encoded_normalized_vector": results["pedalboard"]
-            .params[index]
-            .astype(float)
-            .tolist(),
-            "midi_event": midi_event,
-            "normalized_synth_parameters": patch,
-        }
-        for index, patch in enumerate(synth_params)
-    ]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "parameters.json").write_text(json.dumps(parameters, indent=2) + "\n")
-    (output_dir / "metrics.json").write_text(
-        json.dumps({"onsets": onset_rows, "pairwise": pair_rows}, indent=2) + "\n"
+    _write_json(output_dir / "parameters.json", _parameter_rows(results, synth_params))
+    _write_json(
+        output_dir / "metrics.json",
+        {"onsets": onset_rows, "pairwise": pair_rows},
     )
-    (output_dir / "manifest.json").write_text(
-        json.dumps(_manifest(workload, results), indent=2) + "\n"
-    )
+    _write_json(output_dir / "manifest.json", _manifest(workload, results))
 
 
 def _assert_wav_artifacts(output_dir: Path, render_count: int) -> None:
@@ -643,12 +664,11 @@ def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
         np.testing.assert_allclose(mel, recomputed, rtol=1e-6, atol=1e-6)
 
 
-def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -> None:
-    """Validate schema-v2 diagnostics and provenance documents.
+def _assert_parameter_artifact(output_dir: Path, render_count: int) -> None:
+    """Validate parameter rows against the production parameter contract.
 
     :param output_dir: Workload artifact directory.
-    :param workload: Expected workload identity.
-    :param render_count: Expected row count in each document.
+    :param render_count: Expected row count.
     """
     config = _config("surgepy", render_count)
     parameters = json.loads((output_dir / "parameters.json").read_text())
@@ -660,7 +680,6 @@ def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -
         "velocity": config.velocity,
     }
     expected_width = resolve_param_spec(config.param_spec_name).encoded_width
-    expected_patch_keys = set(_HARDCODED_SYNTH_PARAMS)
     for row in parameters:
         assert set(row) == {
             "sample",
@@ -675,7 +694,7 @@ def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -
         assert np.isfinite(vector).all()
         assert np.all((vector >= 0.0) & (vector <= 1.0))
         patch = row["normalized_synth_parameters"]
-        assert set(patch) == expected_patch_keys
+        assert set(patch) == set(_PARITY_SYNTH_PARAMS)
         assert all(
             isinstance(value, (int, float))
             and not isinstance(value, bool)
@@ -684,11 +703,26 @@ def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -
             for value in patch.values()
         )
 
+
+def _assert_metrics_artifact(output_dir: Path, render_count: int) -> None:
+    """Validate the pairwise and onset metric row counts.
+
+    :param output_dir: Workload artifact directory.
+    :param render_count: Expected row count per backend or pair.
+    """
     metrics = json.loads((output_dir / "metrics.json").read_text())
     assert len(metrics["onsets"]) == render_count * len(_BACKENDS)
     assert set(metrics["pairwise"]) == set(_PAIR_THRESHOLDS)
     assert {len(rows) for rows in metrics["pairwise"].values()} == {render_count}
 
+
+def _assert_manifest_artifact(output_dir: Path, workload: str, render_count: int) -> None:
+    """Validate listening-artifact schema and provenance metadata.
+
+    :param output_dir: Workload artifact directory.
+    :param workload: Expected workload identity.
+    :param render_count: Expected render count.
+    """
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["artifact_schema_version"] == 2
     assert manifest["workload"] == workload
@@ -697,6 +731,18 @@ def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -
     assert {entry["filename"] for entry in manifest["backends"].values()} == {
         f"{backend}.wav" for backend in _BACKENDS
     }
+
+
+def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -> None:
+    """Validate schema-v2 diagnostics and provenance documents.
+
+    :param output_dir: Workload artifact directory.
+    :param workload: Expected workload identity.
+    :param render_count: Expected row count in each document.
+    """
+    _assert_parameter_artifact(output_dir, render_count)
+    _assert_metrics_artifact(output_dir, render_count)
+    _assert_manifest_artifact(output_dir, workload, render_count)
 
 
 def _assert_listening_artifact(
@@ -746,7 +792,7 @@ def _assert_artifact_contract(
 def _assert_directional_audio_diversity(
     results: dict[ParityBackend, _BackendResult],
 ) -> None:
-    """Require each backend to follow the diverse workload's upward spectral sweep.
+    """Require every patch step to change spectrum and end at a higher centroid.
 
     :param results: Materialized diverse-patch artifacts keyed by backend.
     """
@@ -754,6 +800,13 @@ def _assert_directional_audio_diversity(
         mel_bins = np.arange(result.mel.shape[2], dtype=np.float64)[None, :, None]
         energy = np.power(10.0, result.mel.astype(np.float64) / 10.0)
         centroids = np.sum(energy * mel_bins, axis=(1, 2, 3)) / np.sum(energy, axis=(1, 2, 3))
+        adjacent_mel_rmse = np.sqrt(
+            np.mean(np.diff(result.mel, axis=0) ** 2, axis=(1, 2, 3))
+        )
+        assert np.all(adjacent_mel_rmse > _ADJACENT_MEL_RMSE_MIN), (
+            backend,
+            adjacent_mel_rmse.tolist(),
+        )
         assert centroids[-1] - centroids[0] > _DIVERSE_CENTROID_SHIFT_MIN, (
             backend,
             centroids.tolist(),

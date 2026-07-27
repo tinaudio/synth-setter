@@ -107,7 +107,8 @@ Lance writer and reader. The repeated-patch workload renders one patch 30 times;
 the diverse-patch workload renders eight distinct filter and oscillator settings.
 Both pin oscillator drift to zero so host scheduling and parameter dispatch, rather
 than randomized oscillator motion, determine differences. The diverse workload also
-requires each host to follow the intended upward spectral sweep.
+requires every adjacent patch to change the spectrum and the final patch to finish at a
+higher spectral centroid than the first.
 Every host pair and matched render must satisfy mel RMSE ≤ 3.5, MSS ≤ 1.0,
 wMFCC ≤ 2.0, SOT ≤ 0.01, and RMS-envelope cosine ≥ 0.995. These bounds reject
 an unsettled or wrong patch instead of allowing a looser VST-host comparison.

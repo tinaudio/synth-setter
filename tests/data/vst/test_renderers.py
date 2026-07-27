@@ -447,7 +447,7 @@ def test_dawdreamer_renderer_settles_dynamic_preset_before_parameter_dispatch(
             """
 
     class FakeEngine:
-        """Apply the asynchronous preset identity after two processing blocks."""
+        """Apply the asynchronous preset identity after native processing."""
 
         def __init__(self, sample_rate: float, block_size: int) -> None:
             """Create the fake engine.
@@ -468,7 +468,7 @@ def test_dawdreamer_renderer_settles_dynamic_preset_before_parameter_dispatch(
             return self.processor
 
         def load_graph(self, graph: object) -> None:
-            """No-op fake graph loader.
+            """Leave graph state unchanged so render callbacks activate the preset.
 
             :param graph: Ignored fake processor graph.
             """

@@ -118,9 +118,6 @@ def test_dawdreamer_dump_build_roundtrip_loads_real_settled_map(tmp_path: Path) 
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
     clap_path = Path("/usr/lib/clap/Surge XT.clap")
-    if not clap_path.exists():
-        pytest.skip(f"Surge XT CLAP fixture is unavailable: {clap_path}")
-
     pedalboard_dump = tmp_path / "pedalboard.json"
     clap_dump = tmp_path / "clap.json"
     dawdreamer_dump = tmp_path / "dawdreamer.json"
