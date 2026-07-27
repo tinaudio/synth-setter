@@ -757,60 +757,46 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
-def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(
+@pytest.mark.requires_surgepy
+@pytest.mark.slow
+def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     cfg_dataset_dawdreamer: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """The SurgePy identity reaches the operator renderer subprocess contract.
+    """The operator entrypoint writes a real SurgePy shard consumable from R2.
 
     :param cfg_dataset_dawdreamer: Dataset scaffold changed to the SurgePy backend.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param fake_r2_remote: Local-filesystem root backing the real ``rclone`` process.
     :param monkeypatch: Pins the worker contract.
+    :param tmp_path: Scratch directory holding worker-relative resource links.
     """
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset_dawdreamer):
         cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.train_val_test_sizes = [1, 0, 0]
         cfg_dataset_dawdreamer.render.synth.plugin_path = "surgepy"
         cfg_dataset_dawdreamer.render.synth.plugin_state_path = "presets/surge-base.fxp"
         cfg_dataset_dawdreamer.render.renderer_backend = "surgepy"
         cfg_dataset_dawdreamer.render.synth.synth_version = "1.3.master.f7b97c68"
         cfg_dataset_dawdreamer.render.gui_toggle_cadence = "never"
         cfg_dataset_dawdreamer.render.plugin_reload_cadence = "render"
+        cfg_dataset_dawdreamer.render.samples_per_render_batch = 1
+        cfg_dataset_dawdreamer.render.samples_per_shard = 1
         cfg_dataset_dawdreamer.r2.prefix = "fake-r2/surgepy-run/"
         cfg_dataset_dawdreamer.logger = None
 
     spec = spec_from_cfg(cfg_dataset_dawdreamer)
-    captured_renderer_argv: list[str] = []
-    render_shard = stub_renderer(spec)
 
-    def _capture(args: list[str]) -> None:
-        if not (args and args[0] == "rclone"):
-            captured_renderer_argv.extend(args)
-        render_shard(args)
-
-    with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
-        side_effect=_capture,
-    ):
-        from_hydra(cfg_dataset_dawdreamer)
+    from_hydra(cfg_dataset_dawdreamer)
 
     assert spec.render.renderer_backend == "surgepy"
     assert spec.render.plugin_path == "surgepy"
-    backend_index = captured_renderer_argv.index("--renderer_backend")
-    assert captured_renderer_argv[backend_index + 1] == "surgepy"
-    shard = spec.shards[0]
-    staging = (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard.shard_id:06d}"
-    )
-    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+    assert validate_all_shards_from_r2(spec) == []
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(

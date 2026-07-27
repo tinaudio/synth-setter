@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import time
@@ -38,6 +39,7 @@ from tests.data.vst.test_generate_vst_dataset import (
     _emit_benchmark_metrics,
 )
 
+type BenchmarkEntry = dict[str, float | str]
 type ParityBackend = Literal["dawdreamer", "pedalboard", "surgepy"]
 type MetricRow = dict[str, float | int]
 
@@ -242,12 +244,15 @@ def _pair_metrics(
 
 
 def _modified_z_scores(calibration: np.ndarray, observed: np.ndarray) -> np.ndarray:
-    """Score observations against a robust independent calibration.
+    """Score one-dimensional observations against robust calibration values.
 
-    :param calibration: Trusted control observations used to fit location and scale.
-    :param observed: Values to score without affecting calibration.
+    :param calibration: Nonempty one-dimensional trusted-control values.
+    :param observed: One-dimensional values to score without affecting calibration.
     :returns: One-sided modified z-scores for upper outliers.
+    :raises ValueError: If either input violates its shape contract.
     """
+    if calibration.ndim != 1 or observed.ndim != 1 or len(calibration) == 0:
+        raise ValueError("modified z-score inputs must be nonempty one-dimensional arrays")
     median = float(np.median(calibration))
     mad = float(np.median(np.abs(calibration - median)))
     scale = max(mad, _ONSET_SCALE_FLOOR_SAMPLES)
@@ -258,9 +263,12 @@ def _modified_z_scores(calibration: np.ndarray, observed: np.ndarray) -> np.ndar
 def _onset_samples(audio: np.ndarray) -> np.ndarray:
     """Return the first audible sample in each channel-leading waveform.
 
-    :param audio: Batch of channel-leading waveforms.
+    :param audio: Waveforms shaped ``(rows, channels, samples)``.
     :returns: Integer onset sample per row; a silent row fails the test.
+    :raises ValueError: If ``audio`` does not have three nonempty dimensions.
     """
+    if audio.ndim != 3 or any(size == 0 for size in audio.shape):
+        raise ValueError("audio must have shape (rows, channels, samples)")
     onsets: list[int] = []
     for index, waveform in enumerate(audio):
         audible = np.flatnonzero(np.max(np.abs(waveform), axis=0) > _ONSET_AMPLITUDE)
@@ -269,23 +277,32 @@ def _onset_samples(audio: np.ndarray) -> np.ndarray:
     return np.asarray(onsets)
 
 
-def _matched_onset_z_scores(
+def _early_onset_z_scores(
     pedalboard: np.ndarray,
     dawdreamer: np.ndarray,
     observed: np.ndarray,
+    expected: np.ndarray,
 ) -> np.ndarray:
-    """Score matched onsets against each row's trusted-host center.
+    """Score per-patch early audio against trusted-host earliness.
 
-    :param pedalboard: Pedalboard onset sample per patch.
-    :param dawdreamer: DawDreamer onset sample per patch.
-    :param observed: Backend onset samples to score row by row.
+    :param pedalboard: One-dimensional Pedalboard onset samples.
+    :param dawdreamer: One-dimensional DawDreamer onset samples.
+    :param observed: One-dimensional backend onset samples to score.
+    :param expected: One-dimensional requested onset samples.
     :returns: One-sided upper modified z-score per patch.
+    :raises ValueError: If inputs are empty, non-vector, or differently shaped.
     """
-    centers = (pedalboard + dawdreamer) / 2.0
-    control_deviations = np.concatenate(
-        (np.abs(pedalboard - centers), np.abs(dawdreamer - centers))
+    arrays = (pedalboard, dawdreamer, observed, expected)
+    if (
+        any(array.ndim != 1 or array.shape != expected.shape for array in arrays)
+        or len(expected) == 0
+    ):
+        raise ValueError("matched onset inputs must be nonempty vectors of equal shape")
+    control_earliness = np.concatenate(
+        (np.maximum(expected - pedalboard, 0), np.maximum(expected - dawdreamer, 0))
     )
-    return _modified_z_scores(control_deviations, np.abs(observed - centers))
+    observed_earliness = np.maximum(expected - observed, 0)
+    return _modified_z_scores(control_earliness, observed_earliness)
 
 
 def _onset_rows(
@@ -297,9 +314,15 @@ def _onset_rows(
     :returns: Per-backend, per-sample onset values and modified z-scores.
     """
     onsets = {backend: _onset_samples(result.audio) for backend, result in results.items()}
+    render_count = len(onsets["pedalboard"])
+    note_start = _HARDCODED_NOTE_PARAMS["note_start_and_end"][0]
+    requested_sample = math.ceil(note_start * _config("pedalboard", render_count).sample_rate)
+    expected = np.full(render_count, requested_sample)
     rows: list[dict[str, float | int | str]] = []
     for backend, values in onsets.items():
-        scores = _matched_onset_z_scores(onsets["pedalboard"], onsets["dawdreamer"], values)
+        scores = _early_onset_z_scores(
+            onsets["pedalboard"], onsets["dawdreamer"], values, expected
+        )
         rows.extend(
             {
                 "backend": backend,
@@ -352,34 +375,29 @@ def _worst_pair_metrics(rows: list[MetricRow]) -> dict[str, float]:
     }
 
 
-def _benchmark_entries(
-    workload: str,
+def _backend_benchmark_entries(
+    prefix: str,
+    render_count: int,
     *,
     results: dict[ParityBackend, _BackendResult],
-    pair_rows: dict[str, list[MetricRow]],
     onset_rows: list[dict[str, float | int | str]],
-) -> list[dict[str, float | str]]:
-    """Build benchmark-action entries for quality, timing, and onset parity.
+) -> list[BenchmarkEntry]:
+    """Build per-backend timing and onset benchmark entries.
 
-    :param workload: Stable benchmark-series workload name.
+    :param prefix: Stable benchmark-series prefix.
+    :param render_count: Number of workload rows.
     :param results: Real artifact results keyed by host.
-    :param pair_rows: Pairwise quality diagnostics.
     :param onset_rows: Per-render onset scores.
     :returns: Benchmark-action custom metric entries.
     """
-    render_count = len(next(iter(results.values())).audio)
-    prefix = f"surge-host-parity/{workload}"
-    entries: list[dict[str, float | str]] = [
-        {"name": f"{prefix}/render-count", "unit": "renders", "value": render_count}
-    ]
+    entries: list[BenchmarkEntry] = []
     for backend, result in results.items():
-        seconds_per_render = result.total_seconds / render_count
         entries.extend(
             [
                 {
                     "name": f"{prefix}/{backend}/dataset-seconds-per-render",
                     "unit": "seconds",
-                    "value": seconds_per_render,
+                    "value": result.total_seconds / render_count,
                 },
                 {
                     "name": f"{prefix}/{backend}/onset-modified-z-max",
@@ -390,16 +408,30 @@ def _benchmark_entries(
                 },
             ]
         )
+    return entries
+
+
+def _pair_benchmark_entries(
+    prefix: str,
+    pair_rows: dict[str, list[MetricRow]],
+) -> list[BenchmarkEntry]:
+    """Build per-pair quality benchmark entries.
+
+    :param prefix: Stable benchmark-series prefix.
+    :param pair_rows: Pairwise quality diagnostics.
+    :returns: Benchmark-action custom metric entries.
+    """
+    entries: list[BenchmarkEntry] = []
     for pair, rows in pair_rows.items():
         metrics = _worst_pair_metrics(rows)
-        for metric in ("mel_rmse", "mss", "sot", "wmfcc"):
-            entries.append(
-                {
-                    "name": f"{prefix}/{pair}/{metric}-max",
-                    "unit": metric,
-                    "value": metrics[metric],
-                }
-            )
+        entries.extend(
+            {
+                "name": f"{prefix}/{pair}/{metric}-max",
+                "unit": metric,
+                "value": metrics[metric],
+            }
+            for metric in ("mel_rmse", "mss", "sot", "wmfcc")
+        )
         entries.append(
             {
                 "name": f"{prefix}/{pair}/rms-envelope-cosine-distance-max",
@@ -408,6 +440,35 @@ def _benchmark_entries(
             }
         )
     return entries
+
+
+def _benchmark_entries(
+    workload: str,
+    *,
+    results: dict[ParityBackend, _BackendResult],
+    pair_rows: dict[str, list[MetricRow]],
+    onset_rows: list[dict[str, float | int | str]],
+) -> list[BenchmarkEntry]:
+    """Build benchmark-action entries for one workload.
+
+    :param workload: Stable benchmark-series workload name.
+    :param results: Real artifact results keyed by host.
+    :param pair_rows: Pairwise quality diagnostics.
+    :param onset_rows: Per-render onset scores.
+    :returns: Benchmark-action custom metric entries.
+    """
+    render_count = len(next(iter(results.values())).audio)
+    prefix = f"surge-host-parity/{workload}"
+    return [
+        {"name": f"{prefix}/render-count", "unit": "renders", "value": render_count},
+        *_backend_benchmark_entries(
+            prefix,
+            render_count,
+            results=results,
+            onset_rows=onset_rows,
+        ),
+        *_pair_benchmark_entries(prefix, pair_rows),
+    ]
 
 
 def _write_audio(
@@ -539,31 +600,88 @@ def _write_workload(
     )
 
 
+def _assert_wav_artifacts(output_dir: Path, render_count: int) -> None:
+    """Validate every backend-named WAV through SciPy's real reader.
+
+    :param output_dir: Workload artifact directory.
+    :param render_count: Expected sample-directory count.
+    """
+    config = _config("surgepy", render_count)
+    expected_shape = (
+        int(config.sample_rate * config.signal_duration_seconds),
+        config.channels,
+    )
+    wav_paths = sorted((output_dir / "audio").glob("sample_*/*.wav"))
+    assert len(wav_paths) == render_count * len(_BACKENDS)
+    assert {path.name for path in wav_paths} == {f"{backend}.wav" for backend in _BACKENDS}
+    for path in wav_paths:
+        sample_rate, audio = wavfile.read(path)
+        assert sample_rate == config.sample_rate
+        assert audio.shape == expected_shape
+        assert audio.dtype == np.float32
+        assert np.isfinite(audio).all()
+
+
+def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
+    """Validate every persisted mel array and preview.
+
+    :param output_dir: Workload artifact directory.
+    :param render_count: Expected sample-directory count.
+    """
+    mel_paths = sorted((output_dir / "mel").glob("sample_*/*.npy"))
+    png_paths = sorted((output_dir / "mel").glob("sample_*/*.png"))
+    assert len(mel_paths) == render_count * len(_BACKENDS)
+    assert len(png_paths) == render_count * len(_BACKENDS)
+    for path in mel_paths:
+        mel = np.load(path)
+        assert mel.shape == (2, 128, 401)
+        assert mel.dtype == np.float32
+        assert np.isfinite(mel).all()
+
+
+def _assert_json_artifacts(output_dir: Path, workload: str, render_count: int) -> None:
+    """Validate schema-v2 diagnostics and provenance documents.
+
+    :param output_dir: Workload artifact directory.
+    :param workload: Expected workload identity.
+    :param render_count: Expected row count in each document.
+    """
+    config = _config("surgepy", render_count)
+    parameters = json.loads((output_dir / "parameters.json").read_text())
+    assert len(parameters) == render_count
+    assert {row["sample"] for row in parameters} == set(range(render_count))
+    assert {row["midi_event"]["velocity"] for row in parameters} == {config.velocity}
+
+    metrics = json.loads((output_dir / "metrics.json").read_text())
+    assert len(metrics["onsets"]) == render_count * len(_BACKENDS)
+    assert set(metrics["pairwise"]) == set(_PAIR_THRESHOLDS)
+    assert {len(rows) for rows in metrics["pairwise"].values()} == {render_count}
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["artifact_schema_version"] == 2
+    assert manifest["workload"] == workload
+    assert manifest["render_count"] == render_count
+    assert manifest["pair_thresholds"] == _PAIR_THRESHOLDS
+    assert {entry["filename"] for entry in manifest["backends"].values()} == {
+        f"{backend}.wav" for backend in _BACKENDS
+    }
+
+
 def _assert_listening_artifact(
     output_root: Path,
     workload: str,
     render_count: int,
 ) -> None:
-    """Consume the exported schema-v2 listening artifact.
+    """Consume every boundary in the exported schema-v2 artifact.
 
     :param output_root: Persistent artifact root shared by both workloads.
     :param workload: Workload subdirectory name.
     :param render_count: Expected sample-directory count.
     """
     output_dir = output_root / workload
-    wav_paths = sorted((output_dir / "audio").glob("sample_*/*.wav"))
-    assert len(wav_paths) == render_count * len(_BACKENDS)
-    assert {path.name for path in wav_paths} == {f"{backend}.wav" for backend in _BACKENDS}
-    sample_rate, audio = wavfile.read(output_dir / "audio" / "sample_00" / "surgepy.wav")
-    config = _config("surgepy", render_count)
-    assert sample_rate == config.sample_rate
-    assert audio.shape == (
-        int(config.sample_rate * config.signal_duration_seconds),
-        config.channels,
-    )
-    parameters = json.loads((output_dir / "parameters.json").read_text())
-    assert len(parameters) == render_count
-    assert {row["midi_event"]["velocity"] for row in parameters} == {config.velocity}
+    _assert_wav_artifacts(output_dir, render_count)
+    _assert_mel_artifacts(output_dir, render_count)
+    _assert_json_artifacts(output_dir, workload, render_count)
 
 
 def _assert_artifact_contract(
@@ -641,31 +759,50 @@ def _require_surge_xt() -> None:
     assert surge_component_state(_VST_PRESET_PATH) == surge_component_state(_SURGEPY_PRESET_PATH)
 
 
-def test_matched_onset_scores_accept_trusted_host_midpoint() -> None:
-    """An onset closer than either trusted control is not an upper outlier."""
-    scores = _matched_onset_z_scores(
-        np.asarray([100.0]),
-        np.asarray([122.0]),
-        np.asarray([111.0]),
-    )
-
-    np.testing.assert_array_equal(scores, [0.0])
-
-
-def test_matched_onset_scores_keep_patch_identity() -> None:
-    """Patch-dependent controls cannot hide a systematic backend offset."""
-    scores = _matched_onset_z_scores(
+def test_early_onset_scores_accept_on_time_and_late_audio() -> None:
+    """Only audio preceding the requested event contributes to the score."""
+    scores = _early_onset_z_scores(
         np.asarray([100.0, 200.0]),
         np.asarray([100.0, 200.0]),
         np.asarray([120.0, 220.0]),
+        np.asarray([100.0, 200.0]),
+    )
+
+    np.testing.assert_array_equal(scores, [0.0, 0.0])
+
+
+def test_early_onset_scores_keep_patch_identity() -> None:
+    """Matched requests expose a systematic early backend onset."""
+    scores = _early_onset_z_scores(
+        np.asarray([100.0, 200.0]),
+        np.asarray([100.0, 200.0]),
+        np.asarray([80.0, 180.0]),
+        np.asarray([100.0, 200.0]),
     )
 
     np.testing.assert_allclose(scores, [6.7448975, 6.7448975])
     assert np.all(scores > _MODIFIED_Z_MAX)
 
 
+def test_early_onset_scores_mismatched_shapes_raise() -> None:
+    """Patch rows cannot broadcast across a mismatched onset vector."""
+    with pytest.raises(ValueError, match="vectors of equal shape"):
+        _early_onset_z_scores(
+            np.asarray([100.0, 200.0]),
+            np.asarray([100.0]),
+            np.asarray([100.0, 200.0]),
+            np.asarray([100.0, 200.0]),
+        )
+
+
+def test_onset_samples_without_batch_dimension_raises() -> None:
+    """A single waveform cannot be mistaken for a batch of rows."""
+    with pytest.raises(ValueError, match=r"\(rows, channels, samples\)"):
+        _onset_samples(np.zeros((2, 128), dtype=np.float32))
+
+
 def test_modified_z_scores_flag_only_divergent_onset() -> None:
-    """The frozen robust gate tolerates controls and rejects a 12-sample offset."""
+    """The robust gate tolerates controls and rejects a divergent onset."""
     scores = _modified_z_scores(
         np.asarray([100.0, 100.0, 100.0, 100.0]),
         np.asarray([100.0, 101.0, 112.0]),

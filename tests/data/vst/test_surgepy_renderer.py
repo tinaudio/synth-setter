@@ -215,8 +215,8 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
         (note_start_sample / renderer.sample_rate, 656 / renderer.sample_rate),
     )
 
-    assert np.max(np.abs(audio[:, :note_start_sample])) == 0.0
-    assert np.max(np.abs(audio[:, note_start_sample:])) > 1e-4
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == note_start_sample
 
 
 @pytest.mark.slow
@@ -233,8 +233,8 @@ def test_surgepy_renderer_final_partial_block_note_is_audible() -> None:
         (note_start_sample / renderer.sample_rate, 4_409 / renderer.sample_rate),
     )
 
-    assert np.max(np.abs(audio[:, :note_start_sample])) == 0.0
-    assert np.max(np.abs(audio[:, note_start_sample:])) > 1e-4
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == note_start_sample
 
 
 @pytest.mark.slow

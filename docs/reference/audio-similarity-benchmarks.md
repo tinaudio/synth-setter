@@ -109,11 +109,11 @@ MSS, wMFCC, SOT, RMS-envelope cosine, and persisted-mel RMSE have tighter
 host-pair-specific bounds, applied to every matched render rather than only an
 aggregate worst case.
 
-Every render is also gated on onset timing. Each patch is scored against the center
-of its matched Pedalboard and DawDreamer onset samples; the controls' row-wise
-deviations calibrate a robust median and median absolute deviation. Every host must
-remain at or below a one-sided upper modified z-score of 3.5. A two-sample scale floor
-prevents a zero-MAD control set from turning one-sample noise into an infinite
+Every render is also gated on onset timing. Each patch is scored by how many samples
+its audio precedes the requested MIDI start; matched Pedalboard and DawDreamer
+earliness values calibrate a robust median and median absolute deviation. Every host
+must remain at or below a one-sided upper modified z-score of 3.5. A two-sample scale
+floor prevents a zero-MAD control set from turning one-sample noise into an infinite
 score. The gate fails with the backend and sample number instead of hiding one bad
 row in an aggregate bound.
 

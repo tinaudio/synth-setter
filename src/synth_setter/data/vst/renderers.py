@@ -471,7 +471,7 @@ class SurgePyRenderer(AudioRenderer):
         block_size = self.synth.getBlockSize()
         num_blocks = math.ceil(samples / block_size)
         start_sample = math.ceil(start * self.sample_rate)
-        start_block = min(num_blocks - 1, math.ceil(start_sample / block_size))
+        start_block = math.floor(start_sample / block_size)
         end_block = min(
             num_blocks,
             max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),

@@ -121,6 +121,7 @@ jobs:
               tests/data/vst/test_generate_vst_dataset.py
               tests/data/vst/test_dawdreamer_dataset_e2e.py
               tests/data/vst/test_surgepy_host_parity_e2e.py
+              tests/test_generate_dataset.py::test_from_hydra_surgepy_experiment_writes_consumable_shard
               tests/data/vst/test_always_on_integration.py
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
