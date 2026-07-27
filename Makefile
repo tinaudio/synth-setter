@@ -282,6 +282,8 @@ endef
 install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256),,)
 
+# Not in ``install-plugins``: the runtime image does not ship Cardinal yet, and that
+# aggregate's contract is the image's bundle set.
 install-cardinal: ## Download Cardinal Synth VST3 into plugins/ (skipped if already present)
 	$(call install_fetched_synth,CardinalSynth,https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_X86_64),$(CARDINAL_SHA256_X86_64),https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_AARCH64),$(CARDINAL_SHA256_AARCH64))
 
@@ -327,7 +329,7 @@ install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipp
 	cp -a "$$SRC_BUNDLE" "$$DEST"; \
 	echo "Installed $$DEST"
 
-install-plugins: install-surge-xt install-cardinal install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Cardinal, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
 
 link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
 	@set -e; \
