@@ -174,7 +174,8 @@ def test_gpu_worker_script_failed_pytest_uploads_coverage_and_preserves_exit(
     :param tmp_path: Isolated worker directory and command fixtures.
     """
     rclone = shutil.which("rclone")
-    assert rclone is not None
+    if rclone is None:
+        pytest.skip("requires rclone for the upload/retrieval round trip")
     fake_rclone, vst_runner = _install_gpu_command_fixtures(tmp_path, rclone)
     fake_bin = fake_rclone.parent
     (tmp_path / "coverage.xml").write_text("partial coverage")
