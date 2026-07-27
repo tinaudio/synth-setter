@@ -303,10 +303,22 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
 
         def encode(audio: np.ndarray) -> torch.Tensor:
             flat = np.ascontiguousarray(rearrange(audio, "b c t -> (b c) t"), dtype=np.float32)
-            # max_batch_size 16 bounds the encoder's activation spike so the
-            # frozen encoder coexists with training on one shared GPU.
-            with torch.no_grad():
-                latents = encoder.encode(flat, max_batch_size=16)
+            # Adaptive internal batch: halve on OOM, then wait — the frozen
+            # encoder must coexist with training (and siblings) on one GPU.
+            batch = 16
+            for attempt in range(240):
+                try:
+                    with torch.no_grad():
+                        latents = encoder.encode(flat, max_batch_size=batch)
+                    break
+                except torch.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    if batch > 2:
+                        batch //= 2
+                    else:
+                        time.sleep(5)
+            else:
+                raise RuntimeError("m2l encode never fit in GPU memory")
             latents = rearrange(
                 latents, "(b c) d t -> b (c d) t", b=audio.shape[0], c=audio.shape[1]
             )
