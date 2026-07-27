@@ -143,9 +143,11 @@ synth-setter/
 
 **Synth-agnostic core, registry as the contract.** A synth's identity — which
 `ParamSpec`, which plugin, which baseline preset — is authored once in
-`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and
-`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it,
-pinned against the table by `tests/test_synth_spec.py`. Render configs in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths`,
+`src/synth_setter/configs/render/synth/<name>.yaml`, and the root identity
+group `src/synth_setter/configs/synth/<name>.yaml` are projections of it,
+pinned against the table by `tests/test_synth_spec.py` and
+`tests/schemas/test_synth_config.py`. Render configs in
 `src/synth_setter/configs/render/<name>.yaml` select an identity and declare
 backend-specific settings. The `ParamSpec` objects themselves live in
 `src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance

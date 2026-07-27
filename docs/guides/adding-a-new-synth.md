@@ -21,10 +21,12 @@ fully described by four registered artifacts:
 | `RenderConfig`  | `src/synth_setter/configs/render/<name>.yaml`    | selected by `render=<name>` |
 
 The **identity row is the authoring point**: which param spec, which plugin, which
-baseline preset. `plugin_state_paths` and
-`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it, pinned
-against the table by
-[`tests/test_synth_spec.py`](../../tests/test_synth_spec.py). The `ParamSpec`
+baseline preset. `plugin_state_paths`,
+`src/synth_setter/configs/render/synth/<name>.yaml`, and the root identity group
+`src/synth_setter/configs/synth/<name>.yaml` (selected via `synth=<name>` at
+train/eval time) are projections of it, pinned against the table by
+[`tests/test_synth_spec.py`](../../tests/test_synth_spec.py) and
+[`tests/schemas/test_synth_config.py`](../../tests/schemas/test_synth_config.py). The `ParamSpec`
 objects themselves live in
 [`param_spec_registry.py`](../../src/synth_setter/data/vst/param_spec_registry.py).
 The preset filename convention is `<name>-base.vstpreset` for new registrations;
@@ -171,8 +173,10 @@ synth-setter-introspect-plugin \
 ```
 
 `--register` writes the spec module, preset, and CSV to their conventional
-paths, generates `src/synth_setter/configs/render/mysynth.yaml` and its
-`configs/render/synth/mysynth.yaml` identity group, adds the `SYNTHS` row, and
+paths, generates `src/synth_setter/configs/render/mysynth.yaml`, its
+`configs/render/synth/mysynth.yaml` identity group, and
+`src/synth_setter/configs/synth/mysynth.yaml` (the root identity group
+`synth=mysynth` selects at train/eval time), adds the `SYNTHS` row, and
 inserts the import + `param_specs` entry into the registry. `--verify`
 then runs the post-draft battery (pre-commit gates, registry import + sample,
 Hydra compose, classifier audit), writes `verify-mysynth.md` at the checkout
@@ -221,6 +225,16 @@ param_spec_name: "mysynth"
 plugin_path: "plugins/MySynth.vst3"
 plugin_state_path: "presets/mysynth-base.vstpreset"
 synth_version: "1.2.3"
+```
+
+Hand-registration also needs the root identity group, or `synth=mysynth`
+(which VST datamodules, models, and callbacks resolve through
+`${synth.param_spec_name}`) has nothing to select:
+
+```yaml
+# src/synth_setter/configs/synth/mysynth.yaml
+name: "mysynth"
+param_spec_name: "mysynth"
 ```
 
 The render config selects the synth group and inherits generic render knobs

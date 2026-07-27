@@ -342,7 +342,7 @@ num_workers: 4  # per dataloader — validation doubles the live worker count
 persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
-`surge_simple.yaml` is a thin overlay (`defaults: [surge_xt, override synth: surge_simple]`) that swaps only the synth identity group; it inherits the keys above from `surge_xt.yaml`, which in turn inherits them from `vst.yaml`.
+The surge datamodule variants (`surge.yaml`, `surge_simple.yaml`, ...) are thin overlays of `vst.yaml` and carry no identity of their own; the synth spec is selected at the config root (e.g. `- override /synth: surge_simple` in `experiment/surge/base.yaml`) and reaches the datamodule through `${synth.param_spec_name}`.
 
 To use R2, pass it explicitly:
 

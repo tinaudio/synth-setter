@@ -74,7 +74,7 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, render, ...)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, synth, render, ...)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
@@ -92,6 +92,10 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
+- `synth:` defaults to `null`; VST runs select the root identity group
+  (e.g. `synth=surge_xt`, usually via the experiment's defaults) that VST
+  datamodules, models, and callbacks resolve through `${synth.param_spec_name}` —
+  distinct from the nested `render.synth` rendering identity in §2.4
 
 Reference: `training-pipeline.md` §4–5
 
