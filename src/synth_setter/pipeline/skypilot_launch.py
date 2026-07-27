@@ -9,8 +9,8 @@ stem) or falls back to ``synth-setter-<uuid8>``. The
 configs under ``src/synth_setter/configs/launch/`` (train/eval workflows),
 whose ``compute:`` field names a ``skypilot_launch/compute`` Hydra option.
 
-Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``,
-``oci/*``, or ``local/*`` (kubernetes-via-``sky local up``) compute options;
+Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``, or
+``local/*`` (kubernetes-via-``sky local up``) compute options;
 ``synth_setter.pipeline.compute_task.build_task_doc`` turns the validated
 option into the dictionary consumed by ``sky.Task.from_yaml_config``.
 Worker env is applied with ``task.update_envs`` before each rank's task is submitted to
@@ -33,12 +33,8 @@ Managed jobs differ from cluster-level launches:
 - The user-facing identifier is the managed-job *name* (passed to `sky.jobs.*`
   via `name=`), not a cluster name.
 
-Per-backend image handling (driven by ``sky_cfg.worker_image_tag``):
-- RunPod / Vast: each Resources entry's `image_id` is pinned to `docker:<image>` at
-  task construction, so the controller's worker provisions from that image.
-- OCI: SkyPilot's OCI backend rejects `docker:<image>` for `image_id`, so the
-  option's run wrapper performs a sub-docker invocation that consumes
-  `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
+Each Resources entry's `image_id` is pinned to `docker:<image>` from
+``sky_cfg.worker_image_tag`` so the controller provisions the worker image.
 
 ``sky_cfg.num_workers > 1`` fans out N independent managed jobs in parallel
 (neither backend supports num_nodes>1 for this workload). Each rank gets
@@ -89,14 +85,13 @@ from synth_setter.pipeline.schemas.skypilot_launch import (
 )
 from synth_setter.workspace import operator_workspace
 
-_WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 
 # Bare image tag for the worker's wandb provenance — log_wandb_provenance
 # reads IMAGE_TAG into wandb.config.image_tag (storage-provenance-spec.md §12).
 _IMAGE_TAG_ENV = "IMAGE_TAG"
 
-# OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
+# Docker distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 # Worker templates pass this full SHA verbatim into `git fetch + checkout`.
@@ -475,17 +470,12 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
 
 
 def _override_image_id(task: sky.Task, worker_image: str) -> None:
-    """Pin a Docker image on every non-OCI resource alternative."""
-    from sky.clouds import OCI
-
+    """Pin a Docker image on every resource alternative."""
     if not task.resources:
         return
 
     docker_ref = f"docker:{worker_image}"
-    resources = [
-        resource if isinstance(resource.cloud, OCI) else resource.copy(image_id=docker_ref)
-        for resource in task.resources
-    ]
+    resources = [resource.copy(image_id=docker_ref) for resource in task.resources]
     task.set_resources(type(task.resources)(resources))
 
 
@@ -598,13 +588,11 @@ def _launch_one_rank(
         **worker_env_base,
         WORKER_RANK_ENV_VAR: str(rank),
         NUM_WORKERS_ENV_VAR: str(num_workers),
-        _WORKER_IMAGE_ENV: worker_image,
         _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
     task_doc = build_task_doc(compute, cmd=cmd, network_volume=network_volume)
     task = sky.Task.from_yaml_config(task_doc)
-    if compute.image_delivery != "docker-in-run":
-        _override_image_id(task, worker_image)
+    _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
     launch_request_id = sky.jobs.launch(task, name=job_name)
@@ -695,7 +683,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     if not _DOCKER_TAG_RE.fullmatch(sky_cfg.worker_image_tag):
         raise ValueError(
-            f"worker_image_tag must match OCI tag grammar {_DOCKER_TAG_RE.pattern}; "
+            f"worker_image_tag must match Docker tag grammar {_DOCKER_TAG_RE.pattern}; "
             f"got {sky_cfg.worker_image_tag!r}"
         )
 

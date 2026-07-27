@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ensure the worker runtime, then sync to $WORKER_GIT_REF when set.
 #
-# Used by RunPod and OCI compute templates to bypass dev-snapshot image-bake
+# Used by cloud compute templates to bypass dev-snapshot image-bake
 # lag in PR CI: the launcher passes the PR head SHA via WORKER_GIT_REF and the
 # worker fetches+checks out that ref over the image's pre-baked checkout.
 #
