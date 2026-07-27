@@ -1,0 +1,3 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "torchsynth_adsr"
+param_spec_name: "torchsynth_adsr"

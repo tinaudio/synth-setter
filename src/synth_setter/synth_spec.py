@@ -168,3 +168,70 @@ def resolve_synth(name: SynthName) -> SynthSpec:
         return SYNTHS[name]
     except KeyError:
         raise KeyError(name) from None
+
+
+class SynthIdentityConfig(BaseModel):  # noqa: DOC601, DOC603 — field semantics documented below.
+    """Composed root ``synth`` group: an identity-only projection of one ``SYNTHS`` row.
+
+    .. attribute :: name
+
+        Registry key, doubling as the ``configs/synth`` group name.
+
+    .. attribute :: param_spec_name
+
+        Key into the ``ParamSpec`` registry; must match the registry row.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    name: SynthName
+    param_spec_name: ValidatedParamSpecName
+
+    @model_validator(mode="after")
+    def _matches_registry_row(self) -> SynthIdentityConfig:
+        """Reject an identity absent from, or contradicting, the ``SYNTHS`` table.
+
+        :returns: This identity when it restates its registry row exactly.
+        :raises ValueError: The name is unregistered or the spec disagrees.
+        """
+        spec = SYNTHS.get(self.name)
+        if spec is None:
+            raise ValueError(f"synth {self.name!r} is not registered in SYNTHS")
+        if self.param_spec_name != spec.param_spec_name:
+            raise ValueError(
+                f"synth {self.name!r} declares param_spec_name={self.param_spec_name!r} "
+                f"but the registry row says {spec.param_spec_name!r}"
+            )
+        return self
+
+
+def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
+    """Fail fast when a composed root config contradicts the selected synth.
+
+    Duck-typed like :meth:`SynthSpec.from_render_cfg` so the module stays free
+    of a runtime omegaconf import. Reading config values resolves their
+    interpolations, so a CLI-forced ``datamodule.param_spec_name`` literal that
+    skews from the synth selection surfaces here instead of as a silent width
+    mismatch; a malformed or registry-contradicting ``synth`` node propagates
+    ``pydantic.ValidationError``, and a ``synth`` node whose interpolations
+    dangle (e.g. ``dataset.yaml`` without a synth-bearing render group)
+    propagates the interpolation error.
+
+    :param cfg: Root composed config (``train.yaml`` / ``eval.yaml`` shape).
+    :returns: The selected synth's registry row, or ``None`` when no ``synth``
+        group is composed (audio/legacy runs).
+    :raises ValueError: The datamodule's resolved ``param_spec_name`` disagrees
+        with the ``synth`` selection.
+    """
+    synth_node = cfg.get("synth")
+    if synth_node is None:
+        return None
+    identity = SynthIdentityConfig.model_validate(dict(synth_node))
+    datamodule = cfg.get("datamodule")
+    datamodule_spec = None if datamodule is None else datamodule.get("param_spec_name")
+    if datamodule_spec is not None and str(datamodule_spec) != identity.param_spec_name:
+        raise ValueError(
+            f"datamodule.param_spec_name={datamodule_spec!r} disagrees with "
+            f"synth={identity.name!r} (param_spec_name={identity.param_spec_name!r})"
+        )
+    return resolve_synth(identity.name)

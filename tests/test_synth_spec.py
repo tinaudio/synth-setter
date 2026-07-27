@@ -17,7 +17,13 @@ from pydantic import ValidationError
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
-from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec, resolve_synth
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    SynthSpec,
+    resolve_synth,
+    validate_synth_identity,
+)
 
 _ALL_SYNTHS = sorted(SYNTHS)
 
@@ -218,3 +224,57 @@ class TestSynthConfigGroup:
         shipped = {p.name.removesuffix(".yaml") for p in group_dir.iterdir()}
 
         assert shipped == set(SYNTHS)
+
+
+class TestValidateSynthIdentity:
+    """Compose-time guard for the root ``synth`` identity group (#2565)."""
+
+    def test_registered_identity_returns_registry_spec(self) -> None:
+        """A well-formed selection validates and returns its ``SYNTHS`` row."""
+        cfg = OmegaConf.create({"synth": {"name": "surge_xt", "param_spec_name": "surge_xt"}})
+        assert validate_synth_identity(cfg) is SYNTHS[SynthName("surge_xt")]
+
+    def test_absent_synth_node_is_a_noop(self) -> None:
+        """Audio/legacy configs compose no synth group and must pass untouched."""
+        assert validate_synth_identity(OmegaConf.create({"datamodule": {"k": 8}})) is None
+
+    def test_unregistered_name_raises(self) -> None:
+        """A name with no ``SYNTHS`` row is rejected at validation time."""
+        cfg = OmegaConf.create({"synth": {"name": "nope", "param_spec_name": "nope"}})
+        with pytest.raises(ValidationError, match="nope"):
+            validate_synth_identity(cfg)
+
+    def test_param_spec_mismatching_registry_row_raises(self) -> None:
+        """A spec that contradicts the registry row is rejected."""
+        cfg = OmegaConf.create({"synth": {"name": "surge_xt", "param_spec_name": "surge_4"}})
+        with pytest.raises(ValidationError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    def test_extra_key_in_synth_node_raises(self) -> None:
+        """The group is identity-only; stray keys are a config error, not data."""
+        cfg = OmegaConf.create(
+            {"synth": {"name": "surge_xt", "param_spec_name": "surge_xt", "width": 300}}
+        )
+        with pytest.raises(ValidationError, match="width"):
+            validate_synth_identity(cfg)
+
+    def test_datamodule_literal_spec_mismatch_raises(self) -> None:
+        """A CLI-forced datamodule spec that skews from the synth fails loudly."""
+        cfg = OmegaConf.create(
+            {
+                "synth": {"name": "surge_xt", "param_spec_name": "surge_xt"},
+                "datamodule": {"param_spec_name": "surge_4"},
+            }
+        )
+        with pytest.raises(ValueError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    def test_datamodule_interpolated_spec_matches_and_passes(self) -> None:
+        """The shipped rootward interpolation always agrees with the synth node."""
+        cfg = OmegaConf.create(
+            {
+                "synth": {"name": "surge_4", "param_spec_name": "surge_4"},
+                "datamodule": {"param_spec_name": "${synth.param_spec_name}"},
+            }
+        )
+        assert validate_synth_identity(cfg) is SYNTHS[SynthName("surge_4")]

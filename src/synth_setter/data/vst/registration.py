@@ -77,6 +77,10 @@ class RegistrationPaths:
     .. attribute :: synth_config
 
        Hydra synth-identity group config generated from the table row.
+
+    .. attribute :: identity_config
+
+       Root ``configs/synth`` group config selecting this synth (#2565).
     """
 
     spec_module: Path
@@ -86,6 +90,7 @@ class RegistrationPaths:
     registry: Path
     synth_module: Path
     synth_config: Path
+    identity_config: Path
 
 
 def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
@@ -93,7 +98,7 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
 
     :param repo_root: Synth-setter checkout root.
     :param spec_name: Registry key for the synth.
-    :returns: The five destination paths.
+    :returns: Each artifact's destination path.
     :raises ValueError: If the name is reserved for a shared render config.
     """
     if _is_reserved_render_config_name(spec_name):
@@ -108,6 +113,7 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
         synth_config=(
             repo_root / "src/synth_setter/configs/render/synth" / f"{spec_name}.yaml"
         ),
+        identity_config=repo_root / "src/synth_setter/configs/synth" / f"{spec_name}.yaml",
     )
 
 
@@ -332,12 +338,28 @@ def synths_with_spec(
     return "\n".join(lines) + "\n"
 
 
+def _identity_lines(spec_name: str) -> list[str]:
+    """Shared header + identity lines of both generated synth group configs.
+
+    Identity scalars are double-quoted via ``json.dumps`` so an arbitrary
+    plugin path cannot break the YAML scalar.
+
+    :param spec_name: Registry key; names the param spec.
+    :returns: Provenance comment plus ``name`` / ``param_spec_name`` lines.
+    """
+    return [
+        "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; "
+        "edit the table, not this file.",
+        f"name: {json.dumps(spec_name)}",
+        f"param_spec_name: {json.dumps(spec_name)}",
+    ]
+
+
 def synth_group_yaml(spec_name: str, *, plugin_path: str, synth_version: str) -> str:
     """Emit the Hydra synth-identity group config for ``spec_name``.
 
     The generated projection of the ``SYNTHS`` row; ``tests/test_synth_spec.py``
-    pins the two to agree. Identity scalars are double-quoted via ``json.dumps``
-    so an arbitrary plugin path cannot break the YAML scalar.
+    pins the two to agree.
 
     :param spec_name: Registry key; names the param spec and preset.
     :param plugin_path: ``.vst3`` path recorded for render workers.
@@ -346,16 +368,26 @@ def synth_group_yaml(spec_name: str, *, plugin_path: str, synth_version: str) ->
     """
     return "\n".join(
         [
-            "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; "
-            "edit the table, not this file.",
-            f"name: {json.dumps(spec_name)}",
-            f"param_spec_name: {json.dumps(spec_name)}",
+            *_identity_lines(spec_name),
             f"plugin_path: {json.dumps(plugin_path)}",
             f"plugin_state_path: {json.dumps(preset_repo_path(spec_name))}",
             f"synth_version: {json.dumps(synth_version)}",
             "",
         ]
     )
+
+
+def identity_group_yaml(spec_name: str) -> str:
+    """Emit the root ``configs/synth`` identity config for ``spec_name``.
+
+    Identity-only projection of the ``SYNTHS`` row consumed via
+    ``${synth.param_spec_name}``; ``tests/schemas/test_synth_config.py`` pins
+    the group and the table to stay bijective.
+
+    :param spec_name: Registry key; names the param spec and the group file.
+    :returns: YAML text for ``configs/synth/<spec_name>.yaml``.
+    """
+    return "\n".join([*_identity_lines(spec_name), ""])
 
 
 def _import_insert_index(lines: list[str], module: str) -> int:

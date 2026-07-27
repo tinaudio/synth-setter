@@ -23,6 +23,11 @@ task_name: ???
 # construction), so default it to ``task_name`` for the Hydra output-dir interpolation.
 # Dropped before DatasetSpec construction (it's not a spec field).
 run_name: ${task_name}
+# In this root the render group owns synth identity (#2434); mirror it so the
+# shared VST datamodule's ${synth.param_spec_name} interpolation resolves (#2565).
+synth:
+  name: ${render.synth.name}
+  param_spec_name: ${render.synth.param_spec_name}
 output_format: lance
 # Distinct split masters keep held-outs stable as dataset and shard sizes change (#884).
 train_val_test_seeds: [42, 43, 44]

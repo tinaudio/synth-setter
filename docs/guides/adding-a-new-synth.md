@@ -151,8 +151,9 @@ patch:
 The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
 (`len(spec.synth_params)`) because onehot-encoded categoricals expand one
 parameter into several dimensions, and the note parameters add their own. VST
-model configs resolve this width from `datamodule.param_spec_name`; experiments
-must not repeat it as a `num_params`, `d_out`, or `latent_dim` literal.
+model configs resolve this width from the root `synth` group's
+`param_spec_name`; experiments must not repeat it as a `num_params`, `d_out`,
+or `latent_dim` literal.
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.

@@ -61,7 +61,7 @@ def _compose_offline_wandb_eval_cfg(
                 # The experiment defaults to mode=predict; the artifact path is mode-agnostic
                 # and test-mode gives a deterministic zero param_mse without rendering.
                 "mode=test",
-                "datamodule.param_spec_name=surge_4",
+                "synth=surge_4",
             ],
         )
     with open_dict(cfg):

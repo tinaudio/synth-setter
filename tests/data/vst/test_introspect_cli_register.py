@@ -122,6 +122,8 @@ def test_register_writes_all_artifacts_into_the_checkout_layout(
     ).read_bytes() == b"VST3\x01\x00fake-state"
     assert (checkout / "fake_synth_params.csv").exists()
     assert (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
+    identity = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
+    assert identity == {"name": "fake_synth", "param_spec_name": "fake_synth"}
 
 
 def test_register_adds_spec_to_the_registry_module(

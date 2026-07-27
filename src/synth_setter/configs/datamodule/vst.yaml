@@ -16,6 +16,6 @@ predict_file: null
 download_dataset_txids: null
 # First-N rows per split; without txids, intended for disposable smoke/tuning runs.
 download_dataset_row_limit: null
-# Mandatory: each concrete config declares its synth's spec — a default here
-# would silently pair the wrong spec with the dataset.
-param_spec_name: ???
+# Identity flows from the root synth group (#2565); selecting a VST datamodule
+# without `synth=<name>` fails loudly at first resolution.
+param_spec_name: ${synth.param_spec_name}

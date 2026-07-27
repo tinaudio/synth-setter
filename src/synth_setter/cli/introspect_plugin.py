@@ -33,6 +33,7 @@ from synth_setter.data.vst.registration import (
     RegistrationPaths,
     checkout_relative_path,
     find_repo_root,
+    identity_group_yaml,
     is_checkout_root,
     registration_paths,
     registry_with_spec,
@@ -225,7 +226,14 @@ def main(
         )
         paths = target.paths
         spec_dest, preset_dest, csv_dest = paths.spec_module, paths.preset, paths.csv
-        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config, paths.synth_config)
+        guarded = (
+            spec_dest,
+            preset_dest,
+            csv_dest,
+            paths.render_config,
+            paths.synth_config,
+            paths.identity_config,
+        )
     else:
         target = None
         spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
@@ -386,10 +394,14 @@ def _write_register_wiring(
         ),
         encoding="utf-8",
     )
+    identity_config = target.paths.identity_config
+    identity_config.parent.mkdir(parents=True, exist_ok=True)
+    identity_config.write_text(identity_group_yaml(spec_name), encoding="utf-8")
     target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
     click.echo(f"Render cfg  : {render_config}")
     click.echo(f"Synth cfg   : {synth_config}")
+    click.echo(f"Identity cfg: {identity_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(

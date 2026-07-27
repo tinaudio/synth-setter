@@ -1,4 +1,4 @@
-# Requires a VST datamodule declaring param_spec_name.
+# Requires a selected root synth group (synth=<name>, #2565).
 log_per_param_mse:
   _target_: synth_setter.utils.callbacks.LogPerParamMSE
-  param_spec: ${datamodule.param_spec_name}
+  param_spec: ${synth.param_spec_name}

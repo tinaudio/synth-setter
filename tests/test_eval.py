@@ -477,7 +477,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
                 "trainer=cpu",
                 # The experiment defaults to mode=predict; this invariant is test-mode.
                 "mode=test",
-                "datamodule.param_spec_name=surge_4",
+                "synth=surge_4",
             ],
         )
 
@@ -816,7 +816,7 @@ def _compose_fake_oracle_eval_cfg(
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"mode={mode}"]
+            overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
             + ([f"datamodule={datamodule}"] if datamodule else []),
         )
     with open_dict(cfg):
@@ -824,7 +824,6 @@ def _compose_fake_oracle_eval_cfg(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.param_spec_name = param_spec_name
         # None lets the datamodule derive ``test.<its shard suffix>`` under dataset_root.
         cfg.datamodule.predict_file = None
         cfg.datamodule.batch_size = 1
@@ -1169,7 +1168,7 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
 def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
     tmp_path: Path,
 ) -> None:
-    """An unregistered ``datamodule.param_spec_name`` fails during model resolution.
+    """An unregistered ``synth.param_spec_name`` fails during model resolution.
 
     The model width resolver rejects an unknown spec before model construction or
     dataset access.
@@ -1179,7 +1178,7 @@ def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
     """
     cfg = _compose_fake_oracle_eval_cfg(tmp_path, tmp_path / "missing-datasets", mode="validate")
     with open_dict(cfg):
-        cfg.datamodule.param_spec_name = "does_not_exist"
+        cfg.synth.param_spec_name = "does_not_exist"
 
     HydraConfig().set_config(cfg)
     try:
@@ -1425,6 +1424,7 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
                 return_hydra_config=True,
                 overrides=[
                     "datamodule=surge_simple",
+                    "synth=surge_simple",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=.",
@@ -1453,6 +1453,7 @@ def _compose_fake_t5gemma_ffn_eval_cfg(
             return_hydra_config=True,
             overrides=[
                 "model=vst_ffn",
+                f"synth={param_spec_name}",
                 "conditioning=t5gemma",
                 "datamodule=surge_lance",
                 "trainer=cpu",
@@ -1473,7 +1474,6 @@ def _compose_fake_t5gemma_ffn_eval_cfg(
         cfg.paths.log_dir = str(output_dir)
         cfg.datamodule.fake = True
         cfg.datamodule.dataset_root = str(output_dir)
-        cfg.datamodule.param_spec_name = param_spec_name
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.trainer.limit_val_batches = 1
@@ -1559,6 +1559,7 @@ def _assert_conditioning_train_validate_finite(
             return_hydra_config=True,
             overrides=[
                 "experiment=surge/flow_simple",
+                f"synth={param_spec_name}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
@@ -1574,7 +1575,6 @@ def _assert_conditioning_train_validate_finite(
         cfg_eval.datamodule.fake = False
         cfg_eval.datamodule.dataset_root = str(dataset_root)
         cfg_eval.datamodule.predict_file = str(dataset_root / "test.lance")
-        cfg_eval.datamodule.param_spec_name = param_spec_name
         cfg_eval.datamodule.batch_size = 1
         cfg_eval.datamodule.num_workers = 0
         cfg_eval.datamodule.use_saved_mean_and_variance = True

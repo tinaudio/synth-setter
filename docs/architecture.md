@@ -85,8 +85,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    through sample-indexed native `lance.torch` map datasets. The sequential native
    loader remains available for streaming workflows — see
    [training-pipeline.md §6.1](design/training-pipeline.md#61-dataset-access). The datamodule class is
-   param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
-   training a non-Surge dataset overrides `datamodule.param_spec_name=<name>`.
+   param-count-agnostic; synth identity is selected once at the config root via
+   the `synth` group (`synth=<name>`), which VST datamodules, models, and
+   callbacks all resolve through `${synth.param_spec_name}`.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
