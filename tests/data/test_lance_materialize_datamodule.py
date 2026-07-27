@@ -280,6 +280,49 @@ class TestMaterializedSubsetLayout:
             "music2latent",
         ]
 
+    def test_prepare_data_differing_projections_hydrate_separate_subsets(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same conditioning, different read set — the subsets must not collide.
+
+        Moving ``predict_file`` off the test split drops its ``audio`` column
+        while leaving the conditioning column, so the directory name has to
+        separate them on the projection alone.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+
+        def hydrate(predict_file: Path | None) -> Path:
+            module = LanceVSTDataModule(
+                dataset_root=destination,
+                download_dataset_root_uri=source_root.as_uri(),
+                predict_file=predict_file,
+                param_spec_name=_PARAM_SPEC,
+            )
+            module.prepare_data()
+            return module.dataset_root
+
+        serving_predict = hydrate(None)
+        predict_elsewhere = hydrate(tmp_path / "elsewhere" / "predict.lance")
+
+        assert serving_predict != predict_elsewhere
+        assert lance.dataset(str(serving_predict / "test.lance")).schema.names == [
+            "param_array",
+            "mel_spec",
+            "audio",
+        ]
+        assert lance.dataset(str(predict_elsewhere / "test.lance")).schema.names == [
+            "param_array",
+            "mel_spec",
+        ]
+
     def test_prepare_data_repeated_identical_config_reuses_the_subset(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
