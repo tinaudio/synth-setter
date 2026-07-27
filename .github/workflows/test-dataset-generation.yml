@@ -9,8 +9,8 @@ name: Test Dataset Generation
 #     the `local/kind` compute option. Hourly schedule default —
 #     exercises the same launcher / cred-bootstrap path as the cloud providers,
 #     closing the #806 unification gap. No billable capacity.
-#   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the
-#     matching cloud template. Run weekly via the `0 7 * * 0` cron and on
+#   * `runpod` — invokes `generate-dataset-shards.yaml` against the
+#     RunPod smoke template. Runs weekly via the `0 7 * * 0` cron and on
 #     demand via `workflow_dispatch`. See
 #     docs/design/skypilot-compute-integration.md.
 #
@@ -38,22 +38,17 @@ name: Test Dataset Generation
 #     R2 storage adaptor once #749 is unblocked).
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
-#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_API_KEY_PEM — written to ~/.oci/config + ~/.oci/oci_api_key.pem
-#     so SkyPilot's OCI backend can `sky check oci`. SkyPilot defaults to
-#     the root compartment when oci.default.compartment_ocid is unset, so
-#     ~/.sky/config.yaml is no longer managed here — see #876.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, the launcher skips
-#     the cred-bootstrap because the remote API server (#785) holds creds.
+#     the cred-bootstrap because the remote API server holds creds.
 
 on:
   # Two cron axes (#1164, #1170):
   #   * `0 * * * *` (top of every hour) — skypilot-local × {lance}. Keeps
   #     the launcher / kind / R2 path under near-continuous coverage.
   #   * `0 7 * * 0` (Sunday 07:00 UTC = ~midnight Pacific Sat→Sun) — full
-  #     provider matrix (skypilot-local + runpod + oci) × {lance}.
+  #     provider matrix (skypilot-local + runpod) × {lance}.
   #     Only paid-capacity touch outside manual dispatch; gives us weekly
-  #     RunPod / OCI signal so credential rot or backend regressions surface
+  #     RunPod signal so credential rot or backend regressions surface
   #     before someone needs to dispatch a real cloud run.
   # The setup job branches on the event and schedule to resolve the matrix.
   schedule:
@@ -70,7 +65,7 @@ on:
         required: false
         default: "dev-snapshot"
       provider:
-        description: "Provider(s) to launch on (manual override; the hourly cron always uses skypilot-local and the weekly cron uses all three)"
+        description: "Provider(s) to launch on (manual override; the hourly cron always uses skypilot-local and the weekly cron uses both)"
         required: false
         type: choice
         default: all
@@ -78,7 +73,6 @@ on:
           - all
           - skypilot-local
           - runpod
-          - oci
   pull_request:
     paths:
       - ".github/actions/prepare-docker-storage/**"
@@ -158,7 +152,7 @@ jobs:
           if [[ "${EVENT_NAME}" == "schedule" ]]; then
             case "${SCHEDULE_CRON}" in
               "0 * * * *")  providers='["skypilot-local"]' ;;
-              "0 7 * * 0")  providers='["skypilot-local","runpod","oci"]' ;;
+              "0 7 * * 0")  providers='["skypilot-local","runpod"]' ;;
               *)
                 echo "::warning ::Unknown schedule cron '${SCHEDULE_CRON}' — emitting empty matrix" >&2
                 providers='[]'
@@ -168,10 +162,13 @@ jobs:
             providers='["skypilot-local"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
+              all)            providers='["skypilot-local","runpod"]' ;;
               skypilot-local) providers='["skypilot-local"]' ;;
               runpod)         providers='["runpod"]' ;;
-              oci)            providers='["oci"]' ;;
-              *)              providers='["skypilot-local","runpod","oci"]' ;;
+              *)
+                echo "::error::unsupported provider: ${PROVIDER_INPUT}" >&2
+                exit 1
+                ;;
             esac
           else
             providers='[]'
@@ -304,7 +301,7 @@ jobs:
           echo "spec_uris=$json" >> "$GITHUB_OUTPUT"
           echo "spec_uris: $json"
 
-  # `skypilot-local` / `runpod` / `oci` rows: route through the official
+  # `skypilot-local` / `runpod` rows route through the official
   # launcher reusable. Cluster name includes `github.run_attempt` so re-running
   # a failed job doesn't collide on the launcher's R2 spec key. The
   # `--num-workers 1` override for skypilot-local mirrors today's hardcoded
@@ -345,8 +342,8 @@ jobs:
   # job) instead of `needs.generate-launcher` (matrix) sidesteps GHA's
   # matrix-outputs scalar collapse documented at #1154; per-cell pairing is
   # restored because each generate cell wrote under the same per-cell run_id
-  # formula. `if: !cancelled()` decouples each cell from the OTHER cells'
-  # generate outcomes — RunPod transients won't skip OCI validation.
+  # formula. `if: !cancelled()` decouples each cell from the other cells'
+  # generate outcomes.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} / ${{ matrix.scenario }} dataset
     needs: [setup, generate-launcher]

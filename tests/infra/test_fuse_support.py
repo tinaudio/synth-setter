@@ -1,7 +1,7 @@
 """Invariant: image packages and launch flags keep `rclone mount` (FUSE) working.
 
-Rationale and per-platform caveats (RunPod, OCI, devcontainers) live in
-docs/reference/docker.md, section "FUSE mounts (`rclone mount`)".
+Rationale and platform caveats live in docs/reference/docker.md, section
+"FUSE mounts (`rclone mount`)".
 """
 
 from __future__ import annotations
@@ -62,31 +62,3 @@ def test_every_devcontainer_run_args_grant_fuse_device_and_sys_admin(
             f"{path}: runArgs missing {missing}; without them fusermount "
             f"fails with 'failed to open /dev/fuse: Operation not permitted'"
         )
-
-
-@pytest.mark.infra
-def test_oci_compute_run_wrapper_nested_docker_run_stays_privileged(
-    project_root: Path,
-) -> None:
-    """The OCI run wrapper keeps --privileged, the superset grant FUSE relies on.
-
-    :param project_root: Repo checkout whose compute run wrapper is checked (pydoclint requires
-        this field for fixture params).
-    """
-    wrapper = (
-        project_root
-        / "src"
-        / "synth_setter"
-        / "configs"
-        / "skypilot_launch"
-        / "compute"
-        / "scripts"
-        / "oci-docker-run.sh"
-    )
-    # Anchor to the docker run argument line — the flag also appears in an
-    # explanatory comment, which must not satisfy this check.
-    privileged_arg = re.search(r"^\s+--privileged \\$", wrapper.read_text(), re.MULTILINE)
-    assert privileged_arg, (
-        f"{wrapper}: nested docker run lost --privileged; FUSE mounts on OCI "
-        f"workers need it (or explicit --device=/dev/fuse --cap-add=SYS_ADMIN)"
-    )

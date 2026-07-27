@@ -2,7 +2,7 @@
 # Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
 # `sky.jobs.launch`. No stdout output by design (safe for tee'd contexts).
 #
-# Providers (gated on --provider runpod | oci | vast): the local (kubernetes / kind)
+# Providers (gated on --provider runpod | vast): the local (kubernetes / kind)
 # provider needs no compute auth — the launcher skips this script for that
 # case. The kind controller shrink (~/.sky/config.yaml) is written by the
 # launcher's `_ensure_ci_sky_config` when SYNTH_SETTER_CI_MODE is truthy.
@@ -12,8 +12,7 @@
 #   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
 #   RCLONE_CONFIG_R2_ENDPOINT
 #   R2_ACCOUNT_ID
-# Provider-specific required env: see write_runpod_creds / write_vast_creds /
-# write_oci_creds.
+# Provider-specific required env: see write_runpod_creds / write_vast_creds.
 #
 # Idempotency + skip semantics: see should_skip_existing / notice_skip_existing.
 set -euo pipefail
@@ -25,7 +24,7 @@ FORCE=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: skypilot_write_provider_creds.sh --provider <runpod|oci|vast> [--force]
+Usage: skypilot_write_provider_creds.sh --provider <runpod|vast> [--force]
 
 Writes R2 + per-provider compute creds to disk. No stdout output by design
 so callers can run this in a tee'd context without leaking secrets.
@@ -37,7 +36,7 @@ parse_args() {
     case "$1" in
       --provider)
         if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          echo "::error::--provider requires a value (runpod | oci | vast)" >&2
+          echo "::error::--provider requires a value (runpod | vast)" >&2
           usage
           exit 1
         fi
@@ -66,9 +65,7 @@ parse_args() {
 }
 
 # Resolve $1 from env. If empty, fail. Returns the resolved value verbatim on
-# stdout (no trailing newline added) for capture by the caller. Most callers
-# pass single-line values, but `OCI_API_KEY_PEM` is multi-line — `printf '%s'`
-# preserves the original content either way.
+# stdout (no trailing newline added) for capture by the caller.
 resolve_var() {
   local name="$1"
   local value="${!name:-}"
@@ -151,41 +148,11 @@ write_vast_creds() {
   chmod 600 "${key_file}"
 }
 
-write_oci_creds() {
-  local user_ocid tenancy_ocid fingerprint region api_key_pem
-  user_ocid="$(resolve_var OCI_USER_OCID)"
-  tenancy_ocid="$(resolve_var OCI_TENANCY_OCID)"
-  fingerprint="$(resolve_var OCI_FINGERPRINT)"
-  region="$(resolve_var OCI_REGION)"
-  api_key_pem="$(resolve_var OCI_API_KEY_PEM)"
-
-  local oci_config="$HOME/.oci/config"
-  local oci_key="$HOME/.oci/oci_api_key.pem"
-
-  mkdir -p "$HOME/.oci"
-
-  if should_skip_existing "${oci_key}"; then
-    notice_skip_existing "${oci_key}"
-  else
-    printf '%s\n' "${api_key_pem}" > "${oci_key}"
-    chmod 600 "${oci_key}"
-  fi
-
-  if should_skip_existing "${oci_config}"; then
-    notice_skip_existing "${oci_config}"
-  else
-    printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n' \
-      "${user_ocid}" "${fingerprint}" "${tenancy_ocid}" "${region}" "$HOME" \
-      > "${oci_config}"
-    chmod 600 "${oci_config}"
-  fi
-}
-
 main() {
   parse_args "$@"
 
   if [[ -z "${PROVIDER}" ]]; then
-    echo "::error::--provider is required (runpod | oci | vast)" >&2
+    echo "::error::--provider is required (runpod | vast)" >&2
     usage
     exit 1
   fi
@@ -196,14 +163,11 @@ main() {
     runpod)
       write_runpod_creds
       ;;
-    oci)
-      write_oci_creds
-      ;;
     vast)
       write_vast_creds
       ;;
     *)
-      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | vast)" >&2
+      echo "::error::unknown provider: ${PROVIDER} (expected runpod | vast)" >&2
       exit 1
       ;;
   esac

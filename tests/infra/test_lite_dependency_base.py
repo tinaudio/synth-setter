@@ -39,7 +39,6 @@ HEAVY_DEPS = {
     "omegaconf",
     "skypilot",
     "runpod",
-    "oci",
     "kubernetes",
     "librosa",
     "pedalboard",

@@ -1,4 +1,4 @@
-"""Tests for the SkyPilot launcher (RunPod / OCI / kind).
+"""Tests for the SkyPilot launcher (RunPod / Vast / kind).
 
 Covers ``src/synth_setter/pipeline/skypilot_launch.py``. Mock-based: no real SkyPilot or RunPod
 calls. The ``mock_sky`` fixture replaces the launcher's module-level ``sky`` reference with a
@@ -955,7 +955,7 @@ class TestRunpodBalancePreflight:
     ) -> None:
         """A RunPod entry anywhere in ``any_of`` triggers the preflight, not just entry 0.
 
-        Provider detection keys off ``any_of[0]``; a template listing OCI first
+        Provider detection keys off ``any_of[0]``; a template listing Vast first
         could still fall through to a RunPod alternative, so the balance gate
         must scan every entry.
 
@@ -1566,34 +1566,6 @@ class TestDispatchViaSkypilot:
             {None: "docker:tinaudio/synth-setter:test-tag"}
         ]
 
-    def test_dispatch_omits_resources_image_for_oci_docker_in_run(
-        self,
-        env_file: Path,
-        mock_sky: MagicMock,
-    ) -> None:
-        """Leave OCI resources unpinned for nested-Docker delivery.
-
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked SkyPilot submission boundary.
-        """
-        compute = ComputeConfig(
-            name="oci-cpu",
-            resources=[ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8")],
-            image_delivery="docker-in-run",
-            run_wrapper="oci-docker-run.sh",
-        )
-        sky_cfg = SkypilotLaunchConfig(
-            compute=compute,
-            cmd="echo",
-            env_file=str(env_file),
-            job_name="oci-image",
-        )
-
-        dispatch_via_skypilot(sky_cfg)
-
-        task = mock_sky.jobs.launch.call_args.args[0]
-        assert [resource.image_id for resource in task.resources] == [None]
-
     def test_dispatch_uses_default_env_file_when_unset(
         self,
         tmp_path: Path,
@@ -1788,17 +1760,16 @@ class TestDispatchViaSkypilot:
             assert env["FOO"] == "bar"
             assert env[NUM_WORKERS_ENV_VAR] == "2"
 
-    def test_worker_image_and_image_tag_injected_into_rank_env(
+    def test_image_tag_injected_into_rank_env(
         self,
         tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Every rank receives WORKER_IMAGE and the bare IMAGE_TAG for wandb provenance.
+        """Every rank receives the bare IMAGE_TAG for W&B provenance.
 
         ``log_wandb_provenance`` reads ``IMAGE_TAG`` on the worker
-        (storage-provenance-spec.md §12); injecting it centrally means no
-        launch config or worker cmd has to derive it from ``WORKER_IMAGE``.
+        (storage-provenance-spec.md §12), so the launcher injects it centrally.
 
         :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
@@ -1815,7 +1786,6 @@ class TestDispatchViaSkypilot:
         dispatch_via_skypilot(sky_cfg)
 
         injected = mock_sky.jobs.launch.call_args.args[0].envs
-        assert injected["WORKER_IMAGE"] == "tinaudio/synth-setter:dev-snapshot-abc123"
         assert injected["IMAGE_TAG"] == "dev-snapshot-abc123"
 
     def test_rank_world_envs_override_caller_extra_envs(
@@ -1941,7 +1911,7 @@ class TestDispatchViaSkypilot:
         "field, value, match",
         [
             ("job_name", "has/slash", "job_name must match"),
-            ("worker_image_tag", "bad tag", "worker_image_tag must match OCI"),
+            ("worker_image_tag", "bad tag", "worker_image_tag must match Docker"),
             ("env_file", "   ", "env_file must be a non-empty path"),
         ],
         ids=["job-name-with-slash", "image-tag-with-space", "blank-env-file"],

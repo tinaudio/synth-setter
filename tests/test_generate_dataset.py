@@ -94,6 +94,25 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def test_generate_dataset_removed_oci_compute_option_exits_nonzero() -> None:
+    """The real CLI rejects the removed OCI compute option before dispatch."""
+    result = subprocess.run(  # noqa: S603 — fixed module and Hydra overrides
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.generate_dataset",
+            "experiment=generate_dataset/smoke-shard",
+            "skypilot_launch/compute=oci/cpu",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Could not find 'skypilot_launch/compute/oci/cpu'" in result.stderr
+
+
 def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     cfg_dataset: DictConfig,
 ) -> None:

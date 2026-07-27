@@ -4,12 +4,12 @@ name: Test SkyPilot Local
 # Actions runner. Spins up a kind cluster via `sky local up`, registers it as
 # the SkyPilot "kubernetes" cloud, and launches the `local/debug-rclone`
 # compute option — which uploads a sentinel file to Cloudflare R2 from inside
-# the pod. No RunPod / OCI capacity used.
+# the pod. No RunPod capacity used.
 #
 # Goal: verify the rclone-prefixed R2 env vars (RCLONE_CONFIG_R2_*) flow
 # through `task.update_envs` into the worker pod, and that the worker can
-# talk to R2 from inside kind. If this passes but the cloud-provider matrices
-# (test-dataset-generation.yml runpod/oci) fail, the regression is in the
+# talk to R2 from inside kind. If this passes but the RunPod matrix in
+# test-dataset-generation.yml fails, the regression is in the
 # cloud backend wiring, not the launcher's env or task wiring.
 #
 # Triggers: `workflow_dispatch` for ad-hoc runs, plus a `pull_request` trigger
@@ -23,7 +23,7 @@ name: Test SkyPilot Local
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT                          — Cloudflare R2.
 #
-# No provider creds: kind doesn't need RunPod / OCI keys. The
+# No provider creds: kind doesn't need RunPod keys. The
 # `skypilot_write_provider_creds.sh` cred bootstrap is therefore not invoked
 # here — provider keys are a no-op for the kubernetes backend.
 
@@ -92,7 +92,7 @@ jobs:
       - name: Install socat (kubectl port-forward dependency)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
 
-      # skypilot[runpod,oci,kubernetes]==0.12.0 + kubernetes==35.0.0 are pinned
+      # SkyPilot and Kubernetes versions are pinned
       # in [project.dependencies]; --frozen installs the validated closure.
       - name: Install SkyPilot via uv sync --frozen
         run: uv sync --frozen --extra cpu --no-default-groups --group dev

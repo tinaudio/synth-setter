@@ -6,14 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CloudName = Literal["runpod", "vast", "oci", "kubernetes"]
+CloudName = Literal["kubernetes", "runpod", "vast"]
 
 # `sky local up` uses the kubernetes backend; cred bootstrap calls it "local".
 _CLOUD_TO_PROVIDER: dict[str, str] = {
+    "kubernetes": "local",
     "runpod": "runpod",
     "vast": "vast",
-    "oci": "oci",
-    "kubernetes": "local",
 }
 
 
@@ -92,17 +91,9 @@ class ComputeConfig(BaseModel):
 
         Worker mount path for the selected network volume.
 
-    .. attribute :: image_delivery
-
-        Worker-image delivery strategy.
-
     .. attribute :: setup_scripts
 
         Packaged scripts concatenated into ``setup``.
-
-    .. attribute :: run_wrapper
-
-        Packaged script containing the worker-command sentinel.
 
     .. attribute :: run_script
 
@@ -119,9 +110,7 @@ class ComputeConfig(BaseModel):
     resources: list[ComputeResources] = Field(min_length=1)
     config: dict[str, object] | None = None
     mount_network_volume: str | None = None
-    image_delivery: Literal["resources-image-id", "docker-in-run"] = "resources-image-id"
     setup_scripts: list[str] = Field(default_factory=lambda: ["worker-ready.sh"])
-    run_wrapper: str | None = None
     run_script: str | None = None
     file_mounts: dict[str, str] | None = None
 
@@ -136,25 +125,6 @@ class ComputeConfig(BaseModel):
             entry.cloud != "kubernetes" for entry in self.resources
         ):
             raise ValueError("config overrides are only valid with cloud=kubernetes")
-        return self
-
-    @model_validator(mode="after")
-    def _run_fields_are_consistent(self) -> ComputeConfig:
-        """Enforce run-block and image-delivery invariants.
-
-        :returns: Validated compute option.
-        :raises ValueError: Run sources conflict or image delivery is invalid.
-        """
-        if self.run_script is not None and self.run_wrapper is not None:
-            raise ValueError("run_script and run_wrapper are mutually exclusive")
-        if self.image_delivery == "docker-in-run" and self.run_wrapper is None:
-            raise ValueError("image_delivery=docker-in-run requires a run_wrapper script")
-        if self.image_delivery == "resources-image-id" and any(
-            entry.cloud == "oci" for entry in self.resources
-        ):
-            raise ValueError(
-                "OCI rejects image_id=docker:<image>; use image_delivery=docker-in-run"
-            )
         return self
 
     def provider(self) -> str:

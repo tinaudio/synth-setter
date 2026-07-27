@@ -556,15 +556,6 @@ wheels = [
 ]
 
 [[package]]
-name = "circuitbreaker"
-version = "2.1.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/df/ac/de7a92c4ed39cba31fe5ad9203b76a25ca67c530797f6bb420fff5f65ccb/circuitbreaker-2.1.3.tar.gz", hash = "sha256:1a4baee510f7bea3c91b194dcce7c07805fe96c4423ed5594b75af438531d084", size = 10787, upload-time = "2025-03-31T08:12:08.963Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/34/15f08edd4628f65217de1fc3c1a27c82e46fe357d60c217fc9881e12ebcc/circuitbreaker-2.1.3-py3-none-any.whl", hash = "sha256:87ba6a3ed03fdc7032bc175561c2b04d52ade9d5faf94ca2b035fbdc5e6b1dd1", size = 7737, upload-time = "2025-03-31T08:12:07.802Z" },
-]
-
-[[package]]
 name = "click"
 version = "8.1.8"
 source = { registry = "https://pypi.org/simple" }
@@ -706,23 +697,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/81/8b7cd386839b039ebe1855733b9f9449a8dec5d79564018234f185a7fa70/coverage-7.14.1-cp312-cp312-win_amd64.whl", hash = "sha256:54acdb6674a4661768d7bf7db32dfb9f46ab1d764f8aba6df75ce1a6a088724e", size = 223372, upload-time = "2026-05-26T20:39:26.603Z" },
     { url = "https://files.pythonhosted.org/packages/ae/ba/b44d472022f620d289d95fa830143235c0c36461c6f2437ea8d51e5481ed/coverage-7.14.1-cp312-cp312-win_arm64.whl", hash = "sha256:99cd41ff91afd94896fea3bc002706b6ae4ce95727d06e4a0f39c0a8d8bd8b1a", size = 221989, upload-time = "2026-05-26T20:39:28.242Z" },
     { url = "https://files.pythonhosted.org/packages/8a/3c/1a983b9a745d7f83d53f057bcc5bf79ba6a2bbc08266b3f0c7d6fe630c9b/coverage-7.14.1-py3-none-any.whl", hash = "sha256:a252f21c27e38347e60111a3266b03827422a7d5525951aceee313aa68bab1d2", size = 211815, upload-time = "2026-05-26T20:41:34.078Z" },
-]
-
-[[package]]
-name = "crc32c"
-version = "2.8"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e3/66/7e97aa77af7cf6afbff26e3651b564fe41932599bc2d3dce0b2f73d4829a/crc32c-2.8.tar.gz", hash = "sha256:578728964e59c47c356aeeedee6220e021e124b9d3e8631d95d9a5e5f06e261c", size = 48179, upload-time = "2025-10-17T06:20:13.61Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/36/fd18ef23c42926b79c7003e16cb0f79043b5b179c633521343d3b499e996/crc32c-2.8-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:572ffb1b78cce3d88e8d4143e154d31044a44be42cb3f6fbbf77f1e7a941c5ab", size = 66379, upload-time = "2025-10-17T06:19:10.115Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/b8/c584958e53f7798dd358f5bdb1bbfc97483134f053ee399d3eeb26cca075/crc32c-2.8-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:cf827b3758ee0c4aacd21ceca0e2da83681f10295c38a10bfeb105f7d98f7a68", size = 63042, upload-time = "2025-10-17T06:19:10.946Z" },
-    { url = "https://files.pythonhosted.org/packages/62/e6/6f2af0ec64a668a46c861e5bc778ea3ee42171fedfc5440f791f470fd783/crc32c-2.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:106fbd79013e06fa92bc3b51031694fcc1249811ed4364ef1554ee3dd2c7f5a2", size = 61528, upload-time = "2025-10-17T06:19:11.768Z" },
-    { url = "https://files.pythonhosted.org/packages/17/8b/4a04bd80a024f1a23978f19ae99407783e06549e361ab56e9c08bba3c1d3/crc32c-2.8-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:6dde035f91ffbfe23163e68605ee5a4bb8ceebd71ed54bb1fb1d0526cdd125a2", size = 80028, upload-time = "2025-10-17T06:19:12.554Z" },
-    { url = "https://files.pythonhosted.org/packages/21/8f/01c7afdc76ac2007d0e6a98e7300b4470b170480f8188475b597d1f4b4c6/crc32c-2.8-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e41ebe7c2f0fdcd9f3a3fd206989a36b460b4d3f24816d53e5be6c7dba72c5e1", size = 81531, upload-time = "2025-10-17T06:19:13.406Z" },
-    { url = "https://files.pythonhosted.org/packages/32/2b/8f78c5a8cc66486be5f51b6f038fc347c3ba748d3ea68be17a014283c331/crc32c-2.8-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:ecf66cf90266d9c15cea597d5cc86c01917cd1a238dc3c51420c7886fa750d7e", size = 80608, upload-time = "2025-10-17T06:19:14.223Z" },
-    { url = "https://files.pythonhosted.org/packages/db/86/fad1a94cdeeeb6b6e2323c87f970186e74bfd6fbfbc247bf5c88ad0873d5/crc32c-2.8-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:59eee5f3a69ad0793d5fa9cdc9b9d743b0cd50edf7fccc0a3988a821fef0208c", size = 79886, upload-time = "2025-10-17T06:19:15.345Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/db/1a7cb6757a1e32376fa2dfce00c815ea4ee614a94f9bff8228e37420c183/crc32c-2.8-cp312-cp312-win32.whl", hash = "sha256:a73d03ce3604aa5d7a2698e9057a0eef69f529c46497b27ee1c38158e90ceb76", size = 64896, upload-time = "2025-10-17T06:19:16.457Z" },
-    { url = "https://files.pythonhosted.org/packages/bf/8e/2024de34399b2e401a37dcb54b224b56c747b0dc46de4966886827b4d370/crc32c-2.8-cp312-cp312-win_amd64.whl", hash = "sha256:56b3b7d015247962cf58186e06d18c3d75a1a63d709d3233509e1c50a2d36aa2", size = 66645, upload-time = "2025-10-17T06:19:17.235Z" },
 ]
 
 [[package]]
@@ -2813,25 +2787,6 @@ wheels = [
 ]
 
 [[package]]
-name = "oci"
-version = "2.177.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "certifi" },
-    { name = "circuitbreaker" },
-    { name = "crc32c" },
-    { name = "cryptography" },
-    { name = "pyopenssl" },
-    { name = "python-dateutil" },
-    { name = "pytz" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/96/eb/f4e9a840c2c703bf78f1ca8506514bb1195792715dcf52fbb92cab4a6cec/oci-2.177.0.tar.gz", hash = "sha256:941c15283677ec5ca65d82a4bc71bae28692d73e79abbaf5eccb305a0ddb1251", size = 17454232, upload-time = "2026-06-02T01:55:16.945Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/a6/260b0e2ef9de7356030ea82dec56b61c40ac2907590f6aecaa9ce7b11059/oci-2.177.0-py3-none-any.whl", hash = "sha256:fd45a4a4d81764315123283f66cf33cc536ede3e3008dd37c871c89103012a81", size = 35629529, upload-time = "2026-06-02T01:55:07.57Z" },
-]
-
-[[package]]
 name = "omegaconf"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3512,19 +3467,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/48/47/e761c254f410c023a469284a9bc210933e18588ca87706ae93002c05114c/pynacl-1.6.2-cp38-abi3-win32.whl", hash = "sha256:5811c72b473b2f38f7e2a3dc4f8642e3a3e9b5e7317266e4ced1fba85cae41aa", size = 227421, upload-time = "2026-01-01T17:32:33.076Z" },
     { url = "https://files.pythonhosted.org/packages/41/ad/334600e8cacc7d86587fe5f565480fde569dfb487389c8e1be56ac21d8ac/pynacl-1.6.2-cp38-abi3-win_amd64.whl", hash = "sha256:62985f233210dee6548c223301b6c25440852e13d59a8b81490203c3227c5ba0", size = 239754, upload-time = "2026-01-01T17:32:34.557Z" },
     { url = "https://files.pythonhosted.org/packages/29/7d/5945b5af29534641820d3bd7b00962abbbdfee84ec7e19f0d5b3175f9a31/pynacl-1.6.2-cp38-abi3-win_arm64.whl", hash = "sha256:834a43af110f743a754448463e8fd61259cd4ab5bbedcf70f9dabad1d28a394c", size = 184801, upload-time = "2026-01-01T17:32:36.309Z" },
-]
-
-[[package]]
-name = "pyopenssl"
-version = "25.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/80/be/97b83a464498a79103036bc74d1038df4a7ef0e402cfaf4d5e113fb14759/pyopenssl-25.3.0.tar.gz", hash = "sha256:c981cb0a3fd84e8602d7afc209522773b94c1c2446a3c710a75b06fe1beae329", size = 184073, upload-time = "2025-09-17T00:32:21.037Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/81/ef2b1dfd1862567d573a4fdbc9f969067621764fbb74338496840a1d2977/pyopenssl-25.3.0-py3-none-any.whl", hash = "sha256:1fda6fc034d5e3d179d39e59c1895c9faeaf40a79de5fc4cbbfbe0d36f4a77b6", size = 57268, upload-time = "2025-09-17T00:32:19.474Z" },
 ]
 
 [[package]]
@@ -4304,18 +4246,6 @@ kubernetes = [
     { name = "sqlalchemy-adapter" },
     { name = "websockets" },
 ]
-oci = [
-    { name = "aiohttp" },
-    { name = "aiosqlite" },
-    { name = "anyio" },
-    { name = "casbin" },
-    { name = "grpcio" },
-    { name = "oci" },
-    { name = "passlib" },
-    { name = "protobuf" },
-    { name = "pyjwt" },
-    { name = "sqlalchemy-adapter" },
-]
 runpod = [
     { name = "aiohttp" },
     { name = "aiosqlite" },
@@ -4629,9 +4559,8 @@ audio = [
 ]
 compute = [
     { name = "kubernetes" },
-    { name = "oci" },
     { name = "runpod" },
-    { name = "skypilot", extra = ["kubernetes", "oci", "runpod", "vast"] },
+    { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "vastai-sdk" },
 ]
 config = [
@@ -4673,7 +4602,6 @@ dev = [
     { name = "mutmut" },
     { name = "nflows" },
     { name = "numpy" },
-    { name = "oci" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "pedalboard" },
@@ -4697,7 +4625,7 @@ dev = [
     { name = "runpod" },
     { name = "scipy" },
     { name = "sh" },
-    { name = "skypilot", extra = ["kubernetes", "oci", "runpod", "vast"] },
+    { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4755,7 +4683,6 @@ runtime = [
     { name = "mido" },
     { name = "music2latent" },
     { name = "numpy" },
-    { name = "oci" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "pedalboard" },
@@ -4768,7 +4695,7 @@ runtime = [
     { name = "runpod" },
     { name = "scipy" },
     { name = "sh" },
-    { name = "skypilot", extra = ["kubernetes", "oci", "runpod", "vast"] },
+    { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "tenacity" },
@@ -4855,9 +4782,8 @@ audio = [
 ]
 compute = [
     { name = "kubernetes", specifier = "==35.0.0" },
-    { name = "oci" },
     { name = "runpod", specifier = "==1.8.1" },
-    { name = "skypilot", extras = ["runpod", "oci", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "vastai-sdk", specifier = "==0.2.5" },
 ]
 config = [
@@ -4899,7 +4825,6 @@ dev = [
     { name = "mutmut", specifier = "==3.5.*" },
     { name = "nflows" },
     { name = "numpy" },
-    { name = "oci" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "pedalboard" },
@@ -4923,7 +4848,7 @@ dev = [
     { name = "runpod", specifier = "==1.8.1" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
     { name = "sh" },
-    { name = "skypilot", extras = ["runpod", "oci", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
@@ -4975,7 +4900,6 @@ runtime = [
     { name = "mido" },
     { name = "music2latent", specifier = ">=0.1.8" },
     { name = "numpy" },
-    { name = "oci" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "pedalboard" },
@@ -4988,7 +4912,7 @@ runtime = [
     { name = "runpod", specifier = "==1.8.1" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
     { name = "sh" },
-    { name = "skypilot", extras = ["runpod", "oci", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
     { name = "tenacity" },
