@@ -16,5 +16,6 @@
   "runpod/network-volume/training-hclass": "e532f6afa97d200fd0abf4f7b05ec2fe59b8b902c2eafde58767a2ec52d907d8",
   "runpod/smoke": "18daf2b2be2956b103d49b4cc1819deedf8652ac962e3949138107c1aafc15f7",
   "runpod/training": "7b6b3db98d58a95b0ffbe105cf5457a5da1b890892441b09c51830efebd4b415",
+  "runpod/training-consumer": "a47ef4146cf18334fef10405edbf915e5c9586568cd5714253eab84fc25a2773",
   "vast/smoke": "58847483dd2ee91f8ac510b7537fbd0df2c04bd79c25d23793ba162728dec9c6"
 }

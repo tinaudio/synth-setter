@@ -44,12 +44,14 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     [
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
+        "train-runpod-flow-simple-440k-m2l-100k.yaml",
         "train-runpod-flow-simple-440k-volume.yaml",
         "train-runpod-flow-simple-440k-volume-jp.yaml",
     ],
     ids=[
         "smoke",
         "flow-simple-440k",
+        "flow-simple-440k-m2l-100k",
         "flow-simple-440k-volume",
         "flow-simple-440k-volume-jp",
     ],
@@ -93,6 +95,20 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+
+
+def test_runpod_consumer_training_pool_restricts_gpu_types() -> None:
+    """The consumer training pool requests only sub-$1 target GPU families."""
+    compute = load_compute_option("runpod/training-consumer")
+
+    assert len(compute.resources) == 1
+    assert compute.resources[0].accelerators == {"RTX3090": 1, "RTX4090": 1}
+    assert compute.resources[0].disk_size == 1200
+    assert compute.resources[0].use_spot is False
+    dataset_size_bytes = 1_116_619_342_038
+    working_reserve_bytes = 100 * 1024**3
+    provisioned_bytes = compute.resources[0].disk_size * 1024**3
+    assert provisioned_bytes - dataset_size_bytes >= working_reserve_bytes
 
 
 def test_runpod_network_volume_training_hydrates_local_disk_from_mount() -> None:
