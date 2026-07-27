@@ -289,6 +289,9 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     _save_audio_prediction_checkpoint(case, checkpoint)
     output_dir = tmp_path / f"{case.experiment}-output"
 
+    # Drop WANDB_SERVICE: earlier in-process offline runs leave a service token in
+    # the session env, and connecting to that dead socket aborts wandb.init (#2564).
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
     result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
         _audio_prediction_cli_args(
             case,
@@ -299,6 +302,7 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
         capture_output=True,
         text=True,
         timeout=300,
+        env=subprocess_env,
     )
 
     assert result.returncode == 0, result.stderr
