@@ -50,7 +50,7 @@ def _launch_step(project_root: Path) -> dict[str, object]:
 
 @pytest.mark.infra
 def test_gpu_launch_config_pins_low_tier_smoke_pool_on_dev_snapshot() -> None:
-    """The checked-in config carries every launch knob the workflow used to inline."""
+    """Pin the low-tier consumer pool and dev-snapshot worker image."""
     config = load_launch_config(_LAUNCH_CONFIG)
 
     assert config.compute is not None
@@ -80,7 +80,7 @@ def test_gpu_worker_script_prefers_the_mounted_rclone_over_the_image_one() -> No
 
     assert 'export PATH="/tmp/synth-setter-tools:${PATH}"' in script
     assert script.index("chmod u+x /tmp/synth-setter-tools/rclone") < script.index("export PATH=")
-    assert script.index("export PATH=") < script.index("rclone copyto coverage.xml")
+    assert script.index("export PATH=") < script.index("trap upload_coverage EXIT")
 
 
 @pytest.mark.infra
@@ -132,13 +132,43 @@ def test_gpu_worker_script_proves_cuda_and_vst_before_running_gpu_tests() -> Non
 
 
 @pytest.mark.infra
-def test_gpu_worker_script_uploads_coverage_even_when_pytest_fails() -> None:
-    """Coverage leaves the worker through an EXIT trap, so partial results survive."""
-    script = _WORKER_SCRIPT.read_text(encoding="utf-8")
+def test_gpu_worker_script_failed_command_uploads_coverage_and_preserves_exit(
+    tmp_path: Path,
+) -> None:
+    """The EXIT trap publishes partial coverage without masking a test failure.
 
-    assert "trap upload_coverage EXIT" in script
-    assert "rclone copyto coverage.xml" in script
-    assert "--checksum" in script
+    :param tmp_path: Isolated worker directory and fake rclone installation.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_rclone = fake_bin / "rclone"
+    fake_rclone.write_text('#!/bin/bash\n/bin/cp "${2}" "${FAKE_R2_DEST}"\n')
+    fake_rclone.chmod(0o755)
+    (tmp_path / "coverage.xml").write_text("partial coverage")
+    uploaded = tmp_path / "uploaded.xml"
+
+    result = subprocess.run(  # noqa: S603 — invokes Bash against a checked-in script
+        [
+            "/bin/bash",
+            "-c",
+            'source "$1"; trap upload_coverage EXIT; false',
+            "bash",
+            str(_WORKER_SCRIPT),
+        ],
+        cwd=tmp_path,
+        env={
+            "COVERAGE_KEY": "ci/gpu/test/coverage.xml",
+            "FAKE_R2_DEST": str(uploaded),
+            "PATH": str(fake_bin),
+            "R2_BUCKET": "test-bucket",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert uploaded.read_text() == "partial coverage"
 
 
 @pytest.mark.infra

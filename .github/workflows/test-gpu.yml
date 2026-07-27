@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: test-gpu-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   COVERAGE_KEY: ci/gpu/${{ github.run_id }}/${{ github.run_attempt }}/coverage.xml
   LAUNCH_CONFIG: src/synth_setter/configs/launch/gpu-tests-runpod.yaml
