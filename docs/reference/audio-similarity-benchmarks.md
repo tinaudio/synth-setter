@@ -114,20 +114,22 @@ Every host pair and matched render must satisfy mel RMSE ≤ 3.5, MSS ≤ 1.0,
 wMFCC ≤ 2.0, SOT ≤ 0.01, and RMS-envelope cosine ≥ 0.995. These bounds reject
 an unsettled or wrong patch instead of allowing a looser VST-host comparison.
 
-Every render is also gated on onset timing. Each patch is scored by how many samples
-its audio precedes the requested MIDI start; matched Pedalboard and DawDreamer
-earliness values calibrate a robust median and median absolute deviation. Every host
-must remain at or below a one-sided upper modified z-score of 3.5. A two-sample scale
-floor prevents a zero-MAD control set from turning one-sample noise into an infinite
-score. The gate fails with the backend and sample number instead of hiding one bad
-row in an aggregate bound.
+Every render is also gated on onset timing. Audio must not precede the requested
+MIDI sample. Matched Pedalboard and DawDreamer earliness values also calibrate a
+robust median and median absolute deviation, and every host must remain at or below
+a one-sided upper modified z-score of 3.5. A two-sample scale floor prevents a
+zero-MAD control set from turning one-sample noise into an infinite score. The gate
+fails with the backend and sample number instead of hiding one bad row in an
+aggregate bound.
 
 | Workload       | Bucket name                           | JSON file                                |
 | -------------- | ------------------------------------- | ---------------------------------------- |
 | Repeated patch | `Surge host parity (repeated patch)`  | `surge-host-parity-repeated-patch.json`  |
 | Diverse patch  | `Surge host parity (diverse patches)` | `surge-host-parity-diverse-patches.json` |
 
-Metric name prefix: `surge-host-parity/<workload>/`
+Metric name prefix: `surge-host-parity/<workload>/`. Each pairwise metric also
+publishes a signed threshold overrun; positive values identify regressions while
+preserving the smaller-is-better benchmark contract.
 
 The workflow retains the `surge-host-parity-comparison` artifact for 14 days.
 Trusted main-branch runs copy the same directory with checksums to

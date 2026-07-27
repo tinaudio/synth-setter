@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, product
 from pathlib import Path
 from typing import Literal
 
@@ -335,6 +335,7 @@ def _onset_rows(
                 "backend": backend,
                 "sample": sample,
                 "onset_sample": int(values[sample]),
+                "requested_sample": requested_sample,
                 "modified_z": float(scores[sample]),
             }
             for sample in range(len(values))
@@ -347,6 +348,8 @@ def _assert_no_onset_outliers(rows: list[dict[str, float | int | str]]) -> None:
 
     :param rows: Per-render onset scores.
     """
+    early = [row for row in rows if int(row["onset_sample"]) < int(row["requested_sample"])]
+    assert not early, f"early host onset(s): {early}"
     outliers = [row for row in rows if float(row["modified_z"]) > _MODIFIED_Z_MAX]
     assert not outliers, f"host onset outlier(s): {outliers}"
 
@@ -431,20 +434,35 @@ def _pair_benchmark_entries(
     entries: list[BenchmarkEntry] = []
     for pair, rows in pair_rows.items():
         metrics = _worst_pair_metrics(rows)
+        thresholds = _PAIR_THRESHOLDS[pair]
+        for metric in ("mel_rmse", "mss", "sot", "wmfcc"):
+            entries.extend(
+                (
+                    {
+                        "name": f"{prefix}/{pair}/{metric}-max",
+                        "unit": metric,
+                        "value": metrics[metric],
+                    },
+                    {
+                        "name": f"{prefix}/{pair}/{metric}-threshold-overrun-max",
+                        "unit": metric,
+                        "value": metrics[metric] - thresholds[f"{metric}_max"],
+                    },
+                )
+            )
         entries.extend(
-            {
-                "name": f"{prefix}/{pair}/{metric}-max",
-                "unit": metric,
-                "value": metrics[metric],
-            }
-            for metric in ("mel_rmse", "mss", "sot", "wmfcc")
-        )
-        entries.append(
-            {
-                "name": f"{prefix}/{pair}/rms-envelope-cosine-distance-max",
-                "unit": "1-cos",
-                "value": 1.0 - metrics["rms"],
-            }
+            (
+                {
+                    "name": f"{prefix}/{pair}/rms-envelope-cosine-distance-max",
+                    "unit": "1-cos",
+                    "value": 1.0 - metrics["rms"],
+                },
+                {
+                    "name": f"{prefix}/{pair}/rms-threshold-overrun-max",
+                    "unit": "cosine",
+                    "value": thresholds["rms_min"] - metrics["rms"],
+                },
+            )
         )
     return entries
 
@@ -721,9 +739,40 @@ def _assert_metrics_artifact(output_dir: Path, render_count: int) -> None:
     :param render_count: Expected row count per backend or pair.
     """
     metrics = json.loads((output_dir / "metrics.json").read_text())
+    assert set(metrics) == {"onsets", "pairwise"}
+    onset_fields = {
+        "backend",
+        "sample",
+        "onset_sample",
+        "requested_sample",
+        "modified_z",
+    }
     assert len(metrics["onsets"]) == render_count * len(_BACKENDS)
+    for row in metrics["onsets"]:
+        assert set(row) == onset_fields
+        assert row["backend"] in _BACKENDS
+        assert type(row["sample"]) is int
+        assert type(row["onset_sample"]) is int
+        assert type(row["requested_sample"]) is int
+        assert isinstance(row["modified_z"], (int, float))
+        assert not isinstance(row["modified_z"], bool)
+        assert math.isfinite(row["modified_z"])
+    assert {
+        (row["backend"], row["sample"]) for row in metrics["onsets"]
+    } == set(product(_BACKENDS, range(render_count)))
+
     assert set(metrics["pairwise"]) == set(_PAIR_THRESHOLDS)
-    assert {len(rows) for rows in metrics["pairwise"].values()} == {render_count}
+    pair_fields = {"sample", "mel_rmse", "mss", "rms", "sot", "wmfcc"}
+    for rows in metrics["pairwise"].values():
+        assert len(rows) == render_count
+        assert {row["sample"] for row in rows} == set(range(render_count))
+        for row in rows:
+            assert set(row) == pair_fields
+            assert type(row["sample"]) is int
+            for field in pair_fields - {"sample"}:
+                assert isinstance(row[field], (int, float))
+                assert not isinstance(row[field], bool)
+                assert math.isfinite(row[field])
 
 
 def _assert_manifest_artifact(output_dir: Path, workload: str, render_count: int) -> None:
@@ -926,6 +975,89 @@ def _require_surge_xt() -> None:
     assert surge_component_state(_VST_PRESET_PATH) == surge_component_state(_SURGEPY_PRESET_PATH)
 
 
+def test_onset_gate_rejects_all_hosts_early_together() -> None:
+    """Absolute timing rejects common-mode early onset hidden by z-scores."""
+    rows = [
+        {
+            "backend": backend,
+            "sample": 0,
+            "onset_sample": 335,
+            "requested_sample": 336,
+            "modified_z": 0.0,
+        }
+        for backend in _BACKENDS
+    ]
+
+    with pytest.raises(AssertionError, match="early host onset"):
+        _assert_no_onset_outliers(rows)
+
+
+def test_pair_benchmark_entries_include_threshold_overruns() -> None:
+    """Published pair metrics expose signed distance beyond every gate."""
+    rows: list[MetricRow] = [
+        {
+            "sample": 0,
+            "mel_rmse": 1.0,
+            "mss": 0.5,
+            "rms": 0.999,
+            "sot": 0.005,
+            "wmfcc": 1.0,
+        }
+    ]
+
+    entries = _pair_benchmark_entries(
+        "surge-host-parity/test",
+        {"pedalboard-vs-surgepy": rows},
+    )
+
+    assert {
+        str(entry["name"])
+        for entry in entries
+        if "threshold-overrun" in str(entry["name"])
+    } == {
+        "surge-host-parity/test/pedalboard-vs-surgepy/mel_rmse-threshold-overrun-max",
+        "surge-host-parity/test/pedalboard-vs-surgepy/mss-threshold-overrun-max",
+        "surge-host-parity/test/pedalboard-vs-surgepy/rms-threshold-overrun-max",
+        "surge-host-parity/test/pedalboard-vs-surgepy/sot-threshold-overrun-max",
+        "surge-host-parity/test/pedalboard-vs-surgepy/wmfcc-threshold-overrun-max",
+    }
+
+
+def test_metrics_artifact_rejects_nonfinite_metric(tmp_path: Path) -> None:
+    """Persisted diagnostics require complete finite metric rows.
+
+    :param tmp_path: Temporary listening-artifact root.
+    """
+    onset_rows = [
+        {
+            "backend": backend,
+            "sample": 0,
+            "onset_sample": 336,
+            "requested_sample": 336,
+            "modified_z": 0.0,
+        }
+        for backend in _BACKENDS
+    ]
+    pair_row = {
+        "sample": 0,
+        "mel_rmse": float("nan"),
+        "mss": 0.0,
+        "rms": 1.0,
+        "sot": 0.0,
+        "wmfcc": 0.0,
+    }
+    _write_json(
+        tmp_path / "metrics.json",
+        {
+            "onsets": onset_rows,
+            "pairwise": {pair: [pair_row] for pair in _PAIR_THRESHOLDS},
+        },
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_metrics_artifact(tmp_path, 1)
+
+
 def test_wav_artifacts_reject_out_of_range_audio(tmp_path: Path) -> None:
     """Listening WAVs retain the normalized production audio contract.
 
@@ -1062,7 +1194,7 @@ def test_modified_z_scores_flag_only_divergent_onset() -> None:
 def test_surge_hosts_repeated_patch_have_no_per_render_onset_outliers(
     tmp_path: Path,
 ) -> None:
-    """Every repeated render starts with the two trusted host controls.
+    """Every repeated render satisfies independent trusted-host onset controls.
 
     :param tmp_path: Temporary destination for all three real Lance datasets.
     """
