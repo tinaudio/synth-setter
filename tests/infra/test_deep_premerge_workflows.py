@@ -337,19 +337,19 @@ def test_dataset_generation_pr_matrix_is_local_lance_static_only(
             "0 7 * * 0",
             {
                 "output_formats": '["lance"]',
-                "providers": '["skypilot-local","runpod","oci"]',
+                "providers": '["skypilot-local","runpod"]',
                 "scenarios": '["static","queue"]',
             },
         ),
     ],
 )
-def test_dataset_generation_schedule_matrices_remain_unchanged(
+def test_dataset_generation_schedule_matrices_target_supported_providers(
     workflows: WorkflowSet,
     tmp_path: Path,
     schedule: str,
     expected: dict[str, str],
 ) -> None:
-    """Hourly and weekly matrix resolution remains unchanged.
+    """Hourly and weekly matrices target local and RunPod providers.
 
     :param workflows: Four parsed workflow documents keyed by filename.
     :param tmp_path: Directory receiving the synthetic ``GITHUB_OUTPUT`` file.

@@ -93,9 +93,6 @@ name: Test SkyPilot Debug
 #                    that exists in the matrix so triage doesn't require
 #                    re-dispatching the production workflow separately.
 #
-# Matrix is RunPod-only by default; OCI debug coverage runs through
-# test-dataset-generation.yml's matrixed smoke instead.
-#
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
 # dispatch spends one pod per matrix variant. Add a `push` trigger only
 # temporarily when actively iterating on launcher / wrapper / template

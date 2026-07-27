@@ -23,7 +23,7 @@ on:
   workflow_call:
     inputs:
       provider:
-        description: "Provider tag for log/artifact naming (skypilot-local, runpod, oci, or pr-presubmit). Body is provider-agnostic."
+        description: "Provider tag for log/artifact naming (skypilot-local, runpod, or pr-presubmit). Body is provider-agnostic."
         required: true
         type: string
       dataset_root_uri:
