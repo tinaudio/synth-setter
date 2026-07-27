@@ -15,7 +15,6 @@ YamlMapping = dict[object, object]
 WorkflowSet = dict[str, YamlMapping]
 
 DISPATCH_DATASET_CONFIG = "generate_dataset/smoke-shard-lance"
-DISPATCH_PROVIDER = "runpod"
 
 CPU_SLOW_PR_PATHS: frozenset[str] = frozenset(
     {
@@ -153,7 +152,12 @@ def _named_step(workflow: YamlMapping, job_name: str, step_name: str) -> YamlMap
 
 
 def _run_dataset_matrix(
-    workflow: YamlMapping, tmp_path: Path, *, event_name: str, schedule: str = ""
+    workflow: YamlMapping,
+    tmp_path: Path,
+    *,
+    event_name: str,
+    schedule: str = "",
+    provider_input: str = "runpod",
 ) -> dict[str, str]:
     """Execute the dataset workflow's real matrix resolver script.
 
@@ -161,6 +165,7 @@ def _run_dataset_matrix(
     :param tmp_path: Directory receiving the synthetic ``GITHUB_OUTPUT`` file.
     :param event_name: GitHub event name supplied to the resolver.
     :param schedule: Schedule cron value, empty for non-schedule events.
+    :param provider_input: Manual-dispatch provider selection.
     :returns: Resolver outputs written through ``GITHUB_OUTPUT``.
     """
     matrix_step = next(step for step in _steps(workflow, "setup") if step.get("id") == "matrix")
@@ -169,7 +174,7 @@ def _run_dataset_matrix(
         "DISPATCH_DATASET_CONFIG": DISPATCH_DATASET_CONFIG,
         "EVENT_NAME": event_name,
         "GITHUB_OUTPUT": str(output_path),
-        "PROVIDER_INPUT": DISPATCH_PROVIDER,
+        "PROVIDER_INPUT": provider_input,
         "SCHEDULE_CRON": schedule,
     }
     bash_path = shutil.which("bash")
@@ -367,21 +372,56 @@ def test_dataset_generation_schedule_matrices_target_supported_providers(
     )
 
 
-def test_dataset_generation_dispatch_matrix_remains_unchanged(
-    workflows: WorkflowSet, tmp_path: Path
+@pytest.mark.parametrize(
+    ("provider_input", "expected_providers"),
+    [
+        ("all", '["skypilot-local","runpod"]'),
+        ("skypilot-local", '["skypilot-local"]'),
+        ("runpod", '["runpod"]'),
+    ],
+)
+def test_dataset_generation_dispatch_matrix_resolves_supported_providers(
+    workflows: WorkflowSet,
+    tmp_path: Path,
+    provider_input: str,
+    expected_providers: str,
 ) -> None:
-    """Manual provider, format, and scenario resolution remains unchanged.
+    """Manual dispatch resolves each supported provider selection.
 
     :param workflows: Four parsed workflow documents keyed by filename.
     :param tmp_path: Directory receiving the synthetic ``GITHUB_OUTPUT`` file.
+    :param provider_input: Manual-dispatch provider selection.
+    :param expected_providers: JSON provider array emitted by the resolver.
     """
     assert _run_dataset_matrix(
-        workflows["test-dataset-generation.yml"], tmp_path, event_name="workflow_dispatch"
+        workflows["test-dataset-generation.yml"],
+        tmp_path,
+        event_name="workflow_dispatch",
+        provider_input=provider_input,
     ) == {
         "output_formats": '["lance"]',
-        "providers": '["runpod"]',
+        "providers": expected_providers,
         "scenarios": '["static","queue"]',
     }
+
+
+@pytest.mark.parametrize("provider_input", ["aws", "oci"])
+def test_dataset_generation_dispatch_matrix_rejects_unsupported_providers(
+    workflows: WorkflowSet, tmp_path: Path, provider_input: str
+) -> None:
+    """Manual dispatch rejects removed and unknown provider selections.
+
+    :param workflows: Four parsed workflow documents keyed by filename.
+    :param tmp_path: Directory receiving the synthetic ``GITHUB_OUTPUT`` file.
+    :param provider_input: Unsupported manual-dispatch provider selection.
+    """
+    with pytest.raises(sh.ErrorReturnCode):
+        _run_dataset_matrix(
+            workflows["test-dataset-generation.yml"],
+            tmp_path,
+            event_name="workflow_dispatch",
+            provider_input=provider_input,
+        )
 
 
 def test_spec_materialization_pr_paths_cover_materializer_and_validator(

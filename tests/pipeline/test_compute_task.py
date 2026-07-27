@@ -217,7 +217,6 @@ def _all_compute_option_names() -> list[str]:
         for path in root.rglob("*.yaml")
         if path.parent.name != "scripts"
     ]
-    assert len(names) == 17
     return sorted(names)
 
 
@@ -238,8 +237,10 @@ class TestComputeOptionCompose:
             assert load_compute_script(compute.run_script)
 
     def test_compute_option_names_lists_all_options(self) -> None:
-        """Compute option names lists all options."""
-        assert compute_option_names() == _all_compute_option_names()
+        """Compute option names lists all supported options and excludes OCI."""
+        option_names = _all_compute_option_names()
+        assert compute_option_names() == option_names
+        assert "oci/cpu" not in option_names
 
     @pytest.mark.parametrize(
         "debug_option",

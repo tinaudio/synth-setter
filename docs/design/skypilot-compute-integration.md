@@ -115,9 +115,9 @@ provider-specific credential setup in CI. Future targets follow the same
 pattern.
 
 `build_task_doc` sets the task's `run` block from the launcher's injected
-`cmd` (or the option's `run_wrapper` with `${WORKER_CMD}` substituted, or a
-debug option's verbatim `run_script`). SkyPilot parses the resulting mapping;
-the launcher then applies the per-launch image and rank-specific environment.
+`cmd` or a debug option's verbatim `run_script`. SkyPilot parses the resulting
+mapping; the launcher then applies the per-launch image and rank-specific
+environment.
 
 #### 4.1.1 Launch mode (`sky_cfg.tail`)
 

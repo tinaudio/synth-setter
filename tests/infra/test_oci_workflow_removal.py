@@ -69,7 +69,7 @@ def _provider_validation_run(
 
     :param project_root: Repository root containing the workflow directory.
     :param provider: Provider input exposed to the shell block.
-    :returns: Completed Bash process.
+    :returns: Captured result from the workflow's provider-validation block.
     """
     workflow = load_workflow(project_root, "generate-dataset-shards.yaml")
     steps = workflow["jobs"]["generate"]["steps"]
