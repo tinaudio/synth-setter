@@ -48,20 +48,20 @@ _BACKENDS: tuple[ParityBackend, ...] = ("pedalboard", "dawdreamer", "surgepy")
 _REPEATED_RENDER_COUNT = 30
 _PARITY_SYNTH_PARAMS = {**_HARDCODED_SYNTH_PARAMS, "a_osc_drift": 0.0}
 _DIVERSE_PATCH_VALUES = (
-    (0.08, 0.12),
-    (0.18, 0.24),
-    (0.28, 0.36),
-    (0.38, 0.48),
-    (0.52, 0.62),
-    (0.64, 0.74),
-    (0.76, 0.86),
-    (0.88, 0.96),
+    (0.08, 0.044),
+    (0.18, 0.1705),
+    (0.28, 0.3355),
+    (0.38, 0.5005),
+    (0.52, 0.6655),
+    (0.64, 0.8305),
+    (0.76, 0.9565),
+    (0.88, 0.9565),
 )
 _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
 _ADJACENT_MEL_RMSE_MIN = 2.5
 _CAUSAL_CENTROID_SHIFT_MIN = 1.0
-_CAUSAL_PITCH_MEL_RMSE_MIN = 2.5
+_CAUSAL_OCTAVE_FREQUENCY_RATIO_MIN = 6.0
 _DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
@@ -277,30 +277,30 @@ def _onset_samples(audio: np.ndarray) -> np.ndarray:
 
 
 def _early_onset_z_scores(
-    pedalboard: np.ndarray,
-    dawdreamer: np.ndarray,
+    controls: np.ndarray,
     *,
     observed: np.ndarray,
     expected: np.ndarray,
 ) -> np.ndarray:
-    """Score per-patch early audio against trusted-host earliness.
+    """Score per-patch early audio against independent trusted-host controls.
 
-    :param pedalboard: One-dimensional Pedalboard onset samples.
-    :param dawdreamer: One-dimensional DawDreamer onset samples.
+    :param controls: Onsets shaped ``(control backends, patches)``.
     :param observed: One-dimensional backend onset samples to score.
     :param expected: One-dimensional requested onset samples.
     :returns: One-sided upper modified z-score per patch.
-    :raises ValueError: If inputs are empty, non-vector, or differently shaped.
+    :raises ValueError: If inputs are empty or have incompatible shapes.
     """
-    arrays = (pedalboard, dawdreamer, observed, expected)
     if (
-        any(array.ndim != 1 or array.shape != expected.shape for array in arrays)
+        controls.ndim != 2
+        or controls.shape[0] == 0
+        or controls.shape[1:] != expected.shape
+        or observed.ndim != 1
+        or observed.shape != expected.shape
+        or expected.ndim != 1
         or len(expected) == 0
     ):
-        raise ValueError("matched onset inputs must be nonempty vectors of equal shape")
-    control_earliness = np.stack(
-        (np.maximum(expected - pedalboard, 0), np.maximum(expected - dawdreamer, 0))
-    )
+        raise ValueError("matched onset inputs must contain controls and equal patch vectors")
+    control_earliness = np.maximum(expected[None, :] - controls, 0)
     observed_earliness = np.maximum(expected - observed, 0)
     return np.asarray(
         [
@@ -325,12 +325,11 @@ def _onset_rows(
     expected = np.full(render_count, requested_sample)
     rows: list[dict[str, float | int | str]] = []
     for backend, values in onsets.items():
-        scores = _early_onset_z_scores(
-            onsets["pedalboard"],
-            onsets["dawdreamer"],
-            observed=values,
-            expected=expected,
+        control_backends = tuple(
+            control for control in ("pedalboard", "dawdreamer") if control != backend
         )
+        controls = np.stack([onsets[control] for control in control_backends])
+        scores = _early_onset_z_scores(controls, observed=values, expected=expected)
         rows.extend(
             {
                 "backend": backend,
@@ -796,6 +795,15 @@ def _assert_artifact_contract(
     np.testing.assert_array_equal(results["pedalboard"].params, results["surgepy"].params)
 
 
+def _db_to_power(values: np.ndarray) -> np.ndarray:
+    """Convert power-decibel values to linear power.
+
+    :param values: Decibel values.
+    :returns: Linear power values.
+    """
+    return np.power(10.0, values / 10.0)
+
+
 def _mel_centroids(mel: np.ndarray) -> np.ndarray:
     """Return one energy-weighted mel-bin centroid per render.
 
@@ -803,7 +811,7 @@ def _mel_centroids(mel: np.ndarray) -> np.ndarray:
     :returns: Floating-point centroid per row.
     """
     mel_bins = np.arange(mel.shape[2], dtype=np.float64)[None, :, None]
-    energy = np.power(10.0, mel.astype(np.float64) / 10.0)
+    energy = _db_to_power(mel.astype(np.float64))
     return np.sum(energy * mel_bins, axis=(1, 2, 3)) / np.sum(energy, axis=(1, 2, 3))
 
 
@@ -829,22 +837,41 @@ def _assert_directional_audio_diversity(
         )
 
 
+def _dominant_frequencies(audio: np.ndarray) -> np.ndarray:
+    """Return the strongest audible FFT-bin frequency per render.
+
+    :param audio: Channel-leading waveforms shaped ``(rows, channels, samples)``.
+    :returns: Dominant frequency in Hz per row.
+    """
+    mono = audio.mean(axis=1)
+    magnitudes = np.abs(np.fft.rfft(mono, axis=1))
+    sample_rate = _config("pedalboard", len(audio)).sample_rate
+    frequencies = np.fft.rfftfreq(audio.shape[2], 1.0 / sample_rate)
+    audible = (frequencies >= 40.0) & (frequencies <= 5_000.0)
+    peak_indexes = np.argmax(magnitudes[:, audible], axis=1)
+    return frequencies[audible][peak_indexes]
+
+
 def _assert_causal_parameter_response(
     results: dict[ParityBackend, _BackendResult],
 ) -> None:
-    """Require independent cutoff and pitch changes to affect each backend.
+    """Require independent cutoff and oscillator-octave changes per backend.
 
-    :param results: Baseline, cutoff-only, and pitch-only renders by backend.
+    :param results: Baseline, cutoff-only, and octave-only renders by backend.
     """
     for backend, result in results.items():
         centroids = _mel_centroids(result.mel)
         cutoff_centroid_shift = centroids[1] - centroids[0]
-        pitch_mel_rmse = float(np.sqrt(np.mean((result.mel[2] - result.mel[0]) ** 2)))
+        dominant_frequencies = _dominant_frequencies(result.audio)
+        octave_frequency_ratio = dominant_frequencies[2] / dominant_frequencies[0]
         assert cutoff_centroid_shift > _CAUSAL_CENTROID_SHIFT_MIN, (
             backend,
             cutoff_centroid_shift,
         )
-        assert pitch_mel_rmse > _CAUSAL_PITCH_MEL_RMSE_MIN, (backend, pitch_mel_rmse)
+        assert octave_frequency_ratio > _CAUSAL_OCTAVE_FREQUENCY_RATIO_MIN, (
+            backend,
+            octave_frequency_ratio,
+        )
 
 
 def _run_parity_workload(
@@ -898,8 +925,7 @@ def _require_surge_xt() -> None:
 def test_early_onset_scores_accept_on_time_and_late_audio() -> None:
     """Only audio preceding the requested event contributes to the score."""
     scores = _early_onset_z_scores(
-        np.asarray([100.0, 200.0]),
-        np.asarray([100.0, 200.0]),
+        np.asarray([[100.0, 200.0], [100.0, 200.0]]),
         observed=np.asarray([120.0, 220.0]),
         expected=np.asarray([100.0, 200.0]),
     )
@@ -910,8 +936,7 @@ def test_early_onset_scores_accept_on_time_and_late_audio() -> None:
 def test_early_onset_scores_keep_patch_identity() -> None:
     """Matched requests expose a systematic early backend onset."""
     scores = _early_onset_z_scores(
-        np.asarray([100.0, 200.0]),
-        np.asarray([100.0, 200.0]),
+        np.asarray([[100.0, 200.0], [100.0, 200.0]]),
         observed=np.asarray([80.0, 180.0]),
         expected=np.asarray([100.0, 200.0]),
     )
@@ -923,8 +948,7 @@ def test_early_onset_scores_keep_patch_identity() -> None:
 def test_early_onset_scores_use_matched_patch_controls() -> None:
     """Heterogeneous controls cannot hide a per-patch early onset."""
     scores = _early_onset_z_scores(
-        np.asarray([80.0, 200.0]),
-        np.asarray([80.0, 200.0]),
+        np.asarray([[80.0, 200.0], [80.0, 200.0]]),
         observed=np.asarray([80.0, 180.0]),
         expected=np.asarray([100.0, 200.0]),
     )
@@ -933,12 +957,23 @@ def test_early_onset_scores_use_matched_patch_controls() -> None:
     assert scores[1] > _MODIFIED_Z_MAX
 
 
+def test_early_onset_scores_reject_trusted_backend_outlier() -> None:
+    """A trusted backend is scored against the other control, not itself."""
+    scores = _early_onset_z_scores(
+        np.asarray([[336.0]]),
+        observed=np.asarray([0.0]),
+        expected=np.asarray([336.0]),
+    )
+
+    np.testing.assert_allclose(scores, [113.314278])
+    assert scores[0] > _MODIFIED_Z_MAX
+
+
 def test_early_onset_scores_mismatched_shapes_raise() -> None:
     """Patch rows cannot broadcast across a mismatched onset vector."""
-    with pytest.raises(ValueError, match="vectors of equal shape"):
+    with pytest.raises(ValueError, match="controls and equal patch vectors"):
         _early_onset_z_scores(
-            np.asarray([100.0, 200.0]),
-            np.asarray([100.0]),
+            np.asarray([[100.0]]),
             observed=np.asarray([100.0, 200.0]),
             expected=np.asarray([100.0, 200.0]),
         )
@@ -994,9 +1029,9 @@ def test_surge_hosts_diverse_patches_have_no_per_render_onset_outliers(
         {
             **_PARITY_SYNTH_PARAMS,
             "a_filter_1_cutoff": cutoff,
-            "a_osc_1_pitch": pitch,
+            "a_osc_1_octave": octave,
         }
-        for cutoff, pitch in _DIVERSE_PATCH_VALUES
+        for cutoff, octave in _DIVERSE_PATCH_VALUES
     ]
 
     results = _run_parity_workload(tmp_path, "diverse-patches", synth_params)
@@ -1008,8 +1043,8 @@ def test_surge_hosts_diverse_patches_have_no_per_render_onset_outliers(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @pytest.mark.requires_surgepy
-def test_surge_hosts_apply_cutoff_and_pitch_independently(tmp_path: Path) -> None:
-    """Each host dispatches independent cutoff and pitch changes into audio.
+def test_surge_hosts_apply_cutoff_and_octave_independently(tmp_path: Path) -> None:
+    """Each host dispatches independent cutoff and oscillator-three octave changes.
 
     :param tmp_path: Temporary destination for all three real Lance datasets.
     """
@@ -1017,14 +1052,12 @@ def test_surge_hosts_apply_cutoff_and_pitch_independently(tmp_path: Path) -> Non
     baseline = {
         **_PARITY_SYNTH_PARAMS,
         "a_filter_1_cutoff": 0.2,
-        "a_osc_1_pitch": 0.2,
-        "a_osc_2_mute": 0.75,
-        "a_osc_3_mute": 0.75,
+        "a_osc_3_octave": 0.1705,
     }
     synth_params = [
         baseline,
         {**baseline, "a_filter_1_cutoff": 0.8},
-        {**baseline, "a_osc_1_pitch": 0.8},
+        {**baseline, "a_osc_3_octave": 0.8305},
     ]
 
     results = _render_workload(tmp_path, "causal-parameters", synth_params)

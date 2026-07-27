@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 
+from synth_setter.data.vst.clap_introspect import SURGE_XT_CLAP_PATH
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
 from synth_setter.data.vst.shapes import AUDIO_FIELD, PARAM_ARRAY_FIELD
@@ -168,7 +169,7 @@ def _dump_real_native_hosts(runner: CliRunner, dumps: dict[str, Path]) -> None:
         (
             "dump-clap",
             "--plugin",
-            "/usr/lib/clap/Surge XT.clap",
+            str(SURGE_XT_CLAP_PATH),
             "--out",
             str(dumps["clap"]),
         ),
@@ -245,6 +246,8 @@ def test_dawdreamer_dump_build_roundtrip_loads_real_settled_map(tmp_path: Path) 
     """
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
+    if not SURGE_XT_CLAP_PATH.exists():
+        pytest.skip(f"Surge XT CLAP not found at {SURGE_XT_CLAP_PATH}")
     output_map = _build_real_host_map(tmp_path)
     config = _dawdreamer_experiment_config()
     generated_map = load_param_map(output_map)

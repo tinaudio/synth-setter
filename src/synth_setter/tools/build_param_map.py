@@ -48,16 +48,6 @@ _SURGE_CLAP_OSCILLATOR_NAMES = {
         ("triangle", "Width 2"),
     )
 }
-_SURGE_DAWDREAMER_OSCILLATOR_NAMES = {
-    f"a_osc_{oscillator}_{semantic_name}": f"A Osc {oscillator} {host_name}"
-    for oscillator in range(1, 4)
-    for semantic_name, host_name in (
-        ("sawtooth", "Shape"),
-        ("width", "Sub Mix"),
-        ("pulse", "Width 1"),
-        ("triangle", "Width 2"),
-    )
-}
 _SURGE_FX_LABELS = {
     "fx_a1_delay_time": ("FX A1 Param 1", "FX A1 Time"),
     "fx_a1_modulation_rate": ("FX A1 Param 2", "FX A1 Rate"),
@@ -206,17 +196,6 @@ def _expected_surgepy_name(semantic_key: str, pedalboard_name: str) -> str:
     :returns: SurgePy patch-tree label.
     """
     return _SURGEPY_FX_NAMES.get(semantic_key, pedalboard_name)
-
-
-def _expected_dawdreamer_name(semantic_key: str) -> str:
-    """Return the DawDreamer label declared for one repository semantic key.
-
-    :param semantic_key: Repository-owned parameter identity.
-    :returns: Surge's stable DawDreamer label.
-    """
-    if semantic_key in _SURGE_FX_NAMES:
-        return _SURGE_FX_NAMES[semantic_key]
-    return _SURGE_DAWDREAMER_OSCILLATOR_NAMES.get(semantic_key, semantic_key)
 
 
 def _validate_surgepy_provenance(
@@ -394,18 +373,11 @@ def _resolve_dawdreamer_param(
     :param errors: Aggregated diagnostics destination.
     :returns: Unique DawDreamer record, or ``None`` after a diagnostic.
     """
-    settled_candidates = by_name.get(_normalized_identity(pedalboard_name), [])
-    if len(settled_candidates) == 1:
-        return settled_candidates[0]
-    if len(settled_candidates) > 1:
+    candidates = by_name.get(_normalized_identity(pedalboard_name), [])
+    if len(candidates) != 1:
         errors.append(
             f"{semantic_key}: DawDreamer name {pedalboard_name!r} is missing or ambiguous"
         )
-        return None
-    expected_name = _expected_dawdreamer_name(semantic_key)
-    candidates = by_name.get(_normalized_identity(expected_name), [])
-    if len(candidates) != 1:
-        errors.append(f"{semantic_key}: DawDreamer name {expected_name!r} is missing or ambiguous")
         return None
     return candidates[0]
 
