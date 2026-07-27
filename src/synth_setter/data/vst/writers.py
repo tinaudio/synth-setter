@@ -23,6 +23,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,
     generate_sample,
+    warm_spectrogram_backend,
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
@@ -125,6 +126,7 @@ def _render_in_batches(
     clipped_rejections = 0
     silent_rejections = 0
 
+    warm_spectrogram_backend()
     renderer = make_audio_renderer(render_cfg)
 
     def _render_loop() -> None:
