@@ -8,6 +8,7 @@ the target in music2latent embedding space.
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -125,6 +126,7 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         control_num_blocks: int = 2,
         control_encoder_hidden_dim: int = 256,
         synth_name: str = "surge_simple",
+        renderer_backend: str = "surgepy",
         sample_rate: int = 44100,
         channels: int = 2,
         signal_duration_seconds: float = 4.0,
@@ -147,6 +149,8 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         :param control_num_blocks: Control-field residual block count.
         :param control_encoder_hidden_dim: Control-encoder per-frame MLP width.
         :param synth_name: Registered synth identity used for online rendering.
+        :param renderer_backend: ``surgepy`` (fast, fully headless) or
+            ``pedalboard`` (VST3 host; display-free with ``warmup=False``).
         :param sample_rate: Render sample rate in Hz (must match the m2l contract).
         :param channels: Render channel count.
         :param signal_duration_seconds: Render duration per sample.
@@ -164,6 +168,7 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         self._t_min = t_min
         self._control_dim = control_dim
         self._synth_name = synth_name
+        self._renderer_backend = renderer_backend
         self._sample_rate = sample_rate
         self._channels = channels
         self._signal_duration_seconds = signal_duration_seconds
@@ -218,22 +223,46 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         from synth_setter.data.vst.param_spec import decode_model_output
         from synth_setter.pipeline.schemas.spec import RenderConfig
         from synth_setter.renderer_factory import make_audio_renderer
-        from synth_setter.synth_spec import SynthName, resolve_synth
+        from synth_setter.synth_spec import SynthName, SynthSpec, resolve_synth
 
         synth = resolve_synth(SynthName(self._synth_name))
         spec = param_specs[synth.param_spec_name]
-        config = RenderConfig(
-            synth=synth,
-            renderer_backend="pedalboard",
-            sample_rate=self._sample_rate,
-            channels=self._channels,
-            velocity=self._velocity,
-            signal_duration_seconds=self._signal_duration_seconds,
-            min_loudness=-55.0,
-            samples_per_shard=1,
-        )
+        if self._renderer_backend == "surgepy":
+            # In-process engine identity mirroring configs/render/*_surgepy.yaml.
+            synth = SynthSpec(
+                name=synth.name,
+                param_spec_name=synth.param_spec_name,
+                plugin_path="surgepy",
+                plugin_state_path=str(Path(synth.plugin_state_path).with_suffix(".fxp")),
+                synth_version="1.3.master.f7b97c68",
+            )
+        if self._renderer_backend == "surgepy":
+            config = RenderConfig(
+                synth=synth,
+                renderer_backend="surgepy",
+                sample_rate=self._sample_rate,
+                channels=self._channels,
+                velocity=self._velocity,
+                signal_duration_seconds=self._signal_duration_seconds,
+                min_loudness=-55.0,
+                samples_per_shard=1,
+                plugin_reload_cadence="render",
+                gui_toggle_cadence="never",
+            )
+        else:
+            config = RenderConfig(
+                synth=synth,
+                renderer_backend="pedalboard",
+                sample_rate=self._sample_rate,
+                channels=self._channels,
+                velocity=self._velocity,
+                signal_duration_seconds=self._signal_duration_seconds,
+                min_loudness=-55.0,
+                samples_per_shard=1,
+            )
         renderer = make_audio_renderer(config)
         samples = int(self._sample_rate * self._signal_duration_seconds)
+        duration = self._signal_duration_seconds
         velocity = self._velocity
         channels = self._channels
 
@@ -242,12 +271,17 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
             failures = 0
             for i, row in enumerate(rows):
                 synth_params, note_params = decode_model_output(row, spec)
+                # Predicted rows can decode to degenerate note windows; clamp
+                # into the rendered duration before the host sees them.
+                start, end = note_params["note_start_and_end"]
+                start = float(np.clip(start, 0.0, duration - 0.1))
+                end = float(np.clip(end, start + 0.05, duration))
                 try:
                     out[i] = renderer.render(
                         synth_params,
-                        int(note_params["pitch"]),
+                        int(np.clip(note_params["pitch"], 0, 127)),
                         velocity,
-                        note_params["note_start_and_end"],
+                        (start, end),
                     )
                 except (ValueError, RuntimeError):
                     # A failed render feeds back silence rather than killing the

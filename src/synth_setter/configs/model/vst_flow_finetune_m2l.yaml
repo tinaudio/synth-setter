@@ -20,6 +20,8 @@ control_encoder_hidden_dim: 256
 
 # Online-render identity; must match the dataset the base was trained on.
 synth_name: surge_simple
+# surgepy renders fully headless at ~47/s vs pedalboard's ~1.4/s (#2556).
+renderer_backend: surgepy
 sample_rate: 44100
 channels: 2
 signal_duration_seconds: 4.0
