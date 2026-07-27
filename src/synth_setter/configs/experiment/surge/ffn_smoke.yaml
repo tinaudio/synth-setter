@@ -1,6 +1,6 @@
 # @package _global_
 
-# GPU smoke test for VST FFN against the immutable Surge XT R2 fixture.
+# GPU smoke test for VST FFN against a finalized Surge XT Lance R2 root.
 
 defaults:
   - /experiment/surge/ffn_full
@@ -15,11 +15,12 @@ model:
   compile: false
 
 datamodule:
-  # No-clobber-copied by prepare_data() before fit; opt-in R2 source.
-  download_dataset_root_uri: r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/
-  # The fixture's train split holds 20 samples; a larger batch yields zero batches.
+  # Projected-subset hydrated by prepare_data() before fit; opt-in R2 source.
+  download_dataset_root_uri: r2://experiments/data/surge-xt-lance-1k-2k-2k/surge-xt-lance-1k-2k-2k-20260717T042205119Z/
+  # Caps the 1k-row train split so a smoke run hydrates in seconds.
+  download_dataset_row_limit: 64
   batch_size: 4
-  # Single-process loading for the 20-sample fixture, matching surge/test*.yaml.
+  # Single-process loading for the row-capped subset, matching surge/test*.yaml.
   num_workers: 0
 
 trainer:

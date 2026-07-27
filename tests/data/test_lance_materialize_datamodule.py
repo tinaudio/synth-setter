@@ -17,8 +17,10 @@ import lance
 import pytest
 from omegaconf import OmegaConf
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from tests.helpers.lance_fixtures import (
     NUM_PARAMS,
     write_mel_stats,
@@ -184,6 +186,216 @@ class TestMaterializeInitValidation:
         )
 
 
+class TestMaterializedSubsetLayout:
+    """Hydration always projects, into a config-addressed subdirectory."""
+
+    def test_prepare_data_download_uri_alone_projects_away_unread_columns(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare source URI hydrates the read set, not the whole dataset.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+
+        train_split = lance.dataset(str(module.dataset_root / "train.lance"))
+        assert train_split.schema.names == ["param_array", "mel_spec"]
+        assert train_split.count_rows() == 8
+
+    def test_prepare_data_names_subset_directory_for_the_conditioning_column(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The subset directory is a readable prefix plus a request digest.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+
+        assert module.dataset_root.parent == destination
+        assert module.dataset_root.name.startswith("mel_spec-")
+
+    def test_prepare_data_distinct_conditioning_hydrates_sibling_subsets(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Changing conditioning hydrates a new subset instead of failing on the old one.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+
+        def hydrate(conditioning: ConditioningMode) -> Path:
+            module = LanceVSTDataModule(
+                dataset_root=destination,
+                download_dataset_root_uri=source_root.as_uri(),
+                conditioning=conditioning,
+                predict_file=tmp_path / "elsewhere" / "predict.lance",
+                param_spec_name=_PARAM_SPEC,
+            )
+            module.prepare_data()
+            return module.dataset_root
+
+        mel_root = hydrate("mel")
+        m2l_root = hydrate("m2l")
+
+        assert mel_root != m2l_root
+        assert lance.dataset(str(mel_root / "train.lance")).schema.names == [
+            "param_array",
+            "mel_spec",
+        ]
+        assert lance.dataset(str(m2l_root / "train.lance")).schema.names == [
+            "param_array",
+            "music2latent",
+        ]
+
+    def test_prepare_data_repeated_identical_config_reuses_the_subset(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-running the same configuration is a cache hit, not a hard failure.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=_txids(source_root),
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+        module.prepare_data()
+
+        assert lance.dataset(str(module.dataset_root / "train.lance")).count_rows() == 8
+
+    def test_prepare_data_ignores_a_legacy_whole_dataset_copy_at_the_root(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pre-existing flat copy neither blocks hydration nor gets read.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        shutil.copytree(source_root, destination)
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+
+        assert lance.dataset(str(module.dataset_root / "train.lance")).schema.names == [
+            "param_array",
+            "mel_spec",
+        ]
+        assert lance.dataset(str(destination / "train.lance")).schema.names[0] == "audio"
+
+    def test_prepare_data_predict_file_in_configured_root_follows_the_subset(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A predict split named against the configured root resolves to the subset.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=destination / "test.lance",
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+        module.setup("predict")
+        try:
+            batch = next(iter(module.predict_dataloader()))
+        finally:
+            module.teardown()
+
+        assert module.predict_file == module.dataset_root / "test.lance"
+        assert batch["audio"].shape[0] == 2
+
+    def test_materialized_split_pins_the_pipeline_lance_storage_version(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Local subsets are written in the version the pipeline pins, not the pylance default.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+
+        materialized = lance.dataset(str(module.dataset_root / "train.lance"))
+        assert materialized.data_storage_version == LANCE_DATA_STORAGE_VERSION
+
+
 class TestMaterializePrepareData:
     """``prepare_data()`` rematerializes projected, row-capped local splits."""
 
@@ -221,7 +433,7 @@ class TestMaterializePrepareData:
         }
         for split, columns in expected_columns.items():
             source = lance.dataset(str(source_root / f"{split}.lance"))
-            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            materialized = lance.dataset(str(module.dataset_root / f"{split}.lance"))
             assert materialized.schema.names == columns
             assert materialized.count_rows() == 4
             for column in columns:
@@ -232,7 +444,7 @@ class TestMaterializePrepareData:
         assert hydrate_calls == [
             {
                 "source_uri": source_root.as_uri(),
-                "dest": destination,
+                "dest": module.dataset_root,
                 "exclude": "{*.lance/**,metadata/**}",
             }
         ]
@@ -273,7 +485,7 @@ class TestMaterializePrepareData:
         assert datamodule.download_dataset_txids == dict(txids)
         datamodule.prepare_data()
         for split in ("train", "val", "test"):
-            materialized = lance.dataset(str(dest_root / f"{split}.lance"))
+            materialized = lance.dataset(str(datamodule.dataset_root / f"{split}.lance"))
             assert materialized.count_rows() == 4
 
     def test_prepare_data_row_limit_without_txids_feeds_train_dataloader(
@@ -309,7 +521,7 @@ class TestMaterializePrepareData:
 
         for split in ("train", "val", "test"):
             source = lance.dataset(str(source_root / f"{split}.lance"))
-            materialized = lance.dataset(str(destination / f"{split}.lance"))
+            materialized = lance.dataset(str(module.dataset_root / f"{split}.lance"))
             expected_params = source.scanner(columns=["param_array"], limit=4).to_table()
             actual_params = materialized.scanner(columns=["param_array"]).to_table()
             assert actual_params.equals(expected_params)
@@ -375,7 +587,7 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
-        test_split = lance.dataset(str(destination / "test.lance"))
+        test_split = lance.dataset(str(module.dataset_root / "test.lance"))
         assert test_split.schema.names == ["param_array", "mel_spec"]
 
     def test_prepare_data_materialize_m2l_conditioning_projects_music2latent(
@@ -403,5 +615,5 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
-        train_split = lance.dataset(str(destination / "train.lance"))
+        train_split = lance.dataset(str(module.dataset_root / "train.lance"))
         assert train_split.schema.names == ["param_array", "music2latent"]

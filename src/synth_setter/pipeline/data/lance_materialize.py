@@ -28,11 +28,19 @@ from tenacity import (
 )
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_shard import (
+    LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
+)
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
 
 _SIDECAR_SUFFIX = ".materialize.json"
+# Long enough that two live subsets under one root never collide, short enough
+# to stay readable next to the prefix.
+_DIRNAME_DIGEST_CHARS = 8
+_DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
@@ -152,6 +160,16 @@ class MaterializeManifest(BaseModel):
     request_hash: str
 
 
+def _digest(payload: Mapping[str, object]) -> str:
+    """Hash a request payload through one canonical JSON encoding.
+
+    :param payload: JSON-encodable request fields.
+    :returns: sha256 hex digest, stable across dict ordering.
+    """
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def request_hash(
     source_uri: str,
     txid: str | None,
@@ -168,18 +186,48 @@ def request_hash(
     :param limit: First-N row cap, or ``None`` for all rows.
     :returns: sha256 hex digest over the canonical JSON encoding of the fields.
     """
-    payload = json.dumps(
+    return _digest(
         {
             "source_uri": source_uri,
             "txid": txid,
             "resolved_version": resolved_version,
             "columns": list(columns),
             "limit": limit,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+        }
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def subset_dirname(
+    prefix: str,
+    source_root_uri: str,
+    *,
+    txids: Mapping[str, str] | None,
+    projection: Mapping[str, Sequence[str]],
+    row_limit: int | None,
+) -> str:
+    """Name the directory addressing one whole-root materialization request.
+
+    Derived from configuration alone so every rank computes the same directory
+    without a source read — ``prepare_data`` runs on one rank, ``setup`` on all.
+    The resolved source version is deliberately excluded: drift within a
+    directory is the sidecar manifest's job, not the path's.
+
+    :param prefix: Readable leading token, truncated to keep the name short.
+    :param source_root_uri: Hydration root as the caller passed it.
+    :param txids: Per-split transaction pins, or ``None`` for latest snapshots.
+    :param projection: Columns to materialize per split.
+    :param row_limit: First-N row cap per split, or ``None`` for all rows.
+    :returns: ``<prefix>-<digest>`` directory name.
+    """
+    digest = _digest(
+        {
+            "source_root_uri": source_root_uri,
+            "txids": dict(txids) if txids is not None else None,
+            "projection": {split: list(columns) for split, columns in projection.items()},
+            "row_limit": row_limit,
+        }
+    )
+    return f"{prefix[:_DIRNAME_PREFIX_CHARS]}-{digest[:_DIRNAME_DIGEST_CHARS]}"
 
 
 def sidecar_path(dest_path: Path) -> Path:
@@ -392,6 +440,8 @@ def _write_materialized_snapshot(
         str(staging_path),
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
+        data_storage_version=LANCE_DATA_STORAGE_VERSION,
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
     )
     row_count = written.count_rows()
     sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
@@ -481,7 +531,7 @@ def materialize_splits(
     dest_root: Path,
     *,
     txids: Mapping[str, str] | None,
-    columns_for: Callable[[str], Sequence[str]],
+    projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
 ) -> None:
@@ -492,21 +542,17 @@ def materialize_splits(
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
     :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
-    :param columns_for: Callback returning the columns to project for a given split name.
+    :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
-    if txids is None:
-        split_txids = ((split, None) for split in ("train", "val", "test"))
-    else:
-        split_txids = txids.items()
-    for split, txid in split_txids:
+    for split, columns in projection.items():
         name = f"{split}{shard_suffix}"
         materialize_lance_subset(
             f"{source_root_uri.rstrip('/')}/{name}",
             dest_root / name,
-            txid=txid,
-            columns=columns_for(split),
+            txid=txids[split] if txids is not None else None,
+            columns=columns,
             limit=row_limit,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
