@@ -821,11 +821,11 @@ def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None
 
 
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
-    """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
+    """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt root and smoke caps.
 
     Pins the contract that lets the experiment run end-to-end with no pre-staged
-    local data: the opt-in R2 download URI; the batch size and single-process
-    loading that the 20-sample train split forces; the 10-step cap with the
+    local data: the opt-in R2 download URI and its row cap; the batch size and
+    single-process loading the capped subset forces; the 10-step cap with the
     surge-default 1M ``min_steps`` floor dropped; the surge_xt spec wiring
     (datamodule param spec + LogPerParamMSE callback) and the output width
     inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
@@ -834,8 +834,10 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     cfg = _compose("train.yaml", ["experiment=surge/ffn_smoke"])
 
     assert cfg.datamodule.download_dataset_root_uri == (
-        "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"
+        "r2://experiments/data/surge-xt-lance-1k-2k-2k/"
+        "surge-xt-lance-1k-2k-2k-20260717T042205119Z/"
     )
+    assert cfg.datamodule.download_dataset_row_limit == 64
     assert cfg.datamodule.batch_size == 4
     assert cfg.datamodule.num_workers == 0
     assert cfg.datamodule.param_spec_name == "surge_xt"

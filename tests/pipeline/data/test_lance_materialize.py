@@ -325,16 +325,13 @@ def test_materialize_splits_builds_projected_capped_splits_per_txid(
     def download_spy(source_uri: str, dest_path: Path, *, exclude: str | None = None) -> None:
         calls.append((source_uri, dest_path, exclude))
 
-    def columns_for(_split: str) -> tuple[str, ...]:
-        return ("a",)
-
     monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
     dest_root = tmp_path / "dest"
     materialize_splits(
         str(source_root),
         dest_root,
         txids=txids,
-        columns_for=columns_for,
+        projection={split: ("a",) for split in ("train", "val", "test")},
         row_limit=2,
         shard_suffix=".lance",
     )
@@ -365,7 +362,7 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
         source_root,
         dest_root,
         txids={},
-        columns_for=lambda _split: (),
+        projection={},
         row_limit=None,
         shard_suffix=".lance",
     )
