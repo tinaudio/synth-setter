@@ -62,8 +62,7 @@ runner image label and the trigger events. Job IDs are not globally unique
 ## Secrets: feed `.env` directly
 
 `.env` is already the local source of truth for credentials. Pass it as
-`act`'s secrets file — no preprocessing required, including for multi-line
-PEM values (`OCI_API_KEY_PEM`):
+`act`'s secrets file — no preprocessing required:
 
 ```bash
 act <event> --secret-file .env -W .github/workflows/<file>

@@ -366,48 +366,31 @@ If you are working on the data pipeline and need to run distributed generation:
 RUNPOD_API_KEY=<your-api-key>
 ```
 
-### 4e. OCI (Optional -- Second Compute Target)
+### 4e. Vast.ai (Optional -- Alternative Compute Target)
 
-[Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) is wired up as a
-second SkyPilot target alongside RunPod for the `generate_dataset` smoke
-pipeline (CPU-only Flex shapes via the `oci/cpu` compute option under
-`src/synth_setter/configs/skypilot_launch/compute/`).
-**You do not need OCI for local development or training.**
+[Vast.ai](https://vast.ai/) is an alternative SkyPilot GPU target for smoke
+training and dataset-generation jobs. **You do not need Vast.ai for local
+development or training.**
 
-If you are exercising the OCI target:
+To use the Vast.ai target:
 
-1. Generate an API signing key pair following Oracle's
-   [Required Keys and OCIDs](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm) guide.
+1. Create an API key in the [Vast.ai account portal](https://cloud.vast.ai/).
 
-2. Write `~/.oci/config` with the standard skeleton:
+2. Set it in `.env`:
 
    ```
-   [DEFAULT]
-   user=<user-ocid>
-   fingerprint=<key-fingerprint>
-   tenancy=<tenancy-ocid>
-   region=<your-region>
-   key_file=~/.oci/oci_api_key.pem
+   VAST_API_KEY=<your-api-key>
    ```
 
-   `chmod 600 ~/.oci/oci_api_key.pem` and `chmod 600 ~/.oci/config`.
+3. Write the credential file and verify SkyPilot authentication:
 
-3. Optional: write `~/.sky/config.yaml` only if you need to target a
-   non-root OCI compartment (for cleaner quota / IAM scoping). SkyPilot's
-   OCI backend defaults to the root compartment and its default cpu-Ubuntu
-   image when these keys are unset:
-
-   ```yaml
-   oci:
-     default:
-       compartment_ocid: <child-compartment-ocid>
+   ```bash
+   bash scripts/skypilot/write_provider_creds.sh --provider vast
+   sky check vast
    ```
 
-4. Smoke check the credentials:
-
-   ```
-   sky check oci
-   ```
+The supported smoke option is
+`src/synth_setter/configs/skypilot_launch/compute/vast/smoke.yaml`.
 
 ### 4f. Codex plugin (Optional -- Codex reviews and task delegation)
 

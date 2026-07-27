@@ -100,7 +100,6 @@ src/synth_setter/configs/skypilot_launch/compute/
 │   ├── network-volume/       # training / training-hclass / staging with the persistent volume mount
 │   └── debug/                # 8 canary variants inheriting the smoke pool, each with its own run script
 ├── vast/smoke.yaml           # Vast.ai GPU (marketplace on-demand alternative; use_spot: false)
-├── oci/cpu.yaml              # OCI x86 CPU Flex (second smoke target; docker-in-run image delivery)
 ├── local/kind.yaml           # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ├── local/debug-rclone.yaml   # kind rclone canary
 └── scripts/                  # packaged setup/run bash (.sh files, shellcheck-covered)
@@ -229,7 +228,7 @@ envs their worker entrypoint needs.
 
 Source of truth: the GitHub-Actions runner's process env, populated from `secrets.*` and passed into the container via `docker run -e ...`. **No `.env` file is ever written to the runner's filesystem.** The default `sky_cfg.env_file` path (`<repo_root>/.env`) doesn't resolve, the `.env` branch is silently skipped, and resolution falls through to the container's process env.
 
-The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (only fires on `runpod` / `oci` matrix cells; same-repo PRs run a non-SkyPilot `local` cell — see [github-actions.md](../reference/github-actions.md)):
+The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (only fires on `runpod` matrix cells; same-repo PRs run a non-SkyPilot `local` cell — see [github-actions.md](../reference/github-actions.md)):
 
 ```yaml
 - name: Launch SkyPilot job
@@ -352,7 +351,7 @@ Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_f
 **Delivered** (superseded by §4.1 — the actual shape differs from the original spot/ondemand plan):
 
 - `skypilot_launch/compute/vast/smoke.yaml` — a single on-demand option (`use_spot: false`), not separate spot/ondemand variants.
-- `pyproject.toml` — `vast` added to the required `skypilot[runpod,oci,kubernetes,vast]` extra (not an optional dependency).
+- `pyproject.toml` — `vast` is part of the required `skypilot[runpod,kubernetes,vast]` extra (not an optional dependency).
 
 ### Phase C: Pipeline CLI + SkyPilot integration
 

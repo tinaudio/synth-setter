@@ -106,7 +106,7 @@ docs:
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
         covers: "Dataset finalization orchestration and completion signaling"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
-        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
+        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: ".github/workflows/nightly-parallel-datagen.yml"
@@ -185,7 +185,7 @@ docs:
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
-    description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + Vast + OCI smoke)
+    description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod, Vast.ai, local Kubernetes)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`, and preflight-verified worker commit pinning. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
@@ -201,16 +201,14 @@ docs:
         covers: "Vast.ai smoke option. Vast auth is `~/.config/vastai/vast_api_key` (written by write_provider_creds.sh --provider vast); header documents the vastai-sdk 1.x `api_key_access` breakage and the controller-side pin."
       - pattern: "src/synth_setter/configs/launch/train-vast-smoke.yaml"
         covers: "Launch config dispatching the 10-step junk train through the vast/smoke option — Vast.ai analogue of train-runpod-smoke.yaml (checkpoint upload + W&B artifact, num_workers=0)."
-      - pattern: "src/synth_setter/configs/skypilot_launch/compute/oci/cpu.yaml"
-        covers: "OCI CPU option (Flex shapes, docker-in-run image delivery — OCI rejects `docker:<image>` image_id; the worker image is fed via the `WORKER_IMAGE` env into the oci-docker-run.sh wrapper)."
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/scripts/*.sh"
-        covers: "Packaged setup/run bash for compute options: worker-ready echo, operator-SSH authorized_keys decode (#2297), OCI docker install + docker-in-run wrapper (`${WORKER_CMD}` sentinel, --privileged hammer for Xvfb/dbus #776), and the debug-variant canaries."
+        covers: "Packaged setup/run bash for compute options: worker-ready echo, operator-SSH authorized_keys decode (#2297), and debug-variant canaries."
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper invoked by the launcher-built worker cmd on every provider. The launcher always supplies a preflight-verified ref; full transitive resolve handles commits that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
-        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor); PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Per-provider cred writer: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
@@ -226,7 +224,7 @@ docs:
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"
-        covers: "skypilot[runpod,oci,kubernetes,vast]==0.12.0 listed under [project.dependencies] — required, not optional. vastai-sdk==0.2.5 pinned alongside it (1.x drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls)."
+        covers: "skypilot[runpod,kubernetes,vast]==0.12.0 listed under [project.dependencies] — required, not optional. vastai-sdk==0.2.5 pinned alongside it (1.x drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls)."
         scope: "skypilot"
 
   # ── Storage provenance spec ─────────────────────────────────────
