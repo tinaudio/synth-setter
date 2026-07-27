@@ -1,37 +1,63 @@
-#!/usr/bin/env bash
-# Worker body for the GPU test lane (src/synth_setter/configs/launch/gpu-tests-runpod.yaml).
-#
-# Runs in the dev-snapshot image after sync_worker_checkout.sh pins the checkout
-# to WORKER_GIT_REF, so the image supplies CUDA and Surge XT while this script
-# comes from the dispatched commit.
+#!/bin/bash
+# Run the GPU test lane and return partial coverage through R2.
 set -euo pipefail
 
-: "${COVERAGE_KEY:?run-scoped R2 key to publish coverage.xml under}"
-: "${R2_BUCKET:?R2 bucket receiving the coverage artifact}"
-
-# Ahead of the trap so the upload can never fall back to the image's apt rclone,
-# which fails the first R2 write of every process. file_mounts drop the exec bit.
-chmod u+x /tmp/synth-setter-tools/rclone
-export PATH="/tmp/synth-setter-tools:$PATH"
-rclone version
-
-# Coverage ships from an EXIT trap so a pytest failure still returns partial
-# results before the managed job tears the pod down.
+# Upload coverage without hiding test failures — see #2460.
+# Globals: COVERAGE_KEY, R2_BUCKET.
+# Arguments: none; Outputs: rclone output; Returns: exits with test status.
 upload_coverage() {
-  rc=$?
+  local rc=$?
   trap - EXIT
   if [[ -s coverage.xml ]]; then
-    rclone copyto coverage.xml "r2:${R2_BUCKET}/${COVERAGE_KEY}" --checksum || rc=$?
+    rclone copyto coverage.xml "r2:${R2_BUCKET}/${COVERAGE_KEY}" \
+      --checksum || rc=$?
   fi
-  exit "$rc"
+  exit "${rc}"
 }
-trap upload_coverage EXIT
 
-nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
-python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; assert torch.cuda.device_count() > 0; print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())'
+# Run CUDA, VST, and GPU pytest checks — see #2460.
+# Globals: COVERAGE_KEY, PATH, R2_BUCKET, RCLONE_MOUNT_PATH, VST_RUNNER.
+# Arguments: none; Outputs: diagnostics; Returns: test status.
+main() {
+  : "${COVERAGE_KEY:?run-scoped R2 key to publish coverage.xml under}"
+  : "${R2_BUCKET:?R2 bucket receiving the coverage artifact}"
+  local rclone_mount_path="${RCLONE_MOUNT_PATH:-/tmp/synth-setter-tools/rclone}"
+  local vst_runner
+  vst_runner="${VST_RUNNER:-src/synth_setter/scripts/run-linux-vst-headless.sh}"
 
-# Loading the plugin before pytest separates a broken VST host from a failing test.
-src/synth_setter/scripts/run-linux-vst-headless.sh python -X faulthandler -c 'from synth_setter.data.vst.core import load_plugin; plugin = load_plugin("/usr/lib/vst3/Surge XT.vst3"); assert plugin is not None; print("Surge XT loaded")'
+  # The pinned mount avoids apt rclone's first-write failure; see #749.
+  chmod u+x "${rclone_mount_path}"
+  export PATH="${rclone_mount_path%/*}:${PATH}"
+  rclone version
 
-src/synth_setter/scripts/run-linux-vst-headless.sh pytest -vv -s -m gpu --cov=src --cov-branch --cov-report=xml --cov-report=term
-test -s coverage.xml
+  trap upload_coverage EXIT
+
+  nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
+  python - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA not available")
+if torch.cuda.device_count() <= 0:
+    raise RuntimeError("No CUDA devices available")
+print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())
+PY
+
+  # Load the plugin first to distinguish VST host failures.
+  "${vst_runner}" python -X faulthandler - <<'PY'
+from synth_setter.data.vst.core import load_plugin
+
+plugin = load_plugin("/usr/lib/vst3/Surge XT.vst3")
+if plugin is None:
+    raise RuntimeError("Surge XT failed to load")
+print("Surge XT loaded")
+PY
+
+  "${vst_runner}" pytest -vv -s -m gpu \
+    --cov=src --cov-branch --cov-report=xml --cov-report=term
+  [[ -s coverage.xml ]]
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

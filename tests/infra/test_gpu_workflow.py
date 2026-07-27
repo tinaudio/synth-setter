@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -11,12 +13,54 @@ from workflow_fixtures import load_workflow
 
 from synth_setter.pipeline.compute_task import apply_tier_filter, build_task_doc
 from synth_setter.pipeline.schemas.gpu_tier import GpuTier
-from synth_setter.pipeline.skypilot_launch import load_launch_config
+from synth_setter.pipeline.skypilot_launch import load_launch_config, resolve_worker_env
 
 _REPO_ROOT = Path(__file__).parents[2]
+_CRED_SCRIPT = _REPO_ROOT / "scripts/skypilot/write_provider_creds.sh"
 _LAUNCH_CONFIG = _REPO_ROOT / "src/synth_setter/configs/launch/gpu-tests-runpod.yaml"
 _WORKER_SCRIPT = _REPO_ROOT / "scripts/ci/gpu_tests.sh"
 _WORKFLOW = "test-gpu.yml"
+
+
+def _write_executable(path: Path, body: str) -> Path:
+    """Write an executable command fixture.
+
+    :param path: Fixture command path.
+    :param body: Complete shell script body.
+    :returns: ``path`` after writing and setting executable mode.
+    """
+    path.write_text(body)
+    path.chmod(0o755)
+    return path
+
+
+def _install_gpu_command_fixtures(tmp_path: Path, rclone: str) -> tuple[Path, Path]:
+    """Install successful GPU probes plus a pytest-failing VST runner.
+
+    :param tmp_path: Isolated test directory.
+    :param rclone: Real rclone binary wrapped by the command fixture.
+    :returns: Fake rclone mount and VST runner paths.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_rclone = _write_executable(fake_bin / "rclone", f'#!/bin/bash\nexec "{rclone}" "$@"\n')
+    _write_executable(fake_bin / "nvidia-smi", "#!/bin/bash\nexit 0\n")
+    _write_executable(fake_bin / "python", "#!/bin/bash\nexit 0\n")
+    vst_runner = _write_executable(
+        fake_bin / "run-linux-vst-headless.sh",
+        '#!/bin/bash\nif [[ "$*" == *pytest* ]]; then exit 42; fi\nexit 0\n',
+    )
+    return fake_rclone, vst_runner
+
+
+def _workflow_steps(project_root: Path) -> list[dict[str, object]]:
+    """Load the GPU workflow's ordered steps.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    :returns: Step mappings from the GPU job.
+    """
+    jobs = cast(dict[str, dict[str, object]], load_workflow(project_root, _WORKFLOW)["jobs"])
+    return cast(list[dict[str, object]], jobs["run_tests"]["steps"])
 
 
 def _named_step(project_root: Path, name: str) -> dict[str, object]:
@@ -26,9 +70,7 @@ def _named_step(project_root: Path, name: str) -> dict[str, object]:
     :param name: Exact workflow step name.
     :returns: The matching step mapping.
     """
-    jobs = cast(dict[str, dict[str, object]], load_workflow(project_root, _WORKFLOW)["jobs"])
-    steps = cast(list[dict[str, object]], jobs["run_tests"]["steps"])
-    return next(step for step in steps if step.get("name") == name)
+    return next(step for step in _workflow_steps(project_root) if step.get("name") == name)
 
 
 def _launch_step(project_root: Path) -> dict[str, object]:
@@ -42,7 +84,7 @@ def _launch_step(project_root: Path) -> dict[str, object]:
 
 @pytest.mark.infra
 def test_gpu_launch_config_pins_low_tier_smoke_pool_on_dev_snapshot() -> None:
-    """The checked-in config carries every launch knob the workflow used to inline."""
+    """Pin the low-tier consumer pool and dev-snapshot worker image."""
     config = load_launch_config(_LAUNCH_CONFIG)
 
     assert config.compute is not None
@@ -70,9 +112,9 @@ def test_gpu_worker_script_prefers_the_mounted_rclone_over_the_image_one() -> No
     """The image's apt rclone fails first R2 writes, so the mounted binary must win $PATH."""
     script = _WORKER_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'export PATH="/tmp/synth-setter-tools:$PATH"' in script
-    assert script.index("chmod u+x /tmp/synth-setter-tools/rclone") < script.index("export PATH=")
-    assert script.index("export PATH=") < script.index("rclone copyto coverage.xml")
+    assert 'export PATH="${rclone_mount_path%/*}:${PATH}"' in script
+    assert script.index('chmod u+x "${rclone_mount_path}"') < script.index("export PATH=")
+    assert script.index("export PATH=") < script.index("trap upload_coverage EXIT")
 
 
 @pytest.mark.infra
@@ -119,18 +161,61 @@ def test_gpu_worker_script_proves_cuda_and_vst_before_running_gpu_tests() -> Non
     assert "nvidia-smi" in script
     assert "torch.cuda.is_available()" in script
     assert "load_plugin" in script
-    assert "run-linux-vst-headless.sh pytest -vv -s -m gpu" in script
+    assert "pytest -vv -s -m gpu" in script
     assert "--cov=src --cov-branch --cov-report=xml" in script
 
 
 @pytest.mark.infra
-def test_gpu_worker_script_uploads_coverage_even_when_pytest_fails() -> None:
-    """Coverage leaves the worker through an EXIT trap, so partial results survive."""
-    script = _WORKER_SCRIPT.read_text(encoding="utf-8")
+def test_gpu_worker_script_failed_pytest_uploads_coverage_and_preserves_exit(
+    tmp_path: Path,
+) -> None:
+    """The executable worker publishes partial coverage without masking pytest failure.
 
-    assert "trap upload_coverage EXIT" in script
-    assert "rclone copyto coverage.xml" in script
-    assert "--checksum" in script
+    :param tmp_path: Isolated worker directory and command fixtures.
+    """
+    rclone = shutil.which("rclone")
+    if rclone is None:
+        pytest.skip("requires rclone for the upload/retrieval round trip")
+    fake_rclone, vst_runner = _install_gpu_command_fixtures(tmp_path, rclone)
+    fake_bin = fake_rclone.parent
+    (tmp_path / "coverage.xml").write_text("partial coverage")
+    r2_root = tmp_path / "r2"
+    coverage_key = "ci/gpu/test/coverage.xml"
+    env = {
+        "COVERAGE_KEY": coverage_key,
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "R2_BUCKET": str(r2_root),
+        "RCLONE_CONFIG_R2_TYPE": "local",
+        "RCLONE_MOUNT_PATH": str(fake_rclone),
+        "VST_RUNNER": str(vst_runner),
+    }
+
+    result = subprocess.run(  # noqa: S603 — executes the checked-in worker script
+        [str(_WORKER_SCRIPT)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 42
+    uploaded = r2_root / coverage_key
+    assert uploaded.read_text() == "partial coverage"
+
+    retrieved = tmp_path / "retrieved.xml"
+    retrieve = subprocess.run(  # noqa: S603 — invokes the resolved rclone binary
+        [rclone, "moveto", f"r2:{uploaded}", str(retrieved), "--checksum"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert retrieve.returncode == 0, retrieve.stderr
+    assert retrieved.read_text() == "partial coverage"
+    assert not uploaded.exists()
 
 
 @pytest.mark.infra
@@ -180,6 +265,91 @@ def test_gpu_workflow_pins_worker_checkout_to_the_dispatched_commit(project_root
     step_env = cast(dict[str, str], _launch_step(project_root)["env"])
 
     assert step_env["WORKER_GIT_REF"] == "${{ github.sha }}"
+
+
+@pytest.mark.infra
+def test_gpu_workflow_r2_account_reaches_real_credential_bootstrap(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """The launch-step R2 account satisfies the real local bootstrap contract.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    :param tmp_path: Isolated home for generated credential files.
+    """
+    step_env = cast(dict[str, str], _launch_step(project_root)["env"])
+    assert step_env["R2_ACCOUNT_ID"] == "${{ secrets.R2_ACCOUNT_ID }}"
+
+    result = subprocess.run(  # noqa: S603 — executes the checked-in bootstrap script
+        [str(_CRED_SCRIPT), "--provider", "runpod", "--force"],
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ["PATH"],
+            "R2_ACCOUNT_ID": "account-id",
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "access-key",
+            "RCLONE_CONFIG_R2_ENDPOINT": "https://example.invalid",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "secret-key",
+            "RUNPOD_API_KEY": "runpod-key",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".cloudflare/accountid").read_text() == "account-id\n"
+
+
+@pytest.mark.infra
+def test_gpu_workflow_wandb_secret_resolves_into_worker_env(
+    project_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launch-step W&B secret reaches the launcher's managed-worker env.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    :param tmp_path: Isolated empty launch env file.
+    :param monkeypatch: Process-environment fixture.
+    """
+    launch_step = _launch_step(project_root)
+    step_env = cast(dict[str, str], launch_step["env"])
+    assert step_env["WANDB_API_KEY"] == "${{ secrets.WANDB_API_KEY }}"
+    assert "--extra-env WANDB_API_KEY" not in cast(str, launch_step["run"])
+
+    monkeypatch.setenv("WANDB_API_KEY", "wandb-key")
+    env_file = tmp_path / ".env"
+    env_file.write_text("")
+
+    assert resolve_worker_env(env_file)["WANDB_API_KEY"] == "wandb-key"
+
+
+@pytest.mark.infra
+def test_gpu_workflow_does_not_persist_launcher_logs(project_root: Path) -> None:
+    """Launcher output can contain credentials, so it remains only in masked job logs.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    steps = _workflow_steps(project_root)
+
+    assert all(step.get("name") != "Upload run metadata" for step in steps)
+    assert "tee" not in cast(str, _launch_step(project_root)["run"])
+
+
+@pytest.mark.infra
+def test_gpu_workflow_pins_external_actions_to_commit_shas(project_root: Path) -> None:
+    """External actions use immutable revisions while local actions stay relative.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    external_uses = [
+        cast(str, step["uses"])
+        for step in _workflow_steps(project_root)
+        if "uses" in step and not cast(str, step["uses"]).startswith("./")
+    ]
+
+    assert external_uses == [
+        "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e",
+    ]
 
 
 @pytest.mark.infra

@@ -46,10 +46,14 @@ class TestComputeResources:
         assert entry.accelerators == {"RTX3090": 1}
         assert entry.use_spot is False
 
-    def test_unknown_cloud_rejected(self) -> None:
-        """Reject clouds outside the supported provider set."""
+    @pytest.mark.parametrize("cloud", ["aws", "oci"])
+    def test_unsupported_cloud_rejected(self, cloud: str) -> None:
+        """Reject clouds outside the supported provider set.
+
+        :param cloud: Unsupported SkyPilot cloud name.
+        """
         with pytest.raises(ValidationError, match="cloud"):
-            _runpod_resources(cloud="aws")
+            _runpod_resources(cloud=cloud)
 
     def test_extra_field_rejected(self) -> None:
         """Reject fields SkyPilot options do not support."""
@@ -80,33 +84,6 @@ class TestComputeConfig:
         """Require at least one resource alternative."""
         with pytest.raises(ValidationError, match="resources"):
             _compute_config(resources=[])
-
-    def test_run_script_and_run_wrapper_together_rejected(self) -> None:
-        """Reject ambiguous run-block sources."""
-        with pytest.raises(ValidationError, match="run_script"):
-            _compute_config(run_script="debug-noop.sh", run_wrapper="oci-docker-run.sh")
-
-    def test_docker_in_run_without_run_wrapper_rejected(self) -> None:
-        """Require the wrapper that starts the nested OCI container."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8")
-        with pytest.raises(ValidationError, match="run_wrapper"):
-            _compute_config(resources=[oci], image_delivery="docker-in-run")
-
-    def test_oci_with_resources_image_id_delivery_rejected(self) -> None:
-        """Reject OCI's unsupported resources image pinning mode."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8")
-        with pytest.raises(ValidationError, match="docker-in-run"):
-            _compute_config(resources=[oci])
-
-    def test_oci_with_docker_in_run_and_wrapper_validates(self) -> None:
-        """Accept OCI nested-Docker delivery."""
-        oci = ComputeResources(cloud="oci", instance_type="VM.Standard.E5.Flex$_2_8")
-        compute = _compute_config(
-            resources=[oci],
-            image_delivery="docker-in-run",
-            run_wrapper="oci-docker-run.sh",
-        )
-        assert compute.provider() == "oci"
 
     def test_nested_dict_input_validates(self) -> None:
         """Validate Hydra's nested dictionaries into typed resources."""
