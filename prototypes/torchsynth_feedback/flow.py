@@ -192,11 +192,11 @@ def control_signal(
 
 @dataclass
 class SampleConfig:
-    """Euler-ODE sampling configuration.
+    """RK4-ODE sampling configuration.
 
     .. attribute :: steps
 
-       Euler steps from t=0 to t=1.
+       RK4 steps from t=0 to t=1 (mirrors ``validation_sample_steps``).
 
     .. attribute :: feedback
 
@@ -204,7 +204,7 @@ class SampleConfig:
        the capacity-matched ablation).
     """
 
-    steps: int = 40
+    steps: int = 50
     feedback: bool = True
 
 
@@ -217,10 +217,12 @@ def sample_ode(
     control_field: ControlField | None = None,
     config: SampleConfig | None = None,
 ) -> torch.Tensor:
-    """Integrate the flow with Euler steps, applying the control for t >= 0.8.
+    """Integrate the flow with RK4, applying the control for t >= 0.8.
 
-    No CFG (conditional field only, cfg_strength equivalent 1.0) — the spike
-    sidesteps guidance interactions.
+    Mirrors ``VSTFlowMatchingModule._sample`` (fixed-step RK4) but with the
+    conditional field only — no CFG (cfg_strength equivalent 1.0), a deliberate
+    spike + v1 decision. Each RK4 stage inside the feedback window re-renders
+    the one-step estimate for its own control signal.
 
     :param encoder: Audio conditioning encoder.
     :param vector_field: Base flow (frozen or not; evaluated without grad).
@@ -233,16 +235,24 @@ def sample_ode(
     if config is None:
         config = SampleConfig()
     conditioning = encoder(target_audio)
+
+    def effective_velocity(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        velocity = vector_field(x, t, conditioning)
+        if control_field is not None and float(t[0, 0]) >= CONTROL_T_MIN:
+            if config.feedback:
+                signal = control_signal(x, t.clamp(max=1.0), velocity, target_audio)
+            else:
+                signal = torch.zeros((x.shape[0], NUM_PARAMS + 1), device=x.device, dtype=x.dtype)
+            velocity = velocity + control_field(t, velocity, signal)
+        return velocity
+
     x = noise
     dt = 1.0 / config.steps
     for step in range(config.steps):
         t = torch.full((x.shape[0], 1), step * dt, device=x.device)
-        velocity = vector_field(x, t, conditioning)
-        if control_field is not None and float(t[0, 0]) >= CONTROL_T_MIN:
-            if config.feedback:
-                signal = control_signal(x, t, velocity, target_audio)
-            else:
-                signal = torch.zeros((x.shape[0], NUM_PARAMS + 1), device=x.device, dtype=x.dtype)
-            velocity = velocity + control_field(t, velocity, signal)
-        x = x + dt * velocity
+        k1 = effective_velocity(x, t)
+        k2 = effective_velocity(x + dt * k1 / 2, t + dt / 2)
+        k3 = effective_velocity(x + dt * k2 / 2, t + dt / 2)
+        k4 = effective_velocity(x + dt * k3, t + dt)
+        x = x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
     return x

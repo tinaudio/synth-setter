@@ -35,7 +35,10 @@ from prototypes.torchsynth_feedback.flow import (
     sample_batch,
     sample_ode,
 )
-from prototypes.torchsynth_feedback.grad_render import log_spectral_distance
+from prototypes.torchsynth_feedback.grad_render import (
+    log_spectral_distance,
+    multi_scale_log_mel_distance,
+)
 from prototypes.torchsynth_feedback.step_b_pretrain import ARTIFACTS_DIR
 from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.vst.torchsynth_param_spec import NUM_PARAMS
@@ -126,7 +129,7 @@ def evaluate_arm(
     """
     generator = torch.Generator().manual_seed(EVAL_SEED)
     noise_generator = torch.Generator(device="cpu").manual_seed(EVAL_SEED + 1)
-    mses, lsds = [], []
+    mses, lsds, mslms = [], [], []
     for _ in range(EVAL_BATCHES):
         params, audio = sample_batch(BATCH_SIZE, device, generator)
         noise = torch.randn(params.shape, generator=noise_generator).to(device)
@@ -136,7 +139,7 @@ def evaluate_arm(
             audio,
             noise,
             control_field=control,
-            config=SampleConfig(steps=40, feedback=feedback),
+            config=SampleConfig(steps=50, feedback=feedback),
         )
         mses.append((preds - params).square().mean().item())
         with torch.no_grad():
@@ -147,8 +150,21 @@ def evaluate_arm(
                 midi_pitch=MIDI_PITCH,
             )
             lsds.append(log_spectral_distance(pred_audio, audio).mean().item())
-    result = {"param_mse": sum(mses) / len(mses), "lsd": sum(lsds) / len(lsds)}
-    _LOG.info("[arm=%s] param_mse=%.4f lsd=%.3f", label, result["param_mse"], result["lsd"])
+            mslms.append(
+                multi_scale_log_mel_distance(pred_audio, audio, SAMPLE_RATE).mean().item()
+            )
+    result = {
+        "param_mse": sum(mses) / len(mses),
+        "lsd": sum(lsds) / len(lsds),
+        "mslm": sum(mslms) / len(mslms),
+    }
+    _LOG.info(
+        "[arm=%s] param_mse=%.4f lsd=%.3f mslm=%.4f",
+        label,
+        result["param_mse"],
+        result["lsd"],
+        result["mslm"],
+    )
     return result
 
 
@@ -174,9 +190,15 @@ def main() -> None:
     results["feedback"] = evaluate_arm("feedback", encoder, vector_field, control, True, device)
     torch.save(control.state_dict(), ARTIFACTS_DIR / "control_feedback.pt")
 
-    _LOG.info("\n=== summary (param_mse in [-1,1] space / audio LSD dB) ===")
+    _LOG.info("\n=== summary (param_mse in [-1,1] space / LSD dB / multi-scale log-mel) ===")
     for label, metrics in results.items():
-        _LOG.info("%-12s param_mse=%.4f lsd=%.3f", label, metrics["param_mse"], metrics["lsd"])
+        _LOG.info(
+            "%-12s param_mse=%.4f lsd=%.3f mslm=%.4f",
+            label,
+            metrics["param_mse"],
+            metrics["lsd"],
+            metrics["mslm"],
+        )
 
 
 if __name__ == "__main__":

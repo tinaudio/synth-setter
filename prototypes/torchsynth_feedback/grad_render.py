@@ -11,9 +11,11 @@ via ``torch.func.functional_call`` so the graph flows through
 from __future__ import annotations
 
 import contextlib
+import functools
 from collections.abc import Iterator
 
 import torch
+import torchaudio
 from torch.func import functional_call
 
 from synth_setter.data.torchsynth_datamodule import (
@@ -141,6 +143,62 @@ def render_torchsynth_grad(
         with _patched_module_p(voice):
             audio = functional_call(shim, overrides)
     return audio
+
+
+@functools.cache
+def _mel_filterbank(n_fft: int, sample_rate: int, n_mels: int, device: str) -> torch.Tensor:
+    """Return a cached mel filterbank for one STFT geometry and device.
+
+    :param n_fft: STFT window size.
+    :param sample_rate: Audio sample rate in Hz.
+    :param n_mels: Number of mel bands.
+    :param device: Torch device string.
+    :returns: Filterbank shaped ``(n_fft // 2 + 1, n_mels)``.
+    """
+    fbank = torchaudio.functional.melscale_fbanks(
+        n_freqs=n_fft // 2 + 1,
+        f_min=0.0,
+        f_max=sample_rate / 2,
+        n_mels=n_mels,
+        sample_rate=sample_rate,
+    )
+    return fbank.to(device)
+
+
+def multi_scale_log_mel_distance(
+    pred_signal: torch.Tensor,
+    target_signal: torch.Tensor,
+    sample_rate: int,
+    n_ffts: tuple[int, ...] = (256, 512, 1024),
+    n_mels: int = 64,
+    eps: float = 1e-5,
+) -> torch.Tensor:
+    """Per-sample multi-scale log-mel spectral distance (common cross-cell eval).
+
+    L1 between log-mel spectrograms, averaged over the STFT scales.
+
+    :param pred_signal: Predicted audio shaped ``(batch, samples)``.
+    :param target_signal: Target audio shaped ``(batch, samples)``.
+    :param sample_rate: Audio sample rate in Hz.
+    :param n_ffts: STFT window sizes (hop is a quarter window).
+    :param n_mels: Number of mel bands per scale.
+    :param eps: Mel-power clamp floor before the log.
+    :returns: Per-sample distance shaped ``(batch,)``.
+    """
+    device = str(pred_signal.device)
+    total = torch.zeros(pred_signal.shape[0], device=pred_signal.device)
+    for n_fft in n_ffts:
+        window = torch.hann_window(n_fft, device=pred_signal.device)
+        fbank = _mel_filterbank(n_fft, sample_rate, n_mels, device)
+        distances = []
+        for signal in (pred_signal, target_signal):
+            spectrogram = torch.stft(
+                signal, n_fft=n_fft, hop_length=n_fft // 4, window=window, return_complex=True
+            ).abs()
+            mel = (spectrogram.transpose(-1, -2) @ fbank).clamp_min(eps)
+            distances.append(mel.log10())
+        total = total + (distances[0] - distances[1]).abs().mean(dim=(-1, -2))
+    return total / len(n_ffts)
 
 
 def log_spectral_distance(
