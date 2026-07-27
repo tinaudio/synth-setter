@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785130929520,
+  "lastUpdate": 1785130932200,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -19054,6 +19054,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.4561176219,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4f99caa2aa93bf2fe429d6ebe335038ef7d4aa48",
+          "message": "refactor(data-pipeline): remove Oracle Cloud Infrastructure support (#2555)\n\n* refactor(data-pipeline): remove OCI launch support\n\nDelete the OCI compute option, nested-Docker path, credential writer,\nand SDK dependency. Stale OCI inputs now fail instead of falling back.\n\n* refactor(ci-automation): remove OCI workflow support\n\n* docs(pipeline): remove OCI provider guidance\n\n* refactor(ci-automation): reject unsupported providers\n\nValidate reusable and manual provider inputs explicitly. Removed or\nunknown providers can no longer fall through to a successful no-op.\n\n* internal-fix(data-pipeline): address OCI removal review\n\nCover Vast credential checks, execute provider validation in Bash, and\nexercise the removed compute option through the real generation CLI.\n\n* internal-fix(data-pipeline): address final OCI removal review",
+          "timestamp": "2026-07-26T21:47:22-07:00",
+          "tree_id": "f32f0c5d71a30bdd0125066656e373c6c742ab6a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4f99caa2aa93bf2fe429d6ebe335038ef7d4aa48"
+        },
+        "date": 1785130931483,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.63054084777832,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.222353355288506,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09475287795066833,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007362544536590576,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.282487392425537,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.001834295099979,
             "unit": "seconds"
           }
         ]
