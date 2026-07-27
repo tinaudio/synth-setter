@@ -47,7 +47,7 @@ from synth_setter.models.components.vector_field import VectorField
 _LOG = logging.getLogger(__name__)
 
 BATCH_SIZE = 128
-FINETUNE_STEPS = 2_000
+FINETUNE_STEPS = 6_000
 LEARNING_RATE = 3e-4
 EVAL_BATCHES = 4
 EVAL_SEED = 999
