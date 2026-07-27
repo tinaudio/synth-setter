@@ -58,9 +58,9 @@ safety net; the chart is the early warning.
 The chart's left-hand legend lets you toggle individual metric series on
 and off; the dropdown at the top selects the dashboard ("bucket").
 
-## Three dashboards
+## Four dashboards
 
-The workflow publishes three independent dashboards, each representing a
+The workflow publishes four independent dashboards, each representing a
 different question.
 
 ### `VST noise floor (1 preset N renders)`
@@ -98,26 +98,42 @@ This view is _broader_ in patch coverage but noisier between runs (each
 run picks a different random sample), so trend signal is lower per
 point but covers more of the patch space than the hardcoded fixture.
 
-### `Surge host parity and throughput`
+### `Surge host parity`
 
-Sourced from `test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks`.
-Pedalboard, DawDreamer, and SurgePy each render 30 rows from the same native
-Surge patch, normalized parameter vector, and MIDI event through the production
-Lance writer and reader. Every backend pair is checked with MSS, wMFCC, SOT,
-RMS-envelope cosine, and persisted-mel RMSE.
+The two real tests in
+[`test_surgepy_host_parity_e2e.py`](../../tests/data/vst/test_surgepy_host_parity_e2e.py)
+render matched Pedalboard, DawDreamer, and SurgePy datasets through the production
+Lance writer and reader. The repeated-patch workload renders one patch 30 times;
+the diverse-patch workload renders eight distinct filter and oscillator settings.
+MSS, wMFCC, SOT, RMS-envelope cosine, and persisted-mel RMSE have tighter
+host-pair-specific bounds, applied to every matched render rather than only an
+aggregate worst case.
 
-Bucket name: `Surge host parity and throughput`<br>
-JSON file: `surge-host-parity.json`<br>
-Metric name prefix: `surge-host-parity/`
+Every render is also gated on onset timing. Each patch is scored against the center
+of its matched Pedalboard and DawDreamer onset samples; the controls' row-wise
+deviations calibrate a robust median and median absolute deviation. Every host must
+remain at or below a one-sided upper modified z-score of 3.5. A two-sample scale floor
+prevents a zero-MAD control set from turning one-sample noise into an infinite
+score. The gate fails with the backend and sample number instead of hiding one bad
+row in an aggregate bound.
 
-The workflow also retains an evaluator-friendly `surge-host-parity-comparison`
-artifact for 14 days. Trusted main-branch runs copy the same directory with
-checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. It contains
-180 evaluator-layout WAV files, 90 persisted mel arrays, 90 mel PNG previews,
-normalized parameters,
-per-sample metrics, worst-case metrics, thresholds, and provenance. Pull requests
-never receive R2 credentials.
+| Workload       | Bucket name                           | JSON file                                |
+| -------------- | ------------------------------------- | ---------------------------------------- |
+| Repeated patch | `Surge host parity (repeated patch)`  | `surge-host-parity-repeated-patch.json`  |
+| Diverse patch  | `Surge host parity (diverse patches)` | `surge-host-parity-diverse-patches.json` |
+
+Metric name prefix: `surge-host-parity/<workload>/`
+
+The workflow retains the `surge-host-parity-comparison` artifact for 14 days.
+Trusted main-branch runs copy the same directory with checksums to
+`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`; pull requests never
+receive R2 credentials. Artifact schema version 2 has one directory per workload,
+then one directory per sample containing unambiguous `pedalboard.wav`,
+`dawdreamer.wav`, and `surgepy.wav` files. Each workload also includes backend-named
+mel arrays and previews, exact normalized parameters, per-render onset scores,
+pairwise diagnostics, threshold metadata, and provenance. Historical schema-version-1
+objects use pair directories with `target.wav` and `pred.wav`; the pair directory
+name is required to identify those hosts.
 
 ## Metric series
 

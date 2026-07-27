@@ -24,17 +24,17 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 import numpy as np
 
 from synth_setter.data.vst.param_map import SynthParamMap
-from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_ROW,
-    KEYBOARD_DURATION_BOUNDS,
-    PARAM_INDEX,
-)
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
     SurgePySynth,
     import_surgepy,
     iter_surgepy_named_params,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_ROW,
+    KEYBOARD_DURATION_BOUNDS,
+    PARAM_INDEX,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
@@ -136,9 +136,7 @@ class _DawDreamerFaustProcessor(Protocol):
         """
         ...
 
-    def add_midi_note(
-        self, pitch: int, velocity: int, start: float, duration: float
-    ) -> None:
+    def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
         """Schedule one MIDI note.
 
         :param pitch: MIDI note number.
@@ -187,9 +185,7 @@ def _validate_rendered_audio(
     :raises ValueError: If shape or finiteness is invalid.
     """
     if audio.shape != (channels, samples):
-        raise ValueError(
-            f"rendered audio shape {audio.shape} != expected {(channels, samples)}"
-        )
+        raise ValueError(f"rendered audio shape {audio.shape} != expected {(channels, samples)}")
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
     return audio
@@ -406,15 +402,12 @@ class SurgePyRenderer(AudioRenderer):
             return float(normalized_value > 0.5)
         if value_type == "int":
             span = maximum - minimum
-            surge_scaled = (
-                int(
-                    (normalized_value - _SURGE_INT_NORMALIZED_OFFSET)
-                    * span
-                    / _SURGE_INT_NORMALIZED_SCALE
-                    + 0.5
-                )
-                + int(minimum)
-            )
+            surge_scaled = int(
+                (normalized_value - _SURGE_INT_NORMALIZED_OFFSET)
+                * span
+                / _SURGE_INT_NORMALIZED_SCALE
+                + 0.5
+            ) + int(minimum)
             return float(min(max(surge_scaled, int(minimum)), int(maximum)))
         raise ValueError(f"unsupported SurgePy parameter type {value_type!r}")
 
@@ -477,7 +470,8 @@ class SurgePyRenderer(AudioRenderer):
         """
         block_size = self.synth.getBlockSize()
         num_blocks = math.ceil(samples / block_size)
-        start_block = math.floor(start * self.sample_rate / block_size)
+        start_sample = math.ceil(start * self.sample_rate)
+        start_block = min(num_blocks - 1, math.ceil(start_sample / block_size))
         end_block = min(
             num_blocks,
             max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
@@ -499,7 +493,9 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        return np.asarray(audio[:, :samples], dtype=np.float32)
+        trimmed = np.asarray(audio[:, :samples], dtype=np.float32)
+        trimmed[:, :start_sample] = 0.0
+        return trimmed
 
     def render(
         self,

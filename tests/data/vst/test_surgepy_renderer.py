@@ -55,9 +55,7 @@ def test_surgepy_renderer_real_patch_produces_finite_non_silent_audio() -> None:
         channels=2,
         signal_duration_seconds=1.0,
         plugin_state_path="presets/surge-base.fxp",
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
 
     audio = renderer.render(
@@ -152,9 +150,7 @@ def test_surgepy_renderer_matches_surge_native_normalization() -> None:
         channels=2,
         signal_duration_seconds=0.1,
         plugin_state_path="presets/surge-base.fxp",
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
     # Continuous cutoff spans [-60, 70] dB-scaled native units; integer octave and
     # Boolean mute round through Surge's legacy automation grid.
@@ -207,6 +203,42 @@ def test_surgepy_renderer_rejects_undersized_native_output_buffer() -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_surgepy
+def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
+    """A requested note cannot sound before its sample-accurate start time."""
+    renderer = _simple_renderer()
+    note_start_sample = 336
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start_sample / renderer.sample_rate, 656 / renderer.sample_rate),
+    )
+
+    assert np.max(np.abs(audio[:, :note_start_sample])) == 0.0
+    assert np.max(np.abs(audio[:, note_start_sample:])) > 1e-4
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_final_partial_block_note_is_audible() -> None:
+    """A valid note in the final partial block cannot collapse to silence."""
+    renderer = _simple_renderer()
+    note_start_sample = 4_401
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start_sample / renderer.sample_rate, 4_409 / renderer.sample_rate),
+    )
+
+    assert np.max(np.abs(audio[:, :note_start_sample])) == 0.0
+    assert np.max(np.abs(audio[:, note_start_sample:])) > 1e-4
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_short_note_window_spans_a_processing_block() -> None:
     """Sub-block MIDI windows cannot collapse before native processing."""
     renderer = SurgePyRenderer(
@@ -240,9 +272,7 @@ def test_surgepy_renderer_rechecks_patch_hash_before_each_render(tmp_path: Path)
         channels=2,
         signal_duration_seconds=0.1,
         plugin_state_path=str(patch_path),
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
     patch_path.write_bytes(patch_path.read_bytes() + b"changed")
 
