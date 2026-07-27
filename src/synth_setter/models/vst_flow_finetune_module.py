@@ -377,6 +377,45 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         self.log("val/base_loss", metrics["base_loss"], on_step=False, on_epoch=True)
         return loss
 
+    @torch.no_grad()
+    def sample_with_feedback(
+        self,
+        mel: torch.Tensor,
+        noise: torch.Tensor,
+        steps: int,
+        *,
+        apply_control: bool = True,
+    ) -> torch.Tensor:
+        """Euler-integrate the corrected flow with no CFG (common spike eval protocol).
+
+        The control correction (and its per-step renders) applies only for
+        ``t >= t_min``; ``apply_control=False`` reproduces the frozen base flow.
+
+        :param mel: Mel conditioning shaped ``(B, C, n_mels, n_frames)``.
+        :param noise: Initial noise shaped ``(B, num_params)``.
+        :param steps: Euler integration steps.
+        :param apply_control: Whether to add the control correction in the window.
+        :returns: Sampled parameter rows shaped like ``noise``.
+        """
+        self._ensure_runtime()
+        z = self.base.encoder(mel)
+        t = torch.zeros(noise.shape[0], 1, device=noise.device)
+        dt = 1.0 / steps
+        x = noise
+        for step in range(steps):
+            v = self.base.vector_field(x, t, z)
+            if apply_control and (step + 1) * dt > self._t_min:
+                if self._feedback_enabled:
+                    theta_hat = x + (1.0 - t) * v
+                    rep_rendered, _, _ = self._render_reps(theta_hat)
+                    c = self.control_encoder(mel, rep_rendered)
+                else:
+                    c = torch.zeros(noise.shape[0], self._control_dim, device=noise.device)
+                v = v + self.control_field(v, t, c)
+            x = x + dt * v
+            t = t + dt
+        return x
+
     def configure_optimizers(self) -> dict[str, Any]:
         """Build the optimizer (and optional scheduler) over the control parameters only.
 

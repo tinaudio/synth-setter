@@ -20,9 +20,6 @@ datamodule:
 # Spike runs local-only; no checkpoint uploads or W&B artifacts.
 test: false
 
-callbacks:
-  model_checkpoint: null
-
 trainer:
   min_steps: 300
   max_steps: 300
