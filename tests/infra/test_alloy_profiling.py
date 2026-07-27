@@ -29,6 +29,9 @@ REQUIRED_CREDENTIAL_VARS = (
 # (host) PID namespace, which is the one pyroscope.ebpf needs.
 INIT_PID_NAMESPACE_INODE = "4026531836"
 
+# Every launcher diagnostic carries this prefix, so its presence proves the launcher itself ran.
+LAUNCHER_LOG_PREFIX = "start-alloy-profiling:"
+
 # eBPF unwinding needs these beyond the SYS_ADMIN the devcontainers already grant for FUSE.
 _EBPF_RUN_ARGS = (
     "--cap-add=BPF",
@@ -238,8 +241,10 @@ def test_launcher_inside_a_real_nested_pid_namespace_refuses_to_start(
         text=True,
         check=False,
     )
-    if "unshare failed" in result.stderr or result.returncode == 127:
-        pytest.skip(f"unprivileged namespaces unavailable: {result.stderr.strip()}")
+    # unshare fails in several ways where namespaces are restricted (GitHub runners refuse the
+    # uid_map write). Any of them leaves the launcher un-run, which its log prefix reveals.
+    if LAUNCHER_LOG_PREFIX not in result.stderr:
+        pytest.skip(f"could not build a nested PID namespace here: {result.stderr.strip()}")
 
     assert result.returncode != 0, "launcher must refuse inside a nested PID namespace"
     assert not marker.exists(), "launcher started Alloy inside a nested PID namespace"
