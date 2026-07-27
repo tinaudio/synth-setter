@@ -114,8 +114,8 @@ jobs:
           patterns_json=$(jq -er 'if type == "array" and length > 0 and all(.[]; type == "string" and length > 0) then .[] else error("invalid mutation selector array") end' <<<"$MUTMUT_PATTERNS")
           patterns=()
           while IFS= read -r pattern; do
-            patterns+=("$pattern")
-          done <<<"$patterns_json"
+            patterns+=("${pattern}")
+          done <<<"${patterns_json}"
           uv run mutmut run --max-children 4 "${patterns[@]}"
 
       - name: Print results
