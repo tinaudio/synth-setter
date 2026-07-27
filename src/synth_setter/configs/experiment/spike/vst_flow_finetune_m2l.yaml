@@ -1,0 +1,49 @@
+# @package _global_
+
+# Spike (#2556): online simulator-feedback finetune of the frozen m2l-conditioned
+# flow. Expects a small local Lance slice with `param_array` + `m2l` columns:
+#   synth-setter-train experiment=spike/vst_flow_finetune_m2l \
+#     datamodule.dataset_root=<slice_dir> model.pretrained_ckpt=<model.ckpt>
+
+defaults:
+  - override /datamodule: surge_simple
+  - override /model: vst_flow_finetune_m2l
+  - override /logger: csv
+  - _self_
+
+experiment_name: spike-vst-m2l-feedback
+run_name: finetune
+tags: [spike, feedback-finetune, m2l]
+seed: 314159
+
+# The spike eval script owns test-time metrics; no post-fit test stage.
+test: false
+training:
+  val_audio_probe: false
+
+datamodule:
+  dataset_root: ???
+  conditioning:
+    column: m2l
+    input_shape: [128, 42]
+  use_saved_mean_and_variance: false
+  batch_size: 16
+  num_workers: 0
+  persistent_workers: false
+
+callbacks:
+  model_checkpoint:
+    monitor: null
+    every_n_train_steps: 100
+  early_stopping: null
+
+trainer:
+  precision: 32
+  max_steps: 300
+  min_steps: 300
+  max_epochs: 10000
+  limit_val_batches: 1
+  val_check_interval: 100
+  check_val_every_n_epoch: null
+  log_every_n_steps: 1
+  gradient_clip_val: 0.5

@@ -1,0 +1,28 @@
+_target_: synth_setter.models.vst_flow_matching_finetune_module.VSTFlowMatchingFinetuneModule
+
+# Frozen m2l-conditioned base checkpoint (e.g. checkpoints/flow_simple_440k_m2l/model.ckpt).
+pretrained_ckpt: ???
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+scheduler: null
+warmup_steps: 0
+
+feedback_enabled: true
+t_min: 0.8
+control_dim: 128
+control_hidden_dim: 512
+control_num_blocks: 2
+control_encoder_hidden_dim: 256
+
+# Online-render identity; must match the dataset the base was trained on.
+synth_name: surge_simple
+sample_rate: 44100
+channels: 2
+signal_duration_seconds: 4.0
+velocity: 100
+
+validation_sample_steps: 10
