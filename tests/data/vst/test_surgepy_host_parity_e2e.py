@@ -60,6 +60,8 @@ _DIVERSE_PATCH_VALUES = (
 _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
 _ADJACENT_MEL_RMSE_MIN = 2.5
+_CAUSAL_CENTROID_SHIFT_MIN = 1.0
+_CAUSAL_PITCH_MEL_RMSE_MIN = 2.5
 _DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_SCALE_FLOOR_SAMPLES = 2.0
@@ -296,11 +298,16 @@ def _early_onset_z_scores(
         or len(expected) == 0
     ):
         raise ValueError("matched onset inputs must be nonempty vectors of equal shape")
-    control_earliness = np.concatenate(
+    control_earliness = np.stack(
         (np.maximum(expected - pedalboard, 0), np.maximum(expected - dawdreamer, 0))
     )
     observed_earliness = np.maximum(expected - observed, 0)
-    return _modified_z_scores(control_earliness, observed_earliness)
+    return np.asarray(
+        [
+            _modified_z_scores(control_earliness[:, index], observed_earliness[index : index + 1])[0]
+            for index in range(len(expected))
+        ]
+    )
 
 
 def _onset_rows(
@@ -789,6 +796,17 @@ def _assert_artifact_contract(
     np.testing.assert_array_equal(results["pedalboard"].params, results["surgepy"].params)
 
 
+def _mel_centroids(mel: np.ndarray) -> np.ndarray:
+    """Return one energy-weighted mel-bin centroid per render.
+
+    :param mel: Persisted mel tensors shaped ``(rows, channels, bins, frames)``.
+    :returns: Floating-point centroid per row.
+    """
+    mel_bins = np.arange(mel.shape[2], dtype=np.float64)[None, :, None]
+    energy = np.power(10.0, mel.astype(np.float64) / 10.0)
+    return np.sum(energy * mel_bins, axis=(1, 2, 3)) / np.sum(energy, axis=(1, 2, 3))
+
+
 def _assert_directional_audio_diversity(
     results: dict[ParityBackend, _BackendResult],
 ) -> None:
@@ -797,9 +815,7 @@ def _assert_directional_audio_diversity(
     :param results: Materialized diverse-patch artifacts keyed by backend.
     """
     for backend, result in results.items():
-        mel_bins = np.arange(result.mel.shape[2], dtype=np.float64)[None, :, None]
-        energy = np.power(10.0, result.mel.astype(np.float64) / 10.0)
-        centroids = np.sum(energy * mel_bins, axis=(1, 2, 3)) / np.sum(energy, axis=(1, 2, 3))
+        centroids = _mel_centroids(result.mel)
         adjacent_mel_rmse = np.sqrt(
             np.mean(np.diff(result.mel, axis=0) ** 2, axis=(1, 2, 3))
         )
@@ -811,6 +827,24 @@ def _assert_directional_audio_diversity(
             backend,
             centroids.tolist(),
         )
+
+
+def _assert_causal_parameter_response(
+    results: dict[ParityBackend, _BackendResult],
+) -> None:
+    """Require independent cutoff and pitch changes to affect each backend.
+
+    :param results: Baseline, cutoff-only, and pitch-only renders by backend.
+    """
+    for backend, result in results.items():
+        centroids = _mel_centroids(result.mel)
+        cutoff_centroid_shift = centroids[1] - centroids[0]
+        pitch_mel_rmse = float(np.sqrt(np.mean((result.mel[2] - result.mel[0]) ** 2)))
+        assert cutoff_centroid_shift > _CAUSAL_CENTROID_SHIFT_MIN, (
+            backend,
+            cutoff_centroid_shift,
+        )
+        assert pitch_mel_rmse > _CAUSAL_PITCH_MEL_RMSE_MIN, (backend, pitch_mel_rmse)
 
 
 def _run_parity_workload(
@@ -886,6 +920,19 @@ def test_early_onset_scores_keep_patch_identity() -> None:
     assert np.all(scores > _MODIFIED_Z_MAX)
 
 
+def test_early_onset_scores_use_matched_patch_controls() -> None:
+    """Heterogeneous controls cannot hide a per-patch early onset."""
+    scores = _early_onset_z_scores(
+        np.asarray([80.0, 200.0]),
+        np.asarray([80.0, 200.0]),
+        observed=np.asarray([80.0, 180.0]),
+        expected=np.asarray([100.0, 200.0]),
+    )
+
+    np.testing.assert_allclose(scores, [0.0, 6.7448975])
+    assert scores[1] > _MODIFIED_Z_MAX
+
+
 def test_early_onset_scores_mismatched_shapes_raise() -> None:
     """Patch rows cannot broadcast across a mismatched onset vector."""
     with pytest.raises(ValueError, match="vectors of equal shape"):
@@ -956,3 +1003,32 @@ def test_surge_hosts_diverse_patches_have_no_per_render_onset_outliers(
 
     assert np.unique(results["pedalboard"].params, axis=0).shape[0] == len(synth_params)
     _assert_directional_audio_diversity(results)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@pytest.mark.requires_surgepy
+def test_surge_hosts_apply_cutoff_and_pitch_independently(tmp_path: Path) -> None:
+    """Each host dispatches independent cutoff and pitch changes into audio.
+
+    :param tmp_path: Temporary destination for all three real Lance datasets.
+    """
+    _require_surge_xt()
+    baseline = {
+        **_PARITY_SYNTH_PARAMS,
+        "a_filter_1_cutoff": 0.2,
+        "a_osc_1_pitch": 0.2,
+        "a_osc_2_mute": 0.75,
+        "a_osc_3_mute": 0.75,
+    }
+    synth_params = [
+        baseline,
+        {**baseline, "a_filter_1_cutoff": 0.8},
+        {**baseline, "a_osc_1_pitch": 0.8},
+    ]
+
+    results = _render_workload(tmp_path, "causal-parameters", synth_params)
+
+    _assert_artifact_contract(results, len(synth_params))
+    _assert_no_onset_outliers(_onset_rows(results))
+    _assert_causal_parameter_response(results)

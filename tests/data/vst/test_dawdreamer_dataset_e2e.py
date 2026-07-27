@@ -107,6 +107,134 @@ def test_dawdreamer_parameter_map_matches_live_plugin(
     )
 
 
+def _invoke_map_command(runner: CliRunner, args: tuple[str, ...]) -> None:
+    """Run one parameter-map command and surface its captured output on failure.
+
+    :param runner: Isolated Click command runner.
+    :param args: Command arguments after the program name.
+    """
+    result = runner.invoke(build_param_map.main, list(args), catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+
+def _dump_real_vst_hosts(runner: CliRunner, dumps: dict[str, Path]) -> None:
+    """Dump the preset through Pedalboard and DawDreamer.
+
+    :param runner: Isolated Click command runner.
+    :param dumps: Host dump destinations.
+    """
+    _invoke_map_command(
+        runner,
+        (
+            "dump-pedalboard",
+            "--plugin",
+            str(PLUGIN_PATH),
+            "--preset",
+            str(TEST_PRESET_PATH),
+            "--preset-resource",
+            "presets/surge-base.vstpreset",
+            "--out",
+            str(dumps["pedalboard"]),
+        ),
+    )
+    _invoke_map_command(
+        runner,
+        (
+            "dump-dawdreamer",
+            "--plugin",
+            str(PLUGIN_PATH),
+            "--plugin-name",
+            "Surge XT",
+            "--plugin-version",
+            str(TEST_SYNTH_VERSION),
+            "--preset",
+            str(TEST_PRESET_PATH),
+            "--preset-resource",
+            "presets/surge-base.vstpreset",
+            "--out",
+            str(dumps["dawdreamer"]),
+        ),
+    )
+
+
+def _dump_real_native_hosts(runner: CliRunner, dumps: dict[str, Path]) -> None:
+    """Dump the preset through CLAP and SurgePy introspection.
+
+    :param runner: Isolated Click command runner.
+    :param dumps: Host dump destinations.
+    """
+    _invoke_map_command(
+        runner,
+        (
+            "dump-clap",
+            "--plugin",
+            "/usr/lib/clap/Surge XT.clap",
+            "--out",
+            str(dumps["clap"]),
+        ),
+    )
+    _invoke_map_command(
+        runner,
+        (
+            "dump-surgepy",
+            "--preset",
+            "presets/surge-base.fxp",
+            "--preset-resource",
+            "presets/surge-base.fxp",
+            "--out",
+            str(dumps["surgepy"]),
+        ),
+    )
+
+
+def _dump_real_host_parameters(tmp_path: Path, runner: CliRunner) -> dict[str, Path]:
+    """Dump the real Surge preset through all parameter-map hosts.
+
+    :param tmp_path: Temporary host-dump destination.
+    :param runner: Isolated Click command runner.
+    :returns: Dump paths keyed by host name.
+    """
+    dumps = {
+        "clap": tmp_path / "clap.json",
+        "dawdreamer": tmp_path / "dawdreamer.json",
+        "pedalboard": tmp_path / "pedalboard.json",
+        "surgepy": tmp_path / "surgepy.json",
+    }
+    _dump_real_vst_hosts(runner, dumps)
+    _dump_real_native_hosts(runner, dumps)
+    return dumps
+
+
+def _build_real_host_map(tmp_path: Path) -> Path:
+    """Build one joint parameter map from real host dumps.
+
+    :param tmp_path: Temporary host-dump and map destination.
+    :returns: Generated map path.
+    """
+    runner = CliRunner()
+    dumps = _dump_real_host_parameters(tmp_path, runner)
+    output_map = tmp_path / "surge_xt_param_map.json"
+    _invoke_map_command(
+        runner,
+        (
+            "build",
+            "--pedalboard-dump",
+            str(dumps["pedalboard"]),
+            "--clap-dump",
+            str(dumps["clap"]),
+            "--dawdreamer-dump",
+            str(dumps["dawdreamer"]),
+            "--surgepy-dump",
+            str(dumps["surgepy"]),
+            "--param-spec-name",
+            "surge_xt",
+            "--out",
+            str(output_map),
+        ),
+    )
+    return output_map
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @pytest.mark.requires_surgepy
@@ -117,70 +245,7 @@ def test_dawdreamer_dump_build_roundtrip_loads_real_settled_map(tmp_path: Path) 
     """
     if TEST_SYNTH != "surge_xt":
         pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
-    clap_path = Path("/usr/lib/clap/Surge XT.clap")
-    pedalboard_dump = tmp_path / "pedalboard.json"
-    clap_dump = tmp_path / "clap.json"
-    dawdreamer_dump = tmp_path / "dawdreamer.json"
-    surgepy_dump = tmp_path / "surgepy.json"
-    output_map = tmp_path / "surge_xt_param_map.json"
-    runner = CliRunner()
-
-    def invoke(*args: str) -> None:
-        result = runner.invoke(build_param_map.main, list(args), catch_exceptions=False)
-        assert result.exit_code == 0, result.output
-
-    invoke(
-        "dump-pedalboard",
-        "--plugin",
-        str(PLUGIN_PATH),
-        "--preset",
-        str(TEST_PRESET_PATH),
-        "--preset-resource",
-        "presets/surge-base.vstpreset",
-        "--out",
-        str(pedalboard_dump),
-    )
-    invoke("dump-clap", "--plugin", str(clap_path), "--out", str(clap_dump))
-    invoke(
-        "dump-dawdreamer",
-        "--plugin",
-        str(PLUGIN_PATH),
-        "--plugin-name",
-        "Surge XT",
-        "--plugin-version",
-        str(TEST_SYNTH_VERSION),
-        "--preset",
-        str(TEST_PRESET_PATH),
-        "--preset-resource",
-        "presets/surge-base.vstpreset",
-        "--out",
-        str(dawdreamer_dump),
-    )
-    invoke(
-        "dump-surgepy",
-        "--preset",
-        "presets/surge-base.fxp",
-        "--preset-resource",
-        "presets/surge-base.fxp",
-        "--out",
-        str(surgepy_dump),
-    )
-    invoke(
-        "build",
-        "--pedalboard-dump",
-        str(pedalboard_dump),
-        "--clap-dump",
-        str(clap_dump),
-        "--dawdreamer-dump",
-        str(dawdreamer_dump),
-        "--surgepy-dump",
-        str(surgepy_dump),
-        "--param-spec-name",
-        "surge_xt",
-        "--out",
-        str(output_map),
-    )
-
+    output_map = _build_real_host_map(tmp_path)
     config = _dawdreamer_experiment_config()
     generated_map = load_param_map(output_map)
     DawDreamerRenderer(

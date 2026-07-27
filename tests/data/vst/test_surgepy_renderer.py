@@ -220,6 +220,25 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
     assert audible[0] == note_start_sample
 
 
+def test_surgepy_renderer_exact_block_note_processes_one_note_block() -> None:
+    """An exact native-block duration cannot gain a block from float rounding."""
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 44_100
+    renderer.synth = Mock()
+    renderer.synth.getBlockSize.return_value = 64
+    renderer.synth.createMultiBlock.return_value = np.zeros((2, 128), dtype=np.float32)
+
+    renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=128,
+        start=23 / 44_100,
+        end=87 / 44_100,
+    )
+
+    assert renderer.synth.processMultiBlock.call_args_list[0].args[1:] == (0, 1)
+
+
 def test_surgepy_renderer_note_after_retained_samples_returns_silence() -> None:
     """A valid fractional-duration note may start beyond the retained samples."""
     renderer = object.__new__(SurgePyRenderer)
