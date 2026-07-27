@@ -180,6 +180,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate provider
+        env:
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          set -euo pipefail
+          case "${PROVIDER}" in
+            skypilot-local|runpod) ;;
+            *)
+              echo "::error::unsupported provider: ${PROVIDER}"
+              exit 1
+              ;;
+          esac
+
       # setup-r2 exports RCLONE_CONFIG_R2_* for every downstream consumer; only
       # skypilot-local runs `rclone copyto` on the runner, so only it installs
       # rclone — RunPod runs it in the worker container.

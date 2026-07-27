@@ -162,9 +162,13 @@ jobs:
             providers='["skypilot-local"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
+              all)            providers='["skypilot-local","runpod"]' ;;
               skypilot-local) providers='["skypilot-local"]' ;;
               runpod)         providers='["runpod"]' ;;
-              *)              providers='["skypilot-local","runpod"]' ;;
+              *)
+                echo "::error::unsupported provider: ${PROVIDER_INPUT}" >&2
+                exit 1
+                ;;
             esac
           else
             providers='[]'

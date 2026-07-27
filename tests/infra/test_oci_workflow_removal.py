@@ -61,6 +61,20 @@ def test_check_auth_matrix_targets_runpod_and_local_only(project_root: Path) -> 
 
 
 @pytest.mark.infra
+def test_reusable_generation_rejects_unknown_provider(project_root: Path) -> None:
+    """Reusable callers cannot fall through an unknown provider branch.
+
+    :param project_root: Repository root containing the workflow directory.
+    """
+    workflow = load_workflow(project_root, "generate-dataset-shards.yaml")
+    steps = workflow["jobs"]["generate"]["steps"]
+    validation = next(step for step in steps if step.get("name") == "Validate provider")
+    assert "skypilot-local|runpod" in validation["run"]
+    assert "unsupported provider" in validation["run"]
+    assert "exit 1" in validation["run"]
+
+
+@pytest.mark.infra
 def test_dataset_dispatch_choices_target_runpod_and_local_only(project_root: Path) -> None:
     """Manual generation exposes no removed cloud provider.
 
