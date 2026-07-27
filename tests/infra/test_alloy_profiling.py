@@ -396,23 +396,37 @@ def test_oci_run_wrapper_joins_the_host_pid_namespace(project_root: Path) -> Non
 
 
 @pytest.mark.infra
-def test_alloy_config_filters_on_the_venv_path_the_image_actually_uses(
-    alloy_config: Path, runtime_dockerfile: Path
+@pytest.mark.parametrize("architecture", ["aarch64", "x86_64"])
+def test_alloy_process_filter_matches_resolved_uv_runtime_interpreter(
+    alloy_config: Path, runtime_dockerfile: Path, architecture: str
 ) -> None:
-    """The process filter tracks the image's VIRTUAL_ENV; drift here silently drops every target.
+    """The process filter selects the canonical executable exposed through ``/proc``.
 
     :param alloy_config: The Alloy profiling config baked into the image.
-    :param runtime_dockerfile: The runtime Dockerfile declaring VIRTUAL_ENV.
+    :param runtime_dockerfile: The runtime Dockerfile declaring the uv Python installation.
+    :param architecture: uv platform architecture used in its managed interpreter path.
     """
-    virtual_env = re.search(
-        r"^ENV VIRTUAL_ENV=(\S+)$", runtime_dockerfile.read_text(), re.MULTILINE
+    dockerfile_text = runtime_dockerfile.read_text()
+    install_dir = re.search(r"^ENV UV_PYTHON_INSTALL_DIR=(\S+)$", dockerfile_text, re.MULTILINE)
+    python_version = re.search(
+        r'^RUN uv venv --python ([\d.]+) "\$VIRTUAL_ENV"$', dockerfile_text, re.MULTILINE
     )
-    assert virtual_env, "Dockerfile must declare VIRTUAL_ENV for the runtime venv"
+    assert install_dir and python_version, "Dockerfile must pin the uv-managed runtime Python"
 
-    interpreter_prefix = f"{virtual_env.group(1)}/bin/python"
-    assert interpreter_prefix in alloy_config.read_text(), (
-        f"the discovery.relabel keep rule must match {interpreter_prefix}; a stale path "
-        f"filters out every workload process and Pyroscope receives nothing"
+    config_text = alloy_config.read_text()
+    keep_rule = re.search(
+        r'source_labels = \["__meta_process_exe"\]\s+regex\s+=\s+"([^"]+)"\s+action\s+=\s+"keep"',
+        config_text,
+    )
+    assert keep_rule, "Alloy config must keep selected process executables"
+
+    major_minor = python_version.group(1).rsplit(".", 1)[0]
+    resolved_interpreter = (
+        f"{install_dir.group(1)}/cpython-{python_version.group(1)}-linux-{architecture}-gnu/"
+        f"bin/python{major_minor}"
+    )
+    assert re.fullmatch(keep_rule.group(1), resolved_interpreter), (
+        f"the process filter drops the resolved runtime interpreter {resolved_interpreter}"
     )
 
 

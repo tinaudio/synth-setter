@@ -19,9 +19,14 @@ no metrics remote-write and no log forwarding. Run metrics remain W&B's job
 No credential enters an image layer. The config resolves every secret through `sys.env` when Alloy
 starts, so the published image stays safe on public registries.
 
-The config keeps only processes whose executable is the runtime venv interpreter
-(`/venv/main/bin/python*`), which is what every training and pipeline entrypoint runs under. Alloy
-itself, apt's `python3`, and shell helpers are dropped before profiles are sent.
+The config keeps only processes running the runtime interpreter, which is what every training and
+pipeline entrypoint runs under. Alloy itself, apt's `python3`, and shell helpers are dropped before
+profiles are sent.
+
+The filter matches the **uv-managed interpreter path**, not `/venv/main/bin/python`: the
+`__meta_process_exe` label comes from `/proc/<pid>/exe`, which resolves symlinks, and the venv's
+`bin/python` is a symlink into `$UV_PYTHON_INSTALL_DIR`. Matching the venv path would select nothing
+and send no profiles at all.
 
 ## 2. Requirements
 
@@ -113,13 +118,13 @@ Profiles appear in Grafana Cloud under the `process_cpu` profile type, filtered 
 
 ## 6. Troubleshooting
 
-| Symptom                                 | Cause                                                                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `needs the host PID namespace`          | Relaunch with `--pid=host`; on RunPod/Vast this is unavailable (§3)                                     |
-| `must run as root`                      | The devcontainer's non-root default; use the `root_gpu` flavor or `sudo`                                |
-| `tracefs is not mounted`                | Bind-mount `/sys/kernel/tracing` read-only                                                              |
-| No profiles, no errors                  | The workload finished inside one 60s discovery window, or it does not run under `/venv/main/bin/python` |
-| Frames show module names, not functions | Stripped binary — expected for some system libraries; Python frames are unaffected                      |
+| Symptom                                 | Cause                                                                                                                                                                            |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `needs the host PID namespace`          | Relaunch with `--pid=host`; on RunPod/Vast this is unavailable (§3)                                                                                                              |
+| `must run as root`                      | The devcontainer's non-root default; use the `root_gpu` flavor or `sudo`                                                                                                         |
+| `tracefs is not mounted`                | Bind-mount `/sys/kernel/tracing` read-only                                                                                                                                       |
+| No profiles, no errors                  | The workload finished inside one 60s discovery window, or it does not run the image's uv-managed interpreter (compare `readlink /proc/<pid>/exe` against the config's keep rule) |
+| Frames show module names, not functions | Stripped binary — expected for some system libraries; Python frames are unaffected                                                                                               |
 
 Verify the config after editing it, using the Alloy binary in the image:
 

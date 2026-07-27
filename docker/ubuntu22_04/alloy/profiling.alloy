@@ -12,11 +12,10 @@ discovery.process "workloads" {
 discovery.relabel "python_workloads" {
   targets = discovery.process.workloads.targets
 
-  // Keep only the runtime venv interpreter: every training and pipeline entrypoint runs under
-  // /venv/main, so this drops apt's python3, Alloy itself, and shell helpers from the profile.
+  // /proc resolves the venv symlink, so match the uv-managed interpreter behind /venv/main.
   rule {
     source_labels = ["__meta_process_exe"]
-    regex         = "/venv/main/bin/python.*"
+    regex         = "/opt/uv/python/cpython-3[.]12[.]13-linux-(aarch64|x86_64)-gnu/bin/python3[.]12"
     action        = "keep"
   }
 
