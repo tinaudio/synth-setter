@@ -467,16 +467,18 @@ class SurgePyRenderer(AudioRenderer):
         :param samples: Exact output sample count after block trimming.
         :param start: Requested note start in seconds.
         :param end: Requested note end in seconds.
-        :returns: Native stereo output trimmed to ``samples``.
+        :returns: Stereo output aligned to the requested start within ``samples``.
         """
-        start_sample = math.ceil(math.nextafter(start * self.sample_rate, -math.inf))
+        start_sample = math.ceil(start * self.sample_rate)
         if start_sample >= samples:
             return np.zeros((2, samples), dtype=np.float32)
-        end_sample = math.ceil(math.nextafter(end * self.sample_rate, -math.inf))
         block_size = self.synth.getBlockSize()
         num_blocks = (samples + block_size - 1) // block_size
         start_block = start_sample // block_size
-        note_samples = max(1, end_sample - start_sample)
+        duration_samples = math.ceil(
+            math.nextafter((end - start) * self.sample_rate, -math.inf)
+        )
+        note_samples = max(1, duration_samples)
         note_blocks = (note_samples + block_size - 1) // block_size
         end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)

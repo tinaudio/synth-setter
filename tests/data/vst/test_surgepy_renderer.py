@@ -220,6 +220,28 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
     assert audible[0] == note_start_sample
 
 
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_start_just_after_sample_boundary_rounds_up() -> None:
+    """A genuinely post-boundary note starts on the following sample."""
+    renderer = _simple_renderer()
+    boundary_sample = 336
+    note_start = np.nextafter(
+        boundary_sample / renderer.sample_rate,
+        np.inf,
+    )
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start, 656 / renderer.sample_rate),
+    )
+
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == boundary_sample + 1
+
+
 def test_surgepy_renderer_exact_block_note_processes_one_note_block() -> None:
     """An exact native-block duration cannot gain a block from float rounding."""
     renderer = object.__new__(SurgePyRenderer)

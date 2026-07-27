@@ -10,7 +10,7 @@ from typing import Protocol
 
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
-# Surge publishes preset-dependent VST identities several process callbacks after state restore.
+# Eight callbacks cover Surge's observed two-stage identity publication across tested block sizes.
 _PRESET_SETTLE_CYCLES = 8
 _SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {

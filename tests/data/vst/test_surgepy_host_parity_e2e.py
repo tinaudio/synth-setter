@@ -647,6 +647,7 @@ def _assert_wav_artifacts(output_dir: Path, render_count: int) -> None:
         assert audio.shape == expected_shape
         assert audio.dtype == np.float32
         assert np.isfinite(audio).all()
+        assert np.all((audio >= -1.0) & (audio <= 1.0))
 
 
 def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
@@ -685,7 +686,8 @@ def _assert_parameter_artifact(output_dir: Path, render_count: int) -> None:
         "note_start_and_end": list(_HARDCODED_NOTE_PARAMS["note_start_and_end"]),
         "velocity": config.velocity,
     }
-    expected_width = resolve_param_spec(config.param_spec_name).encoded_width
+    param_spec = resolve_param_spec(config.param_spec_name)
+    expected_width = param_spec.encoded_width
     for row in parameters:
         assert set(row) == {
             "sample",
@@ -708,6 +710,8 @@ def _assert_parameter_artifact(output_dir: Path, render_count: int) -> None:
             and 0.0 <= value <= 1.0
             for value in patch.values()
         )
+        expected_vector = param_spec.encode(patch, expected_midi)
+        np.testing.assert_array_equal(vector, expected_vector)
 
 
 def _assert_metrics_artifact(output_dir: Path, render_count: int) -> None:
@@ -920,6 +924,60 @@ def _require_surge_xt() -> None:
     if TEST_SYNTH != "surge_xt":
         pytest.skip("three-host parity fixture uses Surge XT")
     assert surge_component_state(_VST_PRESET_PATH) == surge_component_state(_SURGEPY_PRESET_PATH)
+
+
+def test_wav_artifacts_reject_out_of_range_audio(tmp_path: Path) -> None:
+    """Listening WAVs retain the normalized production audio contract.
+
+    :param tmp_path: Temporary listening-artifact root.
+    """
+    config = _config("surgepy", 1)
+    shape = (
+        int(config.sample_rate * config.signal_duration_seconds),
+        config.channels,
+    )
+    for backend in _BACKENDS:
+        path = tmp_path / "audio" / "sample_00" / f"{backend}.wav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        audio = np.zeros(shape, dtype=np.float32)
+        if backend == "surgepy":
+            audio[0, 0] = 1.01
+        wavfile.write(path, config.sample_rate, audio)
+
+    with pytest.raises(AssertionError):
+        _assert_wav_artifacts(tmp_path, 1)
+
+
+def test_parameter_artifact_rejects_vector_misaligned_with_patch(tmp_path: Path) -> None:
+    """An encoded vector must represent its paired normalized patch.
+
+    :param tmp_path: Temporary listening-artifact root.
+    """
+    config = _config("surgepy", 1)
+    midi_event = {
+        "pitch": _HARDCODED_NOTE_PARAMS["pitch"],
+        "note_start_and_end": list(_HARDCODED_NOTE_PARAMS["note_start_and_end"]),
+        "velocity": config.velocity,
+    }
+    vector = resolve_param_spec(config.param_spec_name).encode(
+        _PARITY_SYNTH_PARAMS,
+        midi_event,
+    )
+    vector[0] = 1.0 - vector[0]
+    _write_json(
+        tmp_path / "parameters.json",
+        [
+            {
+                "sample": 0,
+                "encoded_normalized_vector": vector.tolist(),
+                "midi_event": midi_event,
+                "normalized_synth_parameters": _PARITY_SYNTH_PARAMS,
+            }
+        ],
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_parameter_artifact(tmp_path, 1)
 
 
 def test_early_onset_scores_accept_on_time_and_late_audio() -> None:
