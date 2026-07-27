@@ -1,0 +1,16 @@
+# GPU test lane: runs `pytest -m gpu` on the cheapest available consumer card
+# so the marker's real CUDA + Surge XT paths stay exercised without a
+# self-hosted GPU runner. tier=low keeps the smoke pool off A40-class SKUs.
+#
+# tail=true keeps the dispatcher attached so the Actions job reflects the
+# worker run end-to-end and the managed job is cancelled on exit.
+
+compute: runpod/gpu-tests
+tier: low
+worker_image_tag: dev-snapshot
+env_file: .env
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec bash scripts/ci/gpu_tests.sh

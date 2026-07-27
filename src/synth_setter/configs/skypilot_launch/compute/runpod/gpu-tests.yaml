@@ -1,0 +1,14 @@
+# GPU test lane: the smoke pool plus the launching host's pinned rclone.
+#
+# The image's apt rclone fails the first R2 write of every process with
+# `NotImplemented` (see .github/actions/setup-r2), so the worker needs the
+# 1.68.2 binary that action installs at /usr/local/bin/rclone. The mount is
+# declared here rather than via `task.update_file_mounts(...)`, which RunPod
+# rejects with a public-key overflow (#749); YAML-declared mounts are the
+# only shape that provisions.
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-gpu-tests
+file_mounts:
+  /tmp/synth-setter-tools/rclone: /usr/local/bin/rclone
