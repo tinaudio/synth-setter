@@ -14,6 +14,8 @@ defaults:
 # this allows you to overwrite only specified parameters
 
 experiment_name: flow_size
+# Each sweep arm overrides this; hydra.run.dir interpolates it, so the base needs one too.
+run_name: base
 
 tags:
   - ksin

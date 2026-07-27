@@ -991,6 +991,7 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 # Every k-sinusoid experiment and the module its `model` group must build; the two
 # groups were dropped in a4dfabbe7 while these experiments kept selecting them (#2572).
 _KSIN_EXPERIMENT_MODULES = {
+    "time_weighting": KSinFlowMatchingModule,
     "flow_size/base": KSinFlowMatchingModule,
     "flow_size/bigenc": KSinFlowMatchingModule,
     "flow_size/medenc": KSinFlowMatchingModule,
@@ -1017,10 +1018,11 @@ def test_ksin_experiment_composes_and_instantiates_its_module(
     """Regression guard for #2572: each k-sinusoid experiment builds a real module.
 
     ``model/ksin_flow`` and ``model/ksin_ff`` were deleted in the move to
-    ``src/synth_setter/configs``, leaving these ten experiments uncomposable.
+    ``src/synth_setter/configs``, leaving these eleven experiments uncomposable.
     Composition alone is too weak a guard — a config naming an absent class or a
     stale keyword composes fine and fails at ``instantiate`` — so this also builds
-    the LightningModule on CPU.
+    the LightningModule on CPU. ``run_name`` is asserted because ``hydra.run.dir``
+    interpolates it, which makes an unset one a launch-time crash only.
 
     :param experiment: ``experiment=`` value under test.
     :param module_cls: LightningModule the experiment's ``model`` group must build.
@@ -1028,6 +1030,7 @@ def test_ksin_experiment_composes_and_instantiates_its_module(
     cfg = _compose("train.yaml", [f"experiment={experiment}"])
 
     assert isinstance(hydra.utils.instantiate(cfg.model), module_cls)
+    assert cfg.run_name
 
 
 def test_ksin_ff_experiment_predicts_two_parameters_per_partial() -> None:
@@ -1060,3 +1063,23 @@ def test_ksin_flow_experiment_couples_vector_field_to_encoder_and_partial_count(
 
     assert conditioning.shape == (2, cfg.model.encoder.out_dim)
     assert velocity.shape == noisy_params.shape
+
+
+@pytest.mark.parametrize("experiment", ["flow_size/base", "ksin_ood/mlp_chamfer"])
+def test_ksin_experiment_chamfer_metric_tokenizes_the_parameter_vector(experiment: str) -> None:
+    """The Chamfer metric consumes a full ``(batch, 2k)`` prediction without reshaping errors.
+
+    ``KSin*Module`` defaults ``params_per_token`` to 3, which chunks the k-sinusoid
+    layout of k frequencies then k amplitudes unevenly and raises at ``torch.stack``
+    for every ``k`` not divisible by 3 — the k=8 ``flow_size`` sweep included. Both
+    restored model configs pin 2, and this exercises the metric to prove it.
+
+    :param experiment: ``experiment=`` value under test.
+    """
+    cfg = _compose("train.yaml", [f"experiment={experiment}"])
+    model = hydra.utils.instantiate(cfg.model)
+
+    width = 2 * cfg.datamodule.k
+    model.val_chamfer(torch.randn(4, width), torch.randn(4, width))
+
+    assert model.val_chamfer.compute() > 0

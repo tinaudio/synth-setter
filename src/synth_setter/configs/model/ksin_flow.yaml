@@ -42,4 +42,8 @@ validation_cfg_strength: 4.0
 test_sample_steps: 100
 test_cfg_strength: 4.0
 
+# The k-sinusoid target lays out k frequencies then k amplitudes; the module default
+# of 3 splits that unevenly and the Chamfer metrics die on the stack.
+params_per_token: 2
+
 compile: false
