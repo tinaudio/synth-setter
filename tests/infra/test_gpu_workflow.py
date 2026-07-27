@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,12 +13,44 @@ from workflow_fixtures import load_workflow
 
 from synth_setter.pipeline.compute_task import apply_tier_filter, build_task_doc
 from synth_setter.pipeline.schemas.gpu_tier import GpuTier
-from synth_setter.pipeline.skypilot_launch import load_launch_config
+from synth_setter.pipeline.skypilot_launch import load_launch_config, resolve_worker_env
 
 _REPO_ROOT = Path(__file__).parents[2]
+_CRED_SCRIPT = _REPO_ROOT / "scripts/skypilot/write_provider_creds.sh"
 _LAUNCH_CONFIG = _REPO_ROOT / "src/synth_setter/configs/launch/gpu-tests-runpod.yaml"
 _WORKER_SCRIPT = _REPO_ROOT / "scripts/ci/gpu_tests.sh"
 _WORKFLOW = "test-gpu.yml"
+
+
+def _write_executable(path: Path, body: str) -> Path:
+    """Write an executable command fixture.
+
+    :param path: Fixture command path.
+    :param body: Complete shell script body.
+    :returns: ``path`` after writing and setting executable mode.
+    """
+    path.write_text(body)
+    path.chmod(0o755)
+    return path
+
+
+def _install_gpu_command_fixtures(tmp_path: Path, rclone: str) -> tuple[Path, Path]:
+    """Install successful GPU probes plus a pytest-failing VST runner.
+
+    :param tmp_path: Isolated test directory.
+    :param rclone: Real rclone binary wrapped by the command fixture.
+    :returns: Fake rclone mount and VST runner paths.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_rclone = _write_executable(fake_bin / "rclone", f'#!/bin/bash\nexec "{rclone}" "$@"\n')
+    _write_executable(fake_bin / "nvidia-smi", "#!/bin/bash\nexit 0\n")
+    _write_executable(fake_bin / "python", "#!/bin/bash\nexit 0\n")
+    vst_runner = _write_executable(
+        fake_bin / "run-linux-vst-headless.sh",
+        '#!/bin/bash\nif [[ "$*" == *pytest* ]]; then exit 42; fi\nexit 0\n',
+    )
+    return fake_rclone, vst_runner
 
 
 def _workflow_steps(project_root: Path) -> list[dict[str, object]]:
@@ -142,19 +175,8 @@ def test_gpu_worker_script_failed_pytest_uploads_coverage_and_preserves_exit(
     """
     rclone = shutil.which("rclone")
     assert rclone is not None
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_rclone = fake_bin / "rclone"
-    fake_rclone.write_text(f'#!/bin/bash\nexec "{rclone}" "$@"\n')
-    fake_rclone.chmod(0o755)
-    for command in ("nvidia-smi", "python"):
-        fake_command = fake_bin / command
-        fake_command.write_text("#!/bin/bash\nexit 0\n")
-        fake_command.chmod(0o755)
-    vst_runner = fake_bin / "run-linux-vst-headless.sh"
-    vst_runner.write_text('#!/bin/bash\nif [[ "$*" == *pytest* ]]; then exit 42; fi\nexit 0\n')
-    vst_runner.chmod(0o755)
-
+    fake_rclone, vst_runner = _install_gpu_command_fixtures(tmp_path, rclone)
+    fake_bin = fake_rclone.parent
     (tmp_path / "coverage.xml").write_text("partial coverage")
     r2_root = tmp_path / "r2"
     coverage_key = "ci/gpu/test/coverage.xml"
@@ -245,17 +267,57 @@ def test_gpu_workflow_pins_worker_checkout_to_the_dispatched_commit(project_root
 
 
 @pytest.mark.infra
-def test_gpu_workflow_supplies_local_launcher_and_worker_credentials(project_root: Path) -> None:
-    """Local dispatch bootstraps R2 while the managed worker receives W&B auth.
+def test_gpu_workflow_r2_account_reaches_real_credential_bootstrap(
+    project_root: Path, tmp_path: Path
+) -> None:
+    """The launch-step R2 account satisfies the real local bootstrap contract.
 
     :param project_root: Repo root supplied by the infra test fixtures.
+    :param tmp_path: Isolated home for generated credential files.
+    """
+    step_env = cast(dict[str, str], _launch_step(project_root)["env"])
+    assert step_env["R2_ACCOUNT_ID"] == "${{ secrets.R2_ACCOUNT_ID }}"
+
+    result = subprocess.run(  # noqa: S603 — executes the checked-in bootstrap script
+        [str(_CRED_SCRIPT), "--provider", "runpod", "--force"],
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ["PATH"],
+            "R2_ACCOUNT_ID": "account-id",
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "access-key",
+            "RCLONE_CONFIG_R2_ENDPOINT": "https://example.invalid",
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "secret-key",
+            "RUNPOD_API_KEY": "runpod-key",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".cloudflare/accountid").read_text() == "account-id\n"
+
+
+@pytest.mark.infra
+def test_gpu_workflow_wandb_secret_resolves_into_worker_env(
+    project_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launch-step W&B secret reaches the launcher's managed-worker env.
+
+    :param project_root: Repo root supplied by the infra test fixtures.
+    :param tmp_path: Isolated empty launch env file.
+    :param monkeypatch: Process-environment fixture.
     """
     launch_step = _launch_step(project_root)
     step_env = cast(dict[str, str], launch_step["env"])
-
-    assert step_env["R2_ACCOUNT_ID"] == "${{ secrets.R2_ACCOUNT_ID }}"
     assert step_env["WANDB_API_KEY"] == "${{ secrets.WANDB_API_KEY }}"
     assert "--extra-env WANDB_API_KEY" not in cast(str, launch_step["run"])
+
+    monkeypatch.setenv("WANDB_API_KEY", "wandb-key")
+    env_file = tmp_path / ".env"
+    env_file.write_text("")
+
+    assert resolve_worker_env(env_file)["WANDB_API_KEY"] == "wandb-key"
 
 
 @pytest.mark.infra

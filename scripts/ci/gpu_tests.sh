@@ -2,12 +2,14 @@
 # Run the GPU test lane and return partial coverage through R2.
 
 # Upload coverage without hiding test failures; arguments: none.
-# Globals: COVERAGE_KEY, R2_BUCKET; Outputs: rclone stdout/stderr; Returns: exits.
+# Globals: COVERAGE_KEY, R2_BUCKET.
+# Outputs: rclone stdout/stderr; Returns: exits.
 upload_coverage() {
   local rc=$?
   trap - EXIT
   if [[ -s coverage.xml ]]; then
-    rclone copyto coverage.xml "r2:${R2_BUCKET}/${COVERAGE_KEY}" --checksum || rc=$?
+    rclone copyto coverage.xml "r2:${R2_BUCKET}/${COVERAGE_KEY}" \
+      --checksum || rc=$?
   fi
   exit "${rc}"
 }
@@ -21,7 +23,8 @@ main() {
   : "${COVERAGE_KEY:?run-scoped R2 key to publish coverage.xml under}"
   : "${R2_BUCKET:?R2 bucket receiving the coverage artifact}"
   local rclone_mount_path="${RCLONE_MOUNT_PATH:-/tmp/synth-setter-tools/rclone}"
-  local vst_runner="${VST_RUNNER:-src/synth_setter/scripts/run-linux-vst-headless.sh}"
+  local vst_runner
+  vst_runner="${VST_RUNNER:-src/synth_setter/scripts/run-linux-vst-headless.sh}"
 
   # The pinned mount avoids apt rclone's first-write failure; see #749.
   chmod u+x "${rclone_mount_path}"
@@ -41,7 +44,7 @@ if torch.cuda.device_count() <= 0:
 print("cuda:", torch.cuda.is_available(), "count:", torch.cuda.device_count())
 PY
 
-  # Loading the plugin before pytest separates a broken VST host from a failing test.
+  # Load the plugin first to distinguish VST host failures.
   "${vst_runner}" python -X faulthandler - <<'PY'
 from synth_setter.data.vst.core import load_plugin
 
