@@ -57,6 +57,7 @@ _DIVERSE_PATCH_VALUES = (
     (0.76, 0.9565),
     (0.88, 0.9565),
 )
+_EXPECTED_MEL_SHAPE = (2, 128, 401)
 _MODIFIED_Z_FACTOR = 0.67448975
 _MODIFIED_Z_MAX = 3.5
 _ADJACENT_MEL_RMSE_MIN = 2.5
@@ -363,11 +364,11 @@ def _assert_pair_metrics(pair_rows: dict[str, list[MetricRow]]) -> None:
         thresholds = _PAIR_THRESHOLDS[pair]
         for row in rows:
             identity = (pair, int(row["sample"]), row)
-            assert float(row["mel_rmse"]) < thresholds["mel_rmse_max"], identity
-            assert float(row["mss"]) < thresholds["mss_max"], identity
-            assert float(row["rms"]) > thresholds["rms_min"], identity
-            assert float(row["sot"]) < thresholds["sot_max"], identity
-            assert float(row["wmfcc"]) < thresholds["wmfcc_max"], identity
+            assert float(row["mel_rmse"]) <= thresholds["mel_rmse_max"], identity
+            assert float(row["mss"]) <= thresholds["mss_max"], identity
+            assert float(row["rms"]) >= thresholds["rms_min"], identity
+            assert float(row["sot"]) <= thresholds["sot_max"], identity
+            assert float(row["wmfcc"]) <= thresholds["wmfcc_max"], identity
 
 
 def _worst_pair_metrics(rows: list[MetricRow]) -> dict[str, float]:
@@ -681,7 +682,7 @@ def _assert_mel_artifacts(output_dir: Path, render_count: int) -> None:
     assert len(png_paths) == render_count * len(_BACKENDS)
     for path in mel_paths:
         mel = np.load(path)
-        assert mel.shape == (2, 128, 401)
+        assert mel.shape == _EXPECTED_MEL_SHAPE
         assert mel.dtype == np.float32
         assert np.isfinite(mel).all()
         _, audio = wavfile.read(output_dir / "audio" / path.parent.name / f"{path.stem}.wav")
@@ -835,7 +836,7 @@ def _assert_artifact_contract(
     expected_param_width = resolve_param_spec(config.param_spec_name).encoded_width
     for result in results.values():
         assert result.audio.shape == (render_count, 2, expected_samples)
-        assert result.mel.shape == (render_count, 2, 128, 401)
+        assert result.mel.shape == (render_count, *_EXPECTED_MEL_SHAPE)
         assert result.params.shape == (render_count, expected_param_width)
         assert result.params.dtype == np.float32
         assert np.isfinite(result.audio).all()
@@ -973,6 +974,23 @@ def _require_surge_xt() -> None:
     if TEST_SYNTH != "surge_xt":
         pytest.skip("three-host parity fixture uses Surge XT")
     assert surge_component_state(_VST_PRESET_PATH) == surge_component_state(_SURGEPY_PRESET_PATH)
+
+
+def test_pair_metrics_accept_documented_boundary_values() -> None:
+    """Inclusive documented limits accept metrics exactly on each boundary."""
+    thresholds = _PAIR_THRESHOLDS["pedalboard-vs-surgepy"]
+    rows: list[MetricRow] = [
+        {
+            "sample": 0,
+            "mel_rmse": thresholds["mel_rmse_max"],
+            "mss": thresholds["mss_max"],
+            "rms": thresholds["rms_min"],
+            "sot": thresholds["sot_max"],
+            "wmfcc": thresholds["wmfcc_max"],
+        }
+    ]
+
+    _assert_pair_metrics({"pedalboard-vs-surgepy": rows})
 
 
 def test_onset_gate_rejects_all_hosts_early_together() -> None:

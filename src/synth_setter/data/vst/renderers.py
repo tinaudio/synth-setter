@@ -50,6 +50,20 @@ _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
 
 
+def _sample_index_at_or_after(time_seconds: float, sample_rate: float) -> int:
+    """Quantize a time without shifting quotient-constructed sample boundaries.
+
+    :param time_seconds: Requested event time in seconds.
+    :param sample_rate: Samples per second.
+    :returns: First sample at or after the requested time.
+    """
+    sample_position = time_seconds * sample_rate
+    nearest_sample = round(sample_position)
+    if time_seconds == nearest_sample / sample_rate:
+        return nearest_sample
+    return math.ceil(sample_position)
+
+
 class _DawDreamerParameterDescription(TypedDict):
     """Parameter identity fields returned by DawDreamer.
 
@@ -469,7 +483,7 @@ class SurgePyRenderer(AudioRenderer):
         :param end: Requested note end in seconds.
         :returns: Stereo output aligned to the requested start within ``samples``.
         """
-        start_sample = math.ceil(start * self.sample_rate)
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
         if start_sample >= samples:
             return np.zeros((2, samples), dtype=np.float32)
         block_size = self.synth.getBlockSize()

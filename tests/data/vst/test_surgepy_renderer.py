@@ -13,7 +13,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     _reject_clipped_audio,
 )
 from synth_setter.data.vst.param_map import load_param_map
-from synth_setter.data.vst.renderers import SurgePyRenderer
+from synth_setter.data.vst.renderers import SurgePyRenderer, _sample_index_at_or_after
 from synth_setter.data.vst.surgepy_runtime import surge_component_state
 
 
@@ -220,6 +220,16 @@ def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
     assert audible[0] == note_start_sample
 
 
+def test_surgepy_renderer_exact_sample_boundary_precedes_next_float() -> None:
+    """A quotient-constructed boundary precedes its next float by one sample."""
+    sample_rate = 44_100
+    boundary_sample = 13
+    boundary = boundary_sample / sample_rate
+
+    assert _sample_index_at_or_after(boundary, sample_rate) == boundary_sample
+    assert _sample_index_at_or_after(np.nextafter(boundary, np.inf), sample_rate) == 14
+
+
 @pytest.mark.slow
 @pytest.mark.requires_surgepy
 def test_surgepy_renderer_start_just_after_sample_boundary_rounds_up() -> None:
@@ -242,15 +252,33 @@ def test_surgepy_renderer_start_just_after_sample_boundary_rounds_up() -> None:
     assert audible[0] == boundary_sample + 1
 
 
-def test_surgepy_renderer_exact_block_note_processes_one_note_block() -> None:
-    """An exact native-block duration cannot gain a block from float rounding."""
+def test_surgepy_renderer_exact_block_note_releases_before_next_block() -> None:
+    """An exact-block note cannot remain active in the following block."""
+    block_size = 64
+    state = {"is_playing": False}
+    synth = Mock()
+    synth.getBlockSize.return_value = block_size
+    synth.createMultiBlock.return_value = np.zeros((2, 128), dtype=np.float32)
+    synth.playNote.side_effect = lambda *_: state.__setitem__("is_playing", True)
+    synth.releaseNote.side_effect = lambda *_: state.__setitem__("is_playing", False)
+
+    def process_blocks(output: np.ndarray, startBlock: int, nBlocks: int) -> None:
+        """Mark each rendered block with its note state.
+
+        :param output: Stereo destination buffer.
+        :param startBlock: First destination block.
+        :param nBlocks: Number of blocks to process.
+        """
+        value = 1.0 if state["is_playing"] else -1.0
+        left = startBlock * block_size
+        output[:, left : left + nBlocks * block_size] = value
+
+    synth.processMultiBlock.side_effect = process_blocks
     renderer = object.__new__(SurgePyRenderer)
     renderer.sample_rate = 44_100
-    renderer.synth = Mock()
-    renderer.synth.getBlockSize.return_value = 64
-    renderer.synth.createMultiBlock.return_value = np.zeros((2, 128), dtype=np.float32)
+    renderer.synth = synth
 
-    renderer._render_note_blocks(
+    audio = renderer._render_note_blocks(
         midi_note=60,
         velocity=100,
         samples=128,
@@ -258,7 +286,8 @@ def test_surgepy_renderer_exact_block_note_processes_one_note_block() -> None:
         end=87 / 44_100,
     )
 
-    assert renderer.synth.processMultiBlock.call_args_list[0].args[1:] == (0, 1)
+    np.testing.assert_array_equal(audio[:, 23:87], np.ones((2, 64)))
+    np.testing.assert_array_equal(audio[:, 87:], -np.ones((2, 41)))
 
 
 def test_surgepy_renderer_note_after_retained_samples_returns_silence() -> None:
