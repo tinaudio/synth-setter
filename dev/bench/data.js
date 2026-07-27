@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785112057540,
+  "lastUpdate": 1785112060949,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18912,6 +18912,142 @@ window.BENCHMARK_DATA = {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 9.758209521599985,
             "unit": "seconds"
+          }
+        ]
+      }
+    ],
+    "Surge host parity and throughput": [
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7950f7c096c8c142c9b1b7ead428f0a3f39b465",
+          "message": "internal-feat(data-pipeline): add SurgePy host parity backend (#2498)\n\n* internal-feat(data-pipeline): add SurgePy renderer parity\n\n* chore(ci): refresh checks after PR title fix\n\n* internal-fix(data-pipeline): align SurgePy synth identity\n\n* internal-fix(data-pipeline): address SurgePy backend review findings\n\nResolves the 11 findings from the multi-skill review of #2498:\n\n- gate every real-engine test behind a `requires_surgepy` marker with a\n  conftest auto-skip, so the CPU suite no longer imports a Linux-x86_64-only\n  extension on macOS or arm64\n- collapse the parallel Surge FX label tables into one semantic-key table and\n  derive the per-host projections from it\n- make `_resolve_surgepy_param`'s lookup context keyword-only and drop the\n  test-only positional wrapper around `join_param_map`\n- pin the duplicated `test-vst-slow.yml` push/pull_request path lists with a\n  trigger-parity test (GitHub Actions rejects YAML anchors)\n- assert continuous, integer, and Boolean normalization through a new public\n  `native_parameter_values` seam instead of three private helpers\n- cover malformed `render()` input: unknown parameter keys and note intervals\n  outside the signal\n- assert parameter-column shape, dtype, finiteness, and normalized range at the\n  Lance boundary of the three-host parity test\n- assert every shipped SurgePy render config's `synth_version` against the live\n  engine version, so a dependency bump cannot ship stale configs\n- pin that clipped SurgePy audio stays retryable at the generation gate (#2001)\n  rather than failing the shard in the renderer\n\nRefs #2469\n\n* internal-fix(testing): pin fixture plugin version in the BadWindow test\n\n`renderer_version` moved into the synth identity earlier in this branch, and the\nspec validator now drops the old top-level field, so this test's override no\nlonger reached the version guard: the composed spec kept the Surge default\n`1.3.4` while the fixture plugin reports `1.0.0-test`, failing\n`run_tests_ubuntu`, `run_tests_conda`, and `run_tests_macos`.\n\nSet `render.synth.synth_version`, matching every other fixture-plugin test.\n\nRefs #2469",
+          "timestamp": "2026-07-26T16:41:27-07:00",
+          "tree_id": "b4b00872cc1fa3fdaebf8136583c79ba951649d4",
+          "url": "https://github.com/tinaudio/synth-setter/commit/d7950f7c096c8c142c9b1b7ead428f0a3f39b465"
+        },
+        "date": 1785112060198,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 9.823158829766665,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 2.4557897074416664,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 4.361363631866667,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.0903409079666668,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.2291617725666735,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.057290443141668375,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 23.177274703979492,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 20.22490692138672,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.28922271728515625,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 21.072182520627976,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.1327146291732788,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 7.221534729003906,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.3689117431640625,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.029559040442109108,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.645365739576518,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.032834768295288086,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 23.18079948425293,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 19.988922119140625,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.2799456715583801,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 20.993420946598054,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.11179369688034058,
+            "unit": "1-cos"
           }
         ]
       }
