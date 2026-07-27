@@ -303,8 +303,10 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
 
         def encode(audio: np.ndarray) -> torch.Tensor:
             flat = np.ascontiguousarray(rearrange(audio, "b c t -> (b c) t"), dtype=np.float32)
+            # max_batch_size 16 bounds the encoder's activation spike so the
+            # frozen encoder coexists with training on one shared GPU.
             with torch.no_grad():
-                latents = encoder.encode(flat, max_batch_size=64)
+                latents = encoder.encode(flat, max_batch_size=16)
             latents = rearrange(
                 latents, "(b c) d t -> b (c d) t", b=audio.shape[0], c=audio.shape[1]
             )
