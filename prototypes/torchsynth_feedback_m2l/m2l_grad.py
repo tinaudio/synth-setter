@@ -126,3 +126,16 @@ def m2l_pooled_l2(pred_latents: torch.Tensor, target_latents: torch.Tensor) -> t
     :returns: Distances shaped ``(batch,)``.
     """
     return (pred_latents.mean(dim=-1) - target_latents.mean(dim=-1)).norm(dim=-1)
+
+
+def m2l_framewise_mse(pred_latents: torch.Tensor, target_latents: torch.Tensor) -> torch.Tensor:
+    """Per-sample MSE over the full (dim, T_lat) latent, no time pooling.
+
+    Keeps temporal structure the pooled cost discards; #2557 Step C tests
+    whether pooling is why the pooled-L2 control signal underperforms.
+
+    :param pred_latents: Latents shaped ``(batch, dim, T_lat)``.
+    :param target_latents: Latents shaped ``(batch, dim, T_lat)``.
+    :returns: Distances shaped ``(batch,)``.
+    """
+    return (pred_latents - target_latents).square().mean(dim=(-2, -1))

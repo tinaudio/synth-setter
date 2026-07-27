@@ -24,7 +24,11 @@ from prototypes.torchsynth_feedback_m2l.grad_render import (
     log_spectral_distance,
     render_torchsynth_grad,
 )
-from prototypes.torchsynth_feedback_m2l.m2l_grad import M2LGradEncoder, m2l_pooled_l2
+from prototypes.torchsynth_feedback_m2l.m2l_grad import (
+    M2LGradEncoder,
+    m2l_framewise_mse,
+    m2l_pooled_l2,
+)
 from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.vst.torchsynth_param_spec import NUM_PARAMS
 from synth_setter.models.components.vector_field import VectorField, VectorFieldBlock
@@ -210,6 +214,8 @@ def control_signal(
     base_velocity: torch.Tensor,
     target_latents: torch.Tensor,
     m2l: M2LGradEncoder,
+    framewise: bool = False,
+    cost_scale: float = COST_SCALE,
 ) -> torch.Tensor:
     """Render the one-step estimate and return the m2l-space ``[C; grad C]`` (detached).
 
@@ -221,6 +227,8 @@ def control_signal(
     :param base_velocity: Frozen base-flow velocity at ``(x_t, t)``.
     :param target_latents: m2l latents of the observed audio.
     :param m2l: Grad-enabled m2l encoder.
+    :param framewise: Use the unpooled framewise MSE cost instead of pooled L2.
+    :param cost_scale: Rescale factor bringing the cost feature to O(1).
     :returns: Control signal shaped ``(batch, NUM_PARAMS + 1)``.
     """
     theta_hat = (x_t + (1 - t) * base_velocity).detach().requires_grad_(True)
@@ -232,11 +240,12 @@ def control_signal(
             signal_length=SIGNAL_LENGTH,
             midi_pitch=MIDI_PITCH,
         )
-        cost = m2l_pooled_l2(m2l(audio), target_latents)
+        distance = m2l_framewise_mse if framewise else m2l_pooled_l2
+        cost = distance(m2l(audio), target_latents)
         (grad,) = torch.autograd.grad(cost.sum(), theta_hat)
     rms = grad.norm(dim=-1, keepdim=True) / math.sqrt(grad.shape[-1])
     grad = grad / (rms + 1e-6)
-    return torch.cat((cost.unsqueeze(-1) * COST_SCALE, grad), dim=-1).detach()
+    return torch.cat((cost.unsqueeze(-1) * cost_scale, grad), dim=-1).detach()
 
 
 @dataclass
@@ -251,10 +260,20 @@ class SampleConfig:
 
        Whether the control field receives the simulator signal (else zeros,
        the capacity-matched ablation).
+
+    .. attribute :: framewise
+
+       Use the unpooled framewise m2l cost for the control signal.
+
+    .. attribute :: cost_scale
+
+       Rescale factor bringing the cost feature to O(1).
     """
 
     steps: int = 40
     feedback: bool = True
+    framewise: bool = False
+    cost_scale: float = COST_SCALE
 
 
 @torch.no_grad()
@@ -297,7 +316,15 @@ def sample_ode(
         velocity = vector_field(x, t, conditioning)
         if control_field is not None and float(t[0, 0]) >= CONTROL_T_MIN:
             if config.feedback and m2l is not None and target_latents is not None:
-                signal = control_signal(x, t, velocity, target_latents, m2l)
+                signal = control_signal(
+                    x,
+                    t,
+                    velocity,
+                    target_latents,
+                    m2l,
+                    framewise=config.framewise,
+                    cost_scale=config.cost_scale,
+                )
             else:
                 signal = torch.zeros((x.shape[0], NUM_PARAMS + 1), device=x.device, dtype=x.dtype)
             velocity = velocity + control_field(t, velocity, signal)

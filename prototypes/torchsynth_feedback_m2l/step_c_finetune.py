@@ -118,6 +118,7 @@ def evaluate_arm(
     m2l: M2LGradEncoder,
     mel_metric: MultiScaleLogMel,
     device: str,
+    config: SampleConfig | None = None,
 ) -> dict[str, float]:
     """Evaluate one arm on the shared held-out stream (common protocol).
 
@@ -129,8 +130,11 @@ def evaluate_arm(
     :param m2l: Grad-enabled m2l encoder.
     :param mel_metric: Shared multi-scale log-mel module.
     :param device: Torch device string.
+    :param config: Sampling config override; defaults to 40 steps with ``feedback``.
     :returns: Mean ``param_mse``, ``mel``, ``lsd``, ``m2l`` over held-out batches.
     """
+    if config is None:
+        config = SampleConfig(steps=40, feedback=feedback)
     generator = torch.Generator().manual_seed(EVAL_SEED)
     noise_generator = torch.Generator(device="cpu").manual_seed(EVAL_SEED + 1)
     totals: dict[str, float] = {}
@@ -144,7 +148,7 @@ def evaluate_arm(
             noise,
             control_field=control,
             m2l=m2l,
-            config=SampleConfig(steps=40, feedback=feedback),
+            config=config,
         )
         metrics = eval_metrics(preds, params, audio, mel_metric, m2l)
         for key, value in metrics.items():
