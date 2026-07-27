@@ -280,6 +280,7 @@ def _onset_samples(audio: np.ndarray) -> np.ndarray:
 def _early_onset_z_scores(
     pedalboard: np.ndarray,
     dawdreamer: np.ndarray,
+    *,
     observed: np.ndarray,
     expected: np.ndarray,
 ) -> np.ndarray:
@@ -321,7 +322,10 @@ def _onset_rows(
     rows: list[dict[str, float | int | str]] = []
     for backend, values in onsets.items():
         scores = _early_onset_z_scores(
-            onsets["pedalboard"], onsets["dawdreamer"], values, expected
+            onsets["pedalboard"],
+            onsets["dawdreamer"],
+            observed=values,
+            expected=expected,
         )
         rows.extend(
             {
@@ -764,8 +768,8 @@ def test_early_onset_scores_accept_on_time_and_late_audio() -> None:
     scores = _early_onset_z_scores(
         np.asarray([100.0, 200.0]),
         np.asarray([100.0, 200.0]),
-        np.asarray([120.0, 220.0]),
-        np.asarray([100.0, 200.0]),
+        observed=np.asarray([120.0, 220.0]),
+        expected=np.asarray([100.0, 200.0]),
     )
 
     np.testing.assert_array_equal(scores, [0.0, 0.0])
@@ -776,8 +780,8 @@ def test_early_onset_scores_keep_patch_identity() -> None:
     scores = _early_onset_z_scores(
         np.asarray([100.0, 200.0]),
         np.asarray([100.0, 200.0]),
-        np.asarray([80.0, 180.0]),
-        np.asarray([100.0, 200.0]),
+        observed=np.asarray([80.0, 180.0]),
+        expected=np.asarray([100.0, 200.0]),
     )
 
     np.testing.assert_allclose(scores, [6.7448975, 6.7448975])
@@ -790,8 +794,8 @@ def test_early_onset_scores_mismatched_shapes_raise() -> None:
         _early_onset_z_scores(
             np.asarray([100.0, 200.0]),
             np.asarray([100.0]),
-            np.asarray([100.0, 200.0]),
-            np.asarray([100.0, 200.0]),
+            observed=np.asarray([100.0, 200.0]),
+            expected=np.asarray([100.0, 200.0]),
         )
 
 
