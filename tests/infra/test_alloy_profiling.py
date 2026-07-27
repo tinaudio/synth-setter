@@ -373,29 +373,6 @@ def test_alloy_config_reads_every_grafana_credential_from_the_environment(
 
 
 @pytest.mark.infra
-def test_oci_run_wrapper_joins_the_host_pid_namespace(project_root: Path) -> None:
-    """The OCI worker container shares the host PID namespace, which pyroscope.ebpf requires.
-
-    :param project_root: Repo checkout holding the OCI run wrapper.
-    """
-    wrapper = (
-        project_root
-        / "src"
-        / "synth_setter"
-        / "configs"
-        / "skypilot_launch"
-        / "compute"
-        / "scripts"
-        / "oci-docker-run.sh"
-    )
-    # Anchor to the argument line so a mention in the explanatory comment can't satisfy this.
-    assert re.search(r"^\s+--pid=host \\$", wrapper.read_text(), re.MULTILINE), (
-        f"{wrapper}: nested docker run must pass --pid=host; without it pyroscope.ebpf "
-        f"matches no targets and silently collects nothing"
-    )
-
-
-@pytest.mark.infra
 @pytest.mark.parametrize("architecture", ["aarch64", "x86_64"])
 def test_alloy_process_filter_matches_resolved_uv_runtime_interpreter(
     alloy_config: Path, runtime_dockerfile: Path, architecture: str
@@ -427,31 +404,6 @@ def test_alloy_process_filter_matches_resolved_uv_runtime_interpreter(
     )
     assert re.fullmatch(keep_rule.group(1), resolved_interpreter), (
         f"the process filter drops the resolved runtime interpreter {resolved_interpreter}"
-    )
-
-
-@pytest.mark.infra
-def test_oci_run_wrapper_forwards_every_profiling_variable(project_root: Path) -> None:
-    """The OCI wrapper passes each profiling variable into the container it launches.
-
-    :param project_root: Repo checkout holding the OCI run wrapper.
-    """
-    wrapper_text = (
-        project_root
-        / "src"
-        / "synth_setter"
-        / "configs"
-        / "skypilot_launch"
-        / "compute"
-        / "scripts"
-        / "oci-docker-run.sh"
-    ).read_text()
-    forwarded = set(re.findall(r"^\s+-e (\w+) \\$", wrapper_text, re.MULTILINE))
-
-    required = {*REQUIRED_CREDENTIAL_VARS, "SYNTH_SETTER_PROFILING_ENABLED"}
-    assert required <= forwarded, (
-        f"OCI wrapper does not forward {sorted(required - forwarded)}; profiling cannot be "
-        f"enabled on OCI workers without them"
     )
 
 

@@ -30,6 +30,7 @@ ______________________________________________________________________
 | `WANDB_API_KEY`                      | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
 | `GITHUB_TOKEN`                       | CI workflows (automatic)                          | Automatic per workflow run |
 | `RUNPOD_API_KEY`                     | Pipeline orchestration                            | GitHub Secrets, `.env`     |
+| `VAST_API_KEY`                       | Alternative pipeline orchestration                | `.env`                     |
 | `DOCKERHUB_USERNAME`                 | CI image push workflows                           | GitHub Secrets             |
 | `DOCKERHUB_TOKEN`                    | CI image push workflows                           | GitHub Secrets             |
 | `APPROVAL_BOT_APP_ID`                | Auto-approve workflow, release workflow           | GitHub Secrets             |
@@ -97,7 +98,7 @@ ______________________________________________________________________
 **What:** The Cloudflare account ID, written to `~/.cloudflare/accountid`
 by `scripts/skypilot/write_provider_creds.sh` so SkyPilot's R2 storage
 adaptor can address the account once #749 is unblocked. Required by every
-launcher invocation (`skypilot-local`, `runpod`, `oci`). Stored as a secret
+launcher invocation (`skypilot-local`, `runpod`, `vast`). Stored as a secret
 for the same reason as the R2 endpoint — to avoid embedding the account ID
 in git history.
 
@@ -209,7 +210,7 @@ continuous CPU profiles. Opt-in and never present in an image layer — see
 
 **Where stored:**
 
-- Local `.env` files; forwarded to OCI workers by `oci-docker-run.sh`
+- Local `.env` files on developer machines
 
 **Rotation steps:**
 
@@ -231,6 +232,30 @@ rotation procedure.
 curl -s -o /dev/null -w '%{http_code}\n' \
   -u "$GRAFANA_CLOUD_PYROSCOPE_USER:$GRAFANA_CLOUD_PYROSCOPE_API_KEY" \
   "$GRAFANA_CLOUD_PYROSCOPE_ENDPOINT/api/v1/status/buildinfo"
+```
+
+______________________________________________________________________
+
+### Vast.ai (`VAST_API_KEY`)
+
+**What:** API key for managing GPU workers on Vast.ai through SkyPilot.
+
+**Where stored:**
+
+- Local `.env` files on developer machines
+
+**Rotation steps:**
+
+1. Log in to the [Vast.ai account portal](https://cloud.vast.ai/).
+2. Create a replacement API key.
+3. Update local `.env` files on developer machines.
+4. Delete the old API key.
+
+**Verification:**
+
+```bash
+bash scripts/skypilot/write_provider_creds.sh --provider vast
+sky check vast
 ```
 
 ______________________________________________________________________
@@ -334,6 +359,8 @@ audit):
   `.env`
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
   and `.env`, delete old key
+- [ ] **Vast.ai:** Create new API key, update `VAST_API_KEY` in `.env`, delete
+  old key
 - [ ] **Docker Hub:** Create new access token, update `DOCKERHUB_TOKEN` (and
   `DOCKERHUB_USERNAME` if needed) in GitHub Secrets, revoke old token
 - [ ] **Approval Bot:** Generate new private key, update

@@ -51,7 +51,6 @@ Beyond the `SYS_ADMIN` the devcontainers already grant for FUSE, the eBPF unwind
 
 | Backend            | Container launch                                                                     | Profiling         |
 | ------------------ | ------------------------------------------------------------------------------------ | ----------------- |
-| OCI                | `oci-docker-run.sh`, which passes `--privileged --pid=host`                          | Supported         |
 | Local `docker run` | Yours to control                                                                     | Supported         |
 | Local devcontainer | Needs one manual flag (below)                                                        | Opt-in            |
 | **RunPod / Vast**  | SkyPilot sets `image_id: docker:<image>`; the PID namespace is not ours to configure | **Not supported** |

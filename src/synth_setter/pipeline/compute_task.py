@@ -10,8 +10,6 @@ from synth_setter.pipeline.schemas.compute import ComputeConfig
 from synth_setter.pipeline.schemas.gpu_tier import GpuTier, filter_gpu_skus
 from synth_setter.resources import configs_dir
 
-WORKER_CMD_SENTINEL = "${WORKER_CMD}"
-
 _COMPUTE_GROUP = "skypilot_launch/compute"
 
 
@@ -148,8 +146,6 @@ def resolve_run_block(compute: ComputeConfig, cmd: str | None) -> str:
         raise ValueError(
             f"compute option {compute.name!r} takes an injected worker cmd, but none was given"
         )
-    if compute.run_wrapper is not None:
-        return load_compute_script(compute.run_wrapper).replace(WORKER_CMD_SENTINEL, cmd)
     return cmd
 
 
@@ -198,14 +194,8 @@ def build_task_doc(
     assert isinstance(resources, list)
 
     task_doc.pop("mount_network_volume", None)
-    image_delivery = task_doc.pop("image_delivery")
     setup_scripts = task_doc.pop("setup_scripts")
-    task_doc.pop("run_wrapper", None)
     task_doc.pop("run_script", None)
-
-    if image_delivery == "docker-in-run":
-        for resource in resources:
-            resource.pop("image_id", None)
     task_doc["resources"] = resources[0] if len(resources) == 1 else {"any_of": resources}
 
     setup = "".join(load_compute_script(script) for script in setup_scripts)

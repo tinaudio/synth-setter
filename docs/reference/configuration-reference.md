@@ -131,7 +131,7 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()
     → dispatch_via_skypilot(sky_cfg)
-      → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)
+      → SkyPilot provisions compute (RunPod, Vast.ai, or local Kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
                     && bash scripts/sync_worker_checkout.sh
                     && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
@@ -199,8 +199,8 @@ mapping consumed by `sky.Task.from_yaml_config`.
 (see the file for the full option):
 
 The builder pins `image_id: docker:<image>` per-launch from
-`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for non-OCI
-backends, so the option carries no literal image pin. Worker env
+`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for RunPod and
+Vast.ai, so the option carries no literal image pin. Worker env
 (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `WORKER_GIT_REF`, per-rank
 `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) rides in the task
 env at construction — no placeholder `envs:` block is needed.
@@ -309,7 +309,7 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 | --------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
 | Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                                                       | new provider                                                                                  |
-| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast, OCI, local kind)                                                                                                                                                                                                                                                  | —                                                                                             |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                                                                                                                                                                                              | —                                                                                             |
 | `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
 | `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
 | `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |

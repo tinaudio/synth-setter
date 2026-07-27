@@ -44,7 +44,7 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 
  Infrastructure:
    Storage:   Cloudflare R2 (data, coordination)
-   Compute:   RunPod (on-demand workers)
+   Compute:   SkyPilot (RunPod, Vast.ai, local Kubernetes)
    Tracking:  Weights & Biases (metrics, artifacts, lineage)
    Config:    Hydra (composable YAML configs)
    Training:  PyTorch Lightning
@@ -123,7 +123,7 @@ synth-setter/
 │       ├── train.yaml      #     Root training config
 │       ├── dataset.yaml    #     Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
 │       ├── experiment/     #     Experiment configs — training (compose datamodule + model + trainer) and datagen (composes dataset.yaml)
-│       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
+│       ├── compute/        #     SkyPilot compute options (RunPod, Vast.ai, local Kubernetes)
 │       ├── render/         #     Renderer configs (RenderConfig sub-model)
 │       ├── datamodule/     #     DataModule configs (paths, splits, batch size)
 │       ├── model/          #     Model architecture configs
