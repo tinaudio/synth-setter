@@ -1,0 +1,20 @@
+_target_: synth_setter.models.vst_flow_finetune_module.VSTFlowMatchingFinetuneModule
+
+# Frozen base flow checkpoint; pass a local path or a ${wandb:...} artifact ref.
+pretrained_ckpt: ???
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+
+scheduler: null
+
+t_min: 0.8
+feedback_enabled: true
+control_dim: 256
+control_hidden_dim: 512
+control_num_blocks: 4
+
+param_spec_name: ${datamodule.param_spec_name}

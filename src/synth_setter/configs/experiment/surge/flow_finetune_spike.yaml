@@ -1,0 +1,33 @@
+# @package _global_
+
+# SPIKE (#2554): online simulator-feedback finetune of a frozen surge_simple flow.
+# Small slice, small batch, few steps — sized for a single local GPU.
+
+defaults:
+  - /experiment/surge/base
+  - override /model: vst_flow_finetune
+  - override /logger: csv
+  - _self_
+
+experiment_name: surge-simple-flow-finetune-spike
+run_name: feedback
+
+datamodule:
+  download_dataset_root_uri: r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
+  batch_size: 16
+  num_workers: 2
+
+# Spike runs local-only; no checkpoint uploads or W&B artifacts.
+test: false
+
+callbacks:
+  model_checkpoint: null
+
+trainer:
+  min_steps: 300
+  max_steps: 300
+  val_check_interval: 100
+  limit_val_batches: 4
+  log_every_n_steps: 10
+  # The online render loop is CPU-bound; bf16 autocast adds nothing here.
+  precision: 32-true
