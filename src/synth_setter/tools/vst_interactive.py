@@ -1,0 +1,1510 @@
+"""Interactive VST3 audition and patch capture.
+
+Run ``python -m synth_setter.tools.vst_interactive --help`` for the CLI contract.
+"""
+
+import logging
+import math
+import queue
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, ExitStack
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import click
+import mido
+import numpy as np
+import pandas as pd
+import torch
+from pedalboard import VST3Plugin
+from pedalboard.io import AudioFile, AudioStream, StreamResampler
+from pydantic_settings import CliApp
+from rich.console import Console
+from rich.logging import RichHandler
+
+from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.data.vst.core import (
+    extract_renderer_version,
+    load_plugin,
+    load_preset,
+    make_midi_events,
+    set_params,
+)
+from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
+from synth_setter.data.vst.param_spec_registry import default_plugin_path
+from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.resources import as_file, vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
+
+MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
+
+logger = logging.getLogger(__name__)
+
+
+def make_dataset_render_cfg(
+    *,
+    param_spec_name: str,
+    plugin_path: str,
+    plugin_state_path: str,
+    synth_version: str,
+    samples_per_shard: int,
+) -> RenderConfig:
+    """Build the render config the captured-patch dataset is written with.
+
+    The audition session's render settings are fixed constants, so only the
+    synth identity, the plugin version pin, and the patch count vary per run.
+
+    :param param_spec_name: Registry key naming the spec the patches encode against.
+    :param plugin_path: Plugin bundle the patches were auditioned on.
+    :param plugin_state_path: Baseline preset applied before each patch.
+    :param synth_version: Version read off the plugin bundle.
+    :param samples_per_shard: Number of captured patches, written as one shard.
+    :returns: Render config for :func:`make_lance_dataset`.
+    """
+    return RenderConfig(
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=plugin_path,
+            plugin_state_path=plugin_state_path,
+            synth_version=synth_version,
+        ),
+        sample_rate=SAMPLE_RATE,
+        channels=CHANNELS,
+        velocity=MAKE_DATASET_VELOCITY,
+        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
+        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
+        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
+        samples_per_shard=samples_per_shard,
+    )
+
+
+def _configure_logging() -> None:
+    """Install the Rich root-logger handler used when this script runs as a CLI.
+
+    Kept out of import-time side effects so importing the module (e.g. from the test suite) doesn't
+    reconfigure the root logger or construct a Console.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[
+            RichHandler(
+                console=Console(width=200),
+                rich_tracebacks=True,
+                markup=False,
+                show_path=True,
+            )
+        ],
+    )
+
+
+CHANNELS = 2
+SAMPLE_RATE = 44100
+BUFFER_SIZE = 512
+MAKE_DATASET_VELOCITY = 100
+MAKE_DATASET_SIGNAL_DURATION_SECONDS = 4.0
+MAKE_DATASET_MIN_LOUDNESS = -55.0
+MAKE_DATASET_SAMPLES_PER_RENDER_BATCH = 32
+
+# Set this only when the output device requires a rate other than SAMPLE_RATE.
+PLAYBACK_SAMPLE_RATE = SAMPLE_RATE
+
+# Maximum time to wait for the audio thread to drain after ``stop_event`` is set.
+AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
+
+# Offline middle-C recording uses a fixed window to retain its release tail.
+SESSION_RECORDING_DURATION_SECONDS = 10.0
+SESSION_RECORDING_MIDI_NOTE = 60  # middle C (C4)
+SESSION_RECORDING_VELOCITY = 100
+SESSION_RECORDING_NOTE_START_SECONDS = 2.0
+SESSION_RECORDING_NOTE_END_SECONDS = 4.0
+# Buffer size used for the offline ``plugin.process(...)`` render. Mirrors
+# the value used in ``synth_setter.data.vst.core.render_params``.
+_SESSION_RECORDING_BUFFER_SIZE = 2048
+
+# Plugin-flush parameters used by the post-load / pre-render flush pattern; see
+# ``_flush_plugin``. Mirror of the values used in ``synth_setter.data.vst.core.render_params``.
+_PLUGIN_FLUSH_DURATION_SECONDS = 32.0
+_PLUGIN_FLUSH_BUFFER_SIZE = 2048
+
+# Return signals for ``keyboard_loop`` actions — distinguishes "user requested
+# quit" from "action completed, keep listening".
+_KEEP_LOOPING = True
+_STOP_LOOPING = False
+
+_DRIFT_TOLERANCE = 1e-6
+
+# Bound per-buffer MIDI work to avoid audio underruns; defer excess events.
+_MAX_MIDI_EVENTS_PER_BUFFER = 64
+
+# Poll frequently enough for prompt shutdown without busy-spinning.
+_MIDI_POLL_INTERVAL_SECONDS = 0.01
+
+_VST_SUBPROCESS_TIMEOUT_SECONDS = 300
+_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
+_METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
+_EVAL_MODULE = "synth_setter.cli.eval"
+_DEFAULT_EVAL_EXPERIMENT = "surge/test"
+_PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
+_COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
+
+# Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
+# 0/0 → NaN (see ``compute_rms`` in ``synth_setter.evaluation.compute_audio_metrics``).
+SILENCE_PEAK_THRESHOLD = 1e-4
+
+_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
+
+
+# External I/O seams keep tests state-based without patching module globals (#844).
+# Narrow dependency-injection points so tests can substitute fakes that capture state
+# instead of monkey-patching module-level functions. Defaults preserve production behavior;
+# CLI surface is unchanged. Each seam is keyword-only at the call sites that accept it.
+# Refs #844.
+
+# Returns whatever stdlib ``subprocess.run`` / ``subprocess.check_call`` return; production
+# callers either ignore the result or read ``.returncode`` from a ``CompletedProcess``.
+type SubprocessRunner = Callable[..., object]
+
+
+class AudioStreamProtocol(Protocol):
+    """Structural surface ``play_audio`` needs from an entered audio-output stream."""
+
+    def write(self, buffer: np.ndarray, sample_rate: int) -> object:
+        """Write one channel-first audio buffer.
+
+        :param buffer: Audio samples with shape ``(channels, frames)``.
+        :param sample_rate: Buffer sample rate in hertz.
+        :returns: Stream-specific write result.
+        """
+        ...
+
+
+class MidiMessageProtocol(Protocol):
+    """Structural surface ``midi_listener`` needs from a polled mido message.
+
+    .. attribute :: type
+
+        MIDI message type used to filter performance events.
+    """
+
+    type: str
+
+    def bytes(self) -> list[int]:
+        """Encode the MIDI message for pedalboard.
+
+        :returns: MIDI status and data bytes.
+        """
+        ...
+
+
+class MidiPortProtocol(Protocol):
+    """Structural surface ``midi_listener`` needs from an entered mido input port."""
+
+    def poll(self) -> MidiMessageProtocol | None:
+        """Return the next available MIDI message without blocking.
+
+        :returns: Next message, or ``None`` when the port is idle.
+        """
+        ...
+
+
+type PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
+
+# Factory returning an audio-output stream context manager — entered by ``play_audio`` via
+# ``with factory() as stream``. Production binds ``AudioStream.default_output_device_name``
+# lazily so test factories never trigger a real-device probe.
+type AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
+
+# Production binds click.getchar at call time; tests inject deterministic character sources.
+type KeystrokeSource = Callable[[], str]
+
+
+def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtocol]:
+    """Build the production ``AudioStream`` without probing devices during import.
+
+    :returns: Context manager for the default audio output stream.
+    """
+    return AudioStream(  # pyright: ignore[reportReturnType]
+        output_device_name=AudioStream.default_output_device_name,
+        sample_rate=PLAYBACK_SAMPLE_RATE,
+        buffer_size=BUFFER_SIZE,
+    )
+
+
+@dataclass(frozen=True)
+class _MetricsFileSpec:
+    """Expected shape of a metrics CSV produced by ``compute_audio_metrics.py``.
+
+    .. attribute :: rows
+
+        Required row count.
+
+    .. attribute :: columns
+
+        Required metric columns.
+    """
+
+    rows: int
+    columns: frozenset[str]
+
+
+def _expected_prediction_filenames(num_samples: int) -> list[str]:
+    """List the prediction artifacts written for each requested sample.
+
+    :param num_samples: Number of sample indices to enumerate.
+    :returns: Sorted prediction artifact filenames.
+    """
+    filenames = []
+    for prefix in ("pred", "target-audio", "target-params"):
+        filenames.extend(f"{prefix}-{i}.pt" for i in range(num_samples))
+    return sorted(filenames)
+
+
+def _validate_metrics_df(
+    metrics_path: Path,
+    metrics_df: pd.DataFrame,
+    expected: _MetricsFileSpec,
+) -> None:
+    """Reject metrics tables with the wrong shape, columns, or non-finite values.
+
+    :param metrics_path: Source path included in validation errors.
+    :param metrics_df: Parsed metrics table.
+    :param expected: Required row count and column names.
+    :raises ValueError: The table does not satisfy the expected metrics contract.
+    """
+    if len(metrics_df) != expected.rows:
+        raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
+    missing_columns = expected.columns - set(metrics_df.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{metrics_path}: missing expected columns {sorted(missing_columns)}; "
+            f"got {sorted(metrics_df.columns)}"
+        )
+    expected_cols = sorted(expected.columns)
+    numeric = metrics_df[expected_cols].to_numpy()
+    finite_mask = np.isfinite(numeric)
+    if not finite_mask.all():
+        bad_mask = ~finite_mask.all(axis=1)
+        bad_rows = metrics_df.loc[bad_mask, expected_cols]
+        raise ValueError(
+            f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(metrics_df)} rows:\n"
+            f"{bad_rows}"
+        )
+
+
+@dataclass(frozen=True)
+class PredictionRef:
+    """Identifier for a single predicted parameter row on disk.
+
+    .. attribute :: path
+
+        Prediction tensor path.
+
+    .. attribute :: batch_idx
+
+        Zero-based row index within the tensor.
+    """
+
+    path: Path
+    batch_idx: int
+
+
+@dataclass(frozen=True)
+class DatasetRef:
+    """Identifier for a single dataset row on disk.
+
+    .. attribute :: path
+
+        Lance dataset path.
+
+    .. attribute :: batch_idx
+
+        Zero-based row index within the dataset.
+    """
+
+    path: Path
+    batch_idx: int
+
+
+class PredictionRefType(click.ParamType):
+    """Click parser for ``PATH:BATCH_IDX`` prediction references.
+
+    .. attribute :: name
+
+        Click parameter type label.
+    """
+
+    name = "pred_ref"
+
+    def convert(
+        self,
+        value: str | PredictionRef,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> PredictionRef:
+        """Parse a prediction reference while preserving pre-parsed values.
+
+        :param value: Existing reference or ``PATH:BATCH_IDX`` text.
+        :param param: Click parameter owning the value, when available.
+        :param ctx: Active Click context, when available.
+        :returns: Parsed prediction reference.
+        """
+        if isinstance(value, PredictionRef):
+            return value
+        path_str, sep, idx_str = value.rpartition(":")
+        if not sep or not path_str or not idx_str:
+            self.fail(f"expected PATH:BATCH_IDX (e.g. 'pred-n.pt:n'), got {value!r}", param, ctx)
+        try:
+            batch_idx = int(idx_str)
+        except ValueError:
+            self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
+        if batch_idx < 0:
+            self.fail(f"batch index must be non-negative, got {batch_idx}", param, ctx)
+        return PredictionRef(path=Path(path_str), batch_idx=batch_idx)
+
+
+class DatasetRefType(click.ParamType):
+    """Click parser for ``PATH:DATASET_IDX`` dataset references.
+
+    .. attribute :: name
+
+        Click parameter type label.
+    """
+
+    name = "dataset_ref"
+
+    def convert(
+        self,
+        value: str | DatasetRef,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> DatasetRef:
+        """Parse a dataset reference while preserving pre-parsed values.
+
+        :param value: Existing reference or ``PATH:DATASET_IDX`` text.
+        :param param: Click parameter owning the value, when available.
+        :param ctx: Active Click context, when available.
+        :returns: Parsed dataset reference.
+        """
+        if isinstance(value, DatasetRef):
+            return value
+        path_str, sep, idx_str = value.rpartition(":")
+        if not sep or not path_str or not idx_str:
+            self.fail(
+                f"expected PATH:DATASET_IDX (e.g. 'test.lance:0'), got {value!r}", param, ctx
+            )
+        try:
+            batch_idx = int(idx_str)
+        except ValueError:
+            self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
+        if batch_idx < 0:
+            self.fail(f"dataset index must be non-negative, got {batch_idx}", param, ctx)
+        return DatasetRef(path=Path(path_str), batch_idx=batch_idx)
+
+
+def _load_pred_tensor(pred_path: Path) -> torch.Tensor:
+    """Load a prediction tensor from disk (imperative shell — does I/O only).
+
+    :param pred_path: Path to a ``pred-*.pt`` file produced by ``predict_vst_audio.py``.
+    :returns: A float tensor of shape ``(batch_size, num_params)`` with values
+        in the model output range ``[-1, 1]`` (see
+        :func:`~synth_setter.data.vst.param_spec.decode_model_output` for the
+        inverse scale). Loaded with ``weights_only=True`` since predictions are
+        plain tensors.
+    """
+    return torch.load(pred_path, map_location="cpu", weights_only=True)
+
+
+def _validate_encoded_row(row: np.ndarray, spec: ParamSpec, source: str) -> None:
+    """Reject rows that cannot be decoded by the selected ParamSpec.
+
+    :param row: One-dimensional encoded parameter row.
+    :param spec: ParamSpec selected for decoding.
+    :param source: Human-readable row source for error messages.
+    :raises ValueError: If the row has the wrong width or contains non-finite values.
+    """
+    expected_width = spec.synth_param_length + spec.note_param_length
+    if row.shape != (expected_width,):
+        actual_width = row.shape[-1] if row.ndim else 0
+        raise ValueError(
+            f"{source} width {actual_width} does not match ParamSpec width {expected_width}"
+        )
+    if not np.isfinite(row).all():
+        raise ValueError(f"{source} contains non-finite values")
+
+
+def decode_prediction_row(
+    pred_tensor: torch.Tensor,
+    batch_idx: int,
+    param_spec_name: str,
+) -> dict[str, float]:
+    """Decode a single predicted row into raw VST synth params (functional core — pure transform).
+
+    :param pred_tensor: Float tensor of shape ``(batch_size, num_params)`` with
+        values in ``[-1, 1]``; rows are decoded through
+        :func:`~synth_setter.data.vst.param_spec.decode_model_output`.
+    :param batch_idx: Row index within the prediction tensor to decode. Must be
+        in ``[0, batch_size)``.
+    :param param_spec_name: Parameter spec name (key into ``param_specs``) used
+        to decode the row into raw VST parameter values.
+    :returns: Dict mapping VST parameter name to its raw (decoded) value.
+    :raises IndexError: when ``batch_idx`` is out of range for ``pred_tensor``.
+    """
+    if batch_idx < 0 or batch_idx >= pred_tensor.shape[0]:
+        raise IndexError(f"batch_idx {batch_idx} out of range (batch size {pred_tensor.shape[0]})")
+
+    spec = param_specs[param_spec_name]
+    row = pred_tensor[batch_idx].detach().cpu().float().numpy()
+    _validate_encoded_row(row, spec, "prediction")
+    synth_params, _ = decode_model_output(row, spec)
+    return synth_params
+
+
+def load_dataset_synth_params(
+    ref: DatasetRef,
+    param_spec_name: str,
+) -> dict[str, float]:
+    """Load a single row from a Lance dataset's ``param_array`` and decode it into synth params.
+
+    Unlike prediction tensors, dataset rows are already in encoded form
+    (output of :meth:`ParamSpec.encode`, values in ``[0, 1]``), so they decode
+    directly without the model-output inverse scale.
+
+    :param ref: Reference identifying the ``.lance`` dataset path and row to decode.
+    :param param_spec_name: Parameter spec name (key into ``param_specs``) used
+        to decode the row into raw VST parameter values.
+    :returns: Dict mapping VST parameter name to its raw (decoded) value.
+    :raises IndexError: when ``ref.batch_idx`` is out of range for the dataset.
+    """
+    # Function-local so importing this module (e.g. from the test suite) never
+    # pays the ``lance`` import cost.
+    import lance
+
+    spec = param_specs[param_spec_name]
+    dataset = lance.dataset(str(ref.path))
+    # Random-access read of the one requested row; ``.take`` clamps silently on
+    # over-range, so guard against the row count to preserve the IndexError.
+    if ref.batch_idx >= dataset.count_rows():
+        raise IndexError(f"dataset row {ref.batch_idx} out of range for {ref.path}")
+    table = dataset.take([ref.batch_idx], columns=[PARAM_ARRAY_FIELD])
+    row = np.asarray(
+        table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0], dtype=np.float32
+    )
+    _validate_encoded_row(row, spec, "dataset row")
+
+    synth_params, _ = spec.decode(row)
+    return synth_params
+
+
+def load_prediction_synth_params(
+    ref: PredictionRef,
+    param_spec_name: str,
+) -> dict[str, float]:
+    """Load a single predicted row from a pred-*.pt file and decode it into synth params.
+
+    Thin orchestrator: reads the prediction tensor from disk via
+    :func:`_load_pred_tensor` and decodes the requested row via
+    :func:`decode_prediction_row`.
+
+    :param ref: Reference identifying the file path and row to decode.
+    :param param_spec_name: Parameter spec name (key into ``param_specs``) used
+        to decode the row into raw VST parameter values.
+    :returns: Dict mapping VST parameter name to its raw (decoded) value.
+    """
+    pred_tensor = _load_pred_tensor(ref.path)
+    return decode_prediction_row(pred_tensor, ref.batch_idx, param_spec_name)
+
+
+def _flush_plugin(plugin: VST3Plugin) -> None:
+    """Flush state with the same process-reset sequence used by offline rendering.
+
+    :param plugin: Loaded VST3 instance to flush.
+    """
+    plugin.process(
+        [],
+        _PLUGIN_FLUSH_DURATION_SECONDS,
+        SAMPLE_RATE,
+        CHANNELS,
+        _PLUGIN_FLUSH_BUFFER_SIZE,
+        True,
+    )
+    plugin.reset()
+
+
+def play_audio(
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    midi_queue: "queue.Queue[tuple[list[int], float]] | None",
+    *,
+    audio_stream_factory: AudioStreamFactory | None = None,
+) -> None:
+    """Stream VST3 output to the audio device, processing any pending MIDI messages.
+
+    Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
+    ``main`` after the plugin editor is closed). When ``midi_queue`` is provided, drains it
+    each iteration so the plugin sees incoming notes/CCs from the MIDI listener thread.
+    Resamples to ``PLAYBACK_SAMPLE_RATE`` if it differs from ``SAMPLE_RATE`` so the output
+    device gets a rate it supports.
+
+    ``audio_stream_factory=None`` builds the real pedalboard stream at call time; callers may
+    inject an output-stream factory.
+
+    :param plugin: Loaded VST3 instance that produces each audio buffer.
+    :param stop_event: Shutdown signal shared with the editor and keyboard loop.
+    :param midi_queue: Optional queue of timestamped MIDI byte messages.
+    :param audio_stream_factory: Optional audio-output stream factory.
+    :raises ValueError: The plugin returns an audio buffer with an unexpected shape.
+    """
+    needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
+    stream_resampler = (
+        StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS) if needs_resample else None
+    )
+    buffer_duration_seconds = BUFFER_SIZE / SAMPLE_RATE
+    factory = (
+        audio_stream_factory if audio_stream_factory is not None else _default_audio_stream_factory
+    )
+    with factory() as stream:
+        while not stop_event.is_set():
+            messages: list[tuple[list[int], float]] = []
+            if midi_queue is not None:
+                # Cap per-buffer drain — see ``_MAX_MIDI_EVENTS_PER_BUFFER`` rationale.
+                for _ in range(_MAX_MIDI_EVENTS_PER_BUFFER):
+                    try:
+                        messages.append(midi_queue.get_nowait())
+                    except queue.Empty:
+                        break
+            # ``reset`` passed positionally for consistency with ``_flush_plugin`` /
+            # ``play_audio_recorded`` / ``src/synth_setter/data/vst/core.py`` and to avoid relying on
+            # pedalboard's C-extension keyword-arg support across unpinned versions.
+            synth_output = plugin.process(
+                messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
+            )
+            if synth_output.shape != (CHANNELS, BUFFER_SIZE):
+                raise ValueError(
+                    f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
+                    f"got {synth_output.shape}"
+                )
+            if stream_resampler is not None:
+                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
+            else:
+                stream.write(synth_output, SAMPLE_RATE)
+
+
+def midi_listener(
+    port_name: str,
+    midi_queue: "queue.Queue[tuple[list[int], float]]",
+    stop_event: threading.Event,
+    *,
+    port_opener: PortOpener | None = None,
+) -> None:
+    """Listen on a MIDI input port and push ``(list[int], float)`` tuples onto ``midi_queue``.
+
+    Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
+    message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Each forwarded
+    message is converted to ``(msg.bytes(), 0.0)`` so ``plugin.process`` schedules it at the
+    start of the next audio buffer — the format used elsewhere in the repo (see
+    :func:`synth_setter.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
+    ``list[int]`` (a sequence of MIDI status bytes), matching the ``List[int]`` form
+    accepted by pedalboard's ``plugin.process(...)``.
+
+    Polls ``port.poll()`` non-blockingly so the loop checks ``stop_event`` every
+    ``_MIDI_POLL_INTERVAL_SECONDS`` and exits cleanly when ``main`` signals shutdown
+    — otherwise the queue would keep growing after the audio thread stops (e.g. while
+    ``main`` waits at the post-editor "press any key" prompt).
+
+    ``port_opener`` exists for test injection (#844). ``None`` resolves to
+    ``mido.open_input`` at call time; callers can inject an opener without
+    replacing the module-level mido dependency.
+
+    :param port_name: Exact mido input-port name to open.
+    :param midi_queue: Queue receiving timestamped MIDI byte messages.
+    :param stop_event: Shutdown signal shared with the audio and keyboard loops.
+    :param port_opener: Optional MIDI input context-manager factory.
+    """
+    logger.info("Listening on MIDI port: %s", port_name)
+    opener = port_opener if port_opener is not None else mido.open_input  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        with opener(port_name) as port_handle:
+            while not stop_event.is_set():
+                msg = port_handle.poll()
+                if msg is None:
+                    time.sleep(_MIDI_POLL_INTERVAL_SECONDS)
+                    continue
+                if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
+                    midi_queue.put((msg.bytes(), 0.0))
+    except Exception:
+        logger.exception("MIDI listener thread aborted on port %r", port_name)
+
+
+def _resolve_midi_port(requested: str, available: Sequence[str]) -> str:
+    """Map the ``--midi-port`` flag value to a concrete port name.
+
+    ``requested == ""`` selects ``available[0]``; otherwise an exact match is required.
+
+    :param requested: Requested port name, or an empty string for automatic selection.
+    :param available: Port names reported by mido.
+    :returns: Concrete input-port name.
+    :raises click.UsageError: No input is available or the requested name is absent.
+    """
+    if not available:
+        raise click.UsageError("--midi-port set but no MIDI input ports are available.")
+    if requested == "":
+        return available[0]
+    if requested in available:
+        return requested
+    raise click.UsageError(f"--midi-port {requested!r} not in available inputs {available!r}")
+
+
+def _validate_no_drift(
+    plugin: VST3Plugin, spec: ParamSpec, default_params: dict[str, float]
+) -> None:
+    """Reject drift in plugin parameters outside the selected ParamSpec.
+
+    :param plugin: Loaded plugin whose current parameter values are inspected.
+    :param spec: ParamSpec defining parameters that may vary between patches.
+    :param default_params: Post-preset values for parameters outside the ParamSpec.
+    :raises ValueError: A non-spec parameter differs from its post-preset value.
+    """
+    for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
+        if param_name in spec.synth_param_names:
+            continue
+        current = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        default = default_params[param_name]
+        if not math.isclose(current, default, abs_tol=_DRIFT_TOLERANCE):
+            raise ValueError(
+                f"plugin parameter {param_name!r} drifted from default "
+                f"{default:.6f} to {current:.6f}; revert it before recording"
+            )
+
+
+def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> None:
+    """Render a deterministic clip through ``plugin`` to ``session_recording_path``.
+
+    The clip is a fixed ``SESSION_RECORDING_DURATION_SECONDS`` window with a
+    held middle-C note from ``SESSION_RECORDING_NOTE_START_SECONDS`` to
+    ``SESSION_RECORDING_NOTE_END_SECONDS``; the surrounding silence captures
+    any release tail. The output depends only on the loaded plugin state
+    (preset + ``--pred`` / ``--dataset-ref`` params), so the same inputs
+    always produce the same WAV.
+
+    Headless alternative to :func:`play_audio` — uses
+    ``pedalboard.io.AudioFile`` instead of an ``AudioStream``, so it works in
+    environments without an audio output device.
+
+    :param plugin: Loaded VST3 instance to render.
+    :param session_recording_path: Destination WAV path.
+    :raises ValueError: The plugin returns an invalid shape, non-finite samples, or samples
+        outside the normalized ``[-1, 1]`` range.
+    """
+    midi_events = make_midi_events(
+        SESSION_RECORDING_MIDI_NOTE,
+        SESSION_RECORDING_VELOCITY,
+        SESSION_RECORDING_NOTE_START_SECONDS,
+        SESSION_RECORDING_NOTE_END_SECONDS,
+    )
+    logger.info(
+        "Rendering %.1fs deterministic clip (note %d, %.1f-%.1fs) to %s",
+        SESSION_RECORDING_DURATION_SECONDS,
+        SESSION_RECORDING_MIDI_NOTE,
+        SESSION_RECORDING_NOTE_START_SECONDS,
+        SESSION_RECORDING_NOTE_END_SECONDS,
+        session_recording_path,
+    )
+    output = plugin.process(
+        list(midi_events),
+        SESSION_RECORDING_DURATION_SECONDS,
+        SAMPLE_RATE,
+        CHANNELS,
+        _SESSION_RECORDING_BUFFER_SIZE,
+        True,
+    )
+    expected_frames = int(SESSION_RECORDING_DURATION_SECONDS * SAMPLE_RATE)
+    if output.shape != (CHANNELS, expected_frames):
+        raise ValueError(
+            f"expected output shape ({CHANNELS}, {expected_frames}), got {output.shape}"
+        )
+    if not np.isfinite(output).all():
+        raise ValueError("recorded audio contains non-finite samples")
+    peak = float(np.abs(output).max())
+    if peak > 1.0:
+        raise ValueError(f"recorded audio peak {peak:.6f} is outside [-1, 1]")
+    # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
+    with AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS) as f:
+        f.write(output.T)
+    logger.info("Recording wrote %d frames", expected_frames)
+
+
+def keyboard_loop(
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    param_spec_name: str,
+    default_params: dict[str, float],
+    *,
+    keystroke_source: KeystrokeSource | None = None,
+) -> list[dict[str, float]]:
+    """Read keystrokes and snapshot the live plugin params into a list of patches.
+
+    Keys:
+
+    - ``p`` — record the current values of every synth param in
+      ``param_specs[param_spec_name]`` as a patch dict. Fails if any non-spec parameter
+      has drifted from its post-preset-load default (caught at record time so the user
+      can revert before the editor closes).
+    - ``q`` — set ``stop_event`` and exit.
+
+    Also exits when ``stop_event`` is set externally (e.g. when the plugin editor is
+    closed). Returns the list of recorded patches.
+
+    :param plugin: Loaded plugin whose current parameter values are captured.
+    :param stop_event: Shutdown signal shared with the editor and audio loop.
+    :param param_spec_name: Registry key defining patch parameters.
+    :param default_params: Post-preset values used to detect non-spec drift.
+    :param keystroke_source: Optional zero-argument character source; exhaustion quits.
+    :returns: Recorded synth-parameter patches in capture order.
+    """
+    spec = param_specs[param_spec_name]
+    synth_patches: list[dict[str, float]] = []
+    read_char = keystroke_source if keystroke_source is not None else click.getchar
+
+    def quit_action() -> bool:
+        stop_event.set()
+        logger.info("Quitting...")
+        return _STOP_LOOPING
+
+    def record_patch() -> bool:
+        logger.info("Recording patch...")
+        _validate_no_drift(plugin, spec, default_params)
+        patch: dict[str, float] = {}
+        for param_name in spec.synth_param_names:
+            if param_name not in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
+                raise KeyError(f"parameter {param_name!r} not found in plugin parameters")
+            patch[param_name] = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        synth_patches.append(patch)
+        logger.info("patch recorded: %s", synth_patches[-1])
+        return _KEEP_LOOPING
+
+    actions = {
+        "q": quit_action,
+        "p": record_patch,
+    }
+    # click.getchar() observes external shutdown only after the next keystroke.
+    while not stop_event.is_set():
+        try:
+            ch = read_char()
+        except StopIteration:
+            stop_event.set()
+            return synth_patches
+        action = actions.get(ch)
+        if action is None:
+            continue
+        try:
+            if action() == _STOP_LOOPING:
+                return synth_patches
+        except (KeyError, ValueError):
+            # Log now so the traceback isn't buffered until ``main`` calls ``.result()``.
+            logger.exception("keyboard action %r failed", ch)
+            stop_event.set()
+            raise
+    return synth_patches
+
+
+def _run_predict(
+    checkpoint_path: Path,
+    dataset_root_dir: Path,
+    predict_file: Path,
+    predictions_output_dir: Path,
+    param_spec_name: str,
+    *,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
+    subprocess_runner: SubprocessRunner | None = None,
+) -> None:
+    """Run model prediction via ``src/synth_setter/cli/eval.py`` with ``mode=predict``.
+
+    Paths are passed as absolute (``.resolve()``) because ``src/synth_setter/cli/eval.py`` runs under Hydra, which
+    chdirs into its own output dir before the job starts; relative paths would otherwise resolve
+    against the wrong cwd. The datamodule ParamSpec drives the model output width.
+
+    ``subprocess_runner`` exists for test injection (#844). ``None`` resolves to
+    ``subprocess.check_call`` at call time.
+
+    :param checkpoint_path: Model checkpoint loaded by the evaluation entrypoint.
+    :param dataset_root_dir: Root passed to the prediction datamodule.
+    :param predict_file: Lance split used as prediction input.
+    :param predictions_output_dir: Destination for prediction tensors.
+    :param param_spec_name: ParamSpec registry key controlling model output width.
+    :param experiment: Hydra experiment selecting the model and datamodule configuration.
+    :param subprocess_runner: Optional injected subprocess runner.
+    """
+    runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
+    runner(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            _EVAL_MODULE,
+            f"experiment={experiment}",
+            "ckpt_path=" + str(checkpoint_path.resolve()),
+            "datamodule.predict_file=" + str(predict_file.resolve()),
+            "datamodule.dataset_root=" + str(dataset_root_dir.resolve()),
+            "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir.resolve()),
+            f"datamodule.param_spec_name={param_spec_name}",
+            "mode=predict",
+        ],
+        timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+
+def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
+    """Verify ``PredictionWriter`` wrote the expected per-sample files and finite tensors.
+
+    Checks for the ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files
+    written by ``synth_setter.utils.callbacks.PredictionWriter``, and that every prediction
+    tensor is finite. Tensors are loaded onto CPU regardless of the device they were saved from
+    so this works across mps/cuda/cpu predict runs.
+
+    :param predictions_output_dir: Directory produced by PredictionWriter.
+    :param num_samples: Required number of indexed output groups.
+    :raises FileNotFoundError: Expected files are missing or unexpected files are present.
+    :raises ValueError: A prediction tensor contains a non-finite value.
+    """
+    expected_names = _expected_prediction_filenames(num_samples)
+    actual_names = sorted(p.name for p in predictions_output_dir.iterdir())
+    if actual_names != expected_names:
+        missing = sorted(set(expected_names) - set(actual_names))
+        unexpected = sorted(set(actual_names) - set(expected_names))
+        raise FileNotFoundError(
+            f"unexpected prediction outputs in {predictions_output_dir}: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    for i in range(num_samples):
+        pred_path = predictions_output_dir / f"pred-{i}.pt"
+        pred = torch.load(pred_path, map_location="cpu", weights_only=True)
+        if not torch.isfinite(pred).all():
+            raise ValueError(f"{pred_path} contains NaN/Inf")
+
+
+def _build_predict_vst_audio_argv(
+    predictions_output_dir: Path,
+    audio_dir: Path,
+    render_config: RenderConfig,
+    *,
+    platform: str | None = None,
+    wrapper_path: Path | None = None,
+) -> list[str]:
+    """Build the argv list for ``synth_setter.evaluation.predict_vst_audio`` rendering.
+
+    On Linux the VST headless wrapper is prepended so the subprocess inherits a Xvfb display.
+    No subprocess execution and no writes; the only side effects are reading ``sys.platform``
+    (or the explicit ``platform`` override) and an existence check on the wrapper path when
+    running on Linux.
+
+    :param predictions_output_dir: Directory containing prediction tensors.
+    :param audio_dir: Directory where rendered audio artifacts are written.
+    :param render_config: Exact renderer configuration used to capture the patches.
+    :param platform: Override for ``sys.platform``; ``None`` reads ``sys.platform`` at call time.
+    :param wrapper_path: Real, on-disk path to the Xvfb wrapper; required on Linux
+        (the caller materializes :func:`vst_headless_wrapper` via ``as_file``).
+
+    :returns: Argument vector for the renderer subprocess.
+    :raises FileNotFoundError: On Linux when the wrapper path is absent.
+    :raises ValueError: On Linux when ``wrapper_path`` is ``None``.
+    """
+    resolved_platform = platform if platform is not None else sys.platform
+    args: list[str] = []
+    if resolved_platform == "linux":
+        if wrapper_path is None:
+            raise ValueError(
+                "wrapper_path is required on Linux — caller must materialize "
+                "vst_headless_wrapper() via as_file() before invoking this builder."
+            )
+        if not wrapper_path.is_file():
+            raise FileNotFoundError(
+                f"VST headless wrapper not found at {wrapper_path}; "
+                f"this script needs it on Linux to run predict_vst_audio.py headlessly."
+            )
+        args.append(str(wrapper_path))
+    args += [
+        sys.executable,
+        "-m",
+        _PREDICT_VST_AUDIO_MODULE,
+        str(predictions_output_dir),
+        str(audio_dir),
+        *CliApp.serialize(render_config),
+        "--rerender-target",
+        "True",
+    ]
+    return args
+
+
+def _validate_rendered_audio_dir(audio_dir: Path, num_samples: int) -> None:
+    """Verify ``predict_vst_audio.py`` wrote ``num_samples`` complete sample directories.
+
+    Each ``sample_{i}`` directory must contain the four expected artifacts (``target.wav``,
+    ``pred.wav``, ``spec.png``, ``params.csv``) and the rendered WAVs must not be silent.
+    Read-only with respect to ``audio_dir`` — no writes and no subprocess execution.
+
+    :param audio_dir: Root containing indexed sample directories.
+    :param num_samples: Required number of sample directories.
+    :raises FileNotFoundError: A sample directory or required artifact is absent.
+    :raises ValueError: A rendered WAV is silent.
+    """
+    # Compare as sets so num_samples >= 10 doesn't trip on lexical ordering
+    # (``sample_10`` sorts before ``sample_2`` in a plain ``sorted()``).
+    expected_sample_names = {f"sample_{i}" for i in range(num_samples)}
+    actual_sample_names = {d.name for d in audio_dir.iterdir() if d.is_dir()}
+    if actual_sample_names != expected_sample_names:
+        missing = sorted(expected_sample_names - actual_sample_names)
+        extra = sorted(actual_sample_names - expected_sample_names)
+        raise FileNotFoundError(
+            f"unexpected sample directories in {audio_dir}: missing={missing}, extra={extra}"
+        )
+    for i in range(num_samples):
+        sample_dir = audio_dir / f"sample_{i}"
+        for fname in ("target.wav", "pred.wav", "spec.png", "params.csv"):
+            artifact_path = sample_dir / fname
+            if not artifact_path.is_file():
+                raise FileNotFoundError(f"{artifact_path} not found")
+        for wav_name in ("target.wav", "pred.wav"):
+            with AudioFile(str(sample_dir / wav_name)) as f:
+                audio = f.read(f.frames)
+            peak = float(np.abs(audio).max())
+            if peak <= SILENCE_PEAK_THRESHOLD:
+                raise ValueError(f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})")
+
+
+def _render_predicted_audio(
+    predictions_output_dir: Path,
+    audio_dir: Path,
+    num_samples: int,
+    render_config: RenderConfig,
+    *,
+    subprocess_runner: SubprocessRunner | None = None,
+) -> None:
+    """Render audio for the predicted patches and validate per-sample outputs.
+
+    The complete capture-time renderer configuration is forwarded to prevent backend, lifecycle,
+    spec, or audio-shape drift during re-rendering.
+
+    :param predictions_output_dir: Directory containing prediction tensors.
+    :param audio_dir: Directory where rendered audio artifacts are written.
+    :param num_samples: Number of prediction samples to render.
+    :param render_config: Exact renderer configuration used to capture the patches.
+    :param subprocess_runner: Optional injected subprocess runner.
+    :raises subprocess.TimeoutExpired: Rendering exceeds the subprocess deadline.
+    """
+    # Zipped wheels extract the wrapper to a temp file that only lives while
+    # ``as_file()`` is open; keep the context open across the subprocess call.
+    with ExitStack() as stack:
+        wrapper_path: Path | None = None
+        if sys.platform == "linux":
+            wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
+        args = _build_predict_vst_audio_argv(
+            predictions_output_dir,
+            audio_dir,
+            render_config,
+            wrapper_path=wrapper_path,
+        )
+        runner = subprocess_runner if subprocess_runner is not None else subprocess.run
+        try:
+            runner(  # noqa: S603
+                args,
+                check=True,
+                timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "predict_vst_audio timed out after %ss; command: %s",
+                _VST_SUBPROCESS_TIMEOUT_SECONDS,
+                args,
+            )
+            raise
+    _validate_rendered_audio_dir(audio_dir, num_samples)
+
+
+def _compute_and_validate_metrics(
+    audio_dir: Path,
+    metrics_dir: Path,
+    num_samples: int,
+    *,
+    subprocess_runner: SubprocessRunner | None = None,
+) -> None:
+    """Compute MSS / wMFCC / SOT / RMS metrics on the rendered pairs and verify the CSV outputs.
+
+    ``subprocess_runner`` exists for test injection (#844). ``None`` resolves to
+    ``subprocess.check_call`` at call time. Metrics-table validation errors propagate.
+
+    :param audio_dir: Root containing rendered target/prediction pairs.
+    :param metrics_dir: Destination for metric CSV files.
+    :param num_samples: Expected number of per-sample metric rows.
+    :param subprocess_runner: Optional injected subprocess runner.
+    :raises FileNotFoundError: Either metrics CSV is missing.
+    """
+    metrics_file_expectations: dict[str, _MetricsFileSpec] = {
+        "aggregated_metrics.csv": _MetricsFileSpec(
+            rows=len(_METRIC_COLUMNS), columns=frozenset({"mean", "std"})
+        ),
+        "metrics.csv": _MetricsFileSpec(rows=num_samples, columns=_METRIC_COLUMNS),
+    }
+    runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
+    runner(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            _COMPUTE_AUDIO_METRICS_MODULE,
+            str(audio_dir),
+            str(metrics_dir),
+            "-w",
+            "1",
+        ],
+        timeout=_METRICS_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    for metrics_file, expected in metrics_file_expectations.items():
+        metrics_path = metrics_dir / metrics_file
+        if not metrics_path.is_file():
+            raise FileNotFoundError(f"{metrics_file} not found in {metrics_dir}")
+        metrics_df = pd.read_csv(metrics_path)
+        _validate_metrics_df(metrics_path, metrics_df, expected)
+
+
+def eval_patches(
+    num_samples: int,
+    *,
+    dataset_root_dir: Path,
+    checkpoint_path: Path,
+    render_config: RenderConfig,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
+    subprocess_runner: SubprocessRunner | None = None,
+) -> None:
+    """Run model eval on captured patches end-to-end.
+
+    Pipeline (each step gated on the previous one's success):
+
+    1. Predict params via ``src/synth_setter/cli/eval.py mode=predict`` (``_run_predict``).
+    2. Verify the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
+       files were written and that prediction tensors are finite (``_validate_predictions``).
+    3. Render predicted vs. target audio via ``synth_setter.evaluation.predict_vst_audio`` and verify the
+       per-sample artifacts (``_render_predicted_audio``).
+    4. Compute MSS / wMFCC / SOT / RMS metrics via ``synth_setter.evaluation.compute_audio_metrics`` and verify
+       the resulting CSVs (``_compute_and_validate_metrics``).
+
+    Re-runs against the same ``dataset_root_dir`` clear the previous prediction/audio/metrics
+    output directories so stale files don't leak into validation.
+
+    :param num_samples: Number of patches predicted/rendered (``predict.lance``'s row count).
+    :param dataset_root_dir: Directory containing ``predict.lance``; receives
+        ``prediction_outputs/``, ``audio/``, and ``metrics/`` subdirectories.
+    :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
+    :param render_config: Capture-time configuration used for decoding and rendering.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
+    :param subprocess_runner: Optional runner forwarded to each subprocess helper.
+
+    :raises FileNotFoundError: The checkpoint, predict split, or required output is absent.
+    :raises NotADirectoryError: The dataset root is not a directory.
+    """
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    if not dataset_root_dir.is_dir():
+        raise NotADirectoryError(f"dataset root directory not found: {dataset_root_dir}")
+    predict_file = dataset_root_dir / "predict.lance"
+    if not predict_file.is_dir():
+        raise FileNotFoundError(f"predict.lance not found: {predict_file}")
+
+    predictions_output_dir = dataset_root_dir / "prediction_outputs"
+    audio_dir = dataset_root_dir / "audio"
+    metrics_dir = dataset_root_dir / "metrics"
+
+    # Stale outputs from a prior run would leak into validation (e.g. extra ``pred-N.pt`` files
+    # from a larger previous run). Clear and recreate per-run output dirs up front.
+    for output_dir in (predictions_output_dir, audio_dir, metrics_dir):
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    runner_kwargs: dict[str, SubprocessRunner] = (
+        {"subprocess_runner": subprocess_runner} if subprocess_runner is not None else {}
+    )
+    _run_predict(
+        checkpoint_path,
+        dataset_root_dir,
+        predict_file,
+        predictions_output_dir,
+        render_config.param_spec_name,
+        experiment=experiment,
+        **runner_kwargs,
+    )
+    _validate_predictions(predictions_output_dir, num_samples)
+    _render_predicted_audio(
+        predictions_output_dir,
+        audio_dir,
+        num_samples,
+        render_config,
+        **runner_kwargs,
+    )
+    _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples, **runner_kwargs)
+
+
+@click.command()
+@click.option(
+    "--plugin-path",
+    "-p",
+    default=default_plugin_path,
+    help="Path to VST3 plugin. Defaults to $SYNTH_SETTER_PLUGIN_PATH or the in-repo bundle.",
+)
+@click.option(
+    "--pred",
+    type=PredictionRefType(),
+    default=None,
+    help=(
+        "Prediction reference as PATH:BATCH_IDX (e.g. 'outputs/pred-0.pt:0'). "
+        "When set, the predicted row is decoded and applied to the plugin "
+        "before the editor opens."
+    ),
+)
+@click.option(
+    "--dataset-ref",
+    type=DatasetRefType(),
+    default=None,
+    help=(
+        "Dataset reference as PATH:DATASET_IDX (e.g. 'outputs/test.lance:0'). "
+        "When set, the dataset row is decoded and applied to the plugin "
+        "before the editor opens."
+    ),
+)
+@click.option(
+    "--param-spec-name",
+    type=click.Choice(sorted(param_specs.keys())),
+    required=True,
+    help=(
+        "Parameter spec name used to decode prediction/dataset rows applied to the plugin, "
+        "to enumerate which synth params are captured when recording patches, and to select "
+        "the matching base preset via ``plugin_state_paths``. Required — pass one of the registered "
+        "spec names; the matching base preset is loaded automatically."
+    ),
+)
+@click.option(
+    "--output-dataset-dir-path",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help=(
+        "Directory to create for the recorded patches. Must not already exist — "
+        "``make_lance_dataset`` overwrites any dataset already at its destination. "
+        "After the editor is closed, patches captured via the "
+        "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
+        "and written to ``train.lance`` inside this directory via "
+        "``synth_setter.data.vst.writers.make_lance_dataset`` (plus ``val.lance``/``test.lance``/"
+        "``predict.lance`` siblings when ``--checkpoint-path`` is set)."
+    ),
+)
+@click.option(
+    "--midi-port",
+    type=str,
+    default=None,
+    help=(
+        "Name of a MIDI input port to listen on (matched against ``mido.get_input_names()``). "
+        "When set, a daemon thread forwards MIDI note/CC/pitch-wheel/aftertouch messages to "
+        "the plugin while the editor is open. Pass an empty string ``''`` to auto-select the "
+        "first available input. When unset, no MIDI input is opened. List ports with "
+        '``python -c "import mido; print(mido.get_input_names())"``.'
+    ),
+)
+@click.option(
+    "--checkpoint-path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
+)
+@click.option(
+    "--experiment",
+    default=_DEFAULT_EVAL_EXPERIMENT,
+    show_default=True,
+    help="Hydra experiment used for checkpoint evaluation after patch capture.",
+)
+@click.option(
+    "--session-recording-path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        f"Optional WAV file to render a deterministic "
+        f"{int(SESSION_RECORDING_DURATION_SECONDS)}s test clip to "
+        f"(middle C from {SESSION_RECORDING_NOTE_START_SECONDS:.1f}-"
+        f"{SESSION_RECORDING_NOTE_END_SECONDS:.1f}s). When set, replaces the live "
+        f"audio stream — output depends only on plugin state, so the same inputs "
+        f"always produce the same WAV. No-op when not set."
+    ),
+)
+def main(
+    plugin_path: str,
+    pred: PredictionRef | None,
+    dataset_ref: DatasetRef | None,
+    param_spec_name: str,
+    output_dataset_dir_path: Path | None,
+    midi_port: str | None,
+    checkpoint_path: Path | None,
+    experiment: str,
+    session_recording_path: Path | None,
+) -> None:
+    """Open a VST3 plugin GUI, stream audio, and record patches to a Lance dataset.
+
+    The base preset is selected by ``plugin_state_paths[param_spec_name]`` so a spec/preset
+    mismatch is unrepresentable.
+
+    Flow:
+
+    1. Resolve the base preset from ``plugin_state_paths[param_spec_name]`` and load it.
+    2. If ``--pred`` or ``--dataset-ref`` is provided, decode the referenced row and apply
+       it to the plugin before the editor opens.
+    3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
+       and run a keyboard loop (press ``p`` to snapshot the current synth params as a patch,
+       ``q`` to quit).
+    4. After the editor is closed, render every recorded patch through the plugin and write
+       the resulting samples to ``train.lance`` inside ``--output-dataset-dir-path`` via
+       ``make_lance_dataset``.
+    5. If ``--checkpoint-path`` is set, replicate the captured split and run evaluation.
+
+    :param plugin_path: VST3 plugin path resolved by Click.
+    :param pred: Optional predicted parameter row applied before audition.
+    :param dataset_ref: Optional dataset parameter row applied before audition.
+    :param param_spec_name: ParamSpec registry key paired with the plugin preset.
+    :param output_dataset_dir_path: Optional destination for captured patches.
+    :param midi_port: Optional MIDI input name, or an empty string for auto-selection.
+    :param checkpoint_path: Optional model checkpoint for post-capture evaluation.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
+    :param session_recording_path: Optional destination for deterministic audition audio.
+    :raises TypeError: The loaded plugin is not a VST3 plugin.
+    :raises click.UsageError: CLI options conflict or an output path already exists.
+    """
+    plugin_state_path = plugin_state_paths[param_spec_name]
+    if dataset_ref is not None and pred is not None:
+        raise click.UsageError(
+            "--pred and --dataset-ref are mutually exclusive; pass at most one."
+        )
+
+    # ``--session-recording-path`` skips ``play_audio``, so a MIDI listener would enqueue
+    # forever with no consumer. Reject the combination up front.
+    if session_recording_path is not None and midi_port is not None:
+        raise click.UsageError(
+            "--midi-port and --session-recording-path are mutually exclusive; "
+            "the live audio thread doesn't run during deterministic clip rendering."
+        )
+
+    # Fail fast — a pre-existing path could clobber captured patches; reject before rendering.
+    if output_dataset_dir_path is not None and output_dataset_dir_path.exists():
+        raise click.UsageError(
+            f"--output-dataset-dir-path {output_dataset_dir_path} already exists; "
+            f"this script creates a new directory. Choose a path that does not exist yet."
+        )
+
+    plugin = load_plugin(plugin_path)
+    if not isinstance(plugin, VST3Plugin):
+        raise TypeError(f"expected VST3Plugin, got {type(plugin).__name__}")
+
+    load_preset(plugin, plugin_state_path)
+
+    # Two flushes ensure the plugin's full parameter dict is populated and any
+    # transient state from preset load is cleared before applying user params.
+    _flush_plugin(plugin)
+    _flush_plugin(plugin)
+
+    # Snapshot the post-preset-flush parameter values so ``record_patch`` can detect drift
+    # in any non-spec parameter at record time.
+    default_params: dict[str, float] = {
+        name: plugin.parameters[name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        for name in plugin.parameters  # pyright: ignore[reportAttributeAccessIssue]
+    }
+
+    if dataset_ref is not None:
+        synth_params = load_dataset_synth_params(dataset_ref, param_spec_name)
+        set_params(plugin, synth_params)
+    elif pred is not None:
+        synth_params = load_prediction_synth_params(pred, param_spec_name)
+        set_params(plugin, synth_params)
+
+    # Render the deterministic clip before opening the editor so the WAV depends
+    # only on the initially-loaded plugin state. Running it concurrently with
+    # show_editor would let the user twist knobs mid-render and break that
+    # guarantee.
+    if session_recording_path is not None:
+        play_audio_recorded(plugin, session_recording_path)
+
+    # Created up front so ``midi_listener`` can observe shutdown the moment ``main``
+    # sets it (the same event also drives ``play_audio``, ``keyboard_loop``, and the
+    # plugin editor's blocking close signal).
+    stop_event = threading.Event()
+
+    midi_queue: queue.Queue[tuple[list[int], float]] | None = None
+    if midi_port is not None:
+        resolved_port = _resolve_midi_port(
+            midi_port,
+            mido.get_input_names(),  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        if midi_port == "":
+            logger.info("--midi-port='' — auto-selected first input: %s", resolved_port)
+        midi_queue = queue.Queue()
+        threading.Thread(
+            target=midi_listener,
+            args=(resolved_port, midi_queue, stop_event),
+            daemon=True,
+        ).start()
+
+    pool = ThreadPoolExecutor()
+    audio_timed_out = False
+    try:
+        audio_future = (
+            pool.submit(play_audio, plugin, stop_event, midi_queue)
+            if session_recording_path is None
+            else None
+        )
+        keyboard_future = pool.submit(
+            keyboard_loop, plugin, stop_event, param_spec_name, default_params
+        )
+
+        try:
+            plugin.show_editor(stop_event)
+        finally:
+            stop_event.set()
+            # Surface any exception from the audio thread. Catch TimeoutError so
+            # a slow stream-close on shutdown doesn't crash the script — log it
+            # and skip the wait-for-completion in pool teardown to avoid hanging.
+            if audio_future is not None:
+                try:
+                    audio_future.result(timeout=AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    audio_timed_out = True
+                    logger.warning(
+                        "audio thread did not exit within %ss; "
+                        "cancelling pool and continuing shutdown",
+                        AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS,
+                    )
+        logger.info(
+            "Editor closed; press any key in this terminal to finish "
+            "(captured patches will then be rendered)..."
+        )
+        synth_patches = keyboard_future.result()
+        logger.info("Recorded %d patches: %s", len(synth_patches), synth_patches)
+    finally:
+        # When the audio thread timed out, don't let pool teardown block waiting
+        # on it again — cancel pending work and return immediately. Otherwise
+        # wait for any remaining work to drain normally.
+        pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
+
+    if output_dataset_dir_path is None:
+        logger.info("No --output-dataset-dir-path provided; skipping dataset creation.")
+        return
+    if not synth_patches:
+        logger.info("No patches recorded, skipping dataset creation.")
+        return
+    output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
+    patch_file_path = output_dataset_dir_path / "train.lance"
+    render_cfg = make_dataset_render_cfg(
+        param_spec_name=param_spec_name,
+        plugin_path=plugin_path,
+        plugin_state_path=plugin_state_path,
+        synth_version=extract_renderer_version(Path(plugin_path)),
+        samples_per_shard=len(synth_patches),
+    )
+    make_lance_dataset(
+        lance_dir=patch_file_path,
+        render_cfg=render_cfg,
+        fixed_synth_params_list=synth_patches,
+    )
+    _maybe_eval_captured_patches(
+        patch_file_path,
+        output_dataset_dir_path,
+        len(synth_patches),
+        checkpoint_path,
+        render_config=render_cfg,
+        experiment=experiment,
+    )
+
+
+class EvalRunner(Protocol):
+    """Callable contract for captured-patch evaluation."""
+
+    def __call__(
+        self,
+        num_samples: int,
+        *,
+        dataset_root_dir: Path,
+        checkpoint_path: Path,
+        render_config: RenderConfig,
+        experiment: str,
+    ) -> None:
+        """Evaluate captured patches with explicit same-typed settings.
+
+        :param num_samples: Number of patches to evaluate.
+        :param dataset_root_dir: Root containing the evaluation splits.
+        :param checkpoint_path: Model checkpoint used for prediction.
+        :param render_config: Renderer identity and lifecycle used for captured patches.
+        :param experiment: Hydra experiment selecting the model configuration.
+        """
+
+
+def _maybe_eval_captured_patches(
+    patch_file_path: Path,
+    output_dataset_dir_path: Path,
+    num_patches: int,
+    checkpoint_path: Path | None,
+    render_config: RenderConfig,
+    *,
+    experiment: str = _DEFAULT_EVAL_EXPERIMENT,
+    eval_runner: EvalRunner | None = None,
+) -> None:
+    """Replicate captured patches into the eval-pipeline splits and run eval_patches.
+
+    No-op if no checkpoint is provided. Evaluation receives the complete capture-time render
+    configuration so prediction and re-rendering use the same backend contract.
+
+    :param patch_file_path: Captured patch file used as the evaluation input.
+    :param output_dataset_dir_path: Root directory for evaluation outputs.
+    :param num_patches: Number of captured patches to evaluate.
+    :param checkpoint_path: Optional model checkpoint for evaluation.
+    :param render_config: Exact configuration used to render the captured dataset.
+    :param experiment: Hydra experiment selecting the checkpoint's model configuration.
+    :param eval_runner: Optional injected evaluation runner.
+    :raises OSError: Replicating a captured split fails.
+    """
+    if checkpoint_path is None:
+        logger.info("No --checkpoint-path provided; skipping patch evaluation.")
+        return
+    runner = eval_runner if eval_runner is not None else eval_patches
+    sibling_paths = [
+        output_dataset_dir_path / name for name in ("test.lance", "val.lance", "predict.lance")
+    ]
+    rollback_paths: list[Path] = []
+    try:
+        for sibling_path in sibling_paths:
+            if not sibling_path.exists():
+                rollback_paths.append(sibling_path)
+            # Lance datasets are directories, so copy the whole tree.
+            shutil.copytree(patch_file_path, sibling_path)
+    except OSError:
+        for rollback_path in rollback_paths:
+            if not rollback_path.exists():
+                continue
+            try:
+                shutil.rmtree(rollback_path)
+            except OSError:
+                logger.exception("failed to roll back partial sibling copy at %s", rollback_path)
+        raise
+    runner(
+        num_patches,
+        dataset_root_dir=output_dataset_dir_path,
+        checkpoint_path=checkpoint_path,
+        render_config=render_config,
+        experiment=experiment,
+    )
+
+
+if __name__ == "__main__":
+    _configure_logging()
+    main()  # type: ignore[call-arg]

@@ -1,25 +1,21 @@
 import argparse
-import io
 import logging
-import re
-import tarfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple, TypeAlias
 
-import dask.array as da
-import h5py
 import numpy as np
-from dask.distributed import Client, progress
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
-from synth_setter.data.surge_datamodule import VSTDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 
 logger = logging.getLogger(__name__)
 
-_SHARD_GLOB = "shard-*.tar"
-_MEL_SPEC_MEMBER_RE = re.compile(rf"^\d{{8}}\.{re.escape(MEL_SPEC_FIELD)}\.npy$")
+WelfordValue: TypeAlias = np.ndarray | int
+WelfordState: TypeAlias = tuple[int, WelfordValue, WelfordValue]
+
+# Lance shards are dataset directories, not single files.
+_SHARD_GLOB = "shard-*.lance"
 
 # Cap the listed degenerate indices in error/warning messages so a fully
 # degenerate dataset (e.g. count==1 on a 3-D mel spec, ~100k elements) doesn't
@@ -148,54 +144,6 @@ def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
     return out
 
 
-def get_stats_hdf5(filename: str, mask_degenerate: bool = False) -> None:
-    """Compute Dask-backed mean/std over a Surge XT HDF5 ``mel_spec`` dataset.
-
-    The Dask client and HDF5 file handle are scoped to the ``with`` blocks so
-    every call releases its worker processes/threads and closes the file before
-    returning — required now that the in-process ``finalize-dataset`` CLI calls
-    this in its main loop and would otherwise leak handles across runs.
-
-    :param filename: Path to a ``.h5`` file with a ``mel_spec`` dataset.
-    :param mask_degenerate: See :func:`get_stats_wds`.
-    """
-    dataset_name = "mel_spec"
-    num_workers = 4
-
-    logger.info("Starting Dask client (n_workers=%d)", num_workers)
-    with Client(n_workers=num_workers, threads_per_worker=8) as client:
-        # ``da.from_array`` reads lazily; the h5py.File must stay open through
-        # the final ``.compute()`` so workers can pull chunks on demand.
-        with h5py.File(filename, "r") as h5_file:
-            logger.info("Creating Dask array from dataset %r", dataset_name)
-            darray = da.from_array(h5_file[dataset_name], chunks="auto")
-
-            logger.info("Building mean/std reduction tasks")
-            mean_task = darray.mean(axis=0)
-            std_task = darray.std(axis=0)
-
-            logger.info("Persisting reduction tasks")
-            futures = [mean_task.persist(), std_task.persist()]
-
-            logger.info("Displaying compute progress")
-            progress(futures)
-
-            logger.info("Gathering results")
-            mean_val, std_val = client.gather(futures)
-
-            mean = mean_val.compute()
-            std = std_val.compute()
-            logger.info("Computed mean and std (shapes %s, %s)", mean.shape, std.shape)
-
-    logger.info("Saving stats to file")
-    out_file = VSTDataset.get_stats_file_path(filename)
-    if mask_degenerate:
-        std = _fix_degenerate_bins(std)
-    else:
-        _check_degenerate_bins(std)
-    np.savez(out_file, mean=mean, std=std)
-
-
 def update(existing, new):
     count, mean, M2 = existing
     count += 1
@@ -204,6 +152,29 @@ def update(existing, new):
     delta2 = new - mean
     M2 += delta * delta2
     return count, mean, M2
+
+
+def merge_welford(existing: WelfordState, other: WelfordState) -> WelfordState:
+    """Merge two Welford states (Chan et al. parallel combine).
+
+    Lets finalize reduce per-attempt ``(count, mean, m2)`` shard sidecars into
+    one dataset-level state without touching any rows. The zero state
+    ``(0, 0, 0)`` is the identity, so it seeds a fold.
+
+    :param existing: Welford state ``(count, mean, M2)`` accumulated so far.
+    :param other: Welford state to fold in.
+    :returns: Combined Welford state over both inputs' rows.
+    Both non-identity states must carry identically shaped mean and M2 arrays.
+    """
+    count_a, mean_a, m2_a = existing
+    count_b, mean_b, m2_b = other
+    count = count_a + count_b
+    if count == 0:
+        return existing
+    delta = mean_b - mean_a
+    mean = mean_a + delta * (count_b / count)
+    m2 = m2_a + m2_b + delta * delta * (count_a * count_b / count)
+    return count, mean, m2
 
 
 def finalize(existing, mask_degenerate: bool = False):
@@ -237,128 +208,25 @@ def get_stats_directory(directory, mask_degenerate: bool = False):
     np.savez(out_file, mean=mean, std=std)
 
 
-def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
-    """Yield each ``mel_spec.npy`` member's array from one shard, in name-sorted order.
-
-    Mirrors ``validate_shard``'s raw-``tarfile`` idiom so the stats path
-    pulls in no extra runtime deps (no ``webdataset``) and surfaces tar
-    parse errors at the same layer as the validator. Ignores the writer's
-    ``metadata.json`` sentinel and other per-row fields.
-
-    Iterates sorted ``TarInfo`` objects (not member names) and extracts
-    by the ``TarInfo`` itself so a malformed archive with duplicate
-    matching names cannot trick ``extractfile`` into returning the same
-    payload twice (tar name lookup resolves to the *last* matching entry
-    regardless of which one we're iterating).
-
-    :param shard_path: Filesystem path to one ``shard-*.tar``.
-    :yields: One ``(rows, *inner)`` mel array per matched tar member.
-    :ytype: np.ndarray
-    :raises ValueError: When a matched ``*.mel_spec.npy`` member is not a
-        regular file (directory, symlink, hardlink, device, etc.). Hard-
-        and symlinks pointing at another archive member would satisfy
-        ``extractfile != None``, so the check uses ``TarInfo.isfile()``
-        which only returns ``True`` for ``REGTYPE``/``AREGTYPE``. Treated
-        as a malformed shard so the per-shard guard in
-        :func:`get_stats_wds` cannot be defeated by a mix of readable and
-        unreadable matched members on the same shard.
-    """
-    with tarfile.open(shard_path, mode="r:") as tar:
-        matched = sorted(
-            (m for m in tar.getmembers() if _MEL_SPEC_MEMBER_RE.match(m.name)),
-            key=lambda m: m.name,
-        )
-        for member in matched:
-            if not member.isfile():
-                raise ValueError(
-                    f"shard {shard_path.name}: matched member {member.name!r} is "
-                    f"not a regular file (TarInfo.isfile() is False; rejects "
-                    f"directories, symlinks, hardlinks, and devices); treat as "
-                    f"malformed shard rather than silently skip"
-                )
-            extracted = tar.extractfile(member)
-            if extracted is None:
-                raise ValueError(
-                    f"shard {shard_path.name}: matched member {member.name!r} "
-                    f"could not be extracted (tarfile.extractfile returned None)"
-                )
-            yield np.load(io.BytesIO(extracted.read()))
-
-
-def _fold_shard_into_welford(
-    existing: tuple[int, Any, Any], shard_path: Path
-) -> tuple[int, Any, Any]:
-    """Fold every mel row from one shard into the Welford accumulator.
-
-    :param existing: Welford state ``(count, mean, M2)`` before this shard.
-    :param shard_path: Filesystem path to one ``shard-*.tar``.
-    :returns: Updated Welford state after every readable mel row was folded.
-    :raises ValueError: ``shard_path`` carried no readable ``*.mel_spec.npy``
-        members; raised eagerly so partial stats are never written silently
-        for a truncated/malformed shard.
-    """
-    shard_rows = 0
-    for mel_batch in _iter_mel_batches(shard_path):
-        for row in mel_batch:
-            existing = update(existing, row)
-            shard_rows += 1
-    if shard_rows == 0:
-        raise ValueError(
-            f"shard {shard_path.name} contained no readable "
-            f"'*.{MEL_SPEC_FIELD}.npy' members; aborting so partial stats "
-            f"are never written silently for a truncated/malformed shard"
-        )
-    return existing
-
-
-def stream_stats_wds(
-    shard_paths: Iterable[Path], mask_degenerate: bool = False
-) -> tuple[np.ndarray, np.ndarray]:
-    """Stream Welford mean/std across an iterable of ``shard-*.tar`` paths.
-
-    Lets finalize download a shard, fold it, and ``unlink`` it before pulling
-    the next one — peak disk stays at one shard regardless of split size.
-    The iterable is consumed lazily; a generator that downloads+yields+deletes
-    pairs naturally.
-
-    :param shard_paths: Iterable yielding shard tar paths in the order the
-        caller wants them folded; sorting is the caller's responsibility.
-    :param mask_degenerate: See :func:`get_stats_wds`.
-    :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :raises FileNotFoundError: ``shard_paths`` yielded zero paths; partial
-        stats are never written silently for an empty input set.
-    """
-    existing: tuple[int, Any, Any] = (0, 0, 0)
-    folded_any = False
-    for shard_path in shard_paths:
-        logger.info(f"Processing {shard_path.name}...")
-        existing = _fold_shard_into_welford(existing, shard_path)
-        folded_any = True
-    if not folded_any:
-        raise FileNotFoundError("stream_stats_wds received no shard paths")
-    return finalize(existing, mask_degenerate=mask_degenerate)
-
-
-def _fold_lance_shard_into_welford(
-    existing: tuple[int, Any, Any],
+def fold_lance_shard_into_welford(
+    existing: WelfordState,
     shard_uri: str | Path,
     *,
     storage_options: dict[str, str] | None = None,
-) -> tuple[int, Any, Any]:
+) -> WelfordState:
     """Fold every Lance ``mel_spec`` row from one shard into Welford state.
 
     :param existing: Welford state ``(count, mean, M2)`` before this shard.
     :param shard_uri: One ``shard-*.lance`` dataset (local path or ``s3://`` URI).
     :param storage_options: Object-store config for a cloud ``shard_uri``; ``None`` local.
     :returns: Updated Welford state after every readable mel row was folded.
-    :rtype: tuple[int, Any, Any]
     :raises ValueError: The shard carried no readable ``mel_spec`` rows.
     """
     from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 
     shard_rows = 0
     for row in iter_lance_column_rows(shard_uri, MEL_SPEC_FIELD, storage_options=storage_options):
-        existing = update(existing, row)
+        existing = update(existing, row.astype(np.float32, copy=False))
         shard_rows += 1
     if shard_rows == 0:
         raise ValueError(
@@ -378,17 +246,16 @@ def stream_stats_lance(
 
     :param shard_uris: Iterable of Lance shard datasets in fold order (local
         paths or ``s3://`` URIs).
-    :param mask_degenerate: See :func:`get_stats_wds`.
+    :param mask_degenerate: See :func:`get_stats_lance`.
     :param storage_options: Object-store config for cloud ``shard_uris``; ``None`` local.
     :returns: ``(mean, std)`` arrays as produced by :func:`finalize`.
-    :rtype: tuple[np.ndarray, np.ndarray]
     :raises FileNotFoundError: ``shard_uris`` yielded zero entries.
     """
-    existing: tuple[int, Any, Any] = (0, 0, 0)
+    existing: WelfordState = (0, 0, 0)
     folded_any = False
     for shard_uri in shard_uris:
-        logger.info(f"Processing {Path(str(shard_uri)).name}...")
-        existing = _fold_lance_shard_into_welford(
+        logger.info("Processing %s...", Path(str(shard_uri)).name)
+        existing = fold_lance_shard_into_welford(
             existing, shard_uri, storage_options=storage_options
         )
         folded_any = True
@@ -397,49 +264,41 @@ def stream_stats_lance(
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
-def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
-    """Compute mel-spec mean/std across all ``shard-*.tar`` in ``directory`` and write sibling
-    ``stats.npz``.
+def get_stats_lance(directory: str | Path, mask_degenerate: bool = False) -> None:
+    """Compute mel-spec mean/std over ``shard-*.lance`` shards and write a sibling ``stats.npz``.
 
     Streams Welford's algorithm row-by-row over each shard's pre-computed
-    ``mel_spec`` arrays — no mel recompute, no full-dataset load.
+    ``mel_spec`` column — no mel recompute, no full-dataset load.
 
-    :param directory: Path to a directory containing ``shard-*.tar`` shards.
+    :param directory: Path to a directory containing ``shard-*.lance`` datasets.
     :param mask_degenerate: If ``True``, mel bins with zero variance are
         masked to ``std=1.0`` instead of raising — see the matching flag
-        on :func:`get_stats_hdf5` / :func:`get_stats_directory` for the
-        downstream rationale.
+        on :func:`get_stats_directory` for the downstream rationale.
     :raises FileNotFoundError: When ``directory`` contains no shards.
     :returns: ``None``. Writes ``stats.npz`` to ``directory / "stats.npz"``.
-    :rtype: None
     """
     directory = Path(directory)
     shard_paths = sorted(directory.glob(_SHARD_GLOB))
     if not shard_paths:
         raise FileNotFoundError(f"no {_SHARD_GLOB} files in {directory}")
-    # ``ValueError`` on a malformed shard propagates from
-    # ``stream_stats_wds → _fold_shard_into_welford``; pydoclint's
-    # :raises: section only mirrors local raises.
-    mean, std = stream_stats_wds(shard_paths, mask_degenerate=mask_degenerate)
+    mean, std = stream_stats_lance(shard_paths, mask_degenerate=mask_degenerate)
     out_file = directory / "stats.npz"
-    logger.info(f"Saving to {out_file}")
+    logger.info("Saving to %s", out_file)
     np.savez(out_file, mean=mean, std=std)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute mean/std statistics over a Surge XT HDF5 file, a "
-            "directory of WebDataset shard-*.tar files, or an audio folder, "
-            "and write the result to a sibling stats.npz."
+            "Compute mean/std statistics over a directory of Lance shard-*.lance "
+            "datasets or an audio folder, and write the result to a sibling stats.npz."
         )
     )
     parser.add_argument(
         "input",
         help=(
-            "Path to a .h5 file (Dask path), a directory containing "
-            "shard-*.tar shards (streaming Welford path), or a directory of "
-            "audio files (streaming Welford path)."
+            "Path to a directory containing shard-*.lance datasets (streaming "
+            "Welford path), or a directory of audio files (streaming Welford path)."
         ),
     )
     parser.add_argument(
@@ -459,9 +318,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Parse ``argv`` and dispatch to the matching stats entrypoint.
 
-    Dispatch order: ``.h5`` suffix → :func:`get_stats_hdf5`; directory
-    containing ``shard-*.tar`` → :func:`get_stats_wds`; everything else →
-    :func:`get_stats_directory` (audio folder).
+    Dispatch order: a directory containing ``shard-*.lance`` datasets →
+    :func:`get_stats_lance`; everything else → :func:`get_stats_directory`
+    (audio folder).
 
     :param argv: Argument list forwarded to ``argparse``. ``None`` uses
         ``sys.argv[1:]`` — the standard CLI behavior.
@@ -480,10 +339,8 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     input_path = Path(args.input)
-    if input_path.suffix == ".h5":
-        get_stats_hdf5(args.input, mask_degenerate=args.mask_degenerate_bins)
-    elif input_path.is_dir() and any(input_path.glob(_SHARD_GLOB)):
-        get_stats_wds(args.input, mask_degenerate=args.mask_degenerate_bins)
+    if input_path.is_dir() and any(input_path.glob(_SHARD_GLOB)):
+        get_stats_lance(args.input, mask_degenerate=args.mask_degenerate_bins)
     else:
         get_stats_directory(args.input, mask_degenerate=args.mask_degenerate_bins)
 

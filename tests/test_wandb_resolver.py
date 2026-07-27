@@ -107,9 +107,11 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_register_resolvers_registers_wandb_resolver() -> None:
-    """register_resolvers makes the ``wandb`` resolver available to OmegaConf."""
+def test_register_resolvers_registers_project_resolvers() -> None:
+    """register_resolvers makes project resolvers available to OmegaConf."""
     register_resolvers()
+
+    assert OmegaConf.has_resolver("param_spec_width")
     assert OmegaConf.has_resolver("wandb")
 
 

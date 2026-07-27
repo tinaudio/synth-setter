@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from omegaconf import DictConfig, OmegaConf
 
 from tests._baseline_worktree import git, ref_exists, try_fetch_ref
 
@@ -58,6 +59,25 @@ EXPECTED_SURGE_TASKS = 8
 # fan-out); each script invokes ``python -m synth_setter.cli.eval`` once with a
 # fixed set of Hydra overrides and inherits ``ckpt_path: ${wandb:...}`` from its
 # experiment config (the v0.0.0 baseline instead sourced ``get-ckpt-from-wandb.sh``).
+AUDIO_PREDICT_CASES: tuple[tuple[str, str, str], ...] = (
+    ("jobs/predict/ffn-fsd50k.sh", "model.net.d_out", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/ffn-nsynth.sh", "model.net.d_out", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/flow-fsd50k.sh", "model.num_params", "callbacks.log_per_param_mse.param_spec"),
+    ("jobs/predict/flow-nsynth.sh", "model.num_params", "callbacks.log_per_param_mse.param_spec"),
+    (
+        "jobs/predict/flowmlp-fsd50k.sh",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    (
+        "jobs/predict/flowmlp-nsynth.sh",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    ("jobs/predict/vae-fsd50k.sh", "model.net.latent_dim", "model.param_spec"),
+    ("jobs/predict/vae-nsynth.sh", "model.net.latent_dim", "model.param_spec"),
+)
+
 PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/ffn-fsd50k.sh",
     "jobs/predict/ffn-full.sh",
@@ -318,27 +338,44 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
     "logger.wandb.log_model",  # changed `true` → False (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
+    "logger.wandb.resume",  # W&B run-resume mode changes tracking behavior, not model behavior
     "logger.wandb.settings.console",  # `wrap` added in #1506; console capture, no model impact
     "logger.wandb.settings.console_multipart",  # added in #1641; console capture, no model impact
     # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
     "datamodule.dataset_root",
+    # Per-dataloader process count is host-resource sizing, not a model knob (#1916).
+    "datamodule.num_workers",
+    # Worker lifecycle is resource sizing; #2149 must validate fixed-seed behavior before merge.
+    "datamodule.persistent_workers",
     "datamodule.predict_file",
     "datamodule.stats_file",
     # Optional R2-download URI added in #1338; absent in v0.0.0 — locality, not a model knob.
     "datamodule.download_dataset_root_uri",
+    # Subset-hydration selectors added in #2360; absent in v0.0.0. Both resolve to
+    # null, hydrating the whole dataset, so training sees the v0.0.0 row set.
+    "datamodule.download_dataset_row_limit",
+    "datamodule.download_dataset_txids",
     # Param-spec selection key added in #1602; absent in v0.0.0 — selects the spec,
     # doesn't size the model (d_out/num_params are pinned separately).
     "datamodule.param_spec_name",
+    # Conditioning-modality routing added in #2279; absent in v0.0.0. Resolves to
+    # the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
+    "datamodule.conditioning",
+    # Per-worker prefetch depth added in #2235; absent in v0.0.0 — resolves to
+    # null (delegates to PyTorch), dataloader resource sizing, not a model knob.
+    "datamodule.prefetch_factor",
+    # Model-side conditioning routing added in #2279; absent in v0.0.0. Resolves
+    # to the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
+    "model.conditioning",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
     "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
-    # Opt-in W&B artifact-lineage block (#1508/#1509); absent in v0.0.0 — provenance,
-    # not a model knob. `training`'s sole member is upload_checkpoints_uri (#1472), so
-    # the whole block is stripped; re-narrow to a dotted path if it ever gains a model knob.
+    # Training contains checkpoint/probe observability only; re-narrow this path if a
+    # model-affecting setting is added.
     "training",
-    # Opt-in W&B lineage refs added in #1509; absent in v0.0.0 — provenance, not a model knob.
+    # W&B model lineage ref is provenance, not a model knob.
     "consumed_train_config_id",
-    "consumed_dataset_config_id",
-    "consumed_artifact_alias",
+    # Validation volume affects observability, not optimized parameters, in these configs.
+    "trainer.limit_val_batches",
 )
 
 # Leaf-name keys stripped at every nesting depth. Use this list (vs. ACCEPTED_DIFFS)
@@ -415,6 +452,36 @@ def _normalize_for_compare(cfg: dict) -> dict:
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
 
 
+def test_normalize_for_compare_accepts_num_workers_host_resource_drift() -> None:
+    baseline = {"datamodule": {"num_workers": 11}, "model": {"hidden_size": 512}}
+    current = {"datamodule": {"num_workers": 4}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_persistent_workers_resource_drift() -> None:
+    """Worker persistence is an accepted config difference pending #2149."""
+    baseline = {"datamodule": {"persistent_workers": False}, "model": {"hidden_size": 512}}
+    current = {"datamodule": {"persistent_workers": True}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_wandb_resume_observability_drift() -> None:
+    """W&B resume mode does not change model behavior."""
+    baseline = {"logger": {"wandb": {"resume": None}}, "model": {"hidden_size": 512}}
+    current = {"logger": {"wandb": {"resume": "allow"}}, "model": {"hidden_size": 512}}
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_rejects_model_drift_with_num_workers_drift() -> None:
+    baseline = {"datamodule": {"num_workers": 11}, "model": {"hidden_size": 512}}
+    current = {"datamodule": {"num_workers": 4}, "model": {"hidden_size": 256}}
+
+    assert _normalize_for_compare(baseline) != _normalize_for_compare(current)
+
+
 # Unit tests for _strip_dotted_keys. The end-to-end resolved-config tests exercise
 # this indirectly, but they're slow (~10min); a focused unit test pins the
 # top-level-vs-nested path handling and the asymmetric no-op-when-absent contract.
@@ -434,7 +501,7 @@ class TestStripDottedKeys:
     def test_absent_path_is_no_op(self) -> None:
         """The asymmetric contract: a key absent on this side leaves the config untouched."""
         cfg = {"keep": 1}
-        assert _strip_dotted_keys(cfg, ("consumed_artifact_alias",)) == {"keep": 1}
+        assert _strip_dotted_keys(cfg, ("consumed_train_config_id",)) == {"keep": 1}
 
     def test_path_through_non_dict_is_no_op(self) -> None:
         """A path whose intermediate segment isn't a dict is skipped, not an error."""
@@ -753,6 +820,47 @@ def test_surge_train_configs_are_equal(
 def test_predict_cases() -> None:
     """Sanity-check predict case fan-out matches PREDICT_SCRIPTS."""
     assert len(PREDICT_CASES) == len(PREDICT_SCRIPTS)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("script_rel", "width_path", "param_spec_path"),
+    AUDIO_PREDICT_CASES,
+    ids=[Path(case[0]).stem for case in AUDIO_PREDICT_CASES],
+)
+def test_audio_predict_script_resolves_without_datamodule_param_spec(
+    shim_factory: Callable[[], tuple[Path, Path]],
+    tmp_path: Path,
+    script_rel: str,
+    width_path: str,
+    param_spec_path: str,
+) -> None:
+    """Audio prediction jobs resolve without adding VST metadata to their datamodule.
+
+    :param shim_factory: Builds a shim that drives the real eval config entrypoint.
+    :param tmp_path: Supplies a local checkpoint override that avoids W&B resolution.
+    :param script_rel: Shipped FSD50K or NSynth prediction job under test.
+    :param width_path: Resolved checkpoint architecture width.
+    :param param_spec_path: Resolved checkpoint parameter-spec metadata.
+    """
+    fake_ckpt = tmp_path / "fake.ckpt"
+    fake_ckpt.touch()
+    shim_dir, out_yaml = shim_factory()
+
+    proc = _run_under_shim(
+        shim_dir,
+        REPO_ROOT,
+        script_rel,
+        extra_env={"EXTRA_HYDRA_OVERRIDE": f"++ckpt_path={fake_ckpt}"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    cfg = OmegaConf.load(out_yaml)
+    assert isinstance(cfg, DictConfig)
+    assert cfg["datamodule"]["_target_"] == "synth_setter.data.audio_datamodule.AudioDataModule"
+    assert "param_spec_name" not in cfg["datamodule"]
+    assert OmegaConf.select(cfg, width_path) == 300
+    assert OmegaConf.select(cfg, param_spec_path) == "surge_xt"
 
 
 @pytest.mark.slow

@@ -1,0 +1,20 @@
+# Staging-only variant of the network-volume pool: the copy writes R2 ->
+# mounted volume, so it needs no 750 GB local disk — small-disk GPU hosts are
+# far easier to schedule. GPU (not CPU) pods on purpose: SkyPilot cannot SSH
+# into RunPod CPU pods (600s timeout -> teardown loop), so cheap CPU staging
+# is not currently viable. The pool is capped at sub-$1/hr tiers — an rclone
+# copy gains nothing from H-class hosts.
+name: runpod-network-volume-staging
+resources:
+  - cloud: runpod
+    accelerators:
+      RTX3090: 1
+      RTX4090: 1
+      A40: 1
+      L40S: 1
+      RTX6000-Ada: 1
+    use_spot: false
+    disk_size: 50
+mount_network_volume: /workspace/network-volume
+setup_scripts:
+  - operator-ssh.sh

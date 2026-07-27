@@ -6,7 +6,7 @@
 | Field        | Value      |
 | ------------ | ---------- |
 | Status       | Draft      |
-| Last Updated | 2026-05-27 |
+| Last Updated | 2026-07-16 |
 | Tracking     | #122       |
 
 ______________________________________________________________________
@@ -35,10 +35,11 @@ ______________________________________________________________________
 intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
-└── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+└── probes/{train_config_id}/{recovery_namespace}/step-{global_step}/
 ```
 
-The three prefixes (`data/`, `train/`, `eval/`) are the canonical per-run dataset footprint.
+The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). `{recovery_namespace}` is the per-launch identifier (`{run_id}-{uuid}`, `cli/train.py::_make_recovery_namespace`) shared with mid-run recovery checkpoints, so concurrent runs of one config cannot interleave snapshots and a launch's probes correlate with its checkpoints by name.
 
 ______________________________________________________________________
 
@@ -51,24 +52,34 @@ ______________________________________________________________________
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── shards/                  # Future state — no shards/ subdir exists yet; current workers upload shard files directly under the run prefix root. #406
-│   ├── shard-000000.h5
+│   ├── shard-000000.lance/
 │   └── ...
+├── train.lance/             # output_format=lance; fragment data may be worker-written, manifests are finalize-written
+│   ├── data/
+│   ├── _versions/
+│   └── _transactions/
+├── val.lance/               # output_format=lance
+├── test.lance/              # output_format=lance
 ├── metadata/                # Future state — current `input_spec.json` lives flat at the run prefix root. #385
 │   ├── config.yaml          # Frozen pipeline config (provenance copy)
 │   ├── input_spec.json      # Frozen input specification (authoritative; currently at `<run_prefix>input_spec.json` — `r2.prefix` already ends in `/`)
 │   ├── dataset.json         # Self-describing dataset card
 │   ├── dataset.complete     # Completion marker
+│   ├── shard-claims.lance/  # Lance shard-claims table (opt-in use_shard_queue; operator populates, workers claim/complete via conditional UPDATE)
 │   └── workers/             # Future state — worker staging area; current workers write shards directly to `data/{config_id}/{run_id}/`. #406
-│       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
-│       └── attempts/{worker_id}-{attempt_uuid}/report.json
-├── train.h5, val.h5, test.h5  # Split virtual datasets
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.*
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json
+│       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz
+│       ├── attempts/{worker_id}-{attempt_uuid}/report.json
+│       └── attempts/{worker_id}-{attempt_uuid}/debug.log
 └── stats.npz                   # Normalization statistics
 ```
 
-- Workers may only write under `metadata/workers/` *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- Workers may write only per-attempt metadata under `metadata/workers/`, plus conditional claim/complete updates to the one shared Lance claims table `metadata/shard-claims.lance` (`pipeline/shard_claims.py`), except Lance workers may also write uncommitted fragment data under `train.lance/data/`, `val.lance/data/`, or `test.lance/data/`. Workers never write final Lance manifests, transactions, `metadata/dataset.complete`, or dataset-level `stats.npz`. *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 - `shards/` is written only by finalize *(future state — current workers write directly into the run prefix; finalize stage does not yet exist, see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- Lance `fragment.json` sidecars store only a schema version and Lance's exact serialized `FragmentMetadata.to_json()` payload; logical identity (shard, split, worker, attempt) is derived from the path, filename, and spec, not stored. Per-shard normalization state is stored as `{worker_id}-{attempt_uuid}.shard-stats.npz`; finalize reduces selected winners into dataset-level `stats.npz`.
 - All `rclone` operations use `--checksum`
-- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`. *(future state — completion-marker handling lands with finalize, [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- Datasets are immutable once the `dataset.complete` marker exists. New versions require a new `dataset_wandb_run_id`. *(finalize writes the marker at the run prefix root today; relocation under `metadata/` is [#385](https://github.com/tinaudio/synth-setter/issues/385))*
 
 #### Materialized spec: two destinations, two purposes
 
@@ -124,7 +135,7 @@ ______________________________________________________________________
 
 > **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`), resuming the data-generation run pinned to `spec.run_id` so the artifact lands on the producer node of the lineage DAG. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
-> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end. On global-zero it first uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived location `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`; bucket defaults to `intermediate-data`), then references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference, not the file ([#92](https://github.com/tinaudio/synth-setter/issues/92) is implemented by this). `training.upload_checkpoints_uri` is an optional override of the target (null = auto-derive). The artifact degrades to lineage-only (no reference) when R2 is unreachable (local CPU / CI) or no checkpoint was written (e.g. `fast_dev_run`); training is never aborted by checkpoint persistence. Logging is best-effort and a no-op without a `WandbLogger`.
+> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end. On global-zero it first uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived location `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`; bucket defaults to `intermediate-data`), then references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference, not the file ([#92](https://github.com/tinaudio/synth-setter/issues/92) is implemented by this). Because that reference renders with no size or content in the UI, `artifact.metadata` also carries `ckpt_uri`, `ckpt_bytes`, `epoch`, `global_step`, `monitor`, and `monitor_score`, so the referenced checkpoint is identifiable without leaving W&B ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)). `training.upload_checkpoints_uri` is an optional override of the target (null = auto-derive). The artifact degrades to lineage-only (no reference) when R2 is unreachable (local CPU / CI) or no checkpoint was written (e.g. `fast_dev_run`); training is never aborted by checkpoint persistence. Logging is best-effort and a no-op without a `WandbLogger`.
 >
 > **Known limitation (mutable per-`config_id` storage):** the R2 object lives at a per-`config_id` path and is overwritten each run, so an older artifact version (`:vN` for N < latest) resolves to the *current* object. Reference-only model storage is mutable per `config_id`. (If per-version immutability is ever needed, the run id would be folded into the path — deferred, YAGNI.)
 
@@ -159,6 +170,8 @@ eval dataset artifact ─────────┴→ [evaluation run] ←─�
 - `run.use_artifact()` (not `api.artifact()`) — only the former creates lineage links
 - Every run must include `github_sha` in `wandb.config`
 
+> **Missing edges are marked, not swallowed** ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)): a lineage edge must never abort a run, but a run that silently loses one is indistinguishable from one that never had an input. `record_input_lineage` (train + eval) records each edge via `use_input_artifacts` and, when any consumed input has no edge — the ref was rejected (e.g. a dataset finalized before the `run_id` alias landed in [#1881](https://github.com/tinaudio/synth-setter/issues/1881)) or the configured dataset root's frozen spec would not parse ([#2267](https://github.com/tinaudio/synth-setter/issues/2267)) — writes `summary.lineage_incomplete = true`, `summary.lineage_missing` (what is missing), and the `lineage-incomplete` run tag. Offline runs are exempt from the ref half — `use_artifact` is unavailable offline by design, so those refs are skipped rather than reported as a gap the run could never close.
+
 ______________________________________________________________________
 
 ## 6. W&B Metadata Convention
@@ -179,7 +192,7 @@ ______________________________________________________________________
 | ----------------- | ------------- | --------------------------------- |
 | `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
 | `training`        | Training      | `src/synth_setter/cli/train.py`   |
-| `evaluation`      | Evaluation    | eval script                       |
+| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`    |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
@@ -192,16 +205,17 @@ ______________________________________________________________________
 | Workflow        | File                           | Trigger                              | Runner                          | Secrets             | Key Inputs                                                       |
 | --------------- | ------------------------------ | ------------------------------------ | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
 | Tests           | `test.yml`                     | push, PR, dispatch                   | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| GPU Tests       | `test-gpu.yml`                 | schedule, dispatch                   | `gpu-x64`                       | —                   | —                                                                |
+| GPU Tests       | `test-gpu.yml`                 | schedule, dispatch                   | `ubuntu-latest` → RunPod GPU    | R2, RunPod, W&B     | —                                                                |
 | CPU Slow Tests  | `cpu-slow.yml`                 | push (main), dispatch                | `ubuntu-latest`                 | —                   | —                                                                |
 | Data Generation | `generate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2, RunPod, OCI     | see `workflow_call.inputs` in `generate-dataset-shards.yaml`     |
 | Data Validation | `validate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2                  | `image_tag`, `spec_uri`                                          |
-| Training        | TBD                            | `workflow_dispatch`                  | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
-| Evaluation      | TBD                            | `workflow_dispatch`                  | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
+| Training        | `train.yml`                    | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `experiment` (required), `launch_config` (expert override)       |
+| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `launch_config`                                                  |
 | Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`                  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
-- All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
-- Evaluation requires `train_wandb_run_id` (to find the model artifact) and `eval_config_id` (which dataset to evaluate on).
+- All workflows that create W&B runs must guarantee the §12 `github_sha` provenance: runner-local runs export `GITHUB_SHA` into the run environment; SkyPilot-dispatched runs instead pin the worker checkout via `WORKER_GIT_REF` (the worker records its synced `HEAD`).
+- Training and evaluation dispatch SkyPilot managed jobs via `synth-setter-skypilot-launch <launch_config>`; the launch config (`src/synth_setter/configs/launch/*.yaml`) bakes the compute template, worker image tag, and worker `cmd`. Training resolves its launch config from the required `experiment` input (hardcoded mapping in `train.yml`, #2196) and forwards the experiment through a repeatable `synth-setter-skypilot-launch --extra-env EXPERIMENT <name>` option; the experiment itself owns its dataset pin. The workflows forward `WORKER_GIT_REF=<dispatched SHA>`, and the launcher injects `IMAGE_TAG` into every rank's env, so both §12 provenance fields match the dispatched commit and image.
+- Evaluation sources its checkpoint inside the launch config's `cmd` via the `experiment/surge/wandb_checkpoint/*` overlays, which pin `ckpt_path` to the published model artifact through the `${wandb:…}` OmegaConf resolver (e.g. `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'`); the experiment selects the eval dataset.
 - Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):
@@ -252,7 +266,7 @@ ______________________________________________________________________
 | ------------------------------------ | ----------------------------------- | ----------------------- |
 | `WANDB_API_KEY`                      | data-gen, training, eval, promotion | wandb.ai/settings       |
 | `GITHUB_TOKEN`                       | promotion                           | Automatic in GHA        |
-| `RUNPOD_API_KEY`                     | data-gen, training                  | runpod.io               |
+| `RUNPOD_API_KEY`                     | data-gen, training, eval            | runpod.io               |
 | `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, training, eval            | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, training, eval            | Cloudflare R2 dashboard |
@@ -298,4 +312,4 @@ ______________________________________________________________________
 ## 13. References
 
 - [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md) — W&B → GitHub Release workflow, promote script, GHA workflow
-- artifact-provenance-reference.md — TBD (#122): W&B artifact patterns, lineage DAG examples, API reference
+- [artifact-provenance-reference.md](../reference/artifact-provenance-reference.md) — W&B artifact patterns, lineage DAG examples, `${wandb:…}` resolver recipe

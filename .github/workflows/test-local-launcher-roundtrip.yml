@@ -38,7 +38,7 @@ on:
       - "src/synth_setter/pipeline/ci/**"
       - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard.yaml"
-      - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard-wds.yaml"
+      - "src/synth_setter/configs/experiment/generate_dataset/smoke-shard-lance.yaml"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/configs/render/**"
@@ -71,11 +71,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       - name: Set up R2

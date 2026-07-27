@@ -24,6 +24,7 @@ input shape is promoted to ``r2: R2Location`` — see ``DatasetSpec``'s
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,7 +41,19 @@ from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT
 if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import ShardSpec, Split
 
-__all__ = ["R2Location"]
+__all__ = ["R2Location", "parse_shard_staging_dir"]
+
+_SHARD_STAGING_DIR_PATTERN = re.compile(r"shard-(\d{6,})")
+
+
+def parse_shard_staging_dir(name: str) -> int | None:
+    """Parse a canonical staging directory name into its logical shard id.
+
+    :param name: Directory basename formatted as ``shard-NNNNNN``.
+    :returns: Logical shard id, or ``None`` when ``name`` is not canonical.
+    """
+    match = _SHARD_STAGING_DIR_PATTERN.fullmatch(name)
+    return int(match.group(1)) if match else None
 
 
 class R2Location(BaseModel):
@@ -212,49 +225,17 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(DATASET_COMPLETE_FILENAME)
 
-    def split_h5_uri(self, split: Split) -> str:
-        """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
+    def split_lance_uri(self, split: Split) -> str:
+        """R2 URI of a finalized split Lance dataset directory.
 
-        Reshard produces these locally today; the URI is where they land once
-        finalize uploads them (#408). Paired with :meth:`split_wds_brace_uri`
-        for the wds variant; callers branch on ``DatasetSpec.output_format``.
+        Finalize writes these directly to R2 (#408); the URI is where each
+        ``<split>.lance`` dataset lands.
 
         :param split: Split name; ``Literal["train","val","test"]`` (see
             ``synth_setter.pipeline.schemas.spec.Split``).
-        :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
-        """
-        return self._under_prefix(f"{split}.h5")
-
-    def split_lance_uri(self, split: Split) -> str:
-        """R2 URI of a finalized split Lance file.
-
-        :param split: Split name; ``Literal["train","val","test"]``.
-        :returns: ``r2://<bucket>/<prefix><split>.lance``.
+        :returns: ``r2://<bucket>/<prefix><split>.lance`` URI string.
         """
         return self._under_prefix(f"{split}.lance")
-
-    def split_wds_brace_uri(self, shard_range: tuple[int, int]) -> str:
-        """R2 URI carrying the webdataset brace pattern for ``[lo, hi)`` shards.
-
-        WebDataset readers expand the ``{LO..HI}`` form natively; ``HI`` here
-        is inclusive (``shard_range[1] - 1``) per the
-        ``webdataset.WebDataset`` contract.
-
-        :param shard_range: Half-open shard-index range, typically from
-            ``DatasetSpec.split_shard_ranges[split]``.
-        :returns: ``r2://<bucket>/<prefix>shard-{LO..HI}.tar`` with zero-padded
-            six-digit indices matching ``ShardSpec.filename``'s format.
-        :raises ValueError: ``shard_range`` is empty (``lo >= hi``) — would
-            emit a malformed brace like ``{000003..000002}`` that wds reads
-            as an empty set instead of raising.
-        """
-        lo, hi = shard_range
-        if lo >= hi:
-            raise ValueError(
-                f"split_wds_brace_uri requires lo < hi (got {shard_range!r}); "
-                f"an empty shard range has no brace pattern."
-            )
-        return self._under_prefix(f"shard-{{{lo:06d}..{hi - 1:06d}}}.tar")
 
     def stats_uri(self) -> str:
         """R2 URI of ``stats.npz`` (normalization statistics).
@@ -266,6 +247,24 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(STATS_NPZ_FILENAME)
 
+    def workers_shards_root_uri(self) -> str:
+        """R2 URI of the per-shard staging root (``metadata/workers/shards/``).
+
+        Finalize lists this prefix recursively to reconcile every shard's
+        staged attempts in one pass (#1776).
+
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/`` URI string.
+        """
+        return self._under_prefix("metadata/workers/shards/")
+
+    def shard_staging_dir_uri(self, shard_id: int) -> str:
+        """R2 URI of one shard's staging directory under ``metadata/workers/shards/``.
+
+        :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/`` URI string.
+        """
+        return f"{self.workers_shards_root_uri()}shard-{shard_id:06d}/"
+
     def worker_staged_shard_uri(
         self,
         shard_id: int,
@@ -273,22 +272,25 @@ class R2Location(BaseModel):
         attempt_uuid: str,
         ext: str,
     ) -> str:
-        """R2 URI of a per-attempt staged shard under ``metadata/workers/shards/``.
+        """R2 URI of a per-attempt staged artifact under ``metadata/workers/shards/``.
 
-        Future state (#406): workers upload each shard attempt here before
-        finalize promotes one canonical copy to the run prefix root.
-        No current consumers; included so the staging code path can call
-        through this method when #406 lands.
+        Lance attempts (#1776) stage artifacts here using the canonical
+        suffixes from ``pipeline.constants``.
 
         :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
         :param worker_id: Worker identifier issued by the launcher.
         :param attempt_uuid: Per-attempt UUID distinguishing retries.
-        :param ext: File extension with leading dot (``".h5"`` or ``".tar"``).
-        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt>.<ext>``.
+        :param ext: Filename suffix with leading dot (``".fragment.json"``, ``".lance"``, …).
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt><ext>``.
         """
-        return self._under_prefix(
-            f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt_uuid}{ext}"
-        )
+        return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"
+
+    def shard_claims_uri(self) -> str:
+        """R2 URI of the run's Lance shard-claims table (``pipeline/shard_claims.py``).
+
+        :returns: ``r2://<bucket>/<prefix>metadata/shard-claims.lance``.
+        """
+        return self._under_prefix("metadata/shard-claims.lance")
 
     def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:
         """R2 URI of a per-attempt worker report under ``metadata/workers/attempts/``.

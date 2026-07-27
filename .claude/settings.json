@@ -58,7 +58,7 @@
       },
       {
         "matcher": "Edit|Write",
-        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
+        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/skypilot_launch/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
         "hooks": [
           {
             "type": "command",
@@ -79,6 +79,18 @@
       },
       {
         "matcher": "Bash",
+        "description": "Pr-title-guard: blocks `gh pr create` / `gh pr edit` whose inline --title/-t has an off-vocabulary conventional-commit type (.gitlint) or a release-triggering type (feat/fix/perf/revert per pyproject semantic-release tags) without an explicit RELEASE_INTENT=1 prefix. shlex-tokenizes so quoted prose mentioning the recipe does not trip it; fails closed on unparsable gated commands. PR_TITLE_GUARD: block default / warn / off. Tracked in #2291.",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh*)",
+            "timeout": 10,
+            "command": "bash agent/hooks/pr-title-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
         "description": "Git-commit-trailer-check: blocks `git commit` (and `git -c X=Y commit`, `git --git-dir=.git commit`, other git-level option forms) that carry --no-verify / -n, a Co-Authored-By trailer, or an agent-attribution footer (e.g. 'Generated with Claude ...'). Tokenizes with shlex so chained `&& / || / ; / |` commands are not mis-scoped.",
         "hooks": [
           {
@@ -88,24 +100,11 @@
             "command": "bash agent/hooks/git-commit-trailer-check.sh"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "description": "Pre-PR review gate: blocks gh pr create unless REVIEW_FULL=<path> points at a sentinel review file whose filename-encoded SHA is an ancestor of HEAD within REVIEW_MAX_LAG first-parent commits. Honor-system gate; raises the floor to 'produce a file named after a recent SHA on this branch'. Full contract lives in agent/hooks/pre-pr-review-gate.sh; filename format in agent/_shared/review_sentinel.py.",
-        "hooks": [
-          {
-            "type": "command",
-            "if": "Bash(gh pr create *)",
-            "timeout": 10,
-            "statusMessage": "Checking pre-PR review gate...",
-            "command": "bash agent/hooks/pre-pr-review-gate.sh"
-          }
-        ]
       }
     ],
     "Stop": [
       {
-        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2) so the agent keeps driving the loop instead of treating 'I pushed the fix' as 'the PR is ready'. Checks gate 1 (CI green via `gh pr checks`) and gate 2 (`mergeable=MERGEABLE`) deterministically; the block message points to /pr-readiness + docs/pr-readiness-loop.md for gate 3 (every review comment answered) and gate 4 (no fresh Copilot findings). No-op outside a repo, in the primary checkout, with no PR, or in a headless/CI context (PR_READINESS_HEADLESS — exported by _lib.sh's run_agent_prompt — / CI / a .agent-reviews/worktrees/ cwd) so the doc-drift detached-worktree agent never deadlocks. Escape hatch PR_READINESS_GATE: block default / warn (loud stderr, exit 0) / off (no-op).",
+        "description": "PR-readiness gate: on Stop, if there's an open PR for the current branch whose readiness gates don't hold, blocks the turn from ending (exit 2). The shared probe distinguishes WAIT (pending CI or unknown mergeability) from ACTION_REQUIRED (failed CI, conflicts, or unanswered review threads), and the block message tells the agent whether to keep monitoring or remediate instead of polling. Gate 4 (Copilot) remains advisory. No-op outside a repo, in the primary checkout, with no PR, or in a headless/CI context (PR_READINESS_HEADLESS / CI / a .agent-reviews/worktrees/ cwd). Escape hatch PR_READINESS_GATE: block default / warn (loud stderr, exit 0) / off (no-op).",
         "hooks": [
           {
             "type": "command",
@@ -119,7 +118,7 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "description": "Auto-format on every Edit/Write: ruff (Python), mdformat (Markdown), prettier (YAML). Markdown and YAML go via `pre-commit run <hook> --files` so the exact pinned versions and excludes from .pre-commit-config.yaml apply — no version drift between save-time and commit-time. Goal: catch lint and formatting errors immediately rather than waiting for pre-commit.",
+        "description": "Auto-format feedback on every Edit/Write: best-effort ruff (Python), mdformat (Markdown), and prettier (YAML). Markdown and YAML go via `pre-commit run <hook> --files` so the exact pinned versions and excludes from .pre-commit-config.yaml apply. This hook is non-enforcing; Git pre-commit and pre-push hooks are authoritative.",
         "hooks": [
           {
             "type": "command",
@@ -139,7 +138,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Worktree post-setup: after `git worktree add`, automatically runs `make link-plugins && make link-thoughts` in the new worktree so the plugins/ symlink and thoughts/ symlink are present without a manual follow-up. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks).",
+        "description": "Worktree post-setup: after `git worktree add`, installs pre-commit/pre-push hooks and links shared plugins, thoughts, and skills in the new worktree. Parses the worktree path from the captured command; exits 0 on any failure (fail-safe, never blocks).",
         "hooks": [
           {
             "type": "command",
@@ -163,11 +162,11 @@
       },
       {
         "matcher": "Bash",
-        "description": "PR checkbox trigger: detects gh pr create commands and prompts the agent to invoke the /pr-checkbox skill for verification checkboxes. Goal: ensure every PR gets behavioral verification results before review.",
+        "description": "PR checkbox trigger: detects real gh pr create invocations (via agent/_shared/pr_command_classifier.py, so quoted prose mentioning the recipe — a gh issue create body, an echo, a commit message — does NOT trip it) and prompts the agent to invoke the /pr-checkbox skill for verification checkboxes. Goal: ensure every PR gets behavioral verification results before review.",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command // \"\"' | grep -q 'gh pr create' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"A PR was just created. You MUST now invoke the /pr-checkbox skill to add verification checkboxes to this PR.\"}}' || true",
+            "command": "bash agent/hooks/pr-checkbox-trigger.sh",
             "statusMessage": "Checking for PR creation..."
           }
         ]

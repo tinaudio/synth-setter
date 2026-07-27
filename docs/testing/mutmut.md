@@ -4,16 +4,18 @@
 modules listed under `[tool.mutmut].paths_to_mutate` in `pyproject.toml`.
 This is the authoritative entry point — the CI workflow
 `.github/workflows/mutmut.yaml` runs it on Linux (`workflow_dispatch` + weekly
-cron).
+cron). CI partitions the configured mutation roots into per-module/function
+shards — see the `matrix.include` list in the workflow; each job retains its own
+results and `mutants/` artifact even when another shard fails.
 
-## Requires Python 3.11+
+## Requires Python 3.12
 
 mutmut parses the whole `pyproject.toml`. On Python 3.10 it falls back to the
 legacy `toml` library, which crashes (`IndexError` in `load_array`) on the
-PEP 735 `dev` group's mixed string/inline-table arrays; 3.11+ uses stdlib
-`tomllib`, which parses it cleanly ([#1414](https://github.com/tinaudio/synth-setter/issues/1414)).
-Run `make mutmut` under a 3.11+ interpreter — the CI workflow pins 3.11 for
-this reason.
+PEP 735 `dev` group's mixed string/inline-table arrays. Python 3.11+ provides
+stdlib `tomllib`, which parses it cleanly
+([#1414](https://github.com/tinaudio/synth-setter/issues/1414)). This repository
+standardizes on Python 3.12.13, which the CI workflow pins for reproducibility.
 
 ## `also_copy` covers the full package
 
@@ -26,6 +28,15 @@ Only revisit the `[tool.mutmut]` config when adding a *new* top-level mutate
 path under `src/`. All other `synth_setter.*` imports are covered
 automatically — `also_copy` already pulls in any module added outside
 `paths_to_mutate`.
+
+## Pytest capture must stay disabled
+
+mutmut embeds pytest in its own process. W&B patches the active stdout and
+stderr objects when imported, while Click's `CliRunner` replaces and closes
+those objects. Pytest capture adds another stream replacement layer, which can
+leave W&B writing to a closed Click stream during mutmut's clean test. The
+`--capture=no` entry in `pytest_add_cli_args` avoids that incompatible stream
+lifecycle without excluding tests or mutations.
 
 ## Keep mutmut-target tests in-process
 

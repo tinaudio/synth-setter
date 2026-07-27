@@ -10,6 +10,7 @@ import pytest
 
 from synth_setter.data.vst import generate_vst_dataset, param_specs
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed
+from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.seeding import rng_for_sample
 
 _SPEC_NAME = "surge_xt"
@@ -37,7 +38,21 @@ def _loud_audio() -> np.ndarray:
 
 def _patch_render(monkeypatch: pytest.MonkeyPatch, outputs: list[np.ndarray]) -> None:
     stream = iter(outputs)
-    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: next(stream))
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *a, **kw: next(stream))
+
+
+def _renderer() -> PedalboardRenderer:
+    """Keep seeded-retry tests on the production renderer interface.
+
+    :returns: Renderer whose calls reach the patched ``core.render_params`` seam.
+    """
+    return PedalboardRenderer(
+        plugin_path=_PLUGIN_PATH,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        signal_duration_seconds=_DURATION,
+        plugin_state_path=_PRESET_PATH,
+    )
 
 
 def _generate(
@@ -52,14 +67,10 @@ def _generate(
         else None
     )
     return generate_vst_dataset.generate_sample(
-        plugin_path=_PLUGIN_PATH,
+        renderer=_renderer(),
         velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
         min_loudness=_MIN_LOUDNESS,
         param_spec=param_specs[_SPEC_NAME],
-        preset_path=_PRESET_PATH,
         seed=seed,
     )
 
@@ -93,14 +104,21 @@ def test_generate_sample_records_accepted_attempt_zero_when_first_loud(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_render(monkeypatch, [_loud_audio()])
-    assert _generate().attempt == 0
+    sample = _generate()
+
+    assert sample.attempt == 0
+    assert sample.clipped_rejections == 0
+    assert sample.silent_rejections == 0
 
 
 def test_generate_sample_all_attempts_silent_raises_runtimeerror_naming_sample_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_render(monkeypatch, [_silent_audio()] * 3)
-    with pytest.raises(RuntimeError, match=f"sample {_SAMPLE_IDX}"):
+    with pytest.raises(
+        RuntimeError,
+        match=rf"sample {_SAMPLE_IDX}.*silent rejections: 3; clipped rejections: 0",
+    ):
         _generate(max_attempts=3)
 
 

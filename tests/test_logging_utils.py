@@ -22,8 +22,11 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
+    LINEAGE_INCOMPLETE_TAG,
     log_wandb_provenance,
+    mark_lineage_incomplete,
     pin_wandb_run_id,
+    record_input_lineage,
     resolve_run_config_id,
     use_input_artifacts,
 )
@@ -335,12 +338,36 @@ class TestPinWandbRunId:
 
     def test_sets_run_id_and_job_type(self) -> None:
         """A wandb logger cfg gets the given run id and job_type verbatim."""
-        cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "job_type": ""}}})
+        cfg = OmegaConf.create(
+            {
+                "logger": {
+                    "wandb": {
+                        "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                        "id": None,
+                        "job_type": "",
+                    }
+                }
+            }
+        )
 
         pin_wandb_run_id(cfg, "flow_simple-20260313T100000000Z", "training")
 
         assert cfg.logger.wandb.id == "flow_simple-20260313T100000000Z"
         assert cfg.logger.wandb.job_type == "training"
+
+    def test_noop_when_wandb_logger_is_partial_struct_node(self) -> None:
+        """A non-instantiable experiment overlay is left unchanged in struct mode."""
+        cfg = OmegaConf.create(
+            {"logger": {"wandb": {"project": "synth-setter", "tags": ["surge"]}}}
+        )
+        OmegaConf.set_struct(cfg, True)
+
+        pin_wandb_run_id(cfg, "flow_simple", "evaluation")
+
+        assert OmegaConf.to_container(cfg.logger.wandb) == {
+            "project": "synth-setter",
+            "tags": ["surge"],
+        }
 
     def test_noop_when_wandb_logger_absent(self) -> None:
         """A non-wandb logger group is left untouched (no KeyError)."""
@@ -359,9 +386,16 @@ class TestPinWandbRunId:
 class FakeWandbRun:
     """Fake wandb run recording every ``use_artifact`` call as inspectable state."""
 
-    def __init__(self, raises: bool = False) -> None:
-        """:param raises: When true, ``use_artifact`` raises after recording the call."""
+    def __init__(self, raises: bool = False, offline: bool = False) -> None:
+        """Build the fake run.
+
+        :param raises: When true, ``use_artifact`` raises after recording the call.
+        :param offline: Mirrors ``wandb.Run.offline``; offline runs cannot use artifacts.
+        """
         self.consumed: list[str] = []
+        self.summary: dict[str, object] = {}
+        self.tags: tuple[str, ...] = ()
+        self.offline = offline
         self._raises = raises
 
     def use_artifact(self, name_alias: str) -> None:
@@ -458,6 +492,37 @@ class TestUseInputArtifacts:
 
         assert run.consumed == ["data-diva-v1:latest"]
 
+    def test_recorded_refs_are_not_reported_unrecorded(self) -> None:
+        """A ref every logger accepted is absent from the returned unrecorded list."""
+        run = FakeWandbRun()
+
+        assert use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")]) == []
+
+    def test_use_artifact_failure_is_reported_unrecorded(self) -> None:
+        """A swallowed wandb failure still surfaces as an unrecorded ref (#2424)."""
+        run = FakeWandbRun(raises=True)
+
+        unrecorded = use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert unrecorded == [("data-diva-v1", "latest")]
+
+    def test_ref_failing_on_one_of_two_loggers_is_reported_once(self) -> None:
+        """A ref that fails anywhere is reported once, not once per failing logger."""
+        loggers = [FakeWandbLogger(FakeWandbRun(raises=True)) for _ in range(2)]
+
+        unrecorded = use_input_artifacts(loggers, [("data-diva-v1", "latest")])
+
+        assert unrecorded == [("data-diva-v1", "latest")]
+
+    def test_offline_run_records_no_edge_and_reports_nothing(self) -> None:
+        """An offline run cannot use artifacts at all, so it is skipped, not called a gap."""
+        run = FakeWandbRun(offline=True)
+
+        unrecorded = use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == []
+        assert unrecorded == []
+
     def test_non_zero_rank_records_no_edge(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On a non-zero DDP rank the helper is a no-op — only rank 0 records lineage.
 
@@ -469,3 +534,116 @@ class TestUseInputArtifacts:
         use_input_artifacts([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
 
         assert run.consumed == []
+
+    def test_non_zero_rank_reports_nothing_unrecorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-zero rank records nothing and reports nothing, so it never marks the run.
+
+        :param monkeypatch: Sets ``rank_zero_only.rank`` to a non-zero rank.
+        """
+        monkeypatch.setattr(rank_zero_only, "rank", 1)
+
+        assert (
+            use_input_artifacts([FakeWandbLogger(FakeWandbRun())], [("data-diva-v1", "x")]) == []
+        )
+
+
+class TestMarkLineageIncomplete:
+    """Durably marking a run whose consumed-artifact lineage is incomplete (#2424)."""
+
+    def test_missing_inputs_set_summary_flag(self) -> None:
+        """The run summary carries the boolean flag a lineage audit can filter on."""
+        run = FakeWandbRun()
+
+        mark_lineage_incomplete([FakeWandbLogger(run)], ["data-diva-v1:v0"])
+
+        assert run.summary["lineage_incomplete"] is True
+
+    def test_missing_inputs_are_listed_in_summary(self) -> None:
+        """The summary names each missing input so the gap is diagnosable in the UI."""
+        run = FakeWandbRun()
+
+        mark_lineage_incomplete([FakeWandbLogger(run)], ["data-diva-v1:v0", "dataset root r2://x"])
+
+        assert run.summary["lineage_missing"] == ["data-diva-v1:v0", "dataset root r2://x"]
+
+    def test_missing_inputs_append_tag_preserving_existing_tags(self) -> None:
+        """The marker tag is appended, leaving tags the run already carries intact."""
+        run = FakeWandbRun()
+        run.tags = ("surge",)
+
+        mark_lineage_incomplete([FakeWandbLogger(run)], ["data-diva-v1:v0"])
+
+        assert run.tags == ("surge", LINEAGE_INCOMPLETE_TAG)
+
+    def test_repeated_marking_does_not_duplicate_tag(self) -> None:
+        """Marking twice (train then test leg) leaves exactly one marker tag."""
+        run = FakeWandbRun()
+
+        mark_lineage_incomplete([FakeWandbLogger(run)], ["data-diva-v1:v0"])
+        mark_lineage_incomplete([FakeWandbLogger(run)], ["data-diva-v1:v0"])
+
+        assert run.tags == (LINEAGE_INCOMPLETE_TAG,)
+
+    def test_non_wandb_logger_is_a_no_op(self) -> None:
+        """A logger list without a WandbLogger leaves the fake run untouched."""
+        run = FakeWandbRun()
+        non_wandb_logger = cast(Logger, SimpleNamespace(experiment=run))
+
+        mark_lineage_incomplete([non_wandb_logger], ["data-diva-v1:v0"])
+
+        assert run.summary == {}
+
+    def test_wandb_failure_is_swallowed(self) -> None:
+        """A wandb outage while marking must not abort the run it is marking."""
+        run = SimpleNamespace(tags=(), summary=_ExplodingSummary())
+
+        mark_lineage_incomplete([FakeWandbLogger(cast(FakeWandbRun, run))], ["data-diva-v1:v0"])
+
+        assert run.tags == ()
+
+
+class _ExplodingSummary(dict[str, object]):
+    """Run summary whose writes raise, modelling a wandb outage mid-marking."""
+
+    def __setitem__(self, key: str, value: object) -> None:
+        """Reject the write.
+
+        :param key: Summary key the caller tried to set.
+        :param value: Value the caller tried to store.
+        :raises RuntimeError: Always, to model a failed summary write.
+        """
+        raise RuntimeError("wandb down")
+
+
+class TestRecordInputLineage:
+    """Recording lineage edges and marking the run when any input is missing (#2424)."""
+
+    def test_all_refs_recorded_leaves_run_unmarked(self) -> None:
+        """A complete lineage records its edges and writes no incompleteness marker."""
+        run = FakeWandbRun()
+
+        record_input_lineage([FakeWandbLogger(run)], [("data-diva-v1", "latest")])
+
+        assert run.consumed == ["data-diva-v1:latest"]
+        assert run.summary == {}
+        assert run.tags == ()
+
+    def test_unrecordable_ref_marks_run_with_that_ref(self) -> None:
+        """A ref wandb rejected (missing alias) is named in the durable marker."""
+        run = FakeWandbRun(raises=True)
+
+        record_input_lineage([FakeWandbLogger(run)], [("data-diva-v1", "v0")])
+
+        assert run.summary["lineage_missing"] == ["data-diva-v1:v0"]
+        assert run.tags == (LINEAGE_INCOMPLETE_TAG,)
+
+    def test_unresolved_input_marks_run_without_any_ref(self) -> None:
+        """An input whose ref could not be derived marks the run even with no refs."""
+        run = FakeWandbRun()
+
+        record_input_lineage([FakeWandbLogger(run)], [], ["dataset root r2://bucket/run"])
+
+        assert run.summary["lineage_missing"] == ["dataset root r2://bucket/run"]
+        assert run.tags == (LINEAGE_INCOMPLETE_TAG,)

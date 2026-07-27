@@ -1,4 +1,4 @@
-"""Leaf-module home for the wds tar shard's ``metadata.json`` sidecar model.
+"""Leaf-module home for the Lance shard's schema-metadata payload model.
 
 Kept free of project imports (only ``pydantic``) so consumers on either side
 of the ``synth_setter/`` boundary — notably ``synth_setter.data.vst`` — can
@@ -14,13 +14,12 @@ DEFAULT_ATTEMPTS_PER_SAMPLE = 100
 
 
 class ShardMetadata(BaseModel):
-    """Sidecar JSON written into wds tar shards (member ``metadata.json``).
+    """Per-shard provenance embedded in the Lance dataset's Arrow schema metadata.
 
-    Mirrors the ``audio`` HDF5 dataset attrs that the wds layout doesn't have
-    a natural home for. The wds writer (PR-13) and the wds branch of
-    ``validate_shard`` (also PR-13) will consume this model directly so a
-    malformed sidecar fails loudly at write or read time instead of silently
-    shipping a half-described shard.
+    The writer projects a ``RenderConfig`` onto these fields and embeds them in
+    the shard's schema metadata; validation and finalize recover the payload via
+    this model so a malformed value fails loudly at read time instead of
+    silently shipping a half-described shard.
 
     JSON read off R2 is a trust boundary — the value ranges below match
     ``RenderConfig._ranges_must_be_sane`` so a corrupted or hand-edited
@@ -59,7 +58,12 @@ class ShardMetadata(BaseModel):
     .. attribute :: base_seed
         :type: int
 
-        Per-shard master seed the row RNGs are derived from (#884).
+        Master seed for this shard's dataset or split stream (#884).
+
+    .. attribute :: sample_offset
+        :type: int
+
+        Split-local index of the shard's first sample.
 
     .. attribute :: attempts_per_sample
         :type: int
@@ -79,10 +83,15 @@ class ShardMetadata(BaseModel):
     base_seed: int = Field(
         default=0,
         description=(
-            "Per-shard master seed the row RNGs are derived from (#884). Defaults to 0 so "
+            "Master seed for this shard's row stream (#884). Defaults to 0 so "
             "sidecars written before this field existed still validate; new shards write the "
             "real seed."
         ),
+    )
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of the shard's first sample.",
     )
     attempts_per_sample: int = Field(
         default=DEFAULT_ATTEMPTS_PER_SAMPLE,

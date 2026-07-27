@@ -1,7 +1,7 @@
-"""Behavioral tests for :mod:`synth_setter.models.surge_fake_oracle_module`.
+"""Behavioral tests for :mod:`synth_setter.models.vst_fake_oracle_module`.
 
 The fake-oracle module is a drop-in replacement for
-:class:`synth_setter.models.surge_ff_module.VSTFeedForwardModule` that returns
+:class:`synth_setter.models.vst_ff_module.VSTFeedForwardModule` that returns
 ``batch["params"]`` as its prediction. The tests pin the oracle contract
 (perfect inversion, zero loss, grad-capable) and the four Lightning step
 shapes that downstream callbacks depend on (``PredictionWriter`` unpacks
@@ -19,7 +19,7 @@ from functools import partial
 import pytest
 import torch
 
-from synth_setter.models.surge_fake_oracle_module import (
+from synth_setter.models.vst_fake_oracle_module import (
     FakeOracleNet,
     VSTFakeOracleModule,
 )
@@ -176,7 +176,7 @@ def test_validation_step_returns_zero_per_param_mse(batch_size: int) -> None:
 
     outputs = module.validation_step(batch, batch_idx=0)
 
-    assert set(outputs.keys()) == {"param_mse", "per_param_mse"}
+    assert set(outputs.keys()) == {"param_mse", "per_param_mse", "preds"}
     assert outputs["param_mse"].shape == ()
     assert outputs["per_param_mse"].shape == (_NUM_PARAMS,)
     assert outputs["param_mse"].item() == 0.0
@@ -194,7 +194,7 @@ def test_test_step_returns_zero_per_param_mse(batch_size: int) -> None:
 
     outputs = module.test_step(batch, batch_idx=0)
 
-    assert set(outputs.keys()) == {"param_mse", "per_param_mse"}
+    assert set(outputs.keys()) == {"param_mse", "per_param_mse", "preds"}
     assert outputs["param_mse"].shape == ()
     assert outputs["per_param_mse"].shape == (_NUM_PARAMS,)
     assert outputs["param_mse"].item() == 0.0

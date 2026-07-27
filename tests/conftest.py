@@ -1,17 +1,18 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
-import h5py
-import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
 import numpy as np
 import pytest
 import torch
@@ -20,26 +21,29 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.data.vst import core, param_specs, preset_paths
+from synth_setter.data.vst import core, param_specs, plugin_state_paths
+from synth_setter.model_cache import embedding_model_dir
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
+from synth_setter.synth_spec import SynthName, SynthSpec
+from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
-from tests._vst import PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS
+from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
-# Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
-# ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
-# explicit values for every flag below, so these constants must match the values
-# the subprocess is invoked with.
+# These values must match the explicit RenderConfig fixture arguments.
 _SURGE_FIXTURE_SAMPLE_RATE = 44100
 _SURGE_FIXTURE_CHANNELS = 2
 _SURGE_FIXTURE_DURATION_SECONDS = 4.0
 _SURGE_FIXTURE_VELOCITY = 100
 _SURGE_FIXTURE_MIN_LOUDNESS = -55.0
-_SURGE_FIXTURE_RENDERER_VERSION = "1.3.4"
+_SURGE_FIXTURE_SYNTH_VERSION = "1.3.4"
 _SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_FIXTURE_SAMPLE_RATE * _SURGE_FIXTURE_DURATION_SECONDS)
 _SURGE_AUDIO_CHANNELS = _SURGE_FIXTURE_CHANNELS
 _SURGE_MEL_SHAPE = (2, 128, 401)
@@ -48,30 +52,112 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
+_EMBEDDING_E2E_ROWS = 2
+_EMBEDDING_E2E_CHECKPOINTS = {
+    "clap": embedding_model_dir("clap-htsat-unfused"),
+    "same_l": embedding_model_dir("same-l"),
+    "same_s": embedding_model_dir("same-s"),
+    "t5gemma": embedding_model_dir("sa3-small-music"),
+}
 
-# Probed from the env var, no network hit — AGENTS.md's `rclone lsd r2:` is for
-# interactive verification, not the skip criterion. VST presence lives in tests._vst.
-_R2_AVAILABLE = bool(os.environ.get("RCLONE_CONFIG_R2_ACCESS_KEY_ID"))
 
+def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
+    """Assert that a trainer's per-parameter MSE callback uses its active VST spec.
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-skip requires_vst / integration_r2 tests when resources are absent.
-
-    :param items: mutated in-place to insert skip markers for missing resources.
+    :param trainer: Lightning trainer constructed by the entrypoint.
+    :param param_spec_name: Registry key expected by the callback.
     """
+    mse_callbacks = [
+        callback for callback in trainer.callbacks if isinstance(callback, LogPerParamMSE)
+    ]
+    assert len(mse_callbacks) == 1
+    assert mse_callbacks[0].param_spec is param_specs[param_spec_name]
+
+
+def train_loss_keys(metric_dict: dict[str, torch.Tensor]) -> list[str]:
+    """Collect the ``train/loss*`` keys, asserting at least one was emitted.
+
+    Modules log ``train/loss`` with ``on_step=True, on_epoch=True``; with a single
+    step only the step-level key is guaranteed, so scan the prefix instead of
+    pinning one key.
+
+    :param metric_dict: Train-metric mapping returned by ``train(cfg)``.
+    :returns: The ``train/loss*`` keys present in the mapping.
+    """
+    loss_keys = [k for k in metric_dict if k.startswith("train/loss")]
+    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
+    return loss_keys
+
+
+def assert_finite_train_loss(metric_dict: dict[str, torch.Tensor]) -> None:
+    """Assert a ``train/loss*`` metric was emitted and every one is finite.
+
+    ``trainer.global_step`` advances even past a NaN/Inf loss, so advancement asserts
+    alone let silent numerical failures pass.
+
+    :param metric_dict: Train-metric mapping returned by ``train(cfg)``.
+    """
+    for key in train_loss_keys(metric_dict):
+        loss = metric_dict[key]
+        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
+
+
+def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> float:
+    """Wall-clock budget for a fixture-building VST subprocess, scaled by sample count.
+
+    A flat ceiling silently under-budgets the day ``NUM_FIXTURE_SAMPLES`` is
+    raised; scaling on it keeps the budget honest as the fixture grows. Overhead
+    covers fixed startup (plugin load, imports); the per-sample term is loose
+    render margin.
+
+    :param num_samples: Sample count the subprocess renders or reads.
+    :returns: Timeout in seconds for the subprocess.
+    """
+    return scaled_timeout(num_samples, overhead_seconds=300.0, per_sample_seconds=60.0)
+
+
+_R2_AVAILABLE = r2_io.is_r2_reachable()
+# The pinned surgepy wheel builds only on Linux x86_64 (see pyproject markers), so
+# every real-engine test is dependency-gated the way ``requires_vst`` gates plugins.
+_SURGEPY_AVAILABLE = importlib.util.find_spec("surgepy") is not None
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Validate selected SAME e2e prerequisites and apply resource skip markers.
+
+    :param config: Active pytest configuration containing the marker expression.
+    :param items: Mutated in place to insert skip markers for missing resources.
+    :raises pytest.UsageError: If an explicitly selected SAME lane lacks a prerequisite.
+    """
+    if "same_e2e" in config.getoption("-m"):
+        missing = []
+        if importlib.util.find_spec("stable_audio_tools") is None:
+            missing.append("stable_audio_tools (install with `uv sync --extra same`)")
+        selected_lane_requires_vst = any("requires_vst" in item.keywords for item in items)
+        if selected_lane_requires_vst and not VST_AVAILABLE:
+            missing.append(
+                f"VST plugin at {PLUGIN_PATH!r} "
+                "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
+            )
+        if missing:
+            raise pytest.UsageError("same_e2e missing prerequisites:\n- " + "\n- ".join(missing))
+
     skip_vst = pytest.mark.skip(
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
-    skip_r2 = pytest.mark.skip(
-        reason="R2 credentials absent (RCLONE_CONFIG_R2_ACCESS_KEY_ID not set); "
-        "run `rclone lsd r2:` to verify"
+    skip_r2 = pytest.mark.skip(reason="R2 remote is not reachable; run `rclone lsd r2:` to verify")
+    skip_surgepy = pytest.mark.skip(
+        reason="surgepy native extension is unavailable (pinned for Linux x86_64 only)"
     )
     for item in items:
         if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)
         if "integration_r2" in item.keywords and not _R2_AVAILABLE:
             item.add_marker(skip_r2)
+        if "requires_surgepy" in item.keywords and not _SURGEPY_AVAILABLE:
+            item.add_marker(skip_surgepy)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
@@ -83,94 +169,50 @@ VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
-    """Assert the generated Surge XT dataset is structurally sound.
+    """Assert the generated Surge XT Lance dataset is structurally sound.
 
-    Verifies the three required datasets exist with the expected shapes, that no NaN/Inf leaked in
+    Verifies the three required columns exist with the expected shapes, that no NaN/Inf leaked in
     from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
     failures here rather than letting downstream training crash on opaque NaN losses.
     """
-    with h5py.File(path, "r") as f:
-        for name in ("audio", "mel_spec", "param_array"):
-            assert name in f, f"missing dataset {name!r} in {path}"
+    import lance
 
-        audio = f["audio"]
-        mel = f["mel_spec"]
-        params = f["param_array"]
-        # `h5py.File.__getitem__` returns `Group | Dataset | Datatype`; the
-        # generator only writes Datasets, so narrow the type for shape access.
-        assert isinstance(audio, h5py.Dataset), f"'audio' is not a Dataset in {path}"
-        assert isinstance(mel, h5py.Dataset), f"'mel_spec' is not a Dataset in {path}"
-        assert isinstance(params, h5py.Dataset), f"'param_array' is not a Dataset in {path}"
+    table = lance.dataset(str(path)).to_table()
+    for name in ("audio", "mel_spec", "param_array"):
+        assert name in table.schema.names, f"missing column {name!r} in {path}"
 
-        expected_audio_shape = (
-            num_samples,
-            _SURGE_AUDIO_CHANNELS,
-            _SURGE_AUDIO_SAMPLES_PER_CLIP,
-        )
-        assert audio.shape == expected_audio_shape, (
-            f"audio shape {audio.shape} != expected {expected_audio_shape}"
-        )
-        assert mel.shape == (num_samples, *_SURGE_MEL_SHAPE), (
-            f"mel_spec shape {mel.shape} != expected {(num_samples, *_SURGE_MEL_SHAPE)}"
-        )
-        assert params.shape[0] == num_samples, (
-            f"param_array first dim {params.shape[0]} != num_samples {num_samples}"
-        )
-        assert params.ndim == 2, f"param_array must be 2D, got shape {params.shape}"
+    def _col(name: str) -> np.ndarray:
+        return table.column(name).combine_chunks().to_numpy_ndarray()
 
-        audio_arr = audio[...].astype(np.float32)
-        mel_arr = mel[...]
-        params_arr = params[...]
-        assert np.isfinite(audio_arr).all(), f"audio in {path} contains NaN/Inf"
-        assert np.isfinite(mel_arr).all(), f"mel_spec in {path} contains NaN/Inf"
-        assert np.isfinite(params_arr).all(), f"param_array in {path} contains NaN/Inf"
+    audio_arr = _col("audio").astype(np.float32)
+    mel_arr = _col("mel_spec")
+    params_arr = _col("param_array")
 
-        per_clip_peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
-        silent = np.where(per_clip_peak <= _SURGE_SILENCE_PEAK_THRESHOLD)[0]
-        assert silent.size == 0, (
-            f"audio clips {silent.tolist()} in {path} are silent "
-            f"(peaks={per_clip_peak[silent].tolist()})"
-        )
+    expected_audio_shape = (
+        num_samples,
+        _SURGE_AUDIO_CHANNELS,
+        _SURGE_AUDIO_SAMPLES_PER_CLIP,
+    )
+    assert audio_arr.shape == expected_audio_shape, (
+        f"audio shape {audio_arr.shape} != expected {expected_audio_shape}"
+    )
+    assert mel_arr.shape == (num_samples, *_SURGE_MEL_SHAPE), (
+        f"mel_spec shape {mel_arr.shape} != expected {(num_samples, *_SURGE_MEL_SHAPE)}"
+    )
+    assert params_arr.shape[0] == num_samples, (
+        f"param_array first dim {params_arr.shape[0]} != num_samples {num_samples}"
+    )
+    assert params_arr.ndim == 2, f"param_array must be 2D, got shape {params_arr.shape}"
 
+    assert np.isfinite(audio_arr).all(), f"audio in {path} contains NaN/Inf"
+    assert np.isfinite(mel_arr).all(), f"mel_spec in {path} contains NaN/Inf"
+    assert np.isfinite(params_arr).all(), f"param_array in {path} contains NaN/Inf"
 
-def _write_smoke_stats_npz(train_h5: Path) -> None:
-    """Write the sibling ``stats.npz`` for a smoke dataset via the stats CLI subprocess.
-
-    Runs ``python -m synth_setter.pipeline.data.stats <train_h5> --mask-degenerate-bins``;
-    the subprocess registers the hdf5plugin Blosc2 filter on import, which the
-    in-process dask path does not surface to its workers. Fails loud on timeout
-    or non-zero exit so a broken stats fold surfaces here, not as a downstream
-    datamodule load error.
-
-    :param train_h5: Path to the rendered ``train.h5``; ``stats.npz`` is written beside it.
-    """
-    stats_args = [
-        sys.executable,
-        "-m",
-        "synth_setter.pipeline.data.stats",
-        str(train_h5),
-        "--mask-degenerate-bins",
-    ]
-    try:
-        result = subprocess.run(  # noqa: S603
-            stats_args, text=True, check=False, timeout=VST_SUBPROCESS_TIMEOUT_SECONDS
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"get_dataset_stats timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    if result.returncode != 0:
-        pytest.fail(
-            f"get_dataset_stats failed (exit {result.returncode})\n"
-            f"command: {stats_args}\n"
-            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
-            pytrace=False,
-        )
-    assert train_h5.parent.joinpath("stats.npz").exists(), (
-        "get_dataset_stats failed to produce stats.npz fixture"
+    per_clip_peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
+    silent = np.where(per_clip_peak <= _SURGE_SILENCE_PEAK_THRESHOLD)[0]
+    assert silent.size == 0, (
+        f"audio clips {silent.tolist()} in {path} are silent "
+        f"(peaks={per_clip_peak[silent].tolist()})"
     )
 
 
@@ -249,7 +291,7 @@ def cfg_train_global() -> DictConfig:
         # set defaults for all tests
         with open_dict(cfg):
             _apply_common_train_eval_overrides(cfg)
-            cfg.datamodule.num_workers = 4
+            cfg.datamodule.num_workers = 0
             cfg.callbacks.model_checkpoint.save_top_k = -1
             cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")
@@ -302,6 +344,39 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
     yield cfg
 
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture
+def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a CPU-cheap production TorchSynth config at the entrypoint boundary.
+
+    Composes the production experiment through ``train.yaml``, then shrinks
+    the online splits and trainer loop so the entrypoint test stays CPU-cheap.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :yields: Ready-to-run training configuration.
+    :ytype: DictConfig
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/ffn",
+                "trainer=cpu",
+                "+trainer.fast_dev_run=true",
+                "datamodule.train_val_test_sizes=[2,2,2]",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "logger=csv",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+    yield cfg
     GlobalHydra.instance().clear()
 
 
@@ -400,6 +475,113 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture(scope="function")
+def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with the production brightOrgan render group.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: Faust cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "render=faust_bright_organ",
+                "render.gui_toggle_cadence=never",
+            ],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the torchsynth smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: torchsynth smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/torchsynth-smoke"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_default_cadence(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with an experiment that sets no cadence keys.
+
+    The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
+    so that module stays free of the imports banned by
+    ``tests/_meta/test_entrypoint_e2e_only.py`` while still carrying the
+    default-cadence entrypoint test ``synth-setter-project-standards`` P31 requires.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: No-cadence-override cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/ci-materialize-test"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_dawdreamer(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the DawDreamer smoke experiment with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+
+    :yields DictConfig: DawDreamer smoke cfg with ``tmp_path``-pinned paths;
+        teardown clears Hydra's global singleton.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/surge-xt-dawdreamer-smoke"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
 @pytest.fixture(scope="package")
 def cfg_finalize_global() -> DictConfig:
     """Build a default Hydra DictConfig for ``finalize_dataset``.
@@ -485,7 +667,7 @@ def param_spec_name(request: pytest.FixtureRequest) -> str:
     :param request: Pytest fixture request — when parametrized indirectly, ``request.param``
         carries the spec name; otherwise the default ``"surge_4"`` is used.
 
-    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.preset_paths`.
+    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.plugin_state_paths`.
     """
     return getattr(request, "param", "surge_4")
 
@@ -514,39 +696,38 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
-    datamodule_group: Literal["surge", "surge_lance"] = "surge",
+    datamodule_group: Literal["surge", "surge_lance"] | None = "surge",
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
     Composes ``train.yaml`` with ``experiment=<experiment>`` and bakes in the minimal
     overrides needed to train-smoke-test on the dataset generated by
-    :func:`surge_xt_smoke_datasets`. The ``model.net.d_out`` and
-    ``callbacks.log_per_param_mse.param_spec`` bake-ins re-pin the per-experiment YAML
-    defaults to the smoke fixture's ``param_spec_name``, so the YAML's production
-    ``d_out`` / ``param_spec`` values do not leak into the smoke path. Used both by the
+    :func:`surge_xt_smoke_datasets`. The datamodule's ``param_spec_name`` drives model
+    width and per-parameter callback labels. Used both by the
     :func:`cfg_surge_xt_global` fixture (where the parametrized ``accelerator`` is
     host-checked upstream) and by the ``configs/experiment/surge/test-mps*.yaml``
     equality test (where the cfg must be built on any host so the YAMLs never silently
     drift from this builder).
 
     :param accelerator: Lightning ``trainer.accelerator`` — ``"cpu"``, ``"mps"``, or ``"gpu"``.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs`; drives
-        ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
+        model width and per-parameter callback labels.
     :param experiment: Hydra ``experiment=...`` override (e.g. ``"surge/fake_oracle"``,
         ``"surge/ffn_full"``); selects which model the smoke cfg wires up.
-    :param datamodule_group: Hydra datamodule group override.
+    :param datamodule_group: Hydra datamodule group override, or ``None`` to retain the
+        experiment's selection.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
+    overrides = [f"experiment={experiment}", "callbacks=[default_vst,eval_vst]"]
+    if datamodule_group is not None:
+        overrides.insert(1, f"datamodule={datamodule_group}")
+
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=[
-                f"experiment={experiment}",
-                f"datamodule={datamodule_group}",
-                "callbacks=[default_surge,eval_surge]",
-            ],
+            overrides=overrides,
         )
         TRAINING_STEPS = 1
         with open_dict(cfg):
@@ -564,11 +745,9 @@ def _build_surge_xt_smoke_cfg(
                 cfg.model.compile = True
                 cfg.trainer.precision = "16-mixed"
 
-            # batch_size=1 is forced: ShiftedBatchSampler (used in the
-            # VSTDataModule's train_dataloader) drops one batch per epoch,
-            # so any batch_size > dataset_size // 2 leaves the dataloader empty
-            # and Lightning aborts with "Trainer.fit stopped: No training batches."
+            # The smoke fixture writes one sample, so use a one-row training batch.
             cfg.datamodule.batch_size = 1
+            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.pin_memory = False
             cfg.datamodule.ot = False
             # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
@@ -585,8 +764,6 @@ def _build_surge_xt_smoke_cfg(
             cfg.trainer.deterministic = True
 
             cfg.model.scheduler = None
-            cfg.model.net.d_out = len(param_specs[param_spec_name])
-            cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
             cfg.logger = None
             cfg.test = False
             mc = cfg.callbacks.model_checkpoint
@@ -601,7 +778,12 @@ def _build_surge_xt_smoke_cfg(
     return cfg
 
 
-def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
+def build_fake_train_cfg(
+    output_dir: Path,
+    param_spec_name: str,
+    model_group: str = "vst_fake_oracle",
+    callbacks_group: str = "default_vst",
+) -> DictConfig:
     """Compose a one-step CPU fake-mode train cfg wired to ``param_spec_name``.
 
     Drives ``datamodule.fake=true`` so no dataset is read; the fake batch width comes
@@ -614,15 +796,24 @@ def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
     :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
         the fake param width and the per-param-MSE callback's spec.
+    :param model_group: Hydra model group to compose.
+    :param callbacks_group: Hydra callbacks group to compose.
     :returns: Resolved one-step fake-mode train DictConfig.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", "trainer=cpu"],
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "trainer=cpu",
+                f"model={model_group}",
+                f"callbacks={callbacks_group}",
+            ],
         )
         with open_dict(cfg):
+            # Random-weight training on random fake data is irreproducible unseeded.
+            cfg.seed = 1234
             cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(output_dir)
             cfg.paths.log_dir = str(output_dir)
@@ -634,9 +825,58 @@ def build_fake_train_cfg(output_dir: Path, param_spec_name: str) -> DictConfig:
             cfg.trainer.max_steps = 1
             cfg.trainer.limit_val_batches = 0
             cfg.logger = None
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
             # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
             # concretely — this train path composes no render group.
             cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
+    return cfg
+
+
+def build_fake_flow_ast_pretrained_train_cfg(output_dir: Path) -> DictConfig:
+    """Compose an offline one-step config through the production Hydra selection.
+
+    :param output_dir: Hydra output and log directory.
+    :returns: Resolved fake-mode flow training config.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_simple",
+                "model/encoder=ast_pretrained",
+                "trainer=cpu",
+            ],
+        )
+        with open_dict(cfg):
+            # Random-weight training on random fake data is irreproducible unseeded.
+            cfg.seed = 1234
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(output_dir)
+            cfg.paths.log_dir = str(output_dir)
+            cfg.datamodule.fake = True
+            cfg.datamodule.batch_size = 2
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.use_saved_mean_and_variance = False
+            cfg.trainer.min_steps = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_val_batches = 0
+            # ODE sampling dominates this encoder-wiring test even with a tiny backbone.
+            cfg.test = False
+            cfg.logger = None
+            if "lr_monitor" in (cfg.get("callbacks") or {}):
+                del cfg.callbacks.lr_monitor
+            cfg.model.compile = False
+            cfg.model.encoder.pretrained = False
+            cfg.model.encoder.d_model = 32
+            cfg.model.encoder.n_pool_heads = 2
+            cfg.model.encoder.backbone_config = {
+                "hidden_size": 32,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "intermediate_size": 64,
+            }
     return cfg
 
 
@@ -667,17 +907,18 @@ def cfg_surge_xt_global(
     )
 
 
-def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> None:
-    """Render the smoke ``train`` shard via the ``generate_vst_dataset`` subprocess (real VST), failing loud on timeout/non-zero exit/missing output.
+def _render_smoke_train_subprocess(
+    output_path: Path,
+    param_spec_name: str,
+    *,
+    num_samples: int = NUM_FIXTURE_SAMPLES,
+) -> None:
+    """Render a smoke ``train`` shard through the real VST subprocess.
 
-    The writer is dispatched on ``output_path``'s suffix by ``generate_vst_dataset``
-    (``.h5`` -> HDF5, ``.lance`` -> Lance), so this one renderer backs both the h5
-    and Lance real-VST smoke fixtures.
-
-    :param output_path: Destination shard path (``train.h5`` or ``train.lance``); its
+    :param output_path: Destination shard path (``train.lance``); its
         parent must already exist.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+    :param param_spec_name: Parameter specification and preset selector.
+    :param num_samples: Number of real VST renders to write.
     """
     generate_dataset_args = []
     if sys.platform == "linux":
@@ -687,17 +928,18 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
         sys.executable,
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
-        f"--plugin_path={PLUGIN_PATH}",
-        f"--preset_path={preset_paths[param_spec_name]}",
-        f"--param_spec_name={param_spec_name}",
-        f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
+        f"--synth.name={param_spec_name}",
+        f"--synth.plugin_path={PLUGIN_PATH}",
+        f"--synth.plugin_state_path={plugin_state_paths[param_spec_name]}",
+        f"--synth.param_spec_name={param_spec_name}",
+        f"--synth.synth_version={_SURGE_FIXTURE_SYNTH_VERSION}",
         f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
         f"--channels={_SURGE_FIXTURE_CHANNELS}",
         f"--velocity={_SURGE_FIXTURE_VELOCITY}",
         f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
         f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
-        f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
-        f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
+        f"--samples_per_render_batch={num_samples}",
+        f"--samples_per_shard={num_samples}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
@@ -706,16 +948,17 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
     # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
     # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
     # is what the failure branch needs to fail loud. See #695.
+    timeout = _scaled_vst_subprocess_timeout(num_samples)
     try:
         result = subprocess.run(  # noqa: S603
             generate_dataset_args,
             text=True,
             check=False,
-            timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"generate_vst_dataset timed out after {VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"generate_vst_dataset timed out after {timeout}s\n"
             f"command: {generate_dataset_args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
             pytrace=False,
@@ -731,17 +974,20 @@ def _render_smoke_train_subprocess(output_path: Path, param_spec_name: str) -> N
 
 
 def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
-    """Build the one-shard fake-plugin ``RenderConfig`` shared by the h5 and Lance smoke renders.
+    """Build the one-shard fake-plugin ``RenderConfig`` for the Lance smoke render.
 
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
     """
     return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        preset_path=str(preset_paths[param_spec_name]),
-        param_spec_name=param_spec_name,
-        renderer_version=_SURGE_FIXTURE_RENDERER_VERSION,
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path=PLUGIN_PATH,
+            plugin_state_path=str(plugin_state_paths[param_spec_name]),
+            synth_version=_SURGE_FIXTURE_SYNTH_VERSION,
+        ),
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
         channels=_SURGE_FIXTURE_CHANNELS,
         velocity=_SURGE_FIXTURE_VELOCITY,
@@ -753,94 +999,55 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     )
 
 
-def _render_smoke_train_h5_fake(train_h5: Path, param_spec_name: str) -> None:
-    """Render the smoke ``train.h5`` in-process via ``make_hdf5_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
-
-    :param train_h5: Destination ``train.h5`` path; its parent must already exist.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
-    """
-    from synth_setter.data.vst.writers import make_hdf5_dataset
-
-    make_hdf5_dataset(train_h5, _smoke_fake_render_cfg(param_spec_name))
-
-
 def _render_smoke_train_lance_fake(train_lance: Path, param_spec_name: str) -> None:
     """Render the smoke ``train.lance`` in-process via ``make_lance_dataset``; requires the caller to have installed ``FakeVST3Plugin``.
 
     :param train_lance: Destination ``train.lance`` file; its parent must already exist.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
 
     make_lance_dataset(train_lance, _smoke_fake_render_cfg(param_spec_name))
 
 
-def _build_surge_smoke_datasets(
-    tmp_path: Path,
-    param_spec_name: str,
-    render_train_h5: Callable[[Path, str], None],
-) -> Path:
-    """Build the N-sample Surge smoke dataset; ``render_train_h5`` is the only difference between the real-VST and fake fixtures.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
-    :param render_train_h5: Renders ``train.h5`` given ``(train_h5, param_spec_name)``.
-
-    :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
-    """
-    smoke_dataset_dir = tmp_path / "data" / "smoke"
-    smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
-    train_h5 = smoke_dataset_dir / "train.h5"
-
-    render_train_h5(train_h5, param_spec_name)
-    _validate_surge_dataset(train_h5, NUM_FIXTURE_SAMPLES)
-
-    # Sibling stats.npz; shared across train/val/test splits — see #1002. Subprocess
-    # path: in-process dask workers miss the hdf5plugin Blosc2 filter.
-    _write_smoke_stats_npz(train_h5)
-
-    shutil.copy(train_h5, smoke_dataset_dir / "val.h5")
-    shutil.copy(train_h5, smoke_dataset_dir / "test.h5")
-    return smoke_dataset_dir
-
-
 def _build_surge_smoke_lance_datasets(
     tmp_path: Path,
     param_spec_name: str,
     render_train_lance: Callable[[Path, str], None],
+    *,
+    num_samples: int = NUM_FIXTURE_SAMPLES,
 ) -> Path:
     """Render the N-sample Surge smoke dataset natively as single-file Lance shards.
 
-    The Lance counterpart to :func:`_build_surge_smoke_datasets`: ``render_train_lance``
-    is the only difference between the real-VST and fake fixtures. It renders
-    ``train.lance`` through the production :func:`make_lance_dataset` writer, then this
-    folds the mel rows into ``stats.npz`` via :func:`stream_stats_lance` and clones the
-    split into ``val``/``test``. No HDF5 file is produced — every shard carries the
-    exact on-disk format the pipeline's Lance finalize emits.
+    ``render_train_lance`` is the only difference between the real-VST and fake
+    fixtures. It renders ``train.lance`` through the production
+    :func:`make_lance_dataset` writer, then this folds the mel rows into
+    ``stats.npz`` via :func:`fold_lance_shard_into_welford` and clones the split
+    into ``val``/``test``. Every shard carries the exact on-disk format the
+    pipeline's Lance finalize emits.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.preset_paths` selecting spec and preset.
+        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :param render_train_lance: Renders ``train.lance`` given ``(train_lance, param_spec_name)``.
-
+    :param num_samples: Expected rows in the rendered train split.
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
-    from synth_setter.pipeline.data.stats import stream_stats_lance
+    from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
     smoke_dataset_dir = tmp_path / "data" / "smoke-lance"
     smoke_dataset_dir.mkdir(parents=True, exist_ok=True)
     train_lance = smoke_dataset_dir / "train.lance"
 
     render_train_lance(train_lance, param_spec_name)
+    _validate_surge_dataset(train_lance, num_samples)
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
-    mean, std = stream_stats_lance([train_lance], mask_degenerate=True)
+    welford = fold_lance_shard_into_welford((0, 0, 0), train_lance)
+    mean, std = finalize(welford, mask_degenerate=True)
     np.savez(smoke_dataset_dir / "stats.npz", mean=mean, std=std)
 
     shutil.copytree(train_lance, smoke_dataset_dir / "val.lance")
@@ -850,34 +1057,17 @@ def _build_surge_smoke_lance_datasets(
 
 @pytest.fixture(scope="function")
 def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
-    """Generate the N-sample Surge XT dataset used by the e2e smoke test.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
-        and ``--preset_path`` for ``generate_vst_dataset``.
-
-    :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
-        dataset.
-    """
-    return _build_surge_smoke_datasets(tmp_path, param_spec_name, _render_smoke_train_subprocess)
-
-
-@pytest.fixture(scope="function")
-def surge_xt_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     """Generate the N-sample Surge XT smoke dataset as native Lance shards via the real VST.
 
-    The Lance counterpart to :func:`surge_xt_smoke_datasets`: ``generate_vst_dataset``
-    dispatches the ``.lance`` suffix to :func:`make_lance_dataset`, so the real Surge XT
-    subprocess writes ``train.lance`` directly. Backs the real-VST half of the h5<->Lance
-    train/eval parity matrix.
+    ``generate_vst_dataset`` dispatches the ``.lance`` suffix to
+    :func:`make_lance_dataset`, so the real Surge XT subprocess writes
+    ``train.lance`` directly. Backs the real-VST half of the train/eval smoke matrix.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
-        and ``--preset_path`` for ``generate_vst_dataset``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`) — selects the matching ``--param_spec_name``
+        and ``--plugin_state_path`` for ``generate_vst_dataset``.
 
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
@@ -887,44 +1077,231 @@ def surge_xt_smoke_lance_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
 
 @pytest.fixture(scope="function")
-def fake_surge_smoke_datasets(
-    tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
-) -> Path:
-    """Render the N-sample Surge dataset in-process via the fake plugin (no real VST/X11).
+def local_embedding_checkpoints(
+    require_sa3_extra: None, require_same_extra: None
+) -> dict[str, str]:
+    """Return complete local checkpoints or skip before rendering the E2E fixture.
 
-    The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
-    swaps the loader for ``FakeVST3Plugin`` so ``make_hdf5_dataset`` produces a
-    structurally-valid ``train.h5`` (audio/mel/param) with no Surge XT subprocess.
-    Lets oracle-eval tests that only need a loadable dataset (not real audio fidelity)
-    run on the CPU-fast loop.
-
-    :param tmp_path: Per-test temporary directory; the dataset is written under
-        ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
-    :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
-        for the fake so the render needs no real VST3 binary or display server.
-
-    :return: Path to the directory holding ``{train,val,test}.h5`` and ``stats.npz``.
+    :param require_sa3_extra: Ensures the real SA3 conditioner is installed.
+    :param require_same_extra: Ensures the real SAME model implementation is installed.
+    :returns: Local checkpoint directories keyed by embedding registry name.
     """
-    return _build_surge_smoke_datasets(tmp_path, param_spec_name, _render_smoke_train_h5_fake)
+    del require_sa3_extra, require_same_extra
+    from huggingface_hub import snapshot_download
+    from music2latent.inference import download_model, load_path_inference_default
+
+    download_model()
+    snapshot_download(
+        "laion/clap-htsat-unfused",
+        local_dir=_EMBEDDING_E2E_CHECKPOINTS["clap"],
+    )
+
+    required_files = {
+        _EMBEDDING_E2E_CHECKPOINTS["clap"]: (
+            "config.json",
+            "preprocessor_config.json",
+            "pytorch_model.bin",
+        ),
+        _EMBEDDING_E2E_CHECKPOINTS["same_s"]: ("model_config.json", "model.safetensors"),
+        _EMBEDDING_E2E_CHECKPOINTS["same_l"]: ("model_config.json", "model.safetensors"),
+        _EMBEDDING_E2E_CHECKPOINTS["t5gemma"]: (
+            "model_config.json",
+            "model.safetensors",
+            "t5gemma-b-b-ul2/config.json",
+            "t5gemma-b-b-ul2/model.safetensors",
+            "t5gemma-b-b-ul2/tokenizer.json",
+        ),
+    }
+    missing = [
+        directory / filename
+        for directory, filenames in required_files.items()
+        for filename in filenames
+        if not (directory / filename).is_file()
+    ]
+    m2l_checkpoint = Path(load_path_inference_default)
+    if not m2l_checkpoint.is_file():
+        missing.append(m2l_checkpoint)
+    if missing:
+        message = f"local embedding checkpoints missing: {[str(path) for path in missing]}"
+        if os.environ.get("SYNTH_SETTER_REQUIRE_EMBEDDING_E2E") == "true":
+            pytest.fail(message)
+        pytest.skip(message)
+    return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
 
 
 @pytest.fixture(scope="function")
-def fake_surge_smoke_lance_datasets(
+def surge_xt_embedding_smoke_datasets(
+    local_embedding_checkpoints: dict[str, str],
+    tmp_path: Path,
+    param_spec_name: str,
+) -> Path:
+    """Build the two-row real-VST Lance dataset for all-embedding training E2E.
+
+    :param local_embedding_checkpoints: Preflights model weights before VST rendering.
+    :param tmp_path: Per-test dataset directory parent.
+    :param param_spec_name: Parameter specification and preset selector.
+    :returns: Finalized local ``{train,val,test}.lance`` dataset root.
+    """
+    del local_embedding_checkpoints
+    render_two_rows = partial(_render_smoke_train_subprocess, num_samples=_EMBEDDING_E2E_ROWS)
+    return _build_surge_smoke_lance_datasets(
+        tmp_path,
+        param_spec_name,
+        render_two_rows,
+        num_samples=_EMBEDDING_E2E_ROWS,
+    )
+
+
+def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
+    """Add real ``m2l`` + ``clap`` columns to a rendered smoke dataset's splits.
+
+    Composes the shipped ``add_embeddings.yaml`` pinned at ``train.lance`` and runs
+    the real endpoint (real music2latent + CLAP encoders — no mocks), then clones
+    the augmented ``train.lance`` over the identical ``val``/``test`` clones so the
+    encoders load once. Backs the real clap/m2l conditioning e2e tests; requires
+    network (HuggingFace CLAP download on first run).
+
+    :param dataset_root: Dir holding ``{train,val,test}.lance`` from
+        :func:`surge_xt_smoke_datasets`; each split is augmented in place.
+    :returns: ``dataset_root`` for call-site chaining.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="add_embeddings",
+            overrides=[
+                f"lance_uri={train_uri}",
+                "embeddings=[clap,m2l]",
+                "build_index=false",
+                "device=cpu",
+            ],
+        )
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    GlobalHydra.instance().clear()
+    add_embeddings(config)
+
+    # Identical val/test clones are intentional: a plumbing smoke, not a
+    # generalization check.
+    for split in ("val", "test"):
+        dest = dataset_root / f"{split}.lance"
+        shutil.rmtree(dest)
+        shutil.copytree(train_uri, dest)
+    return dataset_root
+
+
+def build_surge_xt_embedding_train_cfg(
+    output_dir: Path,
+    dataset_root: Path,
+    *,
+    param_spec_name: str,
+    conditioning: str,
+    architecture: Literal["flow", "feed_forward"] = "flow",
+    fake: bool = False,
+) -> DictConfig:
+    """Compose a one-step CPU train cfg wired to an embedding-conditioning profile.
+
+    Composes the selected shipped Surge architecture with ``conditioning=<profile>``
+    over the map-style ``surge_lance`` datamodule, pinned by default to a real
+    dataset augmented with the profile's Lance column. Lives here (not inline in
+    ``tests/test_train.py``) because that module is barred from importing Hydra
+    config-initializers (see ``tests/_meta/test_entrypoint_e2e_only.py``).
+
+    :param output_dir: Pinned as Hydra ``output_dir`` / ``log_dir``; the checkpoint
+        callback writes ``last.ckpt`` beneath it.
+    :param dataset_root: Dir holding the augmented ``{train,val,test}.lance`` splits;
+        unread when ``fake`` is set.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` driving
+        model width and per-parameter callback labels.
+    :param conditioning: Conditioning profile group.
+    :param architecture: Shipped flow or feed-forward VST model; defaults to flow.
+    :param fake: Whether the datamodule synthesizes batches at the profile's shapes
+        instead of reading Lance, keeping checkpoint-consumer tests off the VST lane.
+    :returns: Resolved one-step embedding-conditioning train DictConfig.
+    """
+    experiment = {
+        "feed_forward": "surge/ffn_simple",
+        "flow": "surge/flow_simple",
+    }[architecture]
+    model_overrides = (
+        [
+            "model.net.d_model=16",
+            "model.net.n_heads=1",
+            "model.net.n_layers=1",
+            "model.net.patch_size=128",
+            "model.net.patch_stride=64",
+        ]
+        if architecture == "feed_forward"
+        else []
+    )
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                f"experiment={experiment}",
+                f"conditioning={conditioning}",
+                "trainer=cpu",
+                "datamodule=surge_lance",
+                "callbacks=[default_vst,eval_vst]",
+                *model_overrides,
+            ],
+        )
+        with open_dict(cfg):
+            cfg.seed = 1234
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(output_dir)
+            cfg.paths.log_dir = str(output_dir)
+
+            cfg.trainer.accelerator = "cpu"
+            cfg.trainer.precision = "32-true"
+            cfg.trainer.devices = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.min_steps = 1
+            # Training skips validation; checkpoint-consumer coverage uses evaluate().
+            cfg.trainer.limit_val_batches = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.trainer.enable_model_summary = False
+            cfg.trainer.deterministic = True
+
+            cfg.datamodule.fake = fake
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+            cfg.datamodule.param_spec_name = param_spec_name
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.datamodule.ot = False
+            cfg.datamodule.use_saved_mean_and_variance = True
+
+            cfg.model.compile = False
+            cfg.model.scheduler = None
+            cfg.logger = None
+            cfg.test = False
+            cfg.callbacks.model_checkpoint.save_last = True
+            if cfg.get("callbacks") is not None and "lr_monitor" in cfg.callbacks:
+                cfg.callbacks.lr_monitor = None
+    return cfg
+
+
+@pytest.fixture(scope="function")
+def fake_surge_smoke_datasets(
     tmp_path: Path, param_spec_name: str, install_fake_plugin: FakeVST3Plugin
 ) -> Path:
     """Render the N-sample Surge smoke dataset in-process as native Lance shards (no real VST/X11).
 
-    The Lance counterpart to :func:`fake_surge_smoke_datasets`: ``install_fake_plugin``
+    The fast counterpart to :func:`surge_xt_smoke_datasets`: ``install_fake_plugin``
     swaps the loader for ``FakeVST3Plugin`` so :func:`make_lance_dataset` writes
-    structurally-valid ``{train,val,test}.lance`` shards directly — no HDF5
-    intermediate to convert. Backs the Lance ``evaluate`` oracle smoke test.
+    structurally-valid ``{train,val,test}.lance`` shards directly. Lets oracle-eval
+    tests that only need a loadable dataset (not real audio fidelity) run on the
+    CPU-fast loop.
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke-lance"``.
     :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
-        and :data:`synth_setter.data.vst.preset_paths`); defaults to ``"surge_4"``.
+        and :data:`synth_setter.data.vst.plugin_state_paths`); defaults to ``"surge_4"``.
     :param install_fake_plugin: Swaps ``core.load_plugin`` / ``core.VST3Plugin``
         for the fake so the render needs no real VST3 binary or display server.
 
@@ -952,7 +1329,7 @@ def cfg_surge_xt(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
-        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.h5")
+        cfg.datamodule.predict_file = str(surge_xt_smoke_datasets / "test.lance")
 
     yield cfg
 
@@ -963,36 +1340,25 @@ def cfg_surge_xt(
 # (no public docstring) matching the sibling ``_FakeOracleDataset`` in test_eval.py.
 class _SurgeSmokeVariant(NamedTuple):
     dataset_fixture: str  # conftest fixture yielding the dataset root dir
-    datamodule_group: str  # Hydra ``datamodule=`` group: "surge" (h5) | "surge_lance"
-    split_ext: str  # split file suffix: ".h5" | ".lance"
+    datamodule_group: str  # Hydra ``datamodule=`` group: "surge_lance"
+    split_ext: str  # split file suffix: ".lance"
     plugin_path: str  # render plugin for eval postprocessing: real PLUGIN_PATH | fake.vst3
 
 
-# Dataset-format arms of the h5<->Lance smoke parity matrix, shared by the train and eval
-# entrypoint tests as ``surge_smoke_variant`` parametrize values. The real-VST arms render
-# through the Surge XT subprocess (slow); the fake arms render in-process via the fake
-# plugin (CPU inner loop). Both feed the same test bodies so a Lance-datamodule regression
-# cannot hide behind h5-only coverage.
+# Real- and fake-plugin Lance smoke fixtures share the same map-style datamodule.
 REAL_VST_VARIANTS = [
     pytest.param(
-        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge", ".h5", PLUGIN_PATH), id="h5"
-    ),
-    pytest.param(
-        _SurgeSmokeVariant("surge_xt_smoke_lance_datasets", "surge_lance", ".lance", PLUGIN_PATH),
+        _SurgeSmokeVariant("surge_xt_smoke_datasets", "surge_lance", ".lance", PLUGIN_PATH),
         id="lance",
-    ),
+    )
 ]
 FAKE_VST_VARIANTS = [
     pytest.param(
-        _SurgeSmokeVariant("fake_surge_smoke_datasets", "surge", ".h5", "plugins/fake.vst3"),
-        id="h5",
-    ),
-    pytest.param(
         _SurgeSmokeVariant(
-            "fake_surge_smoke_lance_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
+            "fake_surge_smoke_datasets", "surge_lance", ".lance", "plugins/fake.vst3"
         ),
         id="lance",
-    ),
+    )
 ]
 
 
@@ -1004,6 +1370,36 @@ def surge_smoke_variant(request: pytest.FixtureRequest) -> _SurgeSmokeVariant:
     :return: The dataset-format arm under test.
     """
     return request.param
+
+
+def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[str, object]:
+    """Build the complete renderer transport used by train/eval smoke fixtures.
+
+    :param param_spec_name: Registered spec identity for prediction decoding.
+    :param plugin_path: Real or test plugin path used by the fixture.
+    :returns: JSON-compatible validated render configuration.
+    """
+    config = RenderConfig.model_validate(
+        {
+            "synth": {
+                "name": param_spec_name,
+                "param_spec_name": param_spec_name,
+                "plugin_path": plugin_path,
+                "plugin_state_path": plugin_state_paths[param_spec_name],
+                "synth_version": "1.3.4",
+            },
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 1,
+            "samples_per_shard": 5,
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
+        }
+    )
+    return config.model_dump(mode="json")
 
 
 def _apply_smoke_train_paths(
@@ -1021,6 +1417,9 @@ def _apply_smoke_train_paths(
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
+        cfg.render = _surge_smoke_render_config(
+            str(cfg.datamodule.param_spec_name), variant.plugin_path
+        )
 
 
 @pytest.fixture(scope="function")
@@ -1095,6 +1494,173 @@ def cfg_surge_fake_train(
     GlobalHydra.instance().clear()
 
 
+def augment_lance_splits_with_all_embeddings(
+    dataset_root: Path, checkpoints: dict[str, str], param_spec_name: str
+) -> Path:
+    """Run the Hydra CLI for every real embedding and clone its output splits.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param checkpoints: Complete local checkpoint directories from preflight.
+    :param param_spec_name: Parameter spec used to render the source rows.
+    :returns: Augmented dataset root.
+    """
+    train_uri = dataset_root / "train.lance"
+    command = [
+        sys.executable,
+        "-m",
+        "synth_setter.pipeline.data.add_embeddings",
+        f"lance_uri={train_uri}",
+        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
+        f"param_spec_name={param_spec_name}",
+        "device=cpu",
+        "build_index=false",
+        *(f"checkpoints.{name}={checkpoint}" for name, checkpoint in checkpoints.items()),
+    ]
+    subprocess.run(  # noqa: S603 — validated local paths passed to the project CLI
+        command, check=True, timeout=3600
+    )
+    for split in ("val", "test"):
+        destination = dataset_root / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    return dataset_root
+
+
+def assert_all_embedding_columns(dataset_root: Path) -> None:
+    """Assert every real embedding is finite and follows its row semantics.
+
+    :param dataset_root: Directory holding the augmented train split.
+    """
+    import lance
+
+    from synth_setter.data.vst.shapes import (
+        AUDIO_FIELD,
+        CLAP_FIELD,
+        M2L_FIELD,
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        SAME_L_FIELD,
+        SAME_S_FIELD,
+        T5GEMMA_FIELD,
+    )
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+    from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
+
+    train_lance = dataset_root / "train.lance"
+    _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
+    dataset = lance.dataset(train_lance)
+    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert {
+        AUDIO_FIELD,
+        MEL_SPEC_FIELD,
+        PARAM_ARRAY_FIELD,
+        CLAP_FIELD,
+        M2L_FIELD,
+        SAME_S_FIELD,
+        SAME_L_FIELD,
+        T5GEMMA_FIELD,
+    } <= set(dataset.schema.names)
+    assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
+
+    table = dataset.to_table(
+        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD, T5GEMMA_FIELD]
+    )
+    for column in table.columns:
+        assert column.null_count == 0
+
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    clap = np.stack(table.column(CLAP_FIELD).to_numpy(zero_copy_only=False))
+    m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
+    same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
+    same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+    t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
+
+    assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
+    assert not np.array_equal(audio[0], audio[1])
+    for name, values, shape in (
+        ("clap", clap, (_EMBEDDING_E2E_ROWS, 512)),
+        ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
+        ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
+        ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
+    ):
+        assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
+        assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
+        assert np.isfinite(values).all(), f"{name} contains non-finite values"
+        flat = values.reshape(_EMBEDDING_E2E_ROWS, -1)
+        assert np.linalg.norm(flat, axis=1).min() > 0, f"{name} contains a zero row"
+        assert flat.std(axis=1).min() > 0, f"{name} contains a constant row"
+        assert not np.array_equal(values[0], values[1]), f"{name} collapsed distinct inputs"
+
+    assert t5gemma.shape == (
+        _EMBEDDING_E2E_ROWS,
+        T5GEMMA_EMBEDDING_DIM,
+        T5GEMMA_MAX_LENGTH,
+    )
+    assert t5gemma.dtype == np.float32
+    assert np.isfinite(t5gemma).all()
+    assert np.linalg.norm(t5gemma.reshape(_EMBEDDING_E2E_ROWS, -1), axis=1).min() > 0
+    np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
+
+
+# Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
+_SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
+    "same_s": "stabilityai/SAME-S",
+    "same_l": "stabilityai/SAME-L",
+}
+
+
+@pytest.fixture(scope="function")
+def require_sa3_extra() -> None:
+    """Resolve the SA3 import before expensive VST rendering starts."""
+    pytest.importorskip("stable_audio_3")
+
+
+@pytest.fixture(scope="function")
+def require_same_extra() -> None:
+    """Skip a test unless the optional ``same`` extra (``stable_audio_tools``) is installed.
+
+    Requested first by the SAME-e2e tests so the Surge render never runs when the
+    writer dependency is absent (a slow/VST lane without the ``same`` extra).
+    """
+    pytest.importorskip("stable_audio_tools")
+
+
+def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Path:
+    """Add a real SAME (``same_s``/``same_l``) column to a rendered smoke dataset's splits.
+
+    The SAME sibling of :func:`augment_lance_splits_with_embeddings`: runs the real
+    ``add_embeddings`` SAME dispatch (real ``stable_audio_tools`` encoder, public HF
+    checkpoint, no mocks) pinned at ``train.lance``, then clones the augmented
+    ``train.lance`` over the ``val``/``test`` clones so the encoder loads once.
+    Requires the optional ``same`` extra plus network access (HF weight download).
+
+    :param dataset_root: Dir holding ``{train,val,test}.lance`` from
+        :func:`surge_xt_smoke_datasets`; each split is augmented in place.
+    :param conditioning: SAME conditioning profile (``"same_s"`` / ``"same_l"``).
+    :returns: ``dataset_root`` for call-site chaining.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(train_uri),
+            embeddings=(conditioning,),
+            checkpoints={conditioning: _SAME_E2E_HF_CHECKPOINTS[conditioning]},
+            device="cpu",
+        )
+    )
+
+    # Identical val/test clones are intentional: a plumbing smoke, not a
+    # generalization check.
+    for split in ("val", "test"):
+        dest = dataset_root / f"{split}.lance"
+        shutil.rmtree(dest)
+        shutil.copytree(train_uri, dest)
+    return dataset_root
+
+
 @pytest.fixture(scope="function")
 def cfg_surge_xt_eval(
     cfg_surge_xt_global: DictConfig,
@@ -1109,7 +1675,7 @@ def cfg_surge_xt_eval(
 
     :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
-    :param param_spec_name: Keys ``preset_paths`` so ``cfg.render`` matches the
+    :param param_spec_name: Keys ``plugin_state_paths`` so ``cfg.render`` matches the
         spec the model was trained against.
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the smoke-test
@@ -1120,7 +1686,7 @@ def cfg_surge_xt_eval(
         cfg,
         tmp_path=tmp_path,
         dataset_root=surge_xt_smoke_datasets,
-        predict_file=surge_xt_smoke_datasets / "test.h5",
+        predict_file=surge_xt_smoke_datasets / "test.lance",
         param_spec_name=param_spec_name,
         plugin_path=PLUGIN_PATH,
         rerender_target=True,
@@ -1165,11 +1731,7 @@ def _configure_surge_xt_eval_cfg(
             "rerender_target": rerender_target,
             "num_workers": 1,
         }
-        cfg.render = {
-            "param_spec_name": param_spec_name,
-            "preset_path": preset_paths[param_spec_name],
-            "plugin_path": plugin_path,
-        }
+        cfg.render = _surge_smoke_render_config(param_spec_name, plugin_path)
 
 
 @pytest.fixture(scope="function")
@@ -1296,7 +1858,7 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
     """Return the skeleton shared by hand-built ``DatasetSpec`` test specs.
 
     Carries the fields both the wandb-tracking and parallel-dispatch tests fix
-    identically (deterministic ``created_at`` / ``git_sha``, hdf5 output, the
+    identically (deterministic ``created_at`` / ``git_sha``, lance output, the
     Darwin-portable ``gui_toggle_cadence``); per-test fields (``task_name``,
     ``run_id``, ``r2``, shard sizes, ``parallel``) come in as overrides.
 
@@ -1306,13 +1868,16 @@ def _base_dataset_spec_kwargs() -> dict[str, Any]:
         "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "base_seed": 42,
         "render": {
-            "plugin_path": "plugins/fake.vst3",
-            "preset_path": "presets/fake.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "0.0.0-fake",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/fake.vst3",
+                "plugin_state_path": "presets/fake.vstpreset",
+                "synth_version": "0.0.0-fake",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
@@ -1383,6 +1948,84 @@ def _cgroup_aware_cpu_count() -> int:
 # Per-worker resident-memory budget for the -n auto clamp (override via
 # PYTEST_XDIST_WORKER_MEM_MB); 2 GiB = measured peak RSS per worker slot (#1646).
 _DEFAULT_WORKER_MEM_MB = 2048
+_LOCAL_DARWIN_XDIST_WORKERS = 4
+
+# Wall-clock budget for the whole session (seconds); each Makefile lane pins its
+# own value (#2274) so a silently degraded run fails loudly instead of crawling.
+_SESSION_BUDGET_ENV = "PYTEST_SESSION_BUDGET_SECONDS"
+
+# Stored on the session object (not a module global) so unit tests driving fake
+# sessions through these hooks can't corrupt the live session's own budget.
+_SESSION_BUDGET_START_ATTR = "_synth_setter_session_budget_start"
+
+
+def _session_budget_seconds() -> float | None:
+    """Parse the session budget env var, failing open on anything non-positive.
+
+    :returns: Budget in seconds, or None when unset, malformed, or <= 0.
+    """
+    raw_budget = os.environ.get(_SESSION_BUDGET_ENV)
+    if not raw_budget:
+        return None
+    try:
+        budget = float(raw_budget)
+    except ValueError:
+        return None
+    return budget if budget > 0 else None
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Record the controller's session start time for budget enforcement.
+
+    :param session: The pytest session being started.
+    """
+    if hasattr(session.config, "workerinput"):
+        return  # xdist worker: only the controller owns the wall clock
+    setattr(session, _SESSION_BUDGET_START_ATTR, time.monotonic())
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail an otherwise-green session that blew its wall-clock budget.
+
+    :param session: The finishing pytest session; its exitstatus may be raised to 1.
+    :param exitstatus: Exit status the run would report; nonzero values are preserved.
+    """
+    if hasattr(session.config, "workerinput") or exitstatus != 0:
+        return
+    budget = _session_budget_seconds()
+    budget_start = getattr(session, _SESSION_BUDGET_START_ATTR, None)
+    if budget is None or budget_start is None:
+        return
+    elapsed = time.monotonic() - budget_start
+    if elapsed > budget:
+        sys.stderr.write(
+            f"\nERROR: session budget exceeded: {elapsed:.1f}s > {_SESSION_BUDGET_ENV}={budget}s\n"
+        )
+        session.exitstatus = 1
+
+
+# CPUs left free on local (non-CI) runs so the host stays responsive while the
+# suite runs (#2274); override via PYTEST_XDIST_RESERVED_CPUS.
+_DEFAULT_RESERVED_CPUS = 2
+
+
+def _reserved_cpu_count() -> int:
+    """Return how many CPUs the ``-n auto`` clamp must leave unused.
+
+    ``PYTEST_XDIST_RESERVED_CPUS`` wins when set (invalid values fall back to
+    the default); otherwise CI hosts reserve nothing — they are dedicated —
+    and local runs reserve the default headroom.
+
+    :returns: Non-negative CPU count to subtract from the CPU term.
+    """
+    raw_reserve = os.environ.get("PYTEST_XDIST_RESERVED_CPUS")
+    if raw_reserve:
+        try:
+            return max(0, int(raw_reserve))
+        except ValueError:
+            pass  # non-integer override -> ignore and fall through to the defaults
+    return 0 if os.environ.get("CI") else _DEFAULT_RESERVED_CPUS
+
 
 # A v1 memory.limit_in_bytes at or above this is the kernel's unlimited sentinel.
 _MEM_UNLIMITED_SENTINEL = 1 << 62
@@ -1494,8 +2137,8 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
     Checks ``PYTEST_XDIST_AUTO_NUM_WORKERS`` first so the env-var escape hatch
     that xdist's built-in implementation honours is preserved even when this
     hook wins the ``firstresult`` race. A non-integer or empty pin is ignored,
-    not fatal. Otherwise returns ``min(cpu, memory)`` so neither resource is
-    over-subscribed.
+    not fatal. Otherwise returns ``min(cpu - reserved, memory)`` and applies the
+    local Darwin worker cap so nested ML multiprocessing retains interactive headroom.
 
     :param config: The pytest config object (unused; required by the hook signature).
     :returns: Worker count clamped to the host's real CPU and memory allocation.
@@ -1506,9 +2149,12 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:  # noqa: ARG001
             return max(1, int(env_override))
         except ValueError:
             pass  # non-integer pin -> ignore and fall through to the adaptive clamps
-    cpu_workers = _cgroup_aware_cpu_count()
+    cpu_workers = max(1, _cgroup_aware_cpu_count() - _reserved_cpu_count())
     mem_workers = _memory_aware_worker_count()
-    return cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
+    allocated_workers = cpu_workers if mem_workers is None else min(cpu_workers, mem_workers)
+    if sys.platform == "darwin" and not os.environ.get("CI"):
+        return min(allocated_workers, _LOCAL_DARWIN_XDIST_WORKERS)
+    return allocated_workers
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -1528,10 +2174,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
-# surge_ffn's AST net hard-codes the production mel shape and channel count, so the
+# vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
-_LANCE_SMOKE_NUM_PARAMS = 16
+_LANCE_SMOKE_PARAM_SPEC = "surge_4"
+_LANCE_SMOKE_NUM_PARAMS = len(param_specs[_LANCE_SMOKE_PARAM_SPEC])
 _LANCE_SMOKE_ROWS = 4
 
 
@@ -1552,7 +2199,7 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
         path,
         {
             # float16 mirrors the pipeline's on-disk audio dtype (DATASET_FIELD_DTYPES).
-            "audio": rng.standard_normal((num_rows, 2, 64)).astype(np.float16),
+            "audio": rng.uniform(-1.0, 1.0, (num_rows, 2, 64)).astype(np.float16),
             "mel_spec": rng.standard_normal((num_rows, *_LANCE_SMOKE_MEL_SHAPE)).astype(
                 np.float32
             ),
@@ -1588,7 +2235,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=surge_ffn", "trainer=cpu"],
+            overrides=["datamodule=surge_lance", "model=vst_ffn", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -1599,11 +2246,12 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             if "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
             cfg.trainer.fast_dev_run = True
-            # Not a loop bound under fast_dev_run — surge_ffn's scheduler resolves
+            # Not a loop bound under fast_dev_run — vst_ffn's scheduler resolves
             # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
             cfg.trainer.max_steps = 1
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.batch_size = 1
+            cfg.datamodule.param_spec_name = _LANCE_SMOKE_PARAM_SPEC
             cfg.datamodule.ot = False
             cfg.datamodule.num_workers = 0
             cfg.datamodule.pin_memory = False
@@ -1611,7 +2259,6 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.model.net.d_model = 32
             cfg.model.net.n_heads = 2
             cfg.model.net.n_layers = 1
-            cfg.model.net.d_out = _LANCE_SMOKE_NUM_PARAMS
 
     yield cfg
 

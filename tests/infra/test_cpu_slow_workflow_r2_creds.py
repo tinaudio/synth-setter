@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from workflow_fixtures import load_workflow
+from workflow_fixtures import load_composite_action, load_workflow
 
+INSTALL_RCLONE_USES = "./.github/actions/install-rclone"
 SETUP_R2_USES = "./.github/actions/setup-r2"
 SECRET_INPUT_TO_KEY: dict[str, str] = {
     "access-key-id": "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
@@ -25,11 +26,14 @@ SECRET_INPUT_TO_KEY: dict[str, str] = {
     "endpoint": "RCLONE_CONFIG_R2_ENDPOINT",
 }
 
+INSTALL_RCLONE_STEP_NAME = "Install rclone for PR tests"
 SETUP_R2_STEP_NAME = "Set up R2"
 PYTEST_STEP_NAME = "Run slow (non-GPU, non-MPS, non-VST) tests"
+PR_PYTEST_STEP_NAME = "Run slow PR tests"
 
+INSTALL_RCLONE_ACTION_PATH = ".github/actions/install-rclone/**"
 WORKFLOW_SELF_PATH = ".github/workflows/cpu-slow.yml"
-INVARIANT_TEST_SELF_PATH = "tests/infra/test_cpu_slow_workflow_r2_creds.py"
+TESTS_PATH = "tests/**"
 
 
 def _load_workflow(project_root: Path) -> dict[str, object]:
@@ -109,6 +113,35 @@ def _load_pull_request_paths(project_root: Path) -> list[str]:
 
 
 @pytest.mark.infra
+def test_cpu_slow_pr_installs_rclone_without_r2_secrets_before_pytest(
+    project_root: Path,
+) -> None:
+    """Pull requests install rclone without exposing or configuring R2 secrets.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    steps = _load_workflow_steps(project_root)
+    install_step = next(
+        (step for step in steps if step.get("uses") == INSTALL_RCLONE_USES),
+        None,
+    )
+    assert install_step is not None, (
+        f"cpu-slow.yml missing a PR step that `uses: {INSTALL_RCLONE_USES}`"
+    )
+    assert "github.event_name == 'pull_request'" in cast(str, install_step.get("if", ""))
+    assert "secrets." not in str(install_step)
+
+    install_action = load_composite_action(project_root, "install-rclone")
+    serialized_action = str(install_action)
+    assert "RCLONE_CONFIG_R2" not in serialized_action
+    assert "SYNTH_SETTER_STORAGE" not in serialized_action
+    assert "secrets." not in serialized_action
+
+    names = [step.get("name") for step in steps]
+    assert names.index(INSTALL_RCLONE_STEP_NAME) < names.index(PR_PYTEST_STEP_NAME)
+
+
+@pytest.mark.infra
 def test_cpu_slow_uses_setup_r2_with_rclone_install(project_root: Path) -> None:
     """The R2 step installs rclone so ``is_r2_reachable()`` finds the binary.
 
@@ -158,15 +191,16 @@ def test_cpu_slow_sets_up_r2_before_pytest(project_root: Path) -> None:
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize("expected_path", [WORKFLOW_SELF_PATH, INVARIANT_TEST_SELF_PATH])
+@pytest.mark.parametrize(
+    "expected_path", [INSTALL_RCLONE_ACTION_PATH, WORKFLOW_SELF_PATH, TESTS_PATH]
+)
 def test_cpu_slow_pull_request_self_trigger_present(
     project_root: Path, expected_path: str
 ) -> None:
     """``on.pull_request.paths`` covers the workflow and its invariant test.
 
-    A PR that edits ``cpu-slow.yml`` (or this test, whose contract pins the
-    R2 wiring the workflow promises) must exercise the slow suite pre-merge
-    instead of waiting for the post-merge push run — see #1206.
+    A PR that edits ``cpu-slow.yml`` or any test must exercise the slow suite
+    pre-merge instead of waiting for the post-merge push run — see #1206.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     :param expected_path: a repo-relative path that must appear verbatim in
@@ -185,12 +219,8 @@ def test_cpu_slow_pull_request_self_trigger_present(
 def test_cpu_slow_job_gated_against_fork_prs(project_root: Path) -> None:
     """``run_slow_tests.if`` blocks fork-PR runs of the 90-min suite.
 
-    Fork PRs can't see ``secrets.RCLONE_CONFIG_R2_*``, so the
-    ``integration_r2`` surface skips anyway — but the rest of the slow
-    suite still burns a 4-core runner for up to 90 minutes. The job-level
-    ``if`` guard short-circuits ``pull_request`` events whose head repo
-    differs from the workflow repo; ``workflow_dispatch`` / ``push`` /
-    ``schedule`` runs are unaffected.
+    The job-level guard explicitly skips fork pull requests. Same-repository
+    PRs run the non-R2 lane; dispatch and push runs retain live-R2 coverage.
 
     :param project_root: session fixture from ``tests/infra/conftest.py``.
     """

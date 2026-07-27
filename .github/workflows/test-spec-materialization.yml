@@ -7,9 +7,29 @@ on:
         description: "Docker image tag"
         required: false
         default: "dev-snapshot"
+  pull_request:
+    paths:
+      - ".github/workflows/spec-materialization.yml"
+      - ".github/workflows/test-spec-materialization.yml"
+      - "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
+      - "pyproject.toml"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/configs/dataset.yaml"
+      - "src/synth_setter/configs/experiment/generate_dataset/ci-materialize-test.yaml"
+      - "src/synth_setter/pipeline/ci/materialize_spec.py"
+      - "src/synth_setter/pipeline/ci/validate_spec.py"
+      - "src/synth_setter/pipeline/schemas/**"
+      - "src/synth_setter/scripts/run-linux-vst-headless.sh"
+      - "tests/infra/test_deep_premerge_workflows.py"
+      - "tests/pipeline/ci_config/test_materialize_spec.py"
+      - "uv.lock"
+
+permissions:
+  contents: read
 
 jobs:
   materialize:
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/spec-materialization.yml
     with:
       image_tag: ${{ inputs.image_tag }}
@@ -19,6 +39,7 @@ jobs:
 
   validate-test-config:
     needs: materialize
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,7 +49,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       # `pip install -e .` installs the project + its light base only — pip
       # never installs PEP 735 dependency-groups, so the heavy runtime stays
@@ -48,3 +69,49 @@ jobs:
 
       - name: Assert test-specific values
         run: python3 -m synth_setter.pipeline.ci.validate_spec input_spec.json --test-values
+
+  materialize-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPERIMENT: generate_dataset/ci-materialize-test
+      IMAGE: tinaudio/synth-setter:dev-snapshot
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.13"
+
+      - name: Install synth_setter for spec validation
+        run: pip install -e .
+
+      - name: Pull image
+        run: docker pull "${IMAGE}"
+
+      - name: Materialize spec locally in Docker
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/spec-output
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v /tmp/spec-output:/spec-output \
+            -e EXPERIMENT \
+            "${IMAGE}" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              src/synth_setter/scripts/run-linux-vst-headless.sh \
+                python -m synth_setter.pipeline.ci.materialize_spec \
+                "$EXPERIMENT" /spec-output
+            '
+
+      - name: Validate local spec
+        run: >-
+          python3 -m synth_setter.pipeline.ci.validate_spec
+          /tmp/spec-output/input_spec.json --test-values

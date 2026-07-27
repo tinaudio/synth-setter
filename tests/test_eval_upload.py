@@ -16,7 +16,6 @@ import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.eval import _maybe_upload_output_dir
-from synth_setter.data.vst import param_specs
 
 
 def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConfig:
@@ -35,18 +34,31 @@ def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConf
 
 
 @pytest.fixture()
-def r2_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set the three secret keys :func:`r2_io.ensure_r2_env_loaded` requires present.
+def storage_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set canonical storage credentials for helpers that ping object storage.
 
-    Paired with ``fake_r2_remote`` (which sets ``RCLONE_CONFIG_R2_TYPE=local``),
-    these dummy values satisfy the presence check and let the real ``rclone lsd
-    r2:`` auth ping resolve the local backend instead of dialing Cloudflare.
+    The dummy values satisfy the presence check while rclone resolves the local backend instead of
+    dialing Cloudflare.
 
     :param monkeypatch: Sets the secret env vars for the test's duration.
     """
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "test-secret-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+
+
+def _storage_env() -> dict[str, str]:
+    """Return dummy canonical storage env for subprocess CLI tests.
+
+    :returns: Environment variables that select the local rclone backend.
+    """
+    return {
+        "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID": "stub",
+        "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY": "stub",
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL": "http://localhost:0",
+        "SYNTH_SETTER_STORAGE_RCLONE_TYPE": "local",
+    }
 
 
 def _write_output_tree(output_dir: Path) -> None:
@@ -97,12 +109,12 @@ def test_maybe_upload_output_dir_skips_non_global_zero_rank(
 
 
 def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
-    fake_r2_remote: Path, r2_credentials: None, tmp_path: Path
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
     """A set URI mirrors the whole output dir beneath the destination prefix.
 
     :param fake_r2_remote: Local-backed ``r2:`` remote where the mirror lands.
-    :param r2_credentials: Dummy secrets so the real credential check passes.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
     :param tmp_path: Holds the output dir copied to R2.
     """
     output_dir = tmp_path / "run"
@@ -149,7 +161,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     ``data.download_dataset_root_uri`` gate composes with eval through ``main``.
 
     :param tmp_path: Root for the fake R2 remote, the download target, and the output dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
     """
     if shutil.which("rclone") is None:
         pytest.skip("rclone binary not available on PATH")
@@ -157,19 +169,17 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     remote_root = tmp_path / "r2"
     staged = remote_root / "intermediate-data" / "dataset"
     staged.mkdir(parents=True)
-    splits_and_stats = ("train.h5", "val.h5", "test.h5", "stats.npz")
-    for name in splits_and_stats:
-        shutil.copy(surge_xt_smoke_datasets / name, staged / name)
+    # Lance splits are directories; stats.npz is a plain file.
+    for name in ("train.lance", "val.lance", "test.lance"):
+        shutil.copytree(surge_xt_smoke_datasets / name, staged / name)
+    shutil.copy(surge_xt_smoke_datasets / "stats.npz", staged / "stats.npz")
 
     dataset_root = tmp_path / "downloaded"
     output_dir = tmp_path / "out"
 
     env = {
         **os.environ,
-        "RCLONE_CONFIG_R2_TYPE": "local",
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
-        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+        **_storage_env(),
     }
     proc = subprocess.run(  # noqa: S603 — controlled argv
         [
@@ -182,11 +192,10 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
             # render defaults to null and is read only in mode=predict's
             # postprocessing, so mode=test needs no render group.
             "hydra.job.chdir=false",
-            f"model.net.d_out={len(param_specs['surge_4'])}",
-            "callbacks.log_per_param_mse.param_spec=surge_4",
+            "datamodule.param_spec_name=surge_4",
             "datamodule.download_dataset_root_uri=r2://intermediate-data/dataset",
             f"datamodule.dataset_root={dataset_root}",
-            f"datamodule.predict_file={dataset_root}/test.h5",
+            f"datamodule.predict_file={dataset_root}/test.lance",
             "datamodule.batch_size=1",
             "datamodule.num_workers=0",
             "ckpt_path=null",
@@ -201,8 +210,9 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     )
     assert proc.returncode == 0, proc.stderr
 
-    for name in splits_and_stats:
-        assert (dataset_root / name).is_file(), f"{name} was not downloaded from R2"
+    for split in ("train.lance", "val.lance", "test.lance"):
+        assert (dataset_root / split).is_dir(), f"{split} was not downloaded from R2"
+    assert (dataset_root / "stats.npz").is_file(), "stats.npz was not downloaded from R2"
 
     metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
     assert metrics["test/param_mse"] == 0.0
@@ -220,7 +230,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     ``metrics.json`` must carry the oracle's exact-zero ``test/param_mse``.
 
     :param tmp_path: Root for the fake R2 remote and the local output dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
     """
     if shutil.which("rclone") is None:
         pytest.skip("rclone binary not available on PATH")
@@ -232,10 +242,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
 
     env = {
         **os.environ,
-        "RCLONE_CONFIG_R2_TYPE": "local",
-        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "stub",
-        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "stub",
-        "RCLONE_CONFIG_R2_ENDPOINT": "stub",
+        **_storage_env(),
     }
     proc = subprocess.run(  # noqa: S603 — controlled argv
         [
@@ -246,10 +253,9 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
             "trainer=cpu",
             "mode=test",
             "hydra.job.chdir=false",
-            f"model.net.d_out={len(param_specs['surge_4'])}",
-            "callbacks.log_per_param_mse.param_spec=surge_4",
+            "datamodule.param_spec_name=surge_4",
             f"datamodule.dataset_root={surge_xt_smoke_datasets}",
-            f"datamodule.predict_file={surge_xt_smoke_datasets}/test.h5",
+            f"datamodule.predict_file={surge_xt_smoke_datasets}/test.lance",
             "datamodule.batch_size=1",
             "datamodule.num_workers=0",
             "ckpt_path=null",

@@ -17,12 +17,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
 
 import pytest
 import wandb
-
-_T = TypeVar("_T")
 
 # Verified against wandb 0.26.x. ``wandb.proto.wandb_internal_pb2.Record`` and
 # ``wandb.sdk.internal.datastore.DataStore`` are wandb internals — a future
@@ -42,11 +39,11 @@ _FLUSH_TIMEOUT_S = 10.0
 _FLUSH_POLL_S = 0.05
 
 
-def _poll_until(
-    read_once: Callable[[], _T],
-    until: Callable[[_T], bool] | None,
+def _poll_until[ResultT](
+    read_once: Callable[[], ResultT],
+    until: Callable[[ResultT], bool] | None,
     timeout_s: float,
-) -> _T:
+) -> ResultT:
     """Re-invoke ``read_once`` until ``until`` holds, or return its last result at ``timeout_s``.
 
     The offline writer flushes the ``run-*.wandb`` datastore asynchronously, so

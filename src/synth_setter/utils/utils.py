@@ -14,6 +14,7 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec_width
 from synth_setter.utils import pylogger, rich_utils
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
@@ -29,6 +30,8 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
     if not OmegaConf.has_resolver("div"):
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
+    if not OmegaConf.has_resolver("param_spec_width"):
+        OmegaConf.register_new_resolver("param_spec_width", resolve_param_spec_width)
     if not OmegaConf.has_resolver("wandb"):
         OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
 

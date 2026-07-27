@@ -1,3 +1,4 @@
+# Surge launch scripts keep their stable callbacks=eval_surge CLI contract.
 defaults:
-  - prediction_writer
+  - eval_vst
   - _self_

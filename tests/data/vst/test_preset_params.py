@@ -76,7 +76,7 @@ def test_render_params_sets_preset_dependent_param():
         signal_duration_seconds=1.0,
         sample_rate=44100.0,
         channels=2,
-        preset_path=PRESET_PATH,
+        plugin_state_path=PRESET_PATH,
     )
 
     assert np.isfinite(output).all()

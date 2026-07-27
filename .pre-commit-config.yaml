@@ -1,7 +1,18 @@
 default_language_version:
-  python: python3
+  # AST-parsing hooks need PEP 695 support, matching requires-python.
+  python: python3.12
 
 repos:
+  - repo: local
+    hooks:
+      - id: pre-push-all-files
+        name: Run all pre-commit hooks before push
+        entry: uv run pre-commit run --all-files
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
     hooks:
@@ -40,9 +51,10 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: pyright
+        entry: uv run pyright
         language: system
         types: [python]
+        pass_filenames: false
         exclude: >-
           (?x)^(
             notebooks/|
@@ -57,7 +69,7 @@ repos:
             src/synth_setter/data/fm_datamodule\.py|
             src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ot\.py|
-            src/synth_setter/data/surge_datamodule\.py|
+            src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
             src/synth_setter/data/vst/generate_vst_dataset\.py|
             src/synth_setter/data/vst/param_spec\.py|
@@ -69,9 +81,9 @@ repos:
             src/synth_setter/models/components/vector_field\.py|
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
-            src/synth_setter/models/surge_ff_module\.py|
-            src/synth_setter/models/surge_flow_matching_module\.py|
-            src/synth_setter/models/surge_flowvae_module\.py|
+            src/synth_setter/models/vst_ff_module\.py|
+            src/synth_setter/models/vst_flow_matching_module\.py|
+            src/synth_setter/models/vst_flowvae_module\.py|
             src/synth_setter/cli/train\.py|
             src/synth_setter/utils/callbacks\.py|
             src/synth_setter/utils/logging_utils\.py|
@@ -104,6 +116,16 @@ repos:
     hooks:
       - id: gitlint
 
+  # release-type-guard: blocks feat/fix/perf/revert commit subjects unless
+  # RELEASE_INTENT=1 — those types cut a semantic-release version bump (#2291).
+  - repo: local
+    hooks:
+      - id: release-type-guard
+        name: release-type-guard
+        entry: python3 agent/hooks/pr_title_guard.py --commit-msg-file
+        language: system
+        stages: [commit-msg]
+
   # docformatter: auto-wraps and normalises docstrings (sphinx style).
   # Config lives in pyproject.toml under [tool.docformatter].
   # Local hook because v1.7.4's upstream manifest uses language: python_venv,
@@ -126,6 +148,7 @@ repos:
     rev: 1.7.0
     hooks:
       - id: interrogate
+        language_version: python3.12
         exclude: >-
           (?x)^(
             src/synth_setter/pipeline/data/add_music2latent\.py|
@@ -142,7 +165,7 @@ repos:
             src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ksin_datamodule\.py|
             src/synth_setter/data/ot\.py|
-            src/synth_setter/data/surge_datamodule\.py|
+            src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
             src/synth_setter/data/vst/generate_vst_dataset\.py|
             src/synth_setter/data/vst/param_spec\.py|
@@ -157,9 +180,9 @@ repos:
             src/synth_setter/models/components/vector_field\.py|
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
-            src/synth_setter/models/surge_ff_module\.py|
-            src/synth_setter/models/surge_flow_matching_module\.py|
-            src/synth_setter/models/surge_flowvae_module\.py|
+            src/synth_setter/models/vst_ff_module\.py|
+            src/synth_setter/models/vst_flow_matching_module\.py|
+            src/synth_setter/models/vst_flowvae_module\.py|
             src/synth_setter/utils/callbacks\.py
           )$
 
@@ -185,6 +208,7 @@ repos:
     rev: v0.9.0.2
     hooks:
       - id: shellcheck
+        args: [-x]
         exclude: >-
           (?x)^(
             jobs/eval/eval-audio\.sh|
@@ -257,7 +281,7 @@ repos:
     rev: 0.6.1
     hooks:
       - id: nbstripout
-        exclude: "^notebooks/inpsect-models\\.ipynb$"
+        exclude: "^notebooks/(inpsect-models|add_embeddings_smoke|add_preview_columns)\\.ipynb$"
 
   # C++ formatting and linting (no-op until .cpp/.h files are added)
   - repo: https://github.com/pre-commit/mirrors-clang-format

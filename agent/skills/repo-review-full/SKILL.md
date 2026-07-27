@@ -1,34 +1,34 @@
 ---
 name: repo-review-full
 description: |-
-  Full multi-skill PR review. Spawns one orchestrator agent that fans out a
-  parallel agent per applicable plugin checklist (selection rules in the shared
-  analysis file) and posts every diff-anchored BLOCK/WARN as an individual
-  unresolved inline PR review comment; non-diff findings (merge conflicts,
-  failing checks) go in a `## PR health` section in the review body. Requires
-  the tinaudio-synth-setter-skills plugin.
+  Full multi-skill PR review. Routes every host harness through Pi, fans out a
+  parallel Tintin worker per applicable checklist, and posts every diff-anchored
+  BLOCK/WARN as an unresolved inline comment. Requires the
+  tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full — Multi-Skill Parallel PR Review
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result — you do NOT resolve the PR,
-fan out the reviews, aggregate findings, or call `post_review.py` yourself.
+The review implementation is Pi-native. Claude Code and Codex invoke the same
+headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## What you (the main agent) do
 
 1. Capture the PR argument: if the command was invoked with an explicit `<N>`,
    keep it; otherwise the orchestrator resolves the PR from the current branch.
-2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute when an explicit
-   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
-   verbatim (it already tells the orchestrator to resolve the PR from the
-   current branch). Do not otherwise edit the brief.
-3. Relay the agent's returned `html_url` and one-line summary to the user
-   verbatim. Do not re-run or second-guess the pipeline.
 
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, follow
+   `agent/_shared/pi-review-host-contract.md` with `repo-review-full` as the
+   selected skill. Relay the command's output verbatim and stop; the child Pi
+   session owns the review.
+
+3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
+   orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
+   Agent for the flat Step 4 fan-out. Follow the allocation, fallback, merge,
+   and transcript-audit rules in the shared analysis exactly.
+
+4. Relay the returned `html_url` and one-line summary to the user
+   verbatim. Do not re-run or second-guess the pipeline.
 
 ## Orchestrator agent brief
 
@@ -56,6 +56,10 @@ sub-agents; you never launch those directly.
 >   BLOCK (any `[*:block]`, including folded PR-health BLOCKs), else `COMMENT`
 >   if any WARN exists, else `APPROVE`. The self-review COMMENT fallback (when
 >   the bot is the PR author) is automatic in `post_review.py`.
+> - On any terminal failure after target resolution, follow the shared
+>   **Terminal failure delivery** section with `--mode full`. Its top-level
+>   COMMENT review replaces ordinary Step 7; do not invoke `post_review.py`
+>   afterward.
 >
 > **Step 7 — submit the review.**
 >

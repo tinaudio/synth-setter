@@ -1,8 +1,8 @@
 """Behavioral tests for the ShardMetadata pydantic model.
 
-ShardMetadata is the strict sidecar payload for wds tar shards (member
-``metadata.json``). It lives in a leaf module with no project imports so
-consumers anywhere in the ``synth_setter`` package can import it without
+ShardMetadata is the strict per-shard provenance payload embedded in a Lance
+shard's Arrow schema metadata. It lives in a leaf module with no project imports
+so consumers anywhere in the ``synth_setter`` package can import it without
 picking up transitive dependencies that would form an import cycle.
 """
 
@@ -36,7 +36,7 @@ class TestShardMetadataConstruction:
     """Tests for ShardMetadata model construction and round-trip."""
 
     def test_valid_payload_constructs(self) -> None:
-        """A payload mirroring the audio HDF5 attrs constructs cleanly."""
+        """A well-formed provenance payload constructs cleanly."""
         meta = ShardMetadata(**_valid_kwargs())
         assert meta.velocity == 100
         assert meta.signal_duration_seconds == 4.0
@@ -88,7 +88,7 @@ class TestShardMetadataStrictness:
             ShardMetadata(**_valid_kwargs(velocity="100"))
 
     def test_malformed_sidecar_json_raises(self) -> None:
-        """A malformed ``metadata.json`` (missing field) fails loudly on validate."""
+        """A malformed provenance payload (missing field) fails loudly on validate."""
         payload = json.dumps({"velocity": 100, "channels": 2})  # incomplete
         with pytest.raises(ValidationError):
             ShardMetadata.model_validate_json(payload)
@@ -137,9 +137,9 @@ class TestShardMetadataLeafImport:
     def test_module_has_no_project_imports(self) -> None:
         """Parse the module's AST and assert it has no project-internal imports.
 
-        The leaf-module guarantee matters because the wds writer side
-        (``synth_setter.data.vst.generate_vst_dataset``, to be wired in PR-13)
-        will import this model; if the module pulled in
+        The leaf-module guarantee matters because the writer side
+        (``synth_setter.data.vst.writers``) imports this model; if the module
+        pulled in
         ``synth_setter.pipeline.schemas.spec`` or another non-leaf, the import
         graph would form a cycle through ``param_specs`` / pedalboard. The check
         flags every form Python supports for reaching project code:

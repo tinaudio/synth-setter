@@ -1,7 +1,7 @@
 """Shared fixtures for the `tests/infra` suite.
 
-Self-contained — does NOT import from `tests/conftest.py`, which pulls in torch/Hydra/h5py/VST
-fixtures unrelated to infrastructure checks.
+Self-contained — does NOT import from `tests/conftest.py`, which pulls in torch/Hydra/VST fixtures
+unrelated to infrastructure checks.
 """
 
 from __future__ import annotations

@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: faust_bubble
+param_spec_name: faust_bubble
+plugin_path: faust
+plugin_state_path: ""
+synth_version: "0.8.3"

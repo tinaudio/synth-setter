@@ -2,11 +2,10 @@
 
 defaults:
   - surge/base
-  - override /model: surge_flow
+  - override /model: vst_flow
   - _self_
 
 model:
-  num_params: 92
   vector_field:
     projection:
       final_ffn: false

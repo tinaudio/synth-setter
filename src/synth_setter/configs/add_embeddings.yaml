@@ -1,0 +1,42 @@
+# @package _global_
+defaults:
+  - paths: default
+  - hydra: default
+  - _self_
+
+# Dataset to augment with the selected embedding columns (local path, `r2://`, or `s3://`);
+# validated into AddEmbeddingsConfig and opened by the endpoint.
+lance_uri: ???
+
+# Registry keys selecting which embedding columns to write.
+embeddings: [clap, m2l]
+# Per-embedding checkpoint overrides keyed by registry name; defaults come from the registry.
+checkpoints: {}
+# Torch device for the selected encoders; null auto-selects cuda, MPS, then cpu.
+device: null
+# Rows per Lance UDF call (ignored for legacy v1 datasets).
+batch_size: 128
+# Build IVF_PQ indexes on clap and the selected embeddings' pooled companion columns.
+build_index: true
+# IVF partition count; null uses round(sqrt(rows)).
+num_partitions: null
+# PQ sub-vector count; must divide each indexed column's vector width.
+num_sub_vectors: 16
+# Vector-index distance metric.
+metric: cosine
+# Per-batch UDF-output cache enabling resume of an interrupted run; deleted on success.
+resume_cache: null
+# Log every batch with stage timings and enable native Lance debug telemetry.
+debug: false
+# Param spec describing param_array; required by embeddings that condition on parameters.
+param_spec_name: null
+# Strategy rendering param rows as conditioning text for param-sourced embeddings.
+param_text_normalizer: param_names
+
+# hydra/default interpolates ${task_name}; run.dir is overridden below since
+# its group default also references ${run_name}, absent here.
+task_name: add_embeddings
+
+hydra:
+  run:
+    dir: ${paths.log_dir}/add_embeddings/${now:%Y-%m-%d_%H-%M-%S}

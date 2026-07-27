@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import plistlib
 import threading
 import time
@@ -68,6 +70,49 @@ class TestExtractRendererVersion:
         (contents / "moduleinfo.json").write_text('{"Name": "TestPlugin"}')
         with pytest.raises(KeyError):
             extract_renderer_version(plugin)
+
+    @pytest.mark.skipif(
+        importlib.util.find_spec("dawdreamer") is None,
+        reason="DawDreamer is unavailable on this platform",
+    )
+    def test_faust_backend_name_reads_installed_dawdreamer_version(self) -> None:
+        """The Faust sentinel resolves provenance from the real DawDreamer package."""
+        assert extract_renderer_version(Path("faust")) == importlib.metadata.version(
+            "dawdreamer"
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.requires_surgepy
+    def test_surgepy_backend_name_reads_live_engine_version(self) -> None:
+        """SurgePy provenance records the native engine version, not package 0.1.0."""
+        import surgepy
+
+        assert extract_renderer_version(Path("surgepy")) == surgepy.getVersion()
+
+    def test_torchsynth_backend_name_reads_installed_package_version(self) -> None:
+        """The bare ``torchsynth`` name resolves to the installed package version, not a file."""
+        import importlib.metadata
+
+        version = extract_renderer_version(Path("torchsynth"))
+
+        assert version == importlib.metadata.version("torchsynth")
+
+    def test_torchsynth_backend_missing_package_propagates_dependency_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing torchsynth installation reports the package-metadata failure.
+
+        :param monkeypatch: Replaces package metadata lookup with a missing dependency.
+        """
+        import importlib.metadata
+
+        def _missing_package(name: str) -> str:
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        monkeypatch.setattr(importlib.metadata, "version", _missing_package)
+
+        with pytest.raises(importlib.metadata.PackageNotFoundError, match="torchsynth"):
+            extract_renderer_version(Path("torchsynth"))
 
 
 class TestLoadPluginNoWarmup:
@@ -349,7 +394,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", preloaded),
         )
 
@@ -387,7 +432,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
         )
 
         assert load_calls == ["plugins/Surge XT.vst3"]
@@ -416,7 +461,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             warmup=True,
         )
 
@@ -443,7 +488,7 @@ class TestRenderParamsPreloadedPlugin:
             signal_duration_seconds=1.0,
             sample_rate=44100,
             channels=2,
-            preset_path="presets/surge-base.vstpreset",
+            plugin_state_path="presets/surge-base.vstpreset",
             plugin=cast("VST3Plugin", cached),
             warmup=True,
         )

@@ -8,16 +8,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "8.39.0"
+version = "10.7.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.13"
 # Lite import closure for the lite CI sites (validate_spec, ensure_r2_env_loaded,
 # load_image_config); heavy runtime is in [dependency-groups]. Pinned by
 # tests/infra/test_lite_dependency_base.py — see docs/reference/dependency-management.md (#1139).
 dependencies = [
   "pydantic>=2",
+  "pydantic-settings>=2",
   "python-dotenv",
   "pyyaml",
 ]
@@ -49,6 +50,21 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
+# SAME (Stability AI) encoder runtime for the add_embeddings --same mode.
+# Pinned exactly: 0.0.20 is the release validated for numerical equivalence
+# between upstream's torch pin and this project's lock (see PR #2283). Its
+# stale transitive pins are relaxed in [[tool.uv.dependency-metadata]].
+same = [
+  "stable-audio-tools==0.0.20",
+]
+# Stable Audio 3 text conditioning for the add_embeddings `t5gemma` mode.
+# Commit-pinned: upstream has no PyPI release and no tags, so a branch ref
+# would silently re-resolve. Its torch==2.7.1 / torchaudio==2.7.1 pins are
+# relaxed in [[tool.uv.dependency-metadata]] so the cpu/cu128 index routing
+# keeps choosing this project's locked wheel.
+sa3 = [
+  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
+]
 
 # Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
 # on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
@@ -58,11 +74,15 @@ synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
+synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
-synth-setter-add-mp3-audio = "synth_setter.pipeline.data.add_mp3_audio:main"
+synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
+synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
+synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
+synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 
 
 
@@ -136,6 +156,10 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  # Shape-checked tensor annotations; jaxtyping only checks under a runtime
+  # typechecker, so beartype is not optional here.
+  "jaxtyping>=0.2.36",
+  "beartype>=0.19",
 ]
 config = [
   "hydra-core==1.3.2",
@@ -148,16 +172,15 @@ config = [
 # keeps `uv sync --frozen` self-sufficient.
 # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
 compute = [
-  "skypilot[runpod,oci,kubernetes]==0.12.0",
+  "skypilot[runpod,oci,kubernetes,vast]==0.12.0",
+  # Pin: vastai-sdk 1.x removes VastAI.api_key_access, which SkyPilot 0.12's Vast
+  # provisioner still calls (sky/provision/vast/utils.py) — 1.x breaks every launch.
+  "vastai-sdk==0.2.5",
   "runpod==1.8.1",
   "oci",
   "kubernetes==35.0.0",
 ]
 data = [
-  "dask[distributed]",
-  "h5py",
-  "hdf5plugin",
-  "webdataset",
   "pandas",
   "numpy",
   "pylance>=7.0.0",
@@ -165,11 +188,14 @@ data = [
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
+  "dawdreamer; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
   "librosa",
+  "mido",
   "pedalboard",
   "pyloudnorm",
-  "mido",
   "scipy>=1.14,<1.15",
+  "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchsynth==1.0.2",
 ]
 metrics = [
   "pesto-pitch==2.0.1",
@@ -177,6 +203,10 @@ metrics = [
   "kymatio==0.3.0",
   "POT",
   "einops",
+]
+notebooks = [
+  "duckdb>=1.5.4",
+  "smoosense[jupyter]",
 ]
 util = [
   "click<8.2",
@@ -202,6 +232,7 @@ runtime = [
 dev = [
   "hypothesis",
   "mutmut==3.5.*",
+  "nflows",
   "pre-commit",
   "pyright==1.1.408",
   "pytest",
@@ -213,13 +244,16 @@ dev = [
   # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
   # tests/test_compare_baseline_configs.py runs through the live Python.
   # Not used by `synth_setter/` itself — see #1268.
+  "python-semantic-release==9.21.2",
   "rootutils",
   "ruff",
   { include-group = "docs" },
+  { include-group = "notebooks" },
   { include-group = "runtime" },
 ]
 
 [tool.uv]
+build-constraint-dependencies = ["cmake<4"]
 # Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
 # heavy stack), so local onboarding and the ~15 full-install sites are unchanged
 # by the #1139 base trim. pip never installs PEP 735 groups and `uv pip` only
@@ -233,6 +267,69 @@ conflicts = [
     { extra = "cpu" },
     { extra = "cu128" },
   ],
+]
+# stable-audio-tools 0.0.20 hard-pins torch==2.7.1 / torchaudio==2.7.1, two
+# packages with no py3.12 wheels (sentencepiece 0.1.99, PyWavelets 1.4.1), and
+# importlib-resources==5.12.0 (collides with the dev group's semantic-release).
+# This static metadata replaces ONLY that package's declared deps, relaxing the
+# stale pins to floors so the existing lock (and cpu/cu128 index routing) keeps
+# choosing the torch version. A global override-dependencies would instead
+# rewrite the project's own extra-conditioned torch requirements and collapse
+# the cpu/cu128 fork. The SAME-S encode path is numerically equivalent across
+# torch 2.7.1 and the locked torch (max_abs_diff 9.5e-5 on latents with
+# std 1.8; see PR #2283).
+[[tool.uv.dependency-metadata]]
+name = "stable-audio-tools"
+version = "0.0.20"
+requires-dist = [
+  "alias-free-torch==0.0.6",
+  "dill",
+  "einops",
+  "einops-exts",
+  "huggingface_hub",
+  "importlib-resources>=6.0",
+  "nnAudio",
+  "PyWavelets>=1.6",
+  "safetensors",
+  "scipy",
+  "sentencepiece>=0.2.0",
+  "setuptools",
+  "soxr",
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "torchsde",
+  "tqdm",
+  "transformers",
+  "v-diffusion-pytorch==0.0.2",
+  "vector-quantize-pytorch==1.14.41",
+]
+
+# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. As with
+# stable-audio-tools above, this static metadata replaces ONLY that package's
+# declared deps, relaxing the two pins to floors so the existing lock (and the
+# cpu/cu128 index routing) keeps choosing the torch version; a global
+# override-dependencies would rewrite the project's own extra-conditioned torch
+# requirements and collapse the cpu/cu128 fork. Every other floor it declares
+# is already satisfied by the lock. The T5Gemma prompt-conditioner path is
+# bitwise identical across torch 2.7.1 and the locked torch at float32
+# (max_abs_diff 0.0 over 22 prompts, embedding std 1.75; scripts/dev/
+# sa3_t5gemma_parity.py). At the checkpoint's declared bfloat16 the same
+# comparison diverges by 11.5, which is why the encoder is pinned to float32.
+[[tool.uv.dependency-metadata]]
+name = "stable-audio-3"
+version = "0.1.0"
+requires-dist = [
+  "einops>=0.8.2",
+  "einops-exts>=0.0.4",
+  "huggingface-hub>=1.7.1",
+  "numpy>=2.2.6",
+  "packaging>=26.0",
+  "safetensors>=0.7.0",
+  "soundfile>=0.13.1",
+  "torch>=2.7",
+  "torchaudio>=2.7",
+  "tqdm>=4.67.3",
+  "transformers>=5.8.0",
 ]
 
 [[tool.uv.index]]
@@ -293,7 +390,9 @@ namespaces = true
 "synth_setter" = [
   "configs/**/*.yaml",
   "configs/**/*.yml",
+  "configs/**/*.sh",
   "scripts/*.sh",
+  "data/vst/*_param_map.json",
 ]
 
 
@@ -301,6 +400,7 @@ namespaces = true
 [tool.pytest.ini_options]
 addopts = [
   "--color=yes",
+  "--dist=loadgroup",
   "--durations=0",
   "--strict-markers",
   "--doctest-modules",
@@ -317,13 +417,16 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
+  "dataloader_multiprocess: exercises real DataLoader child processes and must share one xdist resource group",
   "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
+  "requires_surgepy: requires the pinned surgepy native extension (auto-skipped off Linux x86_64)",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
+  "same_e2e: SAME encoder tests needing the `same` extra + HF weight download (own GHA workflow)",
 ]
 minversion = "6.0"
 pythonpath = ["src"]
@@ -332,7 +435,7 @@ testpaths = "tests/"
 
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 99
 exclude = ["logs", "data"]
 # Legacy files excluded until per-file lint cleanup is done (see issue #25).
@@ -373,7 +476,6 @@ known-third-party = ["wandb"]
 "src/synth_setter/pipeline/data/r2_report.py" = ["S603", "S607", "T201", "D102", "D103", "D107"]
 "src/synth_setter/pipeline/data/reshard.py" = ["T201"]
 "src/synth_setter/pipeline/data/rewrite_to_latest.py" = ["ANN001", "D102", "D103", "D107"]
-"src/synth_setter/tools/surge_xt_interactive.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/audio_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/fm_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/kosc_datamodule.py" = ["D102", "D103", "D107"]
@@ -385,7 +487,6 @@ known-third-party = ["wandb"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.
 "tests/pipeline/data/test_r2_report.py" = ["S603", "S607"]
 # ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
-"tests/tools/test_surge_xt_interactive.py" = ["ANN001"]
 "tests/pipeline/ci_config/test_load_image_config.py" = ["D102", "D103", "D107"]
 "tests/pipeline/schemas/test_dataset_spec.py" = ["ANN001", "D102", "D103", "D107"]
 "tests/pipeline/schemas/test_prefix.py" = ["ANN001", "D102", "D103", "D107"]
@@ -407,10 +508,10 @@ known-third-party = ["wandb"]
 "src/synth_setter/models/components/vae.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vector_field.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_ff_module.py" = ["F821", "D102", "D103", "D107"]
-"src/synth_setter/models/surge_ff_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_ff_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/ksin_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flow_matching_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/surge_flowvae_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flow_matching_module.py" = ["D102", "D103", "D107"]
+"src/synth_setter/models/vst_flowvae_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/train.py" = ["E402", "D102", "D103", "D107"]
 "src/synth_setter/utils/__init__.py" = ["F401"]
 "src/synth_setter/utils/callbacks.py" = ["F821", "T201", "ANN001", "D102", "D103", "D107"]
@@ -490,7 +591,10 @@ exclude = '''(?x)
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
-build_command = ""
+# Refresh uv.lock's synth-setter version after the version stamp; the PSR action
+# container ships pip but no uv (#1913). `assets` commits the refreshed lock.
+build_command = "pip install uv==0.11.28 && uv lock"
+assets = ["uv.lock"]
 commit_message = "chore(release): {version} [skip ci]"
 changelog_file = "CHANGELOG.md"
 
@@ -554,4 +658,8 @@ tests_dir = [
 # ImportError during stats collection. Copy the whole package so the sandbox
 # can resolve them.
 also_copy = ["src/synth_setter/"]
-pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
+pytest_add_cli_args = [
+    "-m",
+    "not slow and not requires_vst and not r2 and not gpu and not benchmark",
+    "--capture=no",
+]

@@ -525,7 +525,7 @@ def test_configure_optimizers_with_scheduler(  # noqa: DOC101,DOC103
 
 
 @pytest.mark.parametrize(
-    ("compile_flag", "stage", "expect_called"),
+    ("compile_flag", "stage", "expect_compiled"),
     [
         (False, "fit", False),
         (True, "validate", False),
@@ -535,21 +535,19 @@ def test_configure_optimizers_with_scheduler(  # noqa: DOC101,DOC103
 def test_setup_compiles_only_when_compile_true_and_stage_fit(  # noqa: DOC101,DOC103
     tiny_net: nn.Module,
     opt_partial: Callable[..., torch.optim.Optimizer],
-    monkeypatch: pytest.MonkeyPatch,
     compile_flag: bool,
     stage: str,
-    expect_called: bool,
+    expect_compiled: bool,
 ) -> None:
-    """torch.compile is invoked exactly when compile=True AND stage=='fit'."""
+    """The net is compiled in place exactly when compile=True AND stage=='fit'."""
     module = _make_module(net=tiny_net, optimizer=opt_partial, compile=compile_flag)
     original_net = module.net
-    compile_mock = MagicMock(return_value=original_net)
-    monkeypatch.setattr(torch, "compile", compile_mock)
+
     module.setup(stage)
-    if expect_called:
-        compile_mock.assert_called_once_with(original_net)
-    else:
-        compile_mock.assert_not_called()
+
+    assert module.net is original_net
+    assert (module.net._compiled_call_impl is not None) is expect_compiled
+    assert all("_orig_mod" not in key for key in module.state_dict())
 
 
 # --------------------------------------------------------------------------- #

@@ -23,15 +23,18 @@ def _write_spec(tmp_path: Path, bucket: str = "intermediate-data") -> Path:
     """
     spec = DatasetSpec(
         task_name="ci-task",
-        output_format=OutputFormat.HDF5,
+        output_format=OutputFormat.LANCE,
         train_val_test_sizes=(1, 0, 0),
         base_seed=42,
         r2={"bucket": bucket},  # type: ignore[arg-type]
         render={  # type: ignore[arg-type]
-            "plugin_path": str(tmp_path / "plugin.vst3"),
-            "preset_path": str(tmp_path / "preset.vstpreset"),
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": str(tmp_path / "plugin.vst3"),
+                "plugin_state_path": str(tmp_path / "preset.vstpreset"),
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 1,
             "velocity": 64,
@@ -78,12 +81,14 @@ class TestComputeSpecUri:
             '{"task_name":"t","run_id":"t-20260328T120000000Z",'
             '"created_at":"2026-03-28T12:00:00+00:00",'
             '"git_sha":"a000000000000000000000000000000000000000","is_repo_dirty":false,'
-            '"output_format":"hdf5","train_val_test_sizes":[1,0,0],'
+            '"output_format":"lance","train_val_test_sizes":[1,0,0],'
             '"train_val_test_seeds":null,"base_seed":42,'
             '"r2_bucket":"legacy-bucket","r2_prefix_root":"data",'
             '"r2_prefix":"data/t/t-20260328T120000000Z/",'
-            '"render":{"plugin_path":"x","preset_path":"x","param_spec_name":"surge_simple",'
-            '"renderer_version":"v","sample_rate":44100,"channels":1,"velocity":1,'
+            '"render":{"synth":{"name":"surge_simple",'
+            '"param_spec_name":"surge_simple","plugin_path":"x",'
+            '"plugin_state_path":"x","synth_version":"v"},'
+            '"sample_rate":44100,"channels":1,"velocity":1,'
             '"signal_duration_seconds":1.0,"min_loudness":-1.0,"samples_per_render_batch":1,'
             '"samples_per_shard":1}}'
         )
@@ -237,8 +242,8 @@ class TestComputeSpecUriFromHydra:
 
     def test_run_id_override_lands_in_uri(self) -> None:
         """The ``run_id_override`` argument appears verbatim in the under-prefix URI."""
-        uri = compute_spec_uri_from_hydra(_HYDRA_EXPERIMENT, "cell-runpod-hdf5")
-        assert "/cell-runpod-hdf5/input_spec.json" in uri
+        uri = compute_spec_uri_from_hydra(_HYDRA_EXPERIMENT, "cell-runpod-lance")
+        assert "/cell-runpod-lance/input_spec.json" in uri
         assert uri.endswith("/input_spec.json")
         assert uri.startswith("r2://")
 

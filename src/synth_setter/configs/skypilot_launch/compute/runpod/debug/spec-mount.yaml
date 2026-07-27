@@ -1,0 +1,12 @@
+# DEBUG variant: spec-mount canary — exercises SkyPilot `file_mounts` on
+# RunPod (a diagnostic path independent of production, which ships the spec
+# via R2 because programmatic file_mounts is blocked on RunPod — see #749).
+# Mounts an in-repo file (this option itself) so no fixture is needed; the
+# worker just verifies the file is present and non-empty.
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-spec-mount
+run_script: debug-spec-mount.sh
+file_mounts:
+  /home/build/synth-setter/data/spec-mount-probe.txt: src/synth_setter/configs/skypilot_launch/compute/runpod/debug/spec-mount.yaml

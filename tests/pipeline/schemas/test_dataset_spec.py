@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst import param_specs
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     OutputFormat,
@@ -23,11 +25,21 @@ FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 
 
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
+    synth_name = {
+        "faust": "faust_bright_organ",
+        "torchsynth": "torchsynth_simple",
+    }.get(plugin_path, "surge_simple")
+    synth_version = {"faust": "0.8.3", "torchsynth": "1.0.2"}.get(plugin_path, "1.3.4")
     return {
-        "plugin_path": plugin_path,
-        "preset_path": "presets/surge-base.vstpreset",
-        "param_spec_name": "surge_simple",
-        "renderer_version": "1.3.4",
+        "synth": {
+            "name": synth_name,
+            "param_spec_name": synth_name,
+            "plugin_path": plugin_path,
+            "plugin_state_path": (
+                "presets/surge-base.vstpreset" if synth_name == "surge_simple" else ""
+            ),
+            "synth_version": synth_version,
+        },
         "sample_rate": 44100,
         "channels": 2,
         "velocity": 100,
@@ -39,7 +51,7 @@ def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, An
 
 
 def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any) -> dict[str, Any]:
-    """Return DatasetSpec kwargs that build a 3-shard hdf5 spec by default.
+    """Return DatasetSpec kwargs that build a 3-shard lance spec by default.
 
     Uses the nested ``r2`` shape (post-R2Location-migration). The back-compat
     shim that promotes legacy flat ``r2_bucket`` / ``r2_prefix_root`` /
@@ -47,7 +59,7 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     """
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [300, 0, 0],
         "base_seed": 42,
         "r2": {"bucket": "intermediate-data"},
@@ -75,14 +87,14 @@ class TestShardSpec:
 
     def test_shard_spec_is_frozen(self) -> None:
         """Mutating a ShardSpec field after construction raises ValidationError."""
-        shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
+        shard = ShardSpec(shard_id=0, filename="shard-000000.lance", seed=42)
         with pytest.raises(ValidationError):
             shard.shard_id = 99  # type: ignore[misc]
 
     def test_shard_spec_rejects_extra_fields(self) -> None:
         """ShardSpec rejects unknown keyword args under ``extra='forbid'``."""
         with pytest.raises(ValidationError):
-            ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42, extra="oops")  # type: ignore[call-arg]
+            ShardSpec(shard_id=0, filename="shard-000000.lance", seed=42, extra="oops")  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +112,49 @@ class TestRenderConfig:
         with pytest.raises(ValidationError):
             RenderConfig(**kwargs)
 
+    def test_storage_dtype_defaults_preserve_existing_dataset_encoding(self) -> None:
+        """Omitted storage dtypes use the RenderConfig defaults."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        assert cfg.audio_dtype == "float16"
+        assert cfg.mel_spec_dtype == "float32"
+
+    @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
+    def test_storage_dtype_accepts_float16_and_float32(self, field: str) -> None:
+        """Each stored signal tensor accepts either supported floating-point width.
+
+        :param field: RenderConfig storage field under test.
+        """
+        for dtype in ("float16", "float32"):
+            cfg = RenderConfig(**(_valid_render_kwargs() | {field: dtype}))
+            assert getattr(cfg, field) == dtype
+
+    @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
+    def test_storage_dtype_rejects_unsupported_dtype(self, field: str) -> None:
+        """Unsupported storage widths fail at the persisted spec boundary.
+
+        :param field: RenderConfig storage field under test.
+        """
+        with pytest.raises(ValidationError):
+            RenderConfig(**(_valid_render_kwargs() | {field: "int16"}))
+
+    def test_param_spec_name_serializes_as_string(self) -> None:
+        """The domain identifier preserves the registry key's JSON shape."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        synth = json.loads(cfg.model_dump_json())["synth"]
+
+        assert synth["param_spec_name"] == "surge_simple"
+
+    def test_param_spec_name_preserves_nonblank_boundary_whitespace(self) -> None:
+        """Nonblank registry keys retain surrounding whitespace."""
+        kwargs = _valid_render_kwargs()
+        kwargs["synth"] = {**kwargs["synth"], "param_spec_name": "  surge_simple  "}
+
+        cfg = RenderConfig(**kwargs)
+
+        assert cfg.param_spec_name == "  surge_simple  "
+
     @pytest.mark.parametrize(
         ("field", "bad_value", "match"),
         [
@@ -109,8 +164,6 @@ class TestRenderConfig:
             ("signal_duration_seconds", 0.0, "signal_duration_seconds must be positive"),
             ("samples_per_render_batch", 0, "samples_per_render_batch must be positive"),
             ("samples_per_shard", 0, "samples_per_shard must be positive"),
-            ("param_spec_name", "   ", "param_spec_name must not be blank"),
-            ("renderer_version", "", "renderer_version must not be blank"),
         ],
     )
     def test_render_config_range_validators(self, field: str, bad_value: Any, match: str) -> None:
@@ -127,7 +180,7 @@ class TestRenderConfig:
             assert cfg.velocity == valid
 
     def test_cadence_defaults_off_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Off Darwin: both cadences default to "render" (historical per-render behaviour).
+        """Off Darwin: plugin reload defaults to "once" (#1999), GUI toggle to "render".
 
         :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
         """
@@ -135,7 +188,7 @@ class TestRenderConfig:
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
         cfg = RenderConfig(**_valid_render_kwargs())
-        assert cfg.plugin_reload_cadence == "render"
+        assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "render"
 
     def test_gui_toggle_default_is_never_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,7 +201,17 @@ class TestRenderConfig:
         )
         cfg = RenderConfig(**_valid_render_kwargs())
         assert cfg.gui_toggle_cadence == "never"
-        assert cfg.plugin_reload_cadence == "render"
+        assert cfg.plugin_reload_cadence == "once"
+
+    def test_always_on_with_default_reload_cadence_accepted(self) -> None:
+        """``gui_toggle_cadence="always_on"`` composes with the default reload cadence (#1999).
+
+        Distinct from ``test_always_on_accepted_with_reload_once``: this pins the
+        implicit default satisfying the pairing validator, not an explicit opt-in.
+        """
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "always_on"})
+        assert cfg.plugin_reload_cadence == "once"
+        assert cfg.gui_toggle_cadence == "always_on"
 
     def test_once_reload_with_never_warmup_accepted(self) -> None:
         """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""
@@ -161,6 +224,206 @@ class TestRenderConfig:
         )
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "never"
+
+    @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
+    def test_dawdreamer_gui_toggle_rejects_editor_cadences(
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
+    ) -> None:
+        """DawDreamer's backend contract takes precedence over Darwin's generic guard.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        :param cadence: Unsupported editor cadence under test.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        with pytest.raises(
+            ValidationError,
+            match='DawDreamer requires gui_toggle_cadence="never"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "dawdreamer",
+                    "gui_toggle_cadence": cadence,
+                    "plugin_reload_cadence": "once",
+                }
+            )
+
+    def test_dawdreamer_gui_toggle_never_is_accepted(self) -> None:
+        """DawDreamer accepts ``gui_toggle_cadence="never"`` without editor warm-up."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "renderer_backend": "dawdreamer",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.gui_toggle_cadence == "never"
+
+    def test_faust_backend_accepts_registered_source_identity(self) -> None:
+        """Faust selects checked-in source resolution without plugin or preset paths."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(plugin_path="faust"),
+                "renderer_backend": "dawdreamer_faust",
+                "gui_toggle_cadence": "never",
+            }
+        )
+
+        assert cfg.renderer_backend == "dawdreamer_faust"
+        assert cfg.plugin_path == "faust"
+        assert cfg.plugin_state_path == ""
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"plugin_path": "program.dsp"}, 'requires plugin_path="faust"'),
+            ({"plugin_state_path": "preset.fxp"}, "does not accept plugin_state_path"),
+            ({"gui_toggle_cadence": "once"}, 'requires gui_toggle_cadence="never"'),
+        ],
+    )
+    def test_faust_backend_rejects_external_resources_and_editor_cadence(
+        self,
+        overrides: dict[str, str],
+        message: str,
+    ) -> None:
+        """Faust fails closed on external source/state paths and editor use.
+
+        :param overrides: Invalid Faust renderer fields.
+        :param message: Expected validation-error fragment.
+        """
+        values = {
+            **_valid_render_kwargs(plugin_path="faust"),
+            "renderer_backend": "dawdreamer_faust",
+            "gui_toggle_cadence": "never",
+        }
+        synth_overrides = {
+            key: value
+            for key, value in overrides.items()
+            if key in {"plugin_path", "plugin_state_path"}
+        }
+        values.update(
+            {key: value for key, value in overrides.items() if key not in synth_overrides}
+        )
+        if synth_overrides:
+            values["synth"] = {**values["synth"], **synth_overrides}
+
+        with pytest.raises(ValidationError, match=message):
+            RenderConfig(**values)
+
+    def test_faust_plugin_sentinel_requires_faust_backend(self) -> None:
+        """The bare Faust sentinel cannot dispatch through a VST backend."""
+        with pytest.raises(ValidationError, match='plugin_path="faust" requires renderer_backend'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="faust"))
+
+    @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
+    def test_torchsynth_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:
+        """The in-process torchsynth backend has no plugin editor to toggle.
+
+        :param cadence: Unsupported editor cadence under test.
+        """
+        with pytest.raises(
+            ValidationError,
+            match='torchsynth requires gui_toggle_cadence="never"',
+        ):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(plugin_path="torchsynth"),
+                    "renderer_backend": "torchsynth",
+                    "gui_toggle_cadence": cadence,
+                    "plugin_reload_cadence": "once",
+                }
+            )
+
+    def test_surgepy_backend_accepts_isolated_in_process_rendering(self) -> None:
+        """SurgePy accepts only its sentinel and per-render synth recreation."""
+        values = _valid_render_kwargs(plugin_path="surgepy")
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+        }
+        cfg = RenderConfig(
+            **{
+                **values,
+                "renderer_backend": "surgepy",
+                "gui_toggle_cadence": "never",
+                "plugin_reload_cadence": "render",
+            }
+        )
+
+        assert cfg.renderer_backend == "surgepy"
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"plugin_path": "plugin.vst3"}, 'requires plugin_path="surgepy"'),
+            ({"gui_toggle_cadence": "once"}, 'requires gui_toggle_cadence="never"'),
+            ({"plugin_reload_cadence": "once"}, 'requires plugin_reload_cadence="render"'),
+            ({"param_spec_name": "obxf"}, "requires a Surge parameter spec"),
+        ],
+    )
+    def test_surgepy_backend_rejects_unsafe_configuration(
+        self,
+        overrides: dict[str, str],
+        message: str,
+    ) -> None:
+        """SurgePy fails closed on incompatible synth identity or lifecycle settings.
+
+        :param overrides: Invalid field override under test.
+        :param message: Expected validation error fragment.
+        """
+        values = {
+            **_valid_render_kwargs(plugin_path="surgepy"),
+            "renderer_backend": "surgepy",
+            "gui_toggle_cadence": "never",
+            "plugin_reload_cadence": "render",
+        }
+        synth_keys = {"param_spec_name", "plugin_path", "plugin_state_path"}
+        synth_overrides = {key: value for key, value in overrides.items() if key in synth_keys}
+        values.update({key: value for key, value in overrides.items() if key not in synth_keys})
+        values["synth"] = {
+            **values["synth"],
+            "plugin_state_path": "presets/surge-base.fxp",
+            "synth_version": "1.3.master.f7b97c68",
+            **synth_overrides,
+        }
+
+        with pytest.raises(ValidationError, match=message):
+            RenderConfig(**values)
+
+    def test_surgepy_plugin_path_requires_surgepy_backend(self) -> None:
+        """The SurgePy sentinel cannot dispatch through the default VST host."""
+        with pytest.raises(ValidationError, match='requires renderer_backend="surgepy"'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="surgepy"))
+
+    def test_torchsynth_backend_accepted_with_gui_toggle_never(self) -> None:
+        """``renderer_backend="torchsynth"`` validates with its bare backend name."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(plugin_path="torchsynth"),
+                "renderer_backend": "torchsynth",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.renderer_backend == "torchsynth"
+
+    def test_torchsynth_backend_rejects_vst_plugin_path(self) -> None:
+        """The in-process backend rejects a path that version dispatch would treat as VST3."""
+        with pytest.raises(ValidationError, match='requires plugin_path="torchsynth"'):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "torchsynth",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_torchsynth_plugin_path_requires_torchsynth_backend(self) -> None:
+        """The bare backend name cannot dispatch through the default VST3 renderer."""
+        with pytest.raises(ValidationError, match='requires renderer_backend="torchsynth"'):
+            RenderConfig(**_valid_render_kwargs(plugin_path="torchsynth"))
 
     def test_gui_toggle_render_rejected_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714).
@@ -280,29 +543,6 @@ class TestRenderConfig:
                 }
             )
 
-    def test_always_on_with_default_plugin_reload_cadence_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``"always_on"`` without an explicit ``plugin_reload_cadence`` hits the schema default.
-
-        Pins the contract: callers that opt into ``always_on`` must also set
-        ``plugin_reload_cadence="once"`` — relying on the schema default
-        (``"render"``) is a configuration error and surfaces at construction,
-        not at render time.
-
-        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
-        """
-        monkeypatch.setattr(
-            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
-        )
-        kwargs = _valid_render_kwargs()
-        kwargs.pop("plugin_reload_cadence", None)
-        with pytest.raises(
-            ValidationError,
-            match=r'gui_toggle_cadence="always_on" requires plugin_reload_cadence="once"',
-        ):
-            RenderConfig(**{**kwargs, "gui_toggle_cadence": "always_on"})
-
     def test_always_on_accepted_on_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``"always_on"`` is permitted on Darwin (single open, below #714 threshold).
 
@@ -354,6 +594,23 @@ class TestDatasetSpecConstruction:
         assert spec.created_at == FIXED_NOW
         assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
         assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+
+    def test_use_shard_queue_defaults_to_false(self, patch_runtime_io: None) -> None:
+        """Static rank/world partitioning stays the default distribution mode.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert spec.use_shard_queue is False
+
+    def test_use_shard_queue_true_survives_json_round_trip(self, patch_runtime_io: None) -> None:
+        """Workers re-reading input_spec.json from R2 see the operator's queue opt-in.
+
+        :param patch_runtime_io: Deterministic spec runtime stubs.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(use_shard_queue=True))
+        rehydrated = DatasetSpec.model_validate_json(spec.model_dump_json())
+        assert rehydrated.use_shard_queue is True
 
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
         """An explicit run_id in the input dict passes through instead of being regenerated."""
@@ -488,38 +745,45 @@ class TestDatasetSpecValidators:
     def test_invalid_output_format_token_raises(self, patch_runtime_io: None) -> None:
         """An output_format outside the ``OutputFormat`` enum is rejected.
 
-        ``parquet`` stays outside the enum even as new formats (wds) join — pinning
-        the rejection here prevents a typo (``parquet`` vs. ``wds``) from sneaking in.
+        ``parquet`` stays outside the lance-only enum — pinning the rejection
+        here prevents a typo (``parquet`` vs. ``lance``) from sneaking in.
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
 
-    def test_wds_output_format_constructs(self, patch_runtime_io: None) -> None:
-        """``output_format='wds'`` is accepted (unblocks the wds writer landing in PR-13)."""
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert spec.output_format == "wds"
+    @pytest.mark.parametrize("legacy_token", ["hdf5", "wds"])
+    def test_legacy_output_format_token_raises(
+        self, patch_runtime_io: None, legacy_token: str
+    ) -> None:
+        """Reject unsupported output-format tokens.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param legacy_token: A removed output-format token that must no longer parse.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(output_format=legacy_token))
 
     def test_string_token_coerces_into_output_format_enum(self, patch_runtime_io: None) -> None:
-        """The raw ``hdf5`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
+        """The raw ``lance`` token from Hydra / R2 JSON becomes an ``OutputFormat`` member.
 
         Pins that callers can reach ``.extension`` on a constructed spec rather than
         re-deriving the suffix from a bare string.
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        assert spec.output_format is OutputFormat.HDF5
-        assert spec.output_format.extension == ".h5"
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert spec.output_format is OutputFormat.LANCE
+        assert spec.output_format.extension == ".lance"
 
     def test_output_format_serializes_as_plain_token(self, patch_runtime_io: None) -> None:
         """JSON serialization emits the bare token, not the enum repr (R2 / Hydra contract).
 
         :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
         """
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert '"output_format":"wds"' in spec.model_dump_json()
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert '"output_format":"lance"' in spec.model_dump_json()
 
     def test_non_string_output_format_rejected_despite_non_strict_field(
         self, patch_runtime_io: None
@@ -552,16 +816,41 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=bad_length))
 
-    @pytest.mark.parametrize(
-        "bad_value",
-        [[42, 43, 44], (42, 43, 44), [1, 2, 3, 4], "anything", 0],
-    )
-    def test_train_val_test_seeds_setting_raises_not_implemented(
-        self, patch_runtime_io: None, bad_value: Any
+    def test_train_val_test_seeds_accepts_json_list_as_immutable_tuple(
+        self, patch_runtime_io: None
     ) -> None:
-        """Setting train_val_test_seeds raises NotImplementedError — reserved for #884."""
-        with pytest.raises(NotImplementedError, match="reserved for per-split independent seed"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_value))
+        """Independent split masters accept JSON's list shape and remain immutable.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[101, 202, 303]))
+
+        assert spec.train_val_test_seeds == (101, 202, 303)
+        assert isinstance(spec.train_val_test_seeds, tuple)
+        with pytest.raises(TypeError):
+            spec.train_val_test_seeds[0] = 999  # type: ignore[index]
+
+    @pytest.mark.parametrize("bad_length", [[42, 43], [42, 43, 44, 45]])
+    def test_train_val_test_seeds_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """Split master seeds require one value per train, validation, and test split.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        :param bad_length: Seed list with an invalid number of split masters.
+        """
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
+
+    def test_train_val_test_seeds_rejects_duplicate_split_masters(
+        self, patch_runtime_io: None
+    ) -> None:
+        """Split master seeds must be distinct to prevent cross-split leakage.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        with pytest.raises(ValidationError, match="train_val_test_seeds must be distinct"):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[42, 42, 44]))
 
     def test_train_val_test_seeds_defaults_to_none(self, patch_runtime_io: None) -> None:
         """Omitting train_val_test_seeds yields the default None — field is optional."""
@@ -664,32 +953,73 @@ class TestDatasetSpecComputedFields:
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
-        """Per-shard seed equals ``base_seed + shard_id``."""
+        """Legacy specs preserve ``base_seed + shard_id`` derivation."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
+
+    def test_explicit_split_seeds_use_split_local_sample_offsets(
+        self, patch_runtime_io: None
+    ) -> None:
+        """Each split restarts its own stable sample-index stream at zero.
+
+        :param patch_runtime_io: Fixture stubbing git/clock runtime fields.
+        """
+        spec = DatasetSpec(
+            **_valid_spec_kwargs(
+                train_val_test_sizes=[200, 200, 200],
+                train_val_test_seeds=[101, 202, 303],
+            )
+        )
+
+        assert [(shard.seed, shard.sample_offset) for shard in spec.shards] == [
+            (101, 0),
+            (101, 100),
+            (202, 0),
+            (202, 100),
+            (303, 0),
+            (303, 100),
+        ]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
         """Shard filenames use the ``shard-NNNNNN`` six-digit zero-padded form."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
-        assert spec.shards[0].filename == "shard-000000.h5"
-        assert spec.shards[-1].filename == "shard-000002.h5"
+        assert spec.shards[0].filename == "shard-000000.lance"
+        assert spec.shards[-1].filename == "shard-000002.lance"
 
     def test_shard_filename_extension_matches_output_format(self, patch_runtime_io: None) -> None:
-        """Shard filenames carry the extension implied by ``output_format``."""
-        hdf5_spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        assert all(s.filename.endswith(".h5") for s in hdf5_spec.shards)
-        wds_spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-        assert all(s.filename.endswith(".tar") for s in wds_spec.shards)
+        """Shard filenames carry the ``.lance`` extension implied by ``output_format``."""
+        lance_spec = DatasetSpec(**_valid_spec_kwargs(output_format="lance"))
+        assert all(s.filename.endswith(".lance") for s in lance_spec.shards)
 
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
         """``num_params`` matches the registry's length for the spec's ``param_spec_name``."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.num_params == len(param_specs["surge_simple"])
 
+    def test_dynamic_param_spec_flows_through_schema_to_num_params(
+        self, monkeypatch: pytest.MonkeyPatch, patch_runtime_io: None
+    ) -> None:
+        """A runtime-registered name survives Pydantic parsing and downstream lookup.
+
+        :param monkeypatch: Adds a temporary typed registry entry.
+        :param patch_runtime_io: Disables filesystem and git probes during construction.
+        """
+        name = ParamSpecName("registered_at_runtime")
+        monkeypatch.setitem(param_spec_registry._param_specs, name, param_specs["surge_simple"])
+        kwargs = _valid_spec_kwargs()
+        render = kwargs["render"]
+        render["synth"] = {**render["synth"], "param_spec_name": str(name)}
+
+        spec = DatasetSpec(**kwargs)
+
+        assert spec.render.param_spec_name == name
+        assert spec.num_params == len(param_specs["surge_simple"])
+
     def test_unknown_param_spec_name_raises_at_compute(self, patch_runtime_io: None) -> None:
         """An unknown ``param_spec_name`` raises only when ``num_params`` is materialized."""
         kwargs = _valid_spec_kwargs()
-        kwargs["render"] = {**kwargs["render"], "param_spec_name": "nonexistent_synth"}
+        render = kwargs["render"]
+        render["synth"] = {**render["synth"], "param_spec_name": "nonexistent_synth"}
         spec = DatasetSpec(**kwargs)
         with pytest.raises(KeyError):
             _ = spec.num_params
@@ -937,11 +1267,13 @@ class TestSpecConstructionStaysPedalboardFree:
             "import sys\n"
             "from synth_setter.pipeline.schemas.spec import DatasetSpec\n"
             "spec = DatasetSpec(\n"
-            "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
+            "    task_name='ci', output_format='lance', train_val_test_sizes=[1, 0, 0],\n"
             "    base_seed=0, r2={'bucket': 'b'},\n"
             "    render={\n"
-            "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
-            "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
+            "        'synth': {'name': 'surge_simple', 'param_spec_name': 'surge_simple',\n"
+            "                  'plugin_path': '/tmp/x.vst3',\n"
+            "                  'plugin_state_path': '/tmp/x.vstpreset',\n"
+            "                  'synth_version': 'v1'},\n"
             "        'sample_rate': 44100, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
@@ -984,7 +1316,7 @@ class TestLegacyFlatR2Compat:
         """
         kwargs: dict[str, Any] = {
             "task_name": "ci-smoke-test",
-            "output_format": "hdf5",
+            "output_format": "lance",
             "train_val_test_sizes": [300, 0, 0],
             "base_seed": 42,
             "r2_bucket": "intermediate-data",
@@ -1113,308 +1445,3 @@ class TestFromHydraCfg:
 
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
-
-    def test_stale_datasetsrc_key_is_rejected_with_migration_pointer(self) -> None:
-        """A composed cfg carrying ``datasetsrc`` raises instead of silently dropping it.
-
-        The mask keeps only model fields, so the back-compat shim never sees a
-        Hydra-side ``datasetsrc`` override; ``from_hydra_cfg`` rejects it up front
-        with a pointer to ``copy_dataset_root_uri``.
-        """
-        from omegaconf import OmegaConf
-
-        cfg = OmegaConf.create(_valid_spec_kwargs())
-        cfg.datasetsrc = {"copy_dataset_root": "/data/source-dataset"}
-
-        with pytest.raises(ValueError, match="no longer a config key"):
-            DatasetSpec.from_hydra_cfg(cfg)
-
-    def test_stale_copy_dataset_root_key_is_rejected_with_migration_pointer(self) -> None:
-        """A composed cfg carrying the renamed ``copy_dataset_root`` raises up front.
-
-        ``copy_dataset_root`` is no longer a model field, so the mask would drop a
-        Hydra-side override silently and disable copy; ``from_hydra_cfg`` rejects
-        it with a pointer to ``copy_dataset_root_uri``.
-        """
-        from omegaconf import OmegaConf
-
-        cfg = OmegaConf.create(_valid_spec_kwargs())
-        cfg.copy_dataset_root = "/data/source-dataset"
-
-        with pytest.raises(ValueError, match="no longer a config key"):
-            DatasetSpec.from_hydra_cfg(cfg)
-
-
-class TestCopyDatasetRootUri:
-    """``DatasetSpec.copy_dataset_root_uri`` — optional dataset-copy source root URI."""
-
-    def test_copy_dataset_root_uri_defaults_to_none(self) -> None:
-        """A spec built without ``copy_dataset_root_uri`` leaves the copy path disabled."""
-        spec = DatasetSpec(**_valid_spec_kwargs())
-
-        assert spec.copy_dataset_root_uri is None
-
-    def test_copy_dataset_root_uri_bare_path_is_stored_as_is(self) -> None:
-        """A bare-path ``copy_dataset_root_uri`` is kept verbatim on the spec."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="/data/source-dataset"))
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_copy_dataset_root_uri_r2_uri_is_stored_as_is(self) -> None:
-        """An ``r2://`` ``copy_dataset_root_uri`` is kept verbatim (resolved at copy time)."""
-        spec = DatasetSpec(
-            **_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/prefix/task/run")
-        )
-
-        assert spec.copy_dataset_root_uri == "r2://bucket/prefix/task/run"
-
-    def test_copy_dataset_root_uri_blank_is_rejected(self) -> None:
-        """A blank ``copy_dataset_root_uri`` raises so the per-shard source URI is never empty."""
-        with pytest.raises(ValidationError, match="copy_dataset_root_uri must not be blank"):
-            DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="   "))
-
-    def test_copy_dataset_root_uri_with_wds_output_is_rejected(self) -> None:
-        """Copy requires hdf5 output — pairing it with wds fails at spec build.
-
-        A ``.tar`` output has no same-named HDF5 source to read params from, so the
-        misconfig should surface at launch (spec construction), not per-shard.
-        """
-        with pytest.raises(ValidationError, match="supports output_format='hdf5' only"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    output_format="wds",
-                    copy_dataset_root_uri="/data/source-dataset",
-                )
-            )
-
-    def test_copy_dataset_root_uri_survives_json_round_trip(self) -> None:
-        """A worker reconstructing the spec from JSON sees the same copy source."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root_uri="r2://bucket/source"))
-
-        restored = DatasetSpec.model_validate_json(spec.model_dump_json())
-
-        assert restored.copy_dataset_root_uri == spec.copy_dataset_root_uri
-
-    def test_legacy_flat_copy_dataset_root_is_promoted(self) -> None:
-        """A pre-rename flat ``copy_dataset_root`` promotes to ``copy_dataset_root_uri``."""
-        spec = DatasetSpec(**_valid_spec_kwargs(copy_dataset_root="/data/source-dataset"))
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_legacy_flat_copy_dataset_root_json_loads_via_model_validate_json(self) -> None:
-        """A serialized pre-rename spec (flat ``copy_dataset_root``) loads through the shim.
-
-        Exercises back-compat for ``input_spec.json`` files materialized before the
-        URI rename, reloaded from JSON rather than constructed in-memory.
-        """
-        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
-        data.pop("copy_dataset_root_uri")
-        data["copy_dataset_root"] = "/data/source-dataset"
-
-        restored = DatasetSpec.model_validate_json(json.dumps(data))
-
-        assert restored.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_both_flat_legacy_and_uri_keys_are_rejected(self) -> None:
-        """Carrying both ``copy_dataset_root`` and ``copy_dataset_root_uri`` is ambiguous."""
-        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    copy_dataset_root="/data/a",
-                    copy_dataset_root_uri="/data/b",
-                )
-            )
-
-    def test_legacy_datasetsrc_mapping_is_promoted(self) -> None:
-        """A legacy ``datasetsrc`` mapping from an old spec promotes to the URI field."""
-        spec = DatasetSpec(
-            **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/source-dataset"})
-        )
-
-        assert spec.copy_dataset_root_uri == "/data/source-dataset"
-
-    def test_legacy_datasetsrc_null_is_dropped(self) -> None:
-        """A legacy ``datasetsrc: null`` from an old spec loads as no copy source."""
-        spec = DatasetSpec(**_valid_spec_kwargs(datasetsrc=None))
-
-        assert spec.copy_dataset_root_uri is None
-
-    def test_both_legacy_datasetsrc_and_uri_keys_are_rejected(self) -> None:
-        """Carrying both ``datasetsrc`` and ``copy_dataset_root_uri`` is ambiguous and raises."""
-        with pytest.raises(ValidationError, match="multiple dataset-copy source keys"):
-            DatasetSpec(
-                **_valid_spec_kwargs(
-                    datasetsrc={"copy_dataset_root": "/data/a"},
-                    copy_dataset_root_uri="/data/b",
-                )
-            )
-
-    def test_legacy_datasetsrc_non_mapping_is_rejected(self) -> None:
-        """A legacy ``datasetsrc`` that is neither a mapping nor null is rejected."""
-        with pytest.raises(ValidationError, match="must be a mapping or null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc="/data/source-dataset"))
-
-    def test_legacy_datasetsrc_empty_mapping_is_rejected(self) -> None:
-        """A legacy ``datasetsrc: {}`` raises rather than silently disabling copy.
-
-        The removed ``DatasetSrcConfig`` required ``copy_dataset_root``; ``datasetsrc:
-        null`` is the way to disable copy, so an empty mapping is a misconfig.
-        """
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc={}))
-
-    def test_legacy_datasetsrc_null_inner_is_rejected(self) -> None:
-        """A legacy ``datasetsrc: {copy_dataset_root: null}`` raises, matching the old contract."""
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(**_valid_spec_kwargs(datasetsrc={"copy_dataset_root": None}))
-
-    def test_legacy_datasetsrc_mapping_with_unexpected_key_is_rejected(self) -> None:
-        """A legacy ``datasetsrc`` mapping keeps the old single-key strictness."""
-        with pytest.raises(ValidationError, match="must hold exactly a non-null"):
-            DatasetSpec(
-                **_valid_spec_kwargs(datasetsrc={"copy_dataset_root": "/data/src", "stray": 1})
-            )
-
-    def test_legacy_datasetsrc_json_loads_via_model_validate_json(self) -> None:
-        """A serialized legacy-shaped spec (nested ``datasetsrc``) loads through the shim.
-
-        Exercises the shim's stated purpose: ``input_spec.json`` files materialized
-        before the flatten are reloaded from JSON, not just constructed in-memory.
-        """
-        data = json.loads(DatasetSpec(**_valid_spec_kwargs()).model_dump_json())
-        data.pop("copy_dataset_root_uri")
-        data["datasetsrc"] = {"copy_dataset_root": "/data/source-dataset"}
-
-        restored = DatasetSpec.model_validate_json(json.dumps(data))
-
-        assert restored.copy_dataset_root_uri == "/data/source-dataset"
-
-
-class TestValidateCopySource:
-    """``DatasetSpec.validate_copy_source`` — preflight a copy source against the target.
-
-    Rejects a source that disagrees on any value the filename-matched per-shard copy depends on
-    (param spec, per-shard rows, split sizes, shard filenames).
-    """
-
-    def test_matching_source_does_not_raise(self) -> None:
-        """A source matching the four copy-relevant fields validates clean.
-
-        The source carries a different ``task_name`` (hence a different run_id /
-        r2 prefix) to pin that only the copy-relevant fields gate the copy —
-        identity fields that legitimately differ between datasets do not.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(task_name="target-dataset"))
-        source = DatasetSpec(**_valid_spec_kwargs(task_name="source-dataset"))
-
-        target.validate_copy_source(source)  # no raise
-
-    def test_param_spec_name_mismatch_raises(self) -> None:
-        """A differing ``param_spec_name`` (encoding width) is rejected, naming both values."""
-        target = DatasetSpec(**_valid_spec_kwargs())
-        source = DatasetSpec(
-            **_valid_spec_kwargs(render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"})
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "param_spec_name" in message
-        assert "surge_xt" in message  # source value
-        assert "surge_simple" in message  # target value
-
-    def test_samples_per_shard_mismatch_raises(self) -> None:
-        """A differing ``samples_per_shard`` (per-shard row count) is rejected.
-
-        The assertion checks the rendered ``source=50 != target=100`` value pair,
-        not just the field name, so the samples_per_shard branch is pinned even
-        though the differing shard count co-triggers the filename mismatch.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs())  # sps=100 -> 3 shards
-        source = DatasetSpec(
-            **_valid_spec_kwargs(
-                render={**_valid_render_kwargs(), "samples_per_shard": 50}
-            )  # sps=50, same [300,0,0] -> 6 shards
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "samples_per_shard: source=50 != target=100" in message
-
-    def test_train_val_test_sizes_mismatch_raises(self) -> None:
-        """A differing split layout is rejected even when total/count/filenames match.
-
-        The copy would otherwise partition identical shards into different train/val/test splits
-        than the source.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
-        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[100, 100, 100]))
-
-        with pytest.raises(ValueError, match="train_val_test_sizes"):
-            target.validate_copy_source(source)
-
-    def test_shard_filename_set_mismatch_raises(self) -> None:
-        """A source whose shard filenames differ (``.tar`` vs ``.h5``) is rejected.
-
-        A different ``output_format`` yields a non-matching shard-filename set,
-        so no same-named source shard exists for the target's ``.h5`` shards.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-
-        with pytest.raises(ValueError, match="shard"):
-            target.validate_copy_source(source)
-
-    def test_output_format_mismatch_is_named_directly(self) -> None:
-        """A differing ``output_format`` surfaces a direct, legible cause.
-
-        A ``wds`` source is caught indirectly by the ``.tar`` vs ``.h5`` filename
-        diff, but the message must also name ``output_format`` so the operator
-        sees the real cause rather than only the derived filename symptom.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        assert "output_format: source='wds' != target='hdf5'" in str(excinfo.value)
-
-    def test_shard_filename_partial_overlap_names_the_extra_shard(self) -> None:
-        """A source with extra shards is rejected, naming a shard absent from the target.
-
-        Pins the set-difference + sampled-filename rendering: a source covering
-        ``shard-000000..3`` against a 3-shard target must surface the extra
-        ``shard-000003.h5`` rather than a bare count.
-        """
-        target = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))  # 3 shards
-        source = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 0, 0]))  # 4 shards
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        assert "shard-000003.h5" in str(excinfo.value)
-
-    def test_multiple_mismatches_are_all_reported(self) -> None:
-        """Every mismatch surfaces as its own bullet in one error, not one launch at a time."""
-        target = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        source = DatasetSpec(
-            **_valid_spec_kwargs(
-                output_format="wds",
-                render={**_valid_render_kwargs(), "param_spec_name": "surge_xt"},
-            )
-        )
-
-        with pytest.raises(ValueError) as excinfo:
-            target.validate_copy_source(source)
-
-        message = str(excinfo.value)
-        assert "param_spec_name" in message
-        assert "output_format" in message
-        assert "shard filenames" in message
-        # Three distinct mismatches (param_spec_name + output_format + shard
-        # filenames), each its own bullet.
-        assert message.count("\n  - ") == 3

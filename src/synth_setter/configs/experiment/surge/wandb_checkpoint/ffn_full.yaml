@@ -8,3 +8,11 @@ defaults:
   - _self_
 
 ckpt_path: ${wandb:tinaudio/synth-setter/model-ffn_full:latest}
+
+model:
+  net:
+    d_out: ${param_spec_width:surge_xt}
+
+callbacks:
+  log_per_param_mse:
+    param_spec: surge_xt

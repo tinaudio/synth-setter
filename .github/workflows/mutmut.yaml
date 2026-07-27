@@ -5,7 +5,7 @@ name: Mutation Testing
 # `[tool.mutmut]` configuration — it proves the mutmut sandbox imports resolve
 # and that `mutmut run` actually completes end-to-end. The end-to-end completion
 # is *not* possible on macOS (Apple's fork-safety + heavy C-extension imports in
-# tests/conftest.py — torch, h5py, hydra — cause SIGSEGV in forked children).
+# tests/conftest.py — torch, hydra — cause SIGSEGV in forked children).
 # On ubuntu-latest, os.fork() works cleanly.
 
 on:
@@ -21,22 +21,84 @@ permissions:
 jobs:
   mutmut_run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: evaluation-audio
+            patterns:
+              - synth_setter.evaluation.a*
+          - name: evaluation-metrics
+            patterns:
+              - synth_setter.evaluation.compute_audio_metrics.*
+          - name: evaluation-predict-misc
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1?*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[5-9]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[5-9]?*
+              - synth_setter.evaluation.predict_vst_audio.x__make_render_fn*
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?
+          - name: evaluation-predict-render-audio-leading-2-4
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]?*
+          - name: evaluation-predict-render-artifacts-leading-2-9-and-100-149
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]?*
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[0-4]?
+          - name: evaluation-predict-render-artifacts-150-199
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[5-9]?
+          - name: evaluation-shuffle
+            patterns:
+              - synth_setter.evaluation.shuffle_pred_audio.*
+          - name: tools
+            patterns:
+              - synth_setter.tools.*
+          - name: pipeline-add-public
+            patterns:
+              - synth_setter.pipeline.data.add_*.x_[!_]*
+          - name: pipeline-add-private-a-m
+            patterns:
+              - synth_setter.pipeline.data.add_*.x__[a-m]*
+          - name: pipeline-add-private-n-z
+            patterns:
+              - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-lance
+            patterns:
+              - synth_setter.pipeline.data.lance_*
+          - name: pipeline-stats
+            patterns:
+              - synth_setter.pipeline.data.stats.*
+          - name: pipeline-finalize
+            patterns:
+              - synth_setter.pipeline.data.finalize_progress.*
+          - name: pipeline-t5gemma
+            patterns:
+              - synth_setter.pipeline.data.t5gemma.*
+          - name: ci-scripts
+            patterns:
+              - scripts.ci.*
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Requires 3.11+: mutmut parses pyproject.toml, and 3.10's legacy `toml`
-      # fallback crashes on the PEP 735 `dev` group's inline-table arrays — #1414.
-      - name: Set up Python 3.11
+      # tomllib avoids mutmut's legacy TOML parser failure on PEP 735 groups — see #1414.
+      - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
@@ -46,7 +108,15 @@ jobs:
       - name: Run mutmut
         env:
           HYDRA_FULL_ERROR: "1"
-        run: uv run mutmut run
+          MUTMUT_PATTERNS: ${{ toJson(matrix.patterns) }}
+        run: |
+          set -euo pipefail
+          patterns_json=$(jq -er 'if type == "array" and length > 0 and all(.[]; type == "string" and length > 0) then .[] else error("invalid mutation selector array") end' <<<"$MUTMUT_PATTERNS")
+          patterns=()
+          while IFS= read -r pattern; do
+            patterns+=("${pattern}")
+          done <<<"${patterns_json}"
+          uv run mutmut run --max-children 4 "${patterns[@]}"
 
       - name: Print results
         if: always()
@@ -56,7 +126,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutmut-mutants
+          name: mutmut-${{ matrix.name }}-mutants
           path: mutants/
           retention-days: 14
           if-no-files-found: warn

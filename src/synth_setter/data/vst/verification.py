@@ -236,10 +236,12 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         f"""
         import json
 
-        from synth_setter.data.vst.param_spec_registry import param_specs, preset_paths
+        from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+        from synth_setter.synth_spec import SYNTHS
 
         spec = param_specs[{spec_name!r}]
-        assert {spec_name!r} in preset_paths, "missing preset_paths entry"
+        assert {spec_name!r} in SYNTHS, "missing SYNTHS identity row"
+        assert {spec_name!r} in plugin_state_paths, "missing plugin_state_paths entry"
         spec.sample()
 
         from hydra import compose, initialize_config_dir
@@ -253,9 +255,9 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         raw = OmegaConf.to_container(cfg.render, resolve=True)
         render = RenderConfig(**{{k: v for k, v in raw.items() if isinstance(k, str)}})
         print(json.dumps({{
-            "encoded_width": len(spec),
+            "encoded_width": spec.encoded_width,
             "plugin_path": render.plugin_path,
-            "renderer_version": render.renderer_version,
+            "synth_version": render.synth.synth_version,
         }}))
         """
     )
@@ -278,8 +280,8 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
             f"render plugin_path is absolute and host-specific: {probe_result['plugin_path']!r} "
             "(expected repo-relative 'plugins/<x>.vst3'); not portable across machines"
         )
-    if probe_result["renderer_version"] == "unknown":
-        report.warn("renderer_version is 'unknown' — generate cross-checks this; pin it by hand")
+    if probe_result["synth_version"] == "unknown":
+        report.warn("synth_version is 'unknown' — generate cross-checks this; pin it by hand")
 
 
 def check_classifier_against_plugin(

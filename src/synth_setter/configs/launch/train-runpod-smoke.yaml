@@ -1,0 +1,20 @@
+# Smoke variant of train-runpod.yaml: a 10-step junk run that exercises the
+# full dispatch path (workflow → launcher → SkyPilot worker → checkpoint
+# upload → W&B model artifact) at minimal GPU cost.
+#
+# The surge/ffn_simple_smoke experiment owns the dataset pin and smoke caps
+# (#2196); the cmd carries only experiment selection and operational flags.
+
+compute: runpod/smoke
+worker_image_tag: devcontainer-tools
+env_file: .env
+# tail=true keeps the dispatcher attached so the Actions job reflects the
+# worker run end-to-end.
+tail: true
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  "experiment=${EXPERIMENT:-surge/ffn_simple_smoke}"
+  training.upload_checkpoints_during_training=true
+  hydra.run.dir=/home/build/synth-setter/train-run

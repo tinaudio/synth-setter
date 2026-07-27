@@ -75,12 +75,12 @@ class IntrospectFakePlugin:
         self.preset_data = preset_data
         self.name = name
 
-    def load_preset(self, preset_path: str) -> None:
+    def load_preset(self, plugin_state_path: str) -> None:
         """Adopt the preset file's bytes as state, mirroring the real plugin.
 
-        :param preset_path: ``.vstpreset`` file whose bytes become ``preset_data``.
+        :param plugin_state_path: ``.vstpreset`` file whose bytes become ``preset_data``.
         """
-        self.preset_data = Path(preset_path).read_bytes()
+        self.preset_data = Path(plugin_state_path).read_bytes()
 
 
 def exec_module(source: str) -> dict[str, Any]:

@@ -1,9 +1,21 @@
-_target_: synth_setter.data.surge_datamodule.VSTDataModule
+_target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
-num_workers: 11
+conditioning: mel
+# Per dataloader, so enabling validation doubles the live worker count. Sized
+# against host RAM, not cores — see getting-started.md §8.
+num_workers: 4
+persistent_workers: true
+# Null delegates prefetch depth to PyTorch; in-process loading ignores it.
+prefetch_factor: null
 predict_file: null
-param_spec_name: surge_xt
+# Per-split {train/val/test: transaction-uuid} pins for projected rematerialization.
+download_dataset_txids: null
+# First-N rows per split; without txids, intended for disposable smoke/tuning runs.
+download_dataset_row_limit: null
+# Mandatory: each concrete config declares its synth's spec — a default here
+# would silently pair the wrong spec with the dataset.
+param_spec_name: ???

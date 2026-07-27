@@ -13,11 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-from lightning.pytorch import Trainer
+import pytest
+import torch
+from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
-from synth_setter.utils.callbacks import _log_figure
+from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.utils.callbacks import LogPerParamMSE, _log_figure
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -112,6 +115,111 @@ def _trainer(
     :returns: The fake narrowed to ``Trainer`` for the call site's type checker.
     """
     return cast("Trainer", _FakeTrainer(loggers, global_step, is_global_zero))
+
+
+def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
+    """Per-parameter metric labels require callers to select a ParamSpec."""
+    with pytest.raises(TypeError, match="param_spec"):
+        LogPerParamMSE()  # type: ignore[call-arg]
+
+
+class _RecordingModule:
+    """Stand-in for the LightningModule, capturing the metric dict the callback emits."""
+
+    def __init__(self) -> None:
+        self.logged: dict[str, float] = {}
+
+    def log_dict(self, metrics: dict[str, float]) -> None:
+        """Record the per-parameter metrics the callback dispatches.
+
+        :param metrics: Metric name to value mapping emitted by the callback.
+        """
+        self.logged.update(metrics)
+
+
+def _run_validation_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[str, float]:
+    """Drive one real validation epoch of ``LogPerParamMSE`` and return what it logged.
+
+    :param param_spec: Registered ParamSpec name selecting the metric labels.
+    :param per_param_mse: One per-encoded-column MSE vector, as the modules emit it.
+    :returns: The metric mapping the callback passed to ``log_dict``.
+    """
+    callback = LogPerParamMSE(param_spec)
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(trainer, pl_module, {"per_param_mse": per_param_mse}, None, 0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+    return module.logged
+
+
+@pytest.mark.parametrize("param_spec", ["surge_4", "surge_simple", "surge_xt", "obxf"])
+def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) -> None:
+    """Every ParamSpec parameter gets a metric, regardless of how many columns it spans.
+
+    ``names`` is one entry per ``Parameter`` while the module's ``per_param_mse``
+    is one entry per encoded column; the two never match (``note_start_and_end``
+    alone spans two columns), so positional zipping silently drops the tail.
+
+    :param param_spec: Registered ParamSpec name under test.
+    """
+    spec = param_specs[param_spec]
+    per_param_mse = torch.arange(spec.encoded_width, dtype=torch.float32)
+
+    logged = _run_validation_epoch(param_spec, per_param_mse)
+
+    assert sorted(logged) == sorted(f"per_param_mse/{name}" for name in spec.names)
+
+
+def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
+    """Best-swap vectors use a separate per-parameter namespace when present."""
+    spec = param_specs["surge_4"]
+    callback = LogPerParamMSE("surge_4")
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+    outputs = {
+        "per_param_mse": torch.zeros(spec.encoded_width),
+        "per_param_mse_best_swap": torch.arange(spec.encoded_width, dtype=torch.float32),
+    }
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(trainer, pl_module, outputs, None, 0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged["per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
+
+
+def test_log_per_param_mse_averages_a_multi_column_parameter_over_its_span() -> None:
+    """A parameter spanning several columns reports the mean of those columns.
+
+    ``note_start_and_end`` occupies the final two columns of every spec, so under
+    positional zipping it would take the value of an earlier column instead.
+    """
+    spec = param_specs["surge_4"]
+    # Columns 0..6; note_start_and_end owns the last two, whose mean is 5.5.
+    per_param_mse = torch.arange(spec.encoded_width, dtype=torch.float32)
+
+    logged = _run_validation_epoch("surge_4", per_param_mse)
+
+    assert logged["per_param_mse/note_start_and_end"] == pytest.approx(5.5)
+
+
+def test_log_per_param_mse_labels_parameters_after_a_onehot_correctly() -> None:
+    """Labels stay aligned past a multi-column parameter rather than shifting by one.
+
+    ``surge_xt`` has 32 onehot parameters across 300 columns but only 164 names,
+    so positional zipping misnames every parameter after the first onehot.
+    """
+    spec = param_specs["surge_xt"]
+    spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+    per_param_mse = torch.arange(spec.encoded_width, dtype=torch.float32)
+
+    logged = _run_validation_epoch("surge_xt", per_param_mse)
+
+    pitch_span = spans["pitch"]
+    assert logged["per_param_mse/pitch"] == pytest.approx(float(pitch_span.start))
 
 
 def test_log_figure_routes_to_wandb_logger_when_only_wandb_logger_present():

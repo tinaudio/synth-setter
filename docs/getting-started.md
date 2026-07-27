@@ -16,7 +16,7 @@ ______________________________________________________________________
   are available but significantly slower.
 
 `make install` installs [uv](https://docs.astral.sh/uv/) and a managed
-Python 3.11 interpreter for you — you do not need to install Python
+Python 3.12 interpreter for you — you do not need to install Python
 yourself. If you prefer to manage the interpreter and venv manually, see
 [Appendix A](#appendix-a-manual-environment-setup).
 
@@ -36,7 +36,7 @@ cd synth-setter
 `make install` is the canonical end-to-end install. It:
 
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
-2. Creates `.venv/` using a managed Python 3.11 interpreter (downloaded by uv
+2. Creates `.venv/` using a managed Python 3.12 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
 3. Installs the project itself in editable mode together with its `dev`
    dependency-group (⊇ `runtime`) from `pyproject.toml`
@@ -52,7 +52,7 @@ make install
 ```
 
 Re-running `make install` is safe: it reuses `.venv/` if it already exists and
-is Python 3.11, and refreshes the installed packages. If `.venv/` exists with a
+is Python 3.12, and refreshes the installed packages. If `.venv/` exists with a
 different Python version, `make install` errors and asks you to remove it
 first.
 
@@ -83,12 +83,22 @@ make install-surge-xt
 ```
 
 This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
-verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
+[Makefile](../Makefile), verifies its md5 checksum, and extracts
+`Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
 have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
+
+To mirror the full plugin set the runtime docker image ships — Surge XT plus
+Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
+synths publish x86_64 Linux binaries only, matching the image; on other hosts
+those targets print a notice and exit 0, so on macOS the aggregate still
+succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
+itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
+Dockerfile ARGs and are kept in sync by
+`tests/infra/test_install_plugins_targets.py`.
 
 > **Already have Surge XT installed system-wide?** Skip
 > `make install-surge-xt` and symlink your existing install into `plugins/`:
@@ -114,15 +124,14 @@ first to reinstall.
 > lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
 > `.vst3` bundle before invoking pytest.
 
-### 2e. Export environment variables
+### 2e. Create `.env`
 
-The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+R2 preflight and SkyPilot workers read R2 credentials from a `.env` file.
 After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
-template), export the variables into your shell:
+template), those paths load the checkout's `.env` automatically.
 
-```bash
-set -a && source .env && set +a
-```
+Only source it manually for external tools or ad hoc shell commands that do not
+call synth-setter's R2 preflight.
 
 > Environment variable management is being consolidated under
 > [#563](https://github.com/tinaudio/synth-setter/issues/563).
@@ -229,7 +238,7 @@ pytest -m requires_vst -v
 If the plugin is found, VST-dependent tests will run. If not, they are
 automatically skipped (they are excluded from `make test-fast`).
 
-### 4b. rclone + Cloudflare R2
+### 4b. Cloudflare R2 storage
 
 [rclone](https://rclone.org/) is used for all interactions with Cloudflare R2
 object storage, where pipeline data (shards, specs, metadata) is stored. All
@@ -247,41 +256,33 @@ curl https://rclone.org/install.sh | sudo bash
 # Or see https://rclone.org/install/
 ```
 
-**Configure the R2 remote:**
-
 You need R2 credentials (access key ID, secret access key, and endpoint URL)
 from a project maintainer or your Cloudflare dashboard.
 
-```bash
-rclone config
-```
-
-Follow the prompts to create a new remote named `r2` with provider
-`Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file so rclone can auto-configure
-the `r2` remote — and so `docker run --env-file .env` will work out of
-the box for the synth-setter image. This is the canonical `.env`
-template:
+For synth-setter commands, set the canonical application variables in `.env`:
 
 ```
-# --- rclone (R2) remote definition: type/provider are constants ---
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-# --- R2 credentials (secrets) ---
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
-RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
-# --- Target bucket name (read by pipeline entrypoints) ---
-R2_BUCKET=<bucket-name>
+SYNTH_SETTER_STORAGE_PROVIDER=r2
+SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=<your-access-key>
+SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=<your-secret-key>
+SYNTH_SETTER_STORAGE_ENDPOINT_URL=<your-r2-endpoint-url>
 # --- W&B logging ---
 WANDB_API_KEY=<your-wandb-api-key>
 ```
 
-rclone's native env-var auto-config synthesizes the `r2` remote in-memory
-from the 5 `RCLONE_CONFIG_R2_*` vars each time you invoke `rclone` (locally
-or inside the container). No `rclone.conf` file is written. See
+`SYNTH_SETTER_STORAGE_PROVIDER` is optional because it defaults to `r2`.
+The resolver uses canonical dotenv values, canonical process-environment values,
+legacy dotenv aliases, then legacy process-environment aliases; blank values
+are absent. It projects rclone's `RCLONE_CONFIG_R2_*` variables for backend
+calls. Existing deployments may continue to use those legacy variables, but
+new `.env` files should use the canonical names above. See
 [docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
-for the canonical enumeration of every var the image expects at runtime.
+for the runtime contract.
+
+For a direct, standalone `rclone` command, configure an `r2` remote with
+`rclone config` or provide rclone's own `RCLONE_CONFIG_R2_*` variables. A
+canonical-only `.env` configures synth-setter; it does not configure a bare
+`rclone` process that bypasses synth-setter's resolver.
 
 The Docker build itself requires no credentials or secrets: the repo is
 public, so source is fetched anonymously at build time.
@@ -289,10 +290,10 @@ public, so source is fetched anonymously at build time.
 **Verify:**
 
 ```bash
-rclone lsd r2:<bucket-name>/
+uv run python -c 'from synth_setter.pipeline.r2_io import ensure_r2_env_loaded; ensure_r2_env_loaded(); print("R2 authentication succeeded")'
 ```
 
-You should see top-level directories like `data/`, `train/`, and `eval/`.
+This authenticates using the same resolver that the pipeline uses.
 
 ### 4c. Weights & Biases (W&B)
 
@@ -369,7 +370,8 @@ RUNPOD_API_KEY=<your-api-key>
 
 [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) is wired up as a
 second SkyPilot target alongside RunPod for the `generate_dataset` smoke
-pipeline (CPU-only Flex shapes via `src/synth_setter/configs/compute/oci-cpu-template.yaml`).
+pipeline (CPU-only Flex shapes via the `oci/cpu` compute option under
+`src/synth_setter/configs/skypilot_launch/compute/`).
 **You do not need OCI for local development or training.**
 
 If you are exercising the OCI target:
@@ -578,6 +580,42 @@ Or switch to CPU for debugging:
 python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 ```
 
+### Training dies with no traceback (host RAM, not GPU)
+
+A run that vanishes mid-epoch leaving no Python traceback was almost certainly
+killed from outside. Suspect host RAM before the GPU: `earlyoom` runs on some
+dev boxes and SIGKILLs the largest process once RAM and swap are both low. It is
+a userspace daemon, so it never emits a kernel `oom-kill` and `dmesg` shows
+nothing:
+
+```bash
+journalctl --since "1 hour ago" | grep -E "earlyoom.*(SIGTERM|SIGKILL)"
+```
+
+The usual cause is dataloader workers. `num_workers` applies to *each*
+dataloader, and the VST config keeps positive worker pools persistent between
+epochs. Setting `num_workers=0` automatically disables persistence. Enabling
+validation doubles the live worker count — a run that
+fits with `limit_val_batches: 0` can be killed once validation is on. Lance
+workers are heavy, so the count matters more than it looks: a measured
+`surge_lance` train pool alone is ~6 GB at 2 workers and ~19 GB at 11, and a
+concurrent validation pool roughly doubles the worker share. At 11 workers that
+exceeds a 32 GB host. If a run is killed, lower it below the default:
+
+```bash
+python -m synth_setter.cli.train experiment=surge/ffn_simple datamodule=surge_lance \
+  datamodule.num_workers=2
+```
+
+Raising it rarely helps. On a GPU-bound run, throughput is flat from 2 to 11
+workers while memory grows linearly, so extra workers only prefetch batches the
+GPU cannot consume. Size up only if the GPU is starved (low utilisation).
+
+Pair a long run with a checkpoint interval shorter than the run's survival time
+(`callbacks.model_checkpoint.every_n_train_steps`) — a run killed inside its own
+checkpoint interval banks nothing and replays from the previous checkpoint on
+every restart.
+
 ### W&B login issues
 
 If `wandb login` does not persist, set the API key as an environment variable:
@@ -618,7 +656,11 @@ ______________________________________________________________________
   experiments across different models and datasets.
 - **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
   generation entry point (Hydra; `src/synth_setter/configs/dataset.yaml` is the root config). The
-  `synth-setter-generate-dataset` console script is the canonical surface.
+  `synth-setter-generate-dataset` console script is the canonical surface. To render an
+  already-materialized `input_spec.json` instead of composing one, use
+  `synth-setter-generate-dataset-from-spec-uri <uri>` — the URI may be a bare path, `file://`,
+  `r2://`, or `s3://`
+  (e.g. `synth-setter-generate-dataset-from-spec-uri r2://bucket/data/<task>/<run>/input_spec.json`).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**
@@ -631,23 +673,24 @@ ______________________________________________________________________
 ## Appendix A: Manual environment setup
 
 `make install` is the canonical path for most users — it installs uv, a
-managed Python 3.11 interpreter, the venv, dependencies, and pre-commit.
+managed Python 3.12.13 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
 themselves (pip, conda, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
-(currently `>=3.11,<3.14`; `pip` enforces this).
+(currently `>=3.12,<3.13`; `pip` enforces this). Development and CI use the
+canonical 3.12.13 patch release.
 
 ### A.1. Plain pip + venv
 
 ```bash
-# Use any Python 3.11+ interpreter
-python3.11 -m venv .venv
+# Use the canonical Python patch release
+python3.12 -m venv .venv
 source .venv/bin/activate
 
 # The heavy runtime lives in PEP 735 dependency-groups (see #1139), which plain
 # pip cannot install — drive the project install through uv.
-pip install uv
+pip install uv==0.11.28
 uv pip install --group dev -e .
 pre-commit install
 ```
@@ -657,12 +700,12 @@ Drop `-e` for a non-editable install.
 ### A.2. conda
 
 ```bash
-conda create -n synth-setter python=3.11
+conda create -n synth-setter python=3.12.13
 conda activate synth-setter
 
 # conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
 # from the `dev` dependency-group (plain pip can't install groups). See #1139.
-pip install uv
+pip install uv==0.11.28
 uv pip install --group dev -e .
 pre-commit install
 ```
@@ -677,7 +720,7 @@ If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
 
 ```bash
-uv venv --python 3.11 --prompt synth-setter .venv
+uv venv --python 3.12.13 --prompt synth-setter .venv
 source .venv/bin/activate
 uv pip install --group dev -e .
 pre-commit install
@@ -795,9 +838,10 @@ devcontainer up --workspace-folder .
 ```bash
 # Inside the container, starting from the workspace root on main:
 git worktree add .claude/worktrees/my-feature -b feat/my-feature
-# Claude Code: link-plugins and link-thoughts run automatically via the PostToolUse hook.
-# Plain terminal (outside Claude Code): chain them manually:
-cd .claude/worktrees/my-feature && make link-plugins && make link-thoughts
+# Claude Code installs Git hooks and links shared assets via PostToolUse.
+# Plain terminal (outside Claude Code): run the setup targets manually:
+cd .claude/worktrees/my-feature
+make install-git-hooks link-plugins link-thoughts link-skills
 ```
 
 This is the supported local pattern. Mounting a worktree directly from the
@@ -825,14 +869,14 @@ the failure surfaces immediately rather than partway through `post-create`.
   gitignored, so `git worktree add` doesn't copy them). `make link-plugins`
   mirrors the primary checkout's `plugins/` entries into the worktree;
   `make link-thoughts` symlinks `thoughts/` to the primary's central copy.
-  Claude Code runs both automatically via `agent/hooks/worktree-post-setup.sh`
-  after every `git worktree add`; in a plain terminal, chain them onto the
-  spawn command manually.
+  Claude Code installs the Git hooks and links all shared assets via
+  `agent/hooks/worktree-post-setup.sh` after every `git worktree add`; in a
+  plain terminal, run the setup targets manually.
 
 ### B.3. macOS VM (Tart)
 
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.11 venv, Surge XT (native .vst3 via cask), Claude
+reproducible VM — Python 3.12 venv, Surge XT (native .vst3 via cask), Claude
 Code installed, auto-activated venv — pull the prebuilt Tart image published
 at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
 fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
@@ -877,7 +921,7 @@ base image, updated `uv`, updated Surge XT, etc.), the Packer template at
 See the bottom of the file for the full publishing workflow to Docker Hub.
 The template's `variable` blocks are the authoritative source for supported
 overrides. User-overridable packer vars: `synth_setter_git_ref` (default
-`main`), `python_version` (default `3.11`), `vm_name` (default
+`main`), `python_version` (default `3.12`), `vm_name` (default
 `synth-setter-macos`), `codex_version` (default `latest`),
 `base_image_digest`, `uv_version`, and `surge_xt_version`.
 

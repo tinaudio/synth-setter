@@ -3,9 +3,10 @@
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import hydra
 import pandas as pd
@@ -14,11 +15,26 @@ from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
+from pydantic_settings import CliApp
 
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
+from synth_setter.evaluation.audio_probe import (
+    METRICS_TIMEOUT_OVERHEAD_SECONDS,
+    METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+    RENDER_TIMEOUT_OVERHEAD_SECONDS,
+    RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+)
+from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import _get_git_sha
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
+from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
+from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -27,21 +43,19 @@ from synth_setter.utils import (
     log_hyperparameters,
     log_wandb_provenance,
     pin_wandb_run_id,
+    record_input_lineage,
     register_resolvers,
     resolve_run_config_id,
     task_wrapper,
-    use_input_artifacts,
 )
 from synth_setter.workspace import operator_workspace
 
 _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
-_SUBPROCESS_TIMEOUT_SECONDS = 600
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
 _AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
 _SHUFFLE_PERMUTATION_FILENAME = "shuffle_permutation.csv"
-_AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -52,48 +66,29 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
-def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:
+def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
     """Flatten ``aggregated_metrics.csv`` into ``{"audio/<name>_<stat>": value}``.
 
     :param metrics_dir: Directory containing the ``aggregated_metrics.csv`` produced by
         :mod:`synth_setter.evaluation.compute_audio_metrics`; rows are metric names,
-        columns are :data:`_AGGREGATED_METRICS_STATS`.
+        columns are :data:`~synth_setter.evaluation.compute_audio_metrics.AGGREGATED_METRICS_STATS`.
     :returns: One entry per ``(metric, stat)`` cell of the CSV.
     :raises FileNotFoundError: when the producing subprocess returned 0 without writing the
         CSV; surfaced so the silent-success failure mode is loud.
     :raises ValueError: when the CSV is missing a required stat column.
     """
-    csv_path = metrics_dir / _AGGREGATED_METRICS_FILENAME
-    if not csv_path.is_file():
-        raise FileNotFoundError(
-            f"{_AGGREGATED_METRICS_FILENAME} missing at {csv_path} — the compute_audio_metrics "
-            "subprocess returned 0 but did not write the aggregated CSV."
-        )
-    df = pd.read_csv(csv_path, index_col=0)
-    missing = [stat for stat in _AGGREGATED_METRICS_STATS if stat not in df.columns]
-    if missing:
-        raise ValueError(
-            f"{csv_path} missing required stat columns {missing}; got {list(df.columns)}."
-        )
     result: dict[str, float] = {
-        f"audio/{metric}_{stat}": float(df.at[metric, stat])
-        for metric in df.index
-        for stat in _AGGREGATED_METRICS_STATS
+        f"audio/{name}": value
+        for name, value in load_aggregated_metrics(
+            metrics_dir / _AGGREGATED_METRICS_FILENAME
+        ).items()
     }
     shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
     if shuffled_path.is_file():
-        shuffled_df = pd.read_csv(shuffled_path, index_col=0)
-        missing_s = [s for s in _AGGREGATED_METRICS_STATS if s not in shuffled_df.columns]
-        if missing_s:
-            raise ValueError(
-                f"{shuffled_path} missing required stat columns {missing_s}; "
-                f"got {list(shuffled_df.columns)}."
-            )
         result.update(
             {
-                f"shuffled_audio/{metric}_{stat}": float(shuffled_df.at[metric, stat])
-                for metric in shuffled_df.index
-                for stat in _AGGREGATED_METRICS_STATS
+                f"shuffled_audio/{name}": value
+                for name, value in load_aggregated_metrics(shuffled_path).items()
             }
         )
     return result
@@ -177,18 +172,16 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     always forwarded; the render-order probe (#489) runs automatically inside
     ``compute_audio_metrics`` when all sample dirs have identical params.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
-        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
-        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
-        ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` gates and metric settings, the complete
+        ``cfg.render`` contract, and ``cfg.paths.output_dir`` for artifact roots.
     :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
         ran (``metric_prefix`` empty by default); empty dict otherwise. Always
         rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
-    :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds
-        :data:`_SUBPROCESS_TIMEOUT_SECONDS`.
+    :raises subprocess.TimeoutExpired: propagated when a subprocess exceeds its
+        sample-count-scaled budget (see :func:`scaled_timeout`).
     """
     output_dir = Path(cfg.paths.output_dir)
     predictions_dir = output_dir / "predictions"
@@ -212,38 +205,41 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             if sys.platform == "linux":
                 wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
                 args.append(str(wrapper_path))
+            render_values = OmegaConf.to_container(cfg.render, resolve=True)
+            if not isinstance(render_values, dict):
+                raise TypeError("cfg.render must resolve to a mapping")
+            synth = SynthSpec.from_render_cfg(cfg.render)
+            if synth is None:
+                raise ValueError("render group names no param spec; cannot re-render audio")
+            for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
+                render_values.pop(legacy_key, None)
+            render_values["synth"] = synth.model_dump()
+            render_config = RenderConfig.model_validate(render_values)
             args += [
                 sys.executable,
                 "-m",
                 _PREDICT_VST_AUDIO_MODULE,
                 str(predictions_dir),
                 str(audio_dir),
-                "--param_spec",
-                cfg.render.param_spec_name,
-                "--preset_path",
-                cfg.render.preset_path,
+                *CliApp.serialize(render_config),
             ]
-            if cfg.render.get("plugin_path"):
-                args += ["--plugin_path", cfg.render.plugin_path]
-            # Forward the remaining render fields predict_vst_audio renders with so the
-            # re-render matches the dataset's generation render rather than this module's
-            # CLI defaults. Gated like plugin_path so a partial render cfg still works.
-            for flag, key in (
-                ("--sample_rate", "sample_rate"),
-                ("--channels", "channels"),
-                ("--velocity", "velocity"),
-                ("--signal_duration_seconds", "signal_duration_seconds"),
-            ):
-                value = cfg.render.get(key)
-                if value is not None:
-                    args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
-                args.append("-t")
+                args.extend(["--rerender-target", "True"])
+            # Each pred file stores at most one configured batch, so this is a
+            # conservative timeout budget when the final map-style batch is ragged.
+            n_render_samples = (
+                sum(1 for f in predictions_dir.glob("pred-*.pt") if f.is_file())
+                * cfg.datamodule.batch_size
+            )
             log.info(f"Rendering predicted audio: {args}")
             subprocess.run(  # noqa: S603
                 args,
                 check=True,
-                timeout=_SUBPROCESS_TIMEOUT_SECONDS,
+                timeout=scaled_timeout(
+                    n_render_samples,
+                    overhead_seconds=RENDER_TIMEOUT_OVERHEAD_SECONDS,
+                    per_sample_seconds=RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
+                ),
             )
 
     if cfg.evaluation.compute_metrics:
@@ -264,11 +260,22 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        # Upper-bounds the sample count compute_audio_metrics scores (it skips
+        # subdirs lacking both wavs); the surplus only loosens the budget.
+        n_metric_samples = sum(1 for d in audio_dir.glob("*") if d.is_dir())
+        # num_workers=0 is a valid config (Darwin runs in-process), i.e. one
+        # effective worker — clamp so it means that, not a scaled_timeout error.
+        metric_workers = max(cfg.evaluation.num_workers, 1)
         log.info(f"Computing audio metrics: {args}")
         subprocess.run(  # noqa: S603
             args,
             check=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECONDS,
+            timeout=scaled_timeout(
+                n_metric_samples,
+                workers=metric_workers,
+                overhead_seconds=METRICS_TIMEOUT_OVERHEAD_SECONDS,
+                per_sample_seconds=METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
+            ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
         # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
@@ -284,29 +291,31 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
-def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
     Eval consumes both the model it scores and the dataset it scores it on; the
-    model edge is recorded first to match the DAG's left-to-right read. Each
-    edge is opt-in: a null ``consumed_*_config_id`` is omitted, so an eval
-    without the fields set records no lineage and never calls ``use_artifact``.
+    model edge is recorded first to match the DAG's left-to-right read. Dataset
+    provenance comes from the datamodule's local or remote dataset root.
 
-    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id``,
-        ``consumed_dataset_config_id``, and ``consumed_artifact_alias``
-        (default ``latest``).
-    :returns: ``(name, alias)`` edges for whichever ids are set, model before
-        dataset; ``[]`` when both are null.
+    :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
+        local or remote datamodule root.
+    :returns: ``(refs, unresolved)`` — the optional model ref then the discovered
+        dataset ref, plus a description of the configured dataset root whose edge
+        could not be derived (#2424).
     """
-    alias = cfg.get("consumed_artifact_alias") or "latest"
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
-        refs.append((f"model-{train_id}", alias))
-    dataset_id = cfg.get("consumed_dataset_config_id")
-    if dataset_id:
-        refs.append((f"data-{dataset_id}", alias))
-    return refs
+        refs.append((f"model-{train_id}", "latest"))
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
+    ref = dataset_artifact_ref(dataset_root, download_uri)
+    if ref is not None:
+        refs.append(ref)
+        return refs, []
+    unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    return refs, ([unresolved] if unresolved else [])
 
 
 @task_wrapper
@@ -354,36 +363,39 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
-    use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+    record_input_lineage(logger, *_consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
 
     audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
-        trainer.test(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.test(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                weights_only=False,
+            )
     # Accept both spellings for backwards compatibility with older configs.
     elif mode == "val" or mode == "validate":
         log.info("Starting validating!")
-        trainer.validate(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.validate(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                weights_only=False,
+            )
     elif mode == "predict":
-        trainer.predict(
-            model=model,
-            dataloaders=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            return_predictions=False,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(cfg.ckpt_path):
+            trainer.predict(
+                model=model,
+                dataloaders=datamodule,
+                ckpt_path=cfg.ckpt_path,
+                return_predictions=False,
+                weights_only=False,
+            )
         # Rank-zero gate: trainer.predict runs on every rank in DDP/multi-device
         # setups, but the postprocessing subprocesses share one output_dir.
         if trainer.is_global_zero:
@@ -580,6 +592,10 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: DictConfig configuration composed by Hydra.
     """
+    # An explicit paths.output_dir override may name a directory Hydra did not
+    # create; extras writes tags.log into it before any stage would mkdir (#2116).
+    Path(cfg.paths.output_dir).mkdir(parents=True, exist_ok=True)
+
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
@@ -590,4 +606,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()

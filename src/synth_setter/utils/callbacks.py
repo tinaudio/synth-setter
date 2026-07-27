@@ -1,13 +1,28 @@
-"""Lightning callbacks for plotting losses, similarities, projections, and prediction dumps."""
+"""Lightning callbacks for plots, prediction dumps, and checkpoint mirroring.
 
+Typical usage::
+
+    checkpoint = ModelCheckpoint(save_last=True, save_on_exception=True)
+    uploader = CheckpointUploader("r2://bucket/checkpoints/run", checkpoint)
+    trainer = Trainer(callbacks=[checkpoint, uploader])
+"""
+
+import logging
 import os
+import shutil
+import subprocess
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import BasePredictionWriter, Callback
+from lightning.pytorch import LightningModule, Trainer
+from lightning.pytorch.callbacks import BasePredictionWriter, Callback, Checkpoint, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.trainer.states import TrainerFn
+from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
@@ -16,7 +31,325 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
-from synth_setter.models.surge_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS
+
+log = logging.getLogger(__name__)
+
+# Bound on consecutive failed uploads of one unchanged checkpoint before backing
+# off until the file next changes — caps R2 retries when R2 is down.
+_MAX_UPLOAD_ATTEMPTS = 3
+
+# The single mirrored object name; the whole class contract hinges on this basename.
+_LAST_CKPT_NAME = "last.ckpt"
+_CheckpointRevision = tuple[str, float, int, int | None]
+
+
+def batch_sample_count(batch: object) -> int:
+    """Return the number of samples in a model batch.
+
+    Reads the leading dimension of the batch's first tensor (mapping batches
+    key on ``params``/``noise``; sequence batches take element zero), so a
+    ragged final batch is counted accurately. Used as ``ThroughputMonitor``'s
+    ``batch_size_fn`` for the loader-throughput sweep (#2320).
+
+    :param batch: A training batch (mapping of tensors or a tensor sequence).
+    :returns: Leading-dimension size of the first tensor, or ``0`` when none is found.
+    """
+    candidates = batch.values() if isinstance(batch, Mapping) else batch
+    if isinstance(candidates, torch.Tensor):
+        candidates = [candidates]
+    for value in candidates:
+        if isinstance(value, torch.Tensor) and value.ndim >= 1:
+            return int(value.shape[0])
+    return 0
+
+
+def _stderr_tail(exc: BaseException) -> str:
+    """Return the trailing stderr a subprocess error carries.
+
+    That tail is the child traceback that makes a probe failure diagnosable
+    from the run log.
+
+    :param exc: Exception whose optional ``stderr`` attribute to read.
+    :returns: Up to the last ``STDERR_TAIL_CHARS`` characters, or ``""`` when absent.
+    """
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        # TimeoutExpired attaches undecoded bytes even when the runner asked for text.
+        stderr = stderr.decode(errors="replace")
+    if not isinstance(stderr, str) or not stderr:
+        return ""
+    return stderr[-STDERR_TAIL_CHARS:]
+
+
+class ValidationAlignedModelCheckpoint(ModelCheckpoint):
+    """Align monitored weights with validation while preserving recovery cadence."""
+
+    # Lightning has no public split-save API; lockfile upgrades must pass these hook regressions.
+
+    @property
+    def state_key(self) -> str:
+        """Preserve compatibility with checkpoints written by ModelCheckpoint.
+
+        :returns: Lightning callback-state key used by the base checkpoint class.
+        """
+        fields = {
+            "monitor": self.monitor,
+            "mode": self.mode,
+            "every_n_train_steps": self._every_n_train_steps,
+            "every_n_epochs": self._every_n_epochs,
+            "train_time_interval": self._train_time_interval,
+        }
+        return f"{ModelCheckpoint.__qualname__}{fields!r}"
+
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: STEP_OUTPUT,
+        batch: object,
+        batch_idx: int,
+    ) -> None:
+        """Separate recovery saves from monitored top-k selection at step cadence.
+
+        :param trainer: Supplies checkpoint cadence and loop state.
+        :param pl_module: Ignored Lightning hook module.
+        :param outputs: Ignored Lightning hook payload.
+        :param batch: Ignored Lightning hook payload.
+        :param batch_idx: Ignored Lightning hook payload.
+        """
+        if self.monitor is None or self._every_n_train_steps < 1:
+            super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
+            return
+        if self._should_skip_saving_checkpoint(trainer):
+            return
+        if trainer.global_step % self._every_n_train_steps != 0:
+            return
+        self._save_recovery_checkpoint(trainer)
+        self._defer_save_until_validation = True
+
+    def _save_recovery_checkpoint(self, trainer: Trainer) -> None:
+        """Write recovery weights even when ``save_last='link'`` selects an older best.
+
+        :param trainer: Active trainer receiving the checkpoint save.
+        """
+        configured_save_last = self.save_last
+        if configured_save_last == "link":
+            self.save_last = True
+        try:
+            self._save_last_checkpoint(trainer, self._monitor_candidates(trainer))
+        finally:
+            self.save_last = configured_save_last
+
+    def on_validation_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Rank monitored weights using the metric from this validation event.
+
+        :param trainer: Supplies fresh validation metrics and loop state.
+        :param pl_module: Unused Lightning hook module.
+        """
+        if self.monitor is None or self._every_n_train_steps < 1:
+            super().on_validation_end(trainer, pl_module)
+            return
+        if (
+            trainer.fast_dev_run
+            or trainer.state.fn != TrainerFn.FITTING
+            or trainer.sanity_checking
+        ):
+            return
+        if not self._defer_save_until_validation:
+            return
+        self._save_topk_checkpoint(trainer, self._monitor_candidates(trainer))
+        self._defer_save_until_validation = False
+
+
+def _checkpoint_save_token(checkpoint_callback: ModelCheckpoint) -> int | None:
+    """Return Lightning's completed-save token when available.
+
+    :param checkpoint_callback: Checkpoint writer exposing Lightning's compatibility field.
+    :returns: Completed global step, or ``None`` when Lightning no longer exposes the field.
+    """
+    token = getattr(checkpoint_callback, "_last_global_step_saved", None)
+    return token if isinstance(token, int) else None
+
+
+class CheckpointUploader(Checkpoint):
+    """Best-effort rank-0 R2 mirror ordered after ModelCheckpoint saves.
+
+    Uploads are synchronous; prefer single-device or coarse-cadence DDP runs.
+    """
+
+    def __init__(
+        self, prefix_uri: str, checkpoint_callback: ModelCheckpoint | None = None
+    ) -> None:
+        """Bind the upload target.
+
+        :param prefix_uri: ``r2://`` directory the run's ``last.ckpt`` uploads under.
+        :param checkpoint_callback: Configured writer whose final Lightning topology is verified.
+        """
+        super().__init__()
+        self._dest_uri = f"{prefix_uri.rstrip('/')}/{_LAST_CKPT_NAME}"
+        self._checkpoint_callback = checkpoint_callback
+        self._uploaded_revision: _CheckpointRevision | None = None
+        self._pending_revision: _CheckpointRevision | None = None
+        self._attempts = 0
+        self._saw_checkpoint = False
+        self._warned_ddp = False
+
+    def setup(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
+        """Reject a replaced or reordered checkpoint writer.
+
+        :param trainer: Trainer containing the final callback topology.
+        :param pl_module: Lightning module, unused by this topology check.
+        :param stage: Lightning stage, unused by this topology check.
+        :raises ValueError: If the bound writer is not the sole preceding ModelCheckpoint.
+        """
+        if self._checkpoint_callback is None:
+            return
+        model_checkpoints = [
+            callback for callback in trainer.callbacks if isinstance(callback, ModelCheckpoint)
+        ]
+        if model_checkpoints != [self._checkpoint_callback] or trainer.callbacks.index(
+            self._checkpoint_callback
+        ) > trainer.callbacks.index(self):
+            raise ValueError(
+                "Checkpoint durability writer was replaced or reordered by model callbacks"
+            )
+
+    def _checkpoint_revision(self, trainer: Trainer) -> tuple[Path, _CheckpointRevision] | None:
+        """Return the completed checkpoint path and revision.
+
+        :param trainer: Trainer exposing the active checkpoint writer.
+        :returns: Path and revision, or ``None`` when no readable checkpoint exists.
+        """
+        checkpoint_callback = self._checkpoint_callback or trainer.checkpoint_callback
+        source = getattr(checkpoint_callback, "last_model_path", "") or ""
+        if not source:
+            return None
+        self._saw_checkpoint = True
+        try:
+            stat = Path(source).stat()
+        except OSError as exc:  # checkpoint pruned/rotated between save and this hook
+            log.debug("Checkpoint %s vanished before upload: %s", source, exc)
+            return None
+        revision = (
+            source,
+            stat.st_mtime,
+            stat.st_size,
+            _checkpoint_save_token(checkpoint_callback),
+        )
+        return Path(source), revision
+
+    def _try_upload(self, source: Path) -> bool:
+        """Upload one revision while containing expected R2 failures.
+
+        :param source: Local checkpoint to upload.
+        :returns: Whether the upload succeeded.
+        """
+        try:
+            r2_io.ensure_r2_env_loaded()
+        except (RuntimeError, OSError) as exc:
+            log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
+            return False
+        try:
+            r2_io.upload_to_uri(source, self._dest_uri)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            log.warning("Mid-run checkpoint upload to %s failed: %s", self._dest_uri, exc)
+            return False
+        return True
+
+    def _maybe_upload(self, trainer: Trainer) -> None:
+        """Upload each newly completed rank-0 checkpoint save with bounded retries.
+
+        :param trainer: The active trainer; supplies the rank flag and the
+            ``ModelCheckpoint`` whose ``last_model_path`` is mirrored.
+        """
+        if not trainer.is_global_zero:
+            return
+        if not self._warned_ddp and getattr(trainer, "world_size", 1) > 1:
+            self._warned_ddp = True
+            log.warning(
+                "Mid-run checkpoint upload runs synchronously on rank 0 and stalls "
+                "other DDP ranks at the next collective while each %s is copied to R2; "
+                "prefer a coarse checkpoint cadence.",
+                _LAST_CKPT_NAME,
+            )
+        checkpoint = self._checkpoint_revision(trainer)
+        if checkpoint is None:
+            return
+        source, revision = checkpoint
+        if revision == self._uploaded_revision:
+            return
+        if revision != self._pending_revision:
+            self._pending_revision = revision
+            self._attempts = 0
+        if self._attempts >= _MAX_UPLOAD_ATTEMPTS:
+            return
+        self._attempts += 1
+        if not self._try_upload(source):
+            return
+        self._uploaded_revision = revision
+        log.info("Mid-run checkpoint uploaded to %s", self._dest_uri)
+
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule | None,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+    ) -> None:
+        """Mirror a training-step checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        :param outputs: Unused training-step output.
+        :param batch: Unused training batch.
+        :param batch_idx: Unused batch index.
+        """
+        self._maybe_upload(trainer)
+
+    def on_validation_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Mirror a validation-end checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Mirror a training-epoch checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+
+    def on_train_end(self, trainer: Trainer, pl_module: LightningModule | None) -> None:
+        """Flush the final checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        """
+        self._maybe_upload(trainer)
+        if trainer.is_global_zero and not self._saw_checkpoint:
+            log.warning(
+                "Mid-run checkpoint upload enabled but ModelCheckpoint wrote no "
+                "last_model_path to mirror to %s; set save_last on the ModelCheckpoint.",
+                self._dest_uri,
+            )
+
+    def on_exception(
+        self, trainer: Trainer, pl_module: LightningModule | None, exception: BaseException
+    ) -> None:
+        """Mirror the crash checkpoint.
+
+        :param trainer: Active trainer.
+        :param pl_module: Active Lightning module.
+        :param exception: Exception that interrupted training.
+        """
+        self._maybe_upload(trainer)
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
@@ -305,14 +638,6 @@ class PlotLearntProjection(Callback):
         if not isinstance(pl_module.vector_field, LearntProjection):
             return
 
-        # if not isinstance(pl_module.vector_field, ApproxEquivTransformer):
-        #     print("wrong vector field")
-        #     return
-        #
-        # if not isinstance(pl_module.vector_field.projection, LearntProjection):
-        #     print("wrong projection")
-        #     return
-
         fig_ass = self._plot_assignments(pl_module)
         fig_value = self._plot_projections(pl_module)
         self._log_plots(fig_ass, fig_value, trainer)
@@ -374,18 +699,210 @@ class PredictionWriter(BasePredictionWriter):
             torch.save(batch["params"], os.path.join(self.output_dir, "target-params.pt"))
 
 
+class ValAudioProbe(Callback):
+    """Render a fixed handful of validation predictions off-loop and log audio metrics.
+
+    ``val/param_mse`` says nothing about how a prediction *sounds*, and rendering the
+    whole split through the VST is far too slow to sit in the validation loop. This
+    stages the first val batch's leading ``num_samples`` samples, hands them to
+    ``probe_fn`` on a single worker thread, and logs the resulting metrics at the
+    *next* validation — so the training step never waits on a render.
+
+    At most one probe is in flight: when rendering is slower than the validation
+    cadence, epochs are skipped rather than queued, which bounds the backlog to zero.
+    A probe failure is logged and swallowed — a qualitative signal must never take a
+    training run down with it.
+    """
+
+    def __init__(
+        self,
+        *,
+        probe_root: str | Path,
+        probe_fn: Callable[[Path, int], dict[str, float]],
+        num_samples: int = 5,
+    ) -> None:
+        """Initialize the probe.
+
+        :param probe_root: Directory each ``step-<global_step>/`` probe is staged under.
+        :param probe_fn: Called on a worker thread with the staged probe dir and the
+            originating ``global_step``; returns the fully-namespaced metrics to log
+            verbatim (e.g. ``{"val_audio/mss_mean": ...}``). Exceptions it raises are
+            logged as warnings at the next harvest and never crash the fit loop.
+        :param num_samples: Upper bound on samples taken from the first val batch.
+        """
+        super().__init__()
+        self.probe_root = Path(probe_root)
+        self.num_samples = num_samples
+        self._probe_fn = probe_fn
+        # Created lazily: ddp_spawn pickles callbacks, and a live executor can't travel.
+        self._pool: ThreadPoolExecutor | None = None
+        self._future: Future[dict[str, float]] | None = None
+        self._future_dir: Path | None = None
+        self._future_step: int | None = None
+        self._staged: tuple[Path, int] | None = None
+
+    def __getstate__(self) -> dict[str, object]:
+        """Drop process-local state so ddp_spawn can pickle the callback.
+
+        :returns: The instance dict with the executor, in-flight future, and staged-slot fields
+            reset; the restored copy starts with a clean slot.
+        """
+        state = self.__dict__.copy()
+        state.update(_pool=None, _future=None, _future_dir=None, _future_step=None, _staged=None)
+        return state
+
+    def on_validation_batch_end(
+        self,
+        trainer: "Trainer",
+        pl_module: "LightningModule",
+        outputs: dict[str, torch.Tensor],
+        batch: dict[str, torch.Tensor | None],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Stage the first val batch's leading samples in ``PredictionWriter`` layout.
+
+        :param trainer: Supplies ``global_step`` and the rank/sanity gates.
+        :param pl_module: Unused; present for the Lightning hook signature.
+        :param outputs: ``validation_step`` return value; must carry ``preds``.
+        :param batch: Val batch supplying the ``params`` targets.
+        :param batch_idx: Only batch 0 is probed, so the same samples recur each epoch.
+        :param dataloader_idx: Unused; present for the Lightning hook signature.
+        :raises ValueError: when ``outputs`` has no ``preds`` key or ``batch`` has no
+            ``params`` tensor.
+        """
+        if (
+            batch_idx != 0
+            or dataloader_idx != 0
+            or trainer.sanity_checking
+            or not trainer.is_global_zero
+        ):
+            return
+        if not isinstance(outputs, dict) or "preds" not in outputs:
+            got = sorted(outputs) if isinstance(outputs, dict) else type(outputs).__name__
+            raise ValueError(
+                "ValAudioProbe requires validation_step to return a 'preds' key; got "
+                f"{got}. Wire the probe to a VST module (vst_ff, "
+                "vst_flow_matching, vst_fake_oracle) that returns its predictions."
+            )
+        params = batch.get("params")
+        if params is None:
+            raise ValueError(
+                "ValAudioProbe requires batch['params'] to re-render the target; got None."
+            )
+
+        probe_dir = self.probe_root / f"step-{trainer.global_step}"
+        predictions_dir = probe_dir / "predictions"
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        limit = self.num_samples
+        # No target-audio tensor: training val batches carry none (read_audio is a
+        # predict-only flag), so the probe re-renders the target from its params.
+        for name, tensor in (
+            ("pred", outputs["preds"]),
+            ("target-params", params),
+        ):
+            torch.save(tensor[:limit].detach().cpu(), predictions_dir / f"{name}-0.pt")
+        self._staged = (probe_dir, trainer.global_step)
+
+    def on_validation_epoch_end(self, trainer: "Trainer", pl_module: "LightningModule") -> None:
+        """Log a finished probe's metrics, then launch one for the samples just staged.
+
+        :param trainer: Unused; present for the Lightning hook signature.
+        :param pl_module: Receives the harvested metrics via ``log_dict``.
+        """
+        self._harvest(pl_module)
+        self._launch()
+
+    def teardown(self, trainer: "Trainer", pl_module: "LightningModule", stage: str) -> None:
+        """Stop accepting new probes; the in-flight one is left to finish.
+
+        Deliberately no ``cancel_futures``: at most one probe exists, and its
+        subprocesses block interpreter exit until they complete (bounded by their
+        scaled timeouts), so the final snapshot still reaches R2 instead of dying
+        with the process.
+
+        :param trainer: Unused; present for the Lightning hook signature.
+        :param pl_module: Unused; present for the Lightning hook signature.
+        :param stage: Unused; present for the Lightning hook signature.
+        """
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
+
+    def _harvest(self, pl_module: "LightningModule") -> None:
+        """Log the in-flight probe's metrics if it has finished; no-op while it runs.
+
+        A harvested probe's local directory is pruned (the R2 snapshot is the
+        archive), bounding disk use across arbitrarily long runs; a failed
+        probe's directory is kept for debugging.
+
+        :param pl_module: Receives the harvested metrics via ``log_dict``.
+        """
+        if self._future is None or not self._future.done():
+            return
+        future, probe_dir, step = self._future, self._future_dir, self._future_step
+        self._future, self._future_dir, self._future_step = None, None, None
+        try:
+            metrics = future.result()
+        except Exception as exc:
+            tail = _stderr_tail(exc)
+            log.warning(
+                "val audio probe at step %s failed: %s; skipping its metrics.%s",
+                step,
+                exc,
+                f"\nstderr tail:\n{tail}" if tail else "",
+            )
+            return
+        if probe_dir is not None:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+        if not metrics:
+            return
+        pl_module.log_dict(
+            {**metrics, "val_audio/probe_step": float(step)},
+            on_step=False,
+            on_epoch=True,
+            rank_zero_only=True,
+        )
+
+    def _launch(self) -> None:
+        """Submit the staged probe, or discard it while an earlier probe is still running."""
+        if self._staged is None:
+            return
+        probe_dir, step = self._staged
+        self._staged = None
+        if self._future is not None:
+            log.info(
+                "val audio probe from step %s still running; skipping the step-%s probe.",
+                self._future_step,
+                step,
+            )
+            shutil.rmtree(probe_dir, ignore_errors=True)
+            return
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="val-audio-probe")
+        self._future = self._pool.submit(self._probe_fn, probe_dir, step)
+        self._future_dir = probe_dir
+        self._future_step = step
+
+
+_PER_PARAM_MSE_OUTPUTS = ("per_param_mse", "per_param_mse_best_swap")
+
+
 class LogPerParamMSE(Callback):
     """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
 
-    def __init__(self, param_spec: str = "surge_simple"):
+    def __init__(self, param_spec: str):
+        """Select the ParamSpec whose dimension names label emitted metrics.
+
+        :param param_spec: Registered ParamSpec name for validation outputs.
+        """
         super().__init__()
         self.param_spec = param_specs[param_spec]
 
     def on_validation_epoch_start(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
     ) -> None:
-        self.per_param_mse = 0.0
-        self.count = 0
+        self.metric_totals: dict[str, np.ndarray] = {}
+        self.metric_counts: dict[str, int] = {}
 
     def on_validation_batch_end(
         self,
@@ -396,17 +913,27 @@ class LogPerParamMSE(Callback):
         batch_idx,
         dataloader_idx=0,
     ) -> None:
-        per_param_mse = outputs["per_param_mse"]
-        self.per_param_mse += per_param_mse.detach().cpu().numpy()
-        self.count += 1
+        for metric_name in _PER_PARAM_MSE_OUTPUTS:
+            if metric_name not in outputs:
+                continue
+            values = outputs[metric_name].detach().cpu().numpy()
+            total = self.metric_totals.get(metric_name, np.zeros_like(values))
+            self.metric_totals[metric_name] = total + values
+            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + 1
 
     def on_validation_epoch_end(
         self,
         trainer,
         pl_module,
     ) -> None:
-        per_param_mse = self.per_param_mse / self.count
-        names = self.param_spec.names
-        pl_module.log_dict(
-            {f"per_param_mse/{name}": mse for name, mse in zip(names, per_param_mse)},
-        )
+        metrics = {}
+        for metric_name, total in self.metric_totals.items():
+            per_param_mse = total / self.metric_counts[metric_name]
+            # Encoded spans preserve labels across onehot and multi-column parameters.
+            metrics.update(
+                {
+                    f"{metric_name}/{param.name}": per_param_mse[span].mean()
+                    for param, span in self.param_spec.encoded_slices()
+                }
+            )
+        pl_module.log_dict(metrics)

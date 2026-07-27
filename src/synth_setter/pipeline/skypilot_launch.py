@@ -1,18 +1,19 @@
 """Generic SkyPilot launcher used by ``synth-setter-*`` entrypoints.
 
-``dispatch_via_skypilot(sky_cfg)`` is the only public surface. Callers pass a
-fully populated ``SkypilotLaunchConfig`` — ``compute_template`` and ``cmd``
-required; dataset-specific envs flow through ``sky_cfg.extra_envs``; the
-worker job-name stem comes from ``sky_cfg.job_name`` (callers pin a
-domain-specific stem) or falls back to ``synth-setter-<uuid8>``.
+``dispatch_via_skypilot(sky_cfg)`` is the programmatic surface. Callers pass a
+fully populated ``SkypilotLaunchConfig`` — ``compute`` and ``cmd`` required;
+dataset-specific envs flow through ``sky_cfg.extra_envs``; the worker
+job-name stem comes from ``sky_cfg.job_name`` (callers pin a domain-specific
+stem) or falls back to ``synth-setter-<uuid8>``. The
+``synth-setter-skypilot-launch`` CLI (``main``) wraps it for checked-in launch
+configs under ``src/synth_setter/configs/launch/`` (train/eval workflows),
+whose ``compute:`` field names a ``skypilot_launch/compute`` Hydra option.
 
-Provider-neutral: the same call launches against
-`src/synth_setter/configs/compute/runpod-template.yaml`,
-`src/synth_setter/configs/compute/oci-cpu-template.yaml`, or
-`src/synth_setter/configs/compute/local-template.yaml`
-(kubernetes-via-`sky local up`).
-Worker env is forwarded via `task.update_envs` (#749 explains why
-`task.update_file_mounts` is avoided), and each rank's task is submitted to
+Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``,
+``oci/*``, or ``local/*`` (kubernetes-via-``sky local up``) compute options;
+``synth_setter.pipeline.compute_task.build_task_doc`` turns the validated
+option into the dictionary consumed by ``sky.Task.from_yaml_config``.
+Worker env is applied with ``task.update_envs`` before each rank's task is submitted to
 the SkyPilot managed-jobs controller — see
 https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch
 
@@ -33,10 +34,10 @@ Managed jobs differ from cluster-level launches:
   via `name=`), not a cluster name.
 
 Per-backend image handling (driven by ``sky_cfg.worker_image_tag``):
-- RunPod: each Resources entry's `image_id` is pinned to `docker:<image>` before the
-  managed-job submission, so the controller's worker provisions from that image.
+- RunPod / Vast: each Resources entry's `image_id` is pinned to `docker:<image>` at
+  task construction, so the controller's worker provisions from that image.
 - OCI: SkyPilot's OCI backend rejects `docker:<image>` for `image_id`, so the
-  YAML's `run:` block performs a sub-docker invocation that consumes
+  option's run wrapper performs a sub-docker invocation that consumes
   `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
 
 ``sky_cfg.num_workers > 1`` fans out N independent managed jobs in parallel
@@ -46,12 +47,14 @@ SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
 
 from __future__ import annotations
 
+import base64
 import functools
 import os
 import re
 import subprocess
+import tomllib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -60,56 +63,69 @@ import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
+from pydantic import BaseModel, ValidationError
 
+from synth_setter.pipeline.compute_task import (
+    apply_tier_filter,
+    build_task_doc,
+    load_compute_option,
+    resolve_run_block,
+    resolve_volumes,
+)
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+from synth_setter.pipeline.schemas.compute import ComputeConfig
+from synth_setter.pipeline.schemas.object_storage import (
+    RCLONE_ENV_KEYS,
+    RCLONE_REQUIRED_ENV_KEYS,
+    RCLONE_STRUCTURAL_DEFAULTS,
+    storage_settings_from_sources,
+)
+from synth_setter.pipeline.schemas.skypilot_launch import (
+    ENV_SKYPILOT_API_SERVER_ENDPOINT,
+    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+    SkypilotClientSettings,
+    SkypilotLaunchConfig,
+    skypilot_client_settings_from_sources,
+)
 from synth_setter.workspace import operator_workspace
 
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 
+# Bare image tag for the worker's wandb provenance — log_wandb_provenance
+# reads IMAGE_TAG into wandb.config.image_tag (storage-provenance-spec.md §12).
+_IMAGE_TAG_ENV = "IMAGE_TAG"
+
 # OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
-# Validates WORKER_GIT_REF when set — must be a 7-40 char hex git SHA. Worker
-# templates pass this verbatim into `git fetch + checkout` inside the container.
-_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# Worker templates pass this full SHA verbatim into `git fetch + checkout`.
+_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{40}$")
+_WORKER_GIT_REF_PREFLIGHT_TIMEOUT_S = 30
 
 # Validates sky_cfg.job_name: k8s-label subset — interpolated into a tempfile path and
 # the SkyPilot managed-job name, so path-separator-free and ≤63 chars. See #876.
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
-# Forwarded via task.update_envs; each resolved from .env then process env.
-# Keep in sync with the envs: block in src/synth_setter/configs/compute/runpod-template.yaml.
-# WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
-# bypass dev-snapshot image-bake lag in PR CI.
+# Passed into each rank's task env at construction; resolved from .env then process env.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
-    "RCLONE_CONFIG_R2_TYPE",
-    "RCLONE_CONFIG_R2_PROVIDER",
-    "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-    "RCLONE_CONFIG_R2_ENDPOINT",
+    *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
+    # Pod checks out this launcher-pinned ref before running worker code.
     "WORKER_GIT_REF",
 )
 
-# rclone needs `type` + `provider` to construct the `r2:` remote, but those
-# values are constants for Cloudflare R2 — not secrets — so default them
-# rather than burdening every workflow / .env with two extra lines. An
-# explicit override (env or .env) wins.
-_R2_RCLONE_CONSTANTS: dict[str, str] = {
-    "RCLONE_CONFIG_R2_TYPE": "s3",
-    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-}
+# rclone structural constants (not secrets); produced from storage config projection.
+_RCLONE_STRUCTURAL_CONSTANTS: Mapping[str, str] = RCLONE_STRUCTURAL_DEFAULTS
 
-# Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
-# Detects the unconfigured-creds case: the rclone TYPE/PROVIDER constants
-# default in, so an "empty" worker_env still has those keys — only this residual
-# subset (R2 access creds, WANDB_API_KEY, WORKER_GIT_REF) signals whether
-# anything was actually resolved from .env / process env.
-_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
-    k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
-)
+# Secrets-only subset of _WORKER_ENV_KEYS: TYPE/PROVIDER default in, so this
+# subset is what signals whether any creds were actually resolved.
+_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = RCLONE_REQUIRED_ENV_KEYS
+
+
+def _env_value_is_set(value: str | None) -> bool:
+    return value is not None and value.strip() != ""
+
 
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
@@ -154,15 +170,79 @@ def _ensure_ci_sky_config() -> None:
     config_path.chmod(0o600)
 
 
-# `sky local up` uses the kubernetes backend; map both spellings.
-_CLOUD_TO_PROVIDER: dict[str, str] = {
-    "runpod": "runpod",
-    "oci": "oci",
-    "kubernetes": "local",
-    "k8s": "local",
-}
+# Floor in USD: below this, RunPod refuses/loses pods mid-run, so launches
+# would sit in STARTING indefinitely with no visible cause (#2193).
+_RUNPOD_MIN_BALANCE_USD = 5.0
 
-_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
+_RUNPOD_BALANCE_QUERY = "query { myself { clientBalance } }"
+
+
+class _RunpodMyself(BaseModel, strict=True):
+    clientBalance: float | int  # noqa: N815 — verbatim RunPod GraphQL field name
+
+
+class _RunpodBalanceData(BaseModel, strict=True):
+    myself: _RunpodMyself
+
+
+# Strict trust-boundary model for the RunPod balance GraphQL response.
+class _RunpodBalanceResponse(BaseModel, strict=True):
+    data: _RunpodBalanceData
+
+
+def _fetch_runpod_balance() -> float | None:
+    """Probe the RunPod account balance for the launch preflight.
+
+    Fail-open by contract: missing or unparsable ``~/.runpod/config.toml``, API
+    errors, and malformed responses all return ``None`` — a balance probe must
+    never block a launch on its own failure. Each failure emits a one-line
+    stderr notice (exception class only, never the balance or key).
+
+    :returns: Balance in USD, or ``None`` when undeterminable.
+    """
+    try:
+        import runpod
+        from runpod.api.graphql import run_graphql_query
+
+        config_text = (Path.home() / ".runpod" / "config.toml").read_text(encoding="utf-8")
+        api_key = tomllib.loads(config_text).get("default", {}).get("api_key")
+        if not isinstance(api_key, str) or not api_key:
+            click.echo(
+                "RunPod balance probe found no api_key in ~/.runpod/config.toml; "
+                "continuing fail-open (balance not verified)",
+                err=True,
+            )
+            return None
+        runpod.api_key = api_key
+        response = _RunpodBalanceResponse(**run_graphql_query(_RUNPOD_BALANCE_QUERY))
+        return float(response.data.myself.clientBalance)
+    except Exception as exc:  # noqa: BLE001 — fail open, see docstring contract
+        click.echo(
+            f"RunPod balance probe unavailable ({type(exc).__name__}); "
+            "continuing fail-open (balance not verified)",
+            err=True,
+        )
+        return None
+
+
+def _check_runpod_balance() -> None:
+    """Abort a RunPod launch when the account balance is below the preflight floor.
+
+    The error deliberately omits the actual balance — logs are shared and the
+    amount is account-sensitive. An unknowable balance fails open.
+
+    :raises RuntimeError: Balance is known and below ``_RUNPOD_MIN_BALANCE_USD``.
+    """
+    balance = _fetch_runpod_balance()
+    if balance is not None and balance < _RUNPOD_MIN_BALANCE_USD:
+        raise RuntimeError(
+            "insufficient RunPod balance: the account is below the "
+            f"${_RUNPOD_MIN_BALANCE_USD:.0f} preflight floor. Top up before "
+            "launching (amount withheld from logs)."
+        )
+
+
+_SKYPILOT_API_SERVER_ENV = ENV_SKYPILOT_API_SERVER_ENDPOINT
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
@@ -174,38 +254,182 @@ def load_worker_env(path: Path) -> dict[str, str]:
     return {k: v for k, v in dotenv_values(path).items() if v is not None}
 
 
+def _operator_ssh_dir() -> Path:
+    """Return the launching operator's ``~/.ssh`` directory.
+
+    :return: The resolved ``~/.ssh`` path (existence not required).
+    """
+    return Path.home() / ".ssh"
+
+
+def _operator_ssh_pubkeys_b64(ssh_dir: Path) -> str:
+    """Collect the operator's public keys as a base64 blob for pod authorized_keys.
+
+    Reads ``id_ed25519.pub`` and ``authorized_keys`` under ``ssh_dir`` so the
+    launching machine — and every machine already trusted to reach it — can SSH
+    into the pods it launches (#2297). Base64 keeps the multiline material safe
+    through SkyPilot's env serialization.
+
+    :param ssh_dir: Directory holding the operator's SSH files.
+    :return: Base64 of newline-joined unique key lines; ``""`` when none exist.
+    """
+    lines: list[str] = []
+    missing: list[str] = []
+    try:
+        for name in ("id_ed25519.pub", "authorized_keys"):
+            path = ssh_dir / name
+            if not path.is_file():
+                missing.append(name)
+                continue
+            # errors="replace" salvages intact key lines from a partially
+            # corrupted file; mangled lines can't pass the prefix filter.
+            for raw in path.read_bytes().decode("utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if line.startswith(("ssh-", "ecdsa-")) and line not in lines:
+                    lines.append(line)
+    except OSError as exc:
+        # Fail open: key forwarding is a convenience and must never block a launch.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        return ""
+    if missing:
+        click.echo(f"operator SSH keys: {', '.join(missing)} not found under {ssh_dir}")
+    if not lines:
+        click.echo("no operator SSH keys collected; pods will not trust this machine")
+        return ""
+    click.echo(f"forwarding {len(lines)} operator SSH key(s) into pod authorized_keys")
+    joined = "\n".join(lines) + "\n"
+    return base64.b64encode(joined.encode("utf-8")).decode("ascii")
+
+
 def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     """Resolve the launcher's `_WORKER_ENV_KEYS` from .env and process env.
 
-    For each key in `_WORKER_ENV_KEYS`, the value is taken from `env_file` if
-    that file exists and the key is set there, else from the launcher's
-    process env if set, else skipped. Skipped keys keep the template's
-    default (typically the empty string) — `task.update_envs` only overrides
-    keys that are actually resolved here.
+    ``env_file=None`` reads ``DEFAULT_ENV_FILE``. Storage settings are loaded
+    from canonical ``SYNTH_SETTER_STORAGE_*`` keys and projected into the
+    ``RCLONE_CONFIG_R2_*`` keys the current worker templates consume.
+    Blank/whitespace counts as absent, so a `.env` line `KEY=` never forwards
+    an empty credential to a worker. Missing storage credentials leave only
+    the structural rclone defaults, letting ``dispatch_via_skypilot`` produce
+    the user-facing "no object storage settings" error.
 
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
     """
     file_env: dict[str, str] = {}
-    if env_file is not None and env_file.is_file():
-        file_env = load_worker_env(env_file)
+    resolved_env_file = env_file if env_file is not None else DEFAULT_ENV_FILE
+    if resolved_env_file.is_file():
+        file_env = load_worker_env(resolved_env_file)
 
-    resolved: dict[str, str] = {}
-    for key in _WORKER_ENV_KEYS:
-        if key in file_env:
-            resolved[key] = file_env[key]
-        elif key in os.environ:
-            resolved[key] = os.environ[key]
+    try:
+        resolved: dict[str, str] = (
+            storage_settings_from_sources(resolved_env_file).to_config().rclone_env()
+        )
+    except ValidationError:
+        resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
-    for key, default in _R2_RCLONE_CONSTANTS.items():
-        resolved.setdefault(key, default)
+    for key in ("WANDB_API_KEY", "WORKER_GIT_REF"):
+        # First non-blank wins, .env over process env; a blank candidate is
+        # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
+        # value can't mask a real process-env fallback.
+        for candidate in (file_env.get(key), os.environ.get(key)):
+            cleaned = candidate.strip() if candidate else ""
+            if cleaned:
+                resolved[key] = cleaned
+                break
 
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
         raise click.ClickException(
-            f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
+            f"WORKER_GIT_REF must be a 40-character hex git SHA, got {git_ref!r}"
         )
     return resolved
+
+
+def _run_workspace_git(args: list[str], *, failure_message: str) -> str:
+    """Run a git preflight command against the operator workspace.
+
+    :param args: Git subcommand and validated arguments.
+    :param failure_message: User-facing error when git cannot complete.
+    :return: Command stdout without surrounding whitespace.
+    :raises click.ClickException: Git is unavailable, times out, or exits non-zero.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — caller supplies validated git arguments
+            ["git", "-C", str(_OPERATOR_WORKSPACE), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_WORKER_GIT_REF_PREFLIGHT_TIMEOUT_S,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise click.ClickException(failure_message) from exc
+    return result.stdout.strip()
+
+
+def _resolve_worker_git_ref(worker_env: Mapping[str, str]) -> str:
+    """Select a worker commit and verify the worker can fetch it from origin.
+
+    An explicit ``WORKER_GIT_REF`` remains authoritative. Otherwise the
+    operator checkout's current ``HEAD`` is used so local launches cannot
+    silently run stale image-baked source.
+
+    :param worker_env: Resolved worker environment, optionally containing an
+        explicit ``WORKER_GIT_REF``.
+    :return: Fetchable worker commit SHA.
+    :raises click.ClickException: The checkout has no resolvable ``HEAD`` or
+        the selected commit cannot be fetched from ``origin``.
+    """
+    configured_ref = worker_env.get("WORKER_GIT_REF")
+    if configured_ref is None:
+        configured_ref = _run_workspace_git(
+            ["rev-parse", "HEAD"],
+            failure_message=(
+                f"Cannot resolve WORKER_GIT_REF from checkout {_OPERATOR_WORKSPACE}; "
+                "set it to a fetchable commit SHA explicitly."
+            ),
+        )
+
+    if not _WORKER_GIT_REF_RE.fullmatch(configured_ref):
+        raise click.ClickException(
+            f"WORKER_GIT_REF must be a 40-character hex git SHA, got {configured_ref!r}"
+        )
+
+    _run_workspace_git(
+        ["fetch", "--dry-run", "--depth=1", "origin", configured_ref],
+        failure_message=(
+            f"WORKER_GIT_REF {configured_ref} is not fetchable from origin; "
+            "push the commit or select a fetchable SHA before launching."
+        ),
+    )
+    return configured_ref
+
+
+def _reset_skypilot_client_cache() -> None:
+    """Clear endpoint values cached by the SkyPilot SDK."""
+    from sky.server import common as server_common
+
+    server_common.get_server_url.cache_clear()
+    server_common.is_api_server_local.cache_clear()
+
+
+def _configure_local_skypilot_client() -> None:
+    """Drop remote client auth so the SDK targets its default local server.
+
+    Mutates os.environ for the remaining process lifetime by design: the launcher is a one-shot
+    CLI, and dispatch owns the process env from here on.
+    """
+    os.environ.pop(ENV_SKYPILOT_API_SERVER_ENDPOINT, None)
+    os.environ.pop(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, None)
+    _reset_skypilot_client_cache()
+
+
+def _configure_remote_skypilot_client(settings: SkypilotClientSettings) -> None:
+    """Project validated client auth into the env the SkyPilot SDK reads.
+
+    :param settings: Validated client authentication settings.
+    """
+    os.environ.update(settings.as_env())
+    _reset_skypilot_client_cache()
 
 
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
@@ -251,27 +475,18 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
 
 
 def _override_image_id(task: sky.Task, worker_image: str) -> None:
-    """Pin every Resources entry's image_id to ``docker:<worker_image>`` for backends that take it.
-
-    SkyPilot's OCI backend rejects ``image_id: docker:<image>`` — that path runs the worker via
-    a sub-docker invocation inside the YAML's run: block and consumes WORKER_IMAGE from env, so
-    OCI Resources entries are left unmodified. The function unconditionally rebuilds the Task's
-    resources collection via ``task.set_resources(...)`` even when no entry was mutated, so
-    callers (and mock-based test readers) should expect that call regardless of provider mix.
-    """
+    """Pin a Docker image on every non-OCI resource alternative."""
     from sky.clouds import OCI
 
     if not task.resources:
         return
 
     docker_ref = f"docker:{worker_image}"
-    new_resources: list[sky.Resources] = []
-    for res in task.resources:
-        if isinstance(res.cloud, OCI):
-            new_resources.append(res)
-            continue
-        new_resources.append(res.copy(image_id=docker_ref))
-    task.set_resources(type(task.resources)(new_resources))
+    resources = [
+        resource if isinstance(resource.cloud, OCI) else resource.copy(image_id=docker_ref)
+        for resource in task.resources
+    ]
+    task.set_resources(type(task.resources)(resources))
 
 
 def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:
@@ -354,120 +569,25 @@ def _cancel_job(job_name: str) -> None:
         click.echo(f"[{job_name}] cancel failed: {exc}")
 
 
-def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:
-    """Detect the cred-bootstrap provider from an already-parsed YAML mapping.
-
-    :param doc: Parsed top-level YAML mapping for a SkyPilot Task.
-    :param source: Path the doc was loaded from; used only in error messages.
-    :return: ``--provider`` flag for the cred-bootstrap script.
-    :raises ValueError: ``resources`` is missing/malformed or names an
-        unsupported cloud.
-    """
-    resources = doc.get("resources") or {}
-    if not isinstance(resources, dict):
-        raise ValueError(
-            f"Could not detect cloud from {source}; expected `resources` to be a mapping."
-        )
-    cloud_value = resources.get("cloud")
-    if cloud_value is None:
-        any_of = resources.get("any_of") or []
-        if not isinstance(any_of, list):
-            raise ValueError(
-                f"Could not detect cloud from {source}; expected `resources.any_of` to be a list."
-            )
-        if any_of:
-            first = any_of[0]
-            if not isinstance(first, dict):
-                raise ValueError(
-                    f"Could not detect cloud from {source}; "
-                    "expected `resources.any_of[0]` to be a mapping."
-                )
-            cloud_value = first.get("cloud")
-    if not isinstance(cloud_value, str):
-        raise ValueError(
-            f"Could not detect cloud from {source}; "
-            "expected resources.cloud (str) or resources.any_of[0].cloud (str)."
-        )
-    provider = _CLOUD_TO_PROVIDER.get(cloud_value.strip().lower())
-    if provider is None:
-        raise ValueError(
-            f"Unsupported cloud {cloud_value!r} in {source}; cred bootstrap "
-            "supports runpod, oci, and local (kubernetes) only"
-        )
-    return provider
-
-
-_WORKER_CMD_SENTINEL = "${WORKER_CMD}"
-
-
-def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:
-    """Load ``template_path`` as YAML and inject ``cmd`` into the ``run:`` block.
-
-    Three branches based on the template's existing ``run:``:
-
-    * **Empty/missing** — set ``run = cmd``.
-    * **Contains** ``${WORKER_CMD}`` — substitute ``cmd`` into the sentinel,
-      preserving surrounding scaffolding (e.g. OCI's ``sudo docker run …
-      bash -c "${WORKER_CMD}"``). Caller must shell-quote the context so the
-      substituted string lands as a single argv item.
-    * **Non-empty without sentinel** — refuse, rather than silently dropping
-      the template's ``run:``. Strip ``run:`` or add the sentinel to opt in.
-
-    :param template_path: Path to a SkyPilot Task YAML.
-    :param cmd: Bash command to inject.
-    :return: The parsed YAML dict with ``run`` populated.
-    :raises FileNotFoundError: ``template_path`` does not point to a file.
-    :raises ValueError: top-level YAML is not a mapping, or the template's
-        ``run:`` is non-empty and lacks the sentinel.
-    """
-    if not template_path.is_file():
-        raise FileNotFoundError(f"compute template not found: {template_path}")
-    with template_path.open(encoding="utf-8") as f:
-        doc = yaml.safe_load(f)
-    if doc is None:
-        doc = {}
-    if not isinstance(doc, dict):
-        raise ValueError(
-            f"Top-level YAML in {template_path} must be a mapping, got {type(doc).__name__}"
-        )
-    existing_run = doc.get("run")
-    if existing_run in (None, ""):
-        doc["run"] = cmd
-        return doc
-    if not isinstance(existing_run, str):
-        raise ValueError(
-            f"compute template {template_path} `run:` must be a string, "
-            f"got {type(existing_run).__name__}"
-        )
-    if _WORKER_CMD_SENTINEL in existing_run:
-        doc["run"] = existing_run.replace(_WORKER_CMD_SENTINEL, cmd)
-        return doc
-    raise ValueError(
-        f"compute template {template_path} has a non-empty `run:` block, but "
-        "skypilot_launch.cmd is also set — cmd cannot be silently dropped. "
-        f"Strip the YAML's `run:` section, or substitute {_WORKER_CMD_SENTINEL} "
-        "where the worker cmd should land, to opt into the Hydra cmd-injection flow."
-    )
-
-
-def _launch_one_rank_from_doc(
+def _launch_one_rank(
     rank: int,
     *,
     job_names: list[str],
     worker_env_base: dict[str, str],
     worker_image: str,
-    task_doc: dict[str, object],
+    compute: ComputeConfig,
+    cmd: str,
+    network_volume: str | None,
 ) -> int:
-    """Submit one rank, building the ``sky.Task`` from an in-memory YAML dict.
-
-    Uses ``sky.Task.from_yaml_config`` so a cmd-injected dict skips the
-    disk roundtrip.
+    """Submit one rank from a native SkyPilot task document.
 
     :param rank: This rank's index into ``job_names``.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_env_base: Env dict forwarded to the rank (rank/world keys added here).
     :param worker_image: Resolved ``repo:tag`` Docker image reference.
-    :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
+    :param compute: Validated compute option to build the task from.
+    :param cmd: Worker command injected as the task's run block.
+    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :return: SkyPilot-assigned ``job_id`` for this rank.
     :raises RuntimeError: ``sky.jobs.launch`` / ``sky.stream_and_get`` yielded
         no ``job_id``.
@@ -479,9 +599,12 @@ def _launch_one_rank_from_doc(
         WORKER_RANK_ENV_VAR: str(rank),
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _WORKER_IMAGE_ENV: worker_image,
+        _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
+    task_doc = build_task_doc(compute, cmd=cmd, network_volume=network_volume)
     task = sky.Task.from_yaml_config(task_doc)
-    _override_image_id(task, worker_image)
+    if compute.image_delivery != "docker-in-run":
+        _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
     launch_request_id = sky.jobs.launch(task, name=job_name)
@@ -496,17 +619,21 @@ def _launch_one_rank_from_doc(
     return job_ids[0]
 
 
-def _run_workers_from_doc(
+def _run_workers(
     worker_env_base: dict[str, str],
-    task_doc: dict[str, object],
+    compute: ComputeConfig,
+    cmd: str,
+    network_volume: str | None,
     job_names: list[str],
     worker_image_tag: str,
     tail: bool,
 ) -> list[int]:
-    """Fan out one rank per ``job_names`` entry from a pre-built YAML dict.
+    """Fan out one rank per ``job_names`` entry from a validated compute option.
 
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys added per call).
-    :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
+    :param compute: Validated compute option to build each rank's task from.
+    :param cmd: Worker command injected as each task's run block.
+    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
@@ -515,11 +642,13 @@ def _run_workers_from_doc(
     """
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
     launch_get_job_id = functools.partial(
-        _launch_one_rank_from_doc,
+        _launch_one_rank,
         job_names=job_names,
         worker_env_base=worker_env_base,
         worker_image=worker_image,
-        task_doc=task_doc,
+        compute=compute,
+        cmd=cmd,
+        network_volume=network_volume,
     )
     if tail:
         return _run_workers_tail(job_names, launch_get_job_id)
@@ -527,20 +656,24 @@ def _run_workers_from_doc(
 
 
 def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
-    """Dispatch ``sky_cfg.cmd`` to the SkyPilot template named in ``sky_cfg``.
+    """Dispatch ``sky_cfg.cmd`` to the SkyPilot compute option in ``sky_cfg``.
 
-    ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be non-None.
+    ``sky_cfg.compute`` and ``sky_cfg.cmd`` must both be non-None.
+    Worker source defaults to the operator checkout's current ``HEAD``; an
+    explicit ``WORKER_GIT_REF`` overrides it. The selected commit must be
+    fetchable from ``origin`` before submission.
 
     :param sky_cfg: Validated launcher config; see ``SkypilotLaunchConfig`` for
         per-field semantics.
-    :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
-        unresolved worker env vars, or ``extra_envs`` keys colliding with
+    :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run_script``
+        pair, unresolved worker env vars, or ``extra_envs`` keys colliding with
         ``_WORKER_ENV_KEYS``.
+    :raises click.ClickException: SkyPilot client auth is invalid or rejected.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """
     # Phase 1: pure validation — pinned by test_phase1_failures_skip_phase2_side_effects.
-    if not sky_cfg.compute_template:
-        raise ValueError("dispatch_via_skypilot requires sky_cfg.compute_template to be set")
+    if sky_cfg.compute is None:
+        raise ValueError("dispatch_via_skypilot requires sky_cfg.compute to be set")
     if not sky_cfg.cmd:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
 
@@ -549,8 +682,10 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     if sky_cfg.api_server is not None and sky_cfg.local:
         raise ValueError("api_server and local are mutually exclusive")
 
-    template_path = Path(sky_cfg.compute_template).expanduser().resolve()
-    task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+    compute = apply_tier_filter(sky_cfg.compute, sky_cfg.tier)
+    # Fail on cmd/run_script conflicts and volume mismatches before any side effect.
+    resolve_run_block(compute, sky_cfg.cmd)
+    resolve_volumes(compute, sky_cfg.network_volume)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -574,38 +709,66 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             "not sky_cfg.extra_envs."
         )
 
-    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+    env_file_path = (
+        Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file is not None else DEFAULT_ENV_FILE
+    )
     worker_env = resolve_worker_env(env_file_path)
-    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+    if not any(_env_value_is_set(worker_env.get(k)) for k in _SECRET_WORKER_ENV_KEYS):
         raise ValueError(
-            "No worker env vars resolved. Set the rclone-R2 keys in process env "
-            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "
-            f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
-            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
+            "No object storage settings resolved. Set SYNTH_SETTER_STORAGE_* in process env "
+            f"(e.g. via `docker run -e SYNTH_SETTER_STORAGE_*=...`) or populate "
+            f"{env_file_path}. "
+            "Expected access key id, secret access key, and endpoint URL."
         )
+    worker_env["WORKER_GIT_REF"] = _resolve_worker_git_ref(worker_env)
     worker_env.update(sky_cfg.extra_envs)
+
+    try:
+        operator_keys = _operator_ssh_pubkeys_b64(_operator_ssh_dir())
+    except (RuntimeError, OSError) as exc:
+        # Path.home() raises RuntimeError on hosts with no resolvable home
+        # (headless CI containers); a launch must survive that.
+        click.echo(f"operator SSH key forwarding skipped: {exc}")
+        operator_keys = ""
+    if operator_keys:
+        worker_env.setdefault("OPERATOR_SSH_PUBKEYS_B64", operator_keys)
+
+    client_settings: SkypilotClientSettings | None = None
+    if not sky_cfg.local:
+        try:
+            client_settings = skypilot_client_settings_from_sources(
+                env_file_path,
+                api_server_endpoint=sky_cfg.api_server,
+            )
+        except ValidationError as exc:
+            details = "; ".join(str(error["msg"]) for error in exc.errors(include_input=False))
+            raise click.ClickException(
+                f"Invalid SkyPilot client authentication settings in {env_file_path}: {details}"
+            ) from exc
 
     base_job_name = sky_cfg.job_name or f"synth-setter-{uuid.uuid4().hex[:8]}"
 
-    provider = _detect_provider_from_doc(task_doc, source=template_path)
+    provider = compute.provider()
 
     # Phase 2: commit — side effects in dependency order.
     _ensure_ci_sky_config()
+    if client_settings is None:
+        _configure_local_skypilot_client()
+    else:
+        _configure_remote_skypilot_client(client_settings)
 
-    if sky_cfg.api_server is not None:
-        os.environ[_SKYPILOT_API_SERVER_ENV] = sky_cfg.api_server
-    elif sky_cfg.local:
-        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
-
-    # Defensive: mirror RCLONE_CONFIG_R2_* into os.environ so any downstream subprocess
-    # (e.g. SkyPilot's storage backend) inherits credentials when .env populated worker_env
-    # without exporting them.
+    # Mirror RCLONE_CONFIG_R2_* into os.environ so subprocesses (e.g. SkyPilot's
+    # storage backend) inherit creds resolved from .env that were never exported.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
 
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+    # Skip under a remote API server (mirrors _run_cred_bootstrap): the server
+    # holds the provider creds, so a local config.toml balance may be stale.
+    if compute.requests_runpod() and os.environ.get(_SKYPILOT_API_SERVER_ENV) is None:
+        _check_runpod_balance()
 
     if provider == "local":
         import sky.check
@@ -618,9 +781,11 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
     )
 
-    rcs = _run_workers_from_doc(
+    rcs = _run_workers(
         worker_env_base=worker_env,
-        task_doc=task_doc,
+        compute=compute,
+        cmd=sky_cfg.cmd,
+        network_volume=sky_cfg.network_volume,
         job_names=job_names,
         worker_image_tag=sky_cfg.worker_image_tag,
         tail=sky_cfg.tail,
@@ -636,3 +801,90 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
             f"{len(failed)} of {sky_cfg.num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
+
+
+def load_launch_config(path: Path) -> SkypilotLaunchConfig:
+    """Load a checked-in launch-config YAML into a validated ``SkypilotLaunchConfig``.
+
+    The YAML is the full launch description (``cmd`` included) — unlike the
+    Hydra ``skypilot_launch`` group, which forbids ``cmd`` because the
+    generate-dataset entrypoint builds it from argv. Its ``compute:`` field
+    names a ``skypilot_launch/compute`` option (e.g. ``runpod/smoke``),
+    resolved here via the Hydra Compose API. ``extra="forbid"`` on the model
+    surfaces config typos instead of silently ignoring them.
+
+    :param path: Path to a YAML file whose top level is a mapping of
+        ``SkypilotLaunchConfig`` fields, with ``compute`` as an option name.
+    :return: Validated launcher config.
+    :raises FileNotFoundError: ``path`` does not point to a file.
+    :raises ValueError: top-level YAML is not a mapping, ``compute`` is not a
+        string/null, or field validation fails (``pydantic.ValidationError``
+        is a ``ValueError`` subclass).
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"launch config not found: {path}")
+    with path.open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    if not isinstance(doc, dict):
+        raise ValueError(f"launch config {path} must be a YAML mapping, got {type(doc).__name__}")
+    compute_name = doc.get("compute")
+    if compute_name is not None:
+        if not isinstance(compute_name, str):
+            raise ValueError(
+                f"launch config {path} `compute:` must name a skypilot_launch/compute "
+                f"option (e.g. runpod/smoke), got {type(compute_name).__name__}"
+            )
+        doc = {**doc, "compute": load_compute_option(compute_name)}
+    return SkypilotLaunchConfig(**doc)
+
+
+@click.command()
+@click.option(
+    "--extra-env",
+    nargs=2,
+    multiple=True,
+    metavar="KEY VALUE",
+    help="Worker environment entry; repeat to set multiple values.",
+)
+@click.option(
+    "--network-volume",
+    default=None,
+    metavar="NAME",
+    help="SkyPilot volume name overriding the config's network_volume.",
+)
+@click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def main(
+    launch_config: Path,
+    extra_env: tuple[tuple[str, str], ...],
+    network_volume: str | None,
+) -> None:
+    """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
+
+    Relative paths inside the config (``env_file``) are resolved against the
+    working directory, so run from the repo root.
+
+    :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
+    :param extra_env: Worker environment entries that override config ``extra_envs``.
+    :param network_volume: Volume-name override; retargets the launch to another
+        data center's volume without editing the config.
+    :raises click.ClickException: The config or worker environment fails validation.
+    """
+    try:
+        sky_cfg = load_launch_config(launch_config)
+        sky_cfg = SkypilotLaunchConfig.model_validate(
+            {
+                **sky_cfg.model_dump(),
+                "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
+                **({"network_volume": network_volume} if network_volume is not None else {}),
+            }
+        )
+    except (ValueError, yaml.YAMLError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    try:
+        dispatch_via_skypilot(sky_cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+if __name__ == "__main__":
+    main()

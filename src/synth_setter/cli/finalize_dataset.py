@@ -2,25 +2,23 @@
 
 Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
 ``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
-``upload_spec`` wrote to) and dispatches
-on ``spec.output_format``. Every branch uploads its derived artifact(s)
-and then writes the ``dataset.complete`` marker last per
-``pipeline/CLAUDE.md``. The wds branch streams train shards through
-Welford row-by-row; the hdf5 branch downloads every shard, reshards into
-``{train,val,test}.h5``, and computes ``stats.npz`` over the train split;
-the lance branch streams every shard directly from R2 (no local download),
-folds train shards through Welford for ``stats.npz``, and writes each split
-straight back to R2 as a ``{train,val,test}.lance`` dataset directory.
+``upload_spec`` wrote to) and commits its staged winner fragments into each
+``{train,val,test}.lance`` split manifest, reducing the winners' Welford
+sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
+``dataset.complete`` marker is written last per ``pipeline/CLAUDE.md``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from time import perf_counter
+from traceback import format_tb
+from typing import cast
 
 import hydra
-import numpy as np
+import structlog
 import wandb
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -28,72 +26,95 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import (
-    DATASET_COMPLETE_FILENAME,
-    INPUT_SPEC_FILENAME,
-    STATS_NPZ_FILENAME,
+from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
+from synth_setter.pipeline.data.finalize_progress import (
+    FinalizeProgressCallback,
+    FinalizeProgressEvent,
+    report_finalize_progress,
 )
-from synth_setter.pipeline.data.reshard import reshard_dataset
-from synth_setter.pipeline.data.stats import get_stats_hdf5, stream_stats_wds
 from synth_setter.pipeline.schemas.prefix import assert_r2_prefix_matches
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec
-from synth_setter.pipeline.spec_io import load_spec_from_root, write_spec_to_path
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
+from synth_setter.pipeline.spec_io import load_spec_from_root
 from synth_setter.utils import pin_wandb_run_id
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
-if TYPE_CHECKING:
-    import pyarrow as pa
-
-    LanceBatchIterator: TypeAlias = Iterator[pa.RecordBatch]
-    LanceSplitBatches: TypeAlias = tuple[pa.Schema, LanceBatchIterator]
-else:
-    LanceSplitBatches: TypeAlias = tuple[object, Iterator[object]]
+_failure_logger = structlog.get_logger(__name__)
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
 operator_workspace()
 
 
-def _download_train_shards_one_at_a_time(spec: DatasetSpec, work_dir: Path) -> Iterator[Path]:
-    """Yield one downloaded train shard at a time, unlinking after the consumer is done.
+def _log_finalize_metrics(loggers: Sequence[Logger], metrics: Mapping[str, float]) -> None:
+    """Log one finalization history row to W&B without making logging mandatory.
 
-    Peak local disk stays at one shard regardless of split size; the
-    ``finally`` clause runs when ``stream_stats_wds`` advances to the next
-    iteration, so the previous shard's bytes are released before the next
-    download starts.
+    No explicit step is passed because W&B auto-advances history for each
+    ``log`` call, including when finalize resumes the generation run.
+
+    :param loggers: Configured Lightning loggers; only ``WandbLogger`` entries receive metrics.
+    :param metrics: Completed-progress values for one W&B history row.
+    """
+    for wandb_logger in loggers:
+        if not isinstance(wandb_logger, WandbLogger):
+            continue
+        try:
+            wandb_logger.log_metrics(dict(metrics))
+        except Exception as exc:  # noqa: BLE001 — W&B must remain best-effort
+            logger.warning(
+                "finalize metrics logging failed on {}: {}", type(wandb_logger).__name__, exc
+            )
+
+
+def _make_finalize_progress_logger(
+    loggers: Sequence[Logger], total_shards: int
+) -> tuple[FinalizeProgressCallback, Callable[[float], None]]:
+    """Build the live progress callback and terminal-summary logger.
+
+    :param loggers: Configured Lightning loggers; W&B entries receive history rows.
+    :param total_shards: Number of source shards the finalization run can process.
+    :returns: Callback for live events and a callable for the terminal summary row.
+    """
+    processed_shards = 0
+    uploaded_artifacts = 0
+
+    def handle_progress_event(event: FinalizeProgressEvent) -> None:
+        nonlocal processed_shards, uploaded_artifacts
+        if event == "shard_processed":
+            processed_shards += 1
+            _log_finalize_metrics(
+                loggers,
+                {
+                    "finalize/shards_processed": float(processed_shards),
+                    "finalize/shards_total": float(total_shards),
+                },
+            )
+            return
+
+        uploaded_artifacts += 1
+        _log_finalize_metrics(loggers, {"finalize/artifacts_uploaded": float(uploaded_artifacts)})
+
+    def log_summary(elapsed_seconds: float) -> None:
+        if processed_shards == 0 and uploaded_artifacts == 0:
+            return
+        _log_finalize_metrics(
+            loggers,
+            {
+                "finalize/elapsed_seconds": elapsed_seconds,
+                "finalize/shards_processed": float(processed_shards),
+                "finalize/shards_total": float(total_shards),
+                "finalize/artifacts_uploaded": float(uploaded_artifacts),
+            },
+        )
+
+    return handle_progress_event, log_summary
+
+
+def _require_nonempty_train(spec: DatasetSpec) -> None:
+    """Reject a spec whose train split holds no shards — stats need at least one.
 
     :param spec: Validated dataset spec.
-    :param work_dir: Scratch directory; shards land here transiently.
-    :yields Path: Local path of the just-downloaded train shard.
-    """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    for shard in spec.shards[train_lo:train_hi]:
-        local = work_dir / shard.filename
-        r2_io.download_to_path(spec.r2.shard_uri(shard), local)
-        try:
-            yield local
-        finally:
-            local.unlink(missing_ok=True)
-
-
-def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
-    """Stream stats over the train shards and upload ``stats.npz``.
-
-    Per-shard tar files stay in their original R2 location; only the
-    derived ``stats.npz`` is materialized. Brace patterns for non-empty
-    splits are available via
-    ``spec.r2.split_wds_brace_uri(spec.split_shard_ranges[split])``;
-    callers must check ``lo < hi`` first because empty splits raise
-    ``ValueError`` at that helper. ``spec.mask_degenerate_bins`` is
-    forwarded to ``stream_stats_wds``.
-
-    :param spec: Validated dataset spec (``output_format == "wds"``).
-    :param work_dir: Scratch directory; one shard at a time + the final
-        ``stats.npz`` live here transiently.
-    :raises ValueError: The train split is empty
-        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); stats
-        cannot be computed without at least one train shard.
+    :raises ValueError: The train split range is empty.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     if train_lo >= train_hi:
@@ -102,161 +123,54 @@ def finalize_wds(spec: DatasetSpec, work_dir: Path) -> None:
             f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
             f"without at least one train shard."
         )
-    mean, std = stream_stats_wds(
-        _download_train_shards_one_at_a_time(spec, work_dir),
-        mask_degenerate=spec.mask_degenerate_bins,
-    )
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_npz, mean=mean, std=std)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
 
 
-def finalize_hdf5(spec: DatasetSpec, work_dir: Path) -> None:
-    """Download every shard, reshard into split files, compute stats, upload all artifacts.
+# DOC502: the documented ValueError propagates from _require_nonempty_train.
+def finalize_lance(  # noqa: DOC502
+    spec: DatasetSpec,
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
+) -> None:
+    """Commit staged winner fragments into split datasets — no shard row is decoded.
 
-    Writes ``work_dir/input_spec.json`` flat (via
-    :func:`~synth_setter.pipeline.spec_io.write_spec_to_path`) so
-    :func:`~synth_setter.pipeline.data.reshard.reshard_dataset`'s default
-    spec discovery picks it up without a ``--spec`` override. The flat
-    placement diverges from :func:`~synth_setter.pipeline.spec_io.write_spec_locally`'s
-    nested ``<output_dir>/data/<task>/<run>/metadata/`` layout because
-    ``work_dir`` is a per-finalize scratch tempdir whose only consumer is
-    reshard — re-creating the operator-side ``data/`` hierarchy under it
-    would force the reshard adapter to learn that layout for no benefit.
-    ``get_stats_hdf5`` then writes ``work_dir / "stats.npz"`` (path derived
-    via ``VSTDataset.get_stats_file_path(train.h5)``); the post-call
-    existence guard pins that contract so a future drift in the derivation
-    surfaces here rather than as a missing upload source. Structural
-    validation (per ``pipeline/CLAUDE.md``) is delegated to the h5py opens
-    that ``reshard_dataset`` performs while staging each split — finalize
-    never re-runs the workers' full four-check pass.
-    ``spec.mask_degenerate_bins`` is forwarded to ``get_stats_hdf5``.
-
-    :param spec: Validated dataset spec (``output_format == "hdf5"``).
-    :param work_dir: Scratch directory; shards, splits, stats and the spec
-        copy live here transiently for the duration of the call.
-    :raises ValueError: The train split is empty
-        (``spec.split_shard_ranges["train"]`` has ``lo >= hi``); reshard
-        would prune ``train.h5`` and stats compute would fail with a
-        low-signal HDF5 error.
-    :raises FileNotFoundError: ``get_stats_hdf5`` returned without writing
-        ``work_dir / "stats.npz"``, breaking the upload-source contract.
-    """
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
-    for shard in spec.shards:
-        r2_io.download_to_path(spec.r2.shard_uri(shard), work_dir / shard.filename)
-    write_spec_to_path(spec, work_dir / INPUT_SPEC_FILENAME)
-    reshard_dataset(work_dir)
-    get_stats_hdf5(str(work_dir / "train.h5"), mask_degenerate=spec.mask_degenerate_bins)
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    if not stats_npz.is_file():
-        raise FileNotFoundError(
-            f"get_stats_hdf5 did not write {stats_npz}; check "
-            f"VSTDataset.get_stats_file_path derivation."
-        )
-    # Reshard prunes empty splits — only upload the ones it actually wrote.
-    # Iterate ``split_shard_ranges`` (Split-typed keys) so split_h5_uri's
-    # Literal narrowing holds without a cast.
-    for split in spec.split_shard_ranges:
-        split_h5 = work_dir / f"{split}.h5"
-        if split_h5.exists():
-            split_uri = spec.r2.split_h5_uri(split)
-            r2_io.upload(split_h5, split_uri)
-            logger.info("uploaded {} to {}", split_h5.name, split_uri)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
-
-
-def _lance_split_batches(
-    shard_uris: list[str], storage_options: dict[str, str]
-) -> LanceSplitBatches:
-    """Return the schema and batch iterator for a finalized Lance split.
-
-    Reads shards directly from R2 (no local download) — one sequential pass per
-    shard, which Lance streams natively over object storage.
-
-    :param shard_uris: Non-empty list of ``s3://`` shard dataset URIs in split order.
-    :param storage_options: Object-store config for the R2 bucket.
-    :returns: ``(schema, batches)`` for :func:`write_lance_dataset`.
-    """
-    import lance
-
-    schema = lance.dataset(shard_uris[0], storage_options=storage_options).schema
-
-    def _batches() -> LanceBatchIterator:
-        for uri in shard_uris:
-            yield from lance.dataset(uri, storage_options=storage_options).to_batches()
-
-    return schema, _batches()
-
-
-def finalize_lance(spec: DatasetSpec, work_dir: Path) -> None:
-    """Stream Lance shards from R2 into split datasets, compute stats, upload artifacts.
-
-    Shards are read directly from R2 and each split dataset is written straight to
-    its R2 URI via Lance ``storage_options`` — no shard download or split upload.
-    Only ``stats.npz`` (a plain numpy archive) is staged locally and uploaded.
+    Delegates to
+    :func:`~synth_setter.pipeline.data.lance_finalize.finalize_lance_fragments`:
+    winner selection over the staged attempts, structural checks, one atomic
+    ``Overwrite`` commit per split, Welford reduction of the winners'
+    ``.shard-stats.npz`` sidecars into ``stats.npz``, and the ``dataset.json``
+    audit record. Progress events surface one ``shard_processed`` per selected
+    winner and one ``artifact_uploaded`` per committed split, plus the stats
+    and card uploads.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
-    :param work_dir: Scratch directory for the finalized ``stats.npz``.
-    :raises ValueError: The train split is empty.
+    :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
+    :param progress_callback: Optional sink for completed shard and upload events.
+    :raises ValueError: The train split is empty, a spec shard has no
+        staged-valid attempt, or a winner fails a structural check.
     """
-    from synth_setter.pipeline.data.lance_shard import write_lance_dataset
-    from synth_setter.pipeline.data.stats import stream_stats_lance
+    from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 
-    train_lo, train_hi = spec.split_shard_ranges["train"]
-    if train_lo >= train_hi:
-        raise ValueError(
-            f"train split is empty (split_shard_ranges['train']="
-            f"{spec.split_shard_ranges['train']!r}); cannot compute stats "
-            f"without at least one train shard."
-        )
-    storage_options = r2_io.r2_storage_options()
-
-    def _shard_s3_uri(shard: ShardSpec) -> str:
-        return r2_io.to_s3_uri(spec.r2.shard_uri(shard))
-
-    train_uris = [_shard_s3_uri(shard) for shard in spec.shards[train_lo:train_hi]]
-    mean, std = stream_stats_lance(
-        train_uris, mask_degenerate=spec.mask_degenerate_bins, storage_options=storage_options
-    )
-    stats_npz = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_npz, mean=mean, std=std)
-
-    for split, (lo, hi) in spec.split_shard_ranges.items():
-        if lo >= hi:
-            continue
-        shard_uris = [_shard_s3_uri(shard) for shard in spec.shards[lo:hi]]
-        schema, batches = _lance_split_batches(shard_uris, storage_options)
-        split_uri = spec.r2.split_lance_uri(split)
-        write_lance_dataset(
-            r2_io.to_s3_uri(split_uri), schema, batches, storage_options=storage_options
-        )
-        logger.info("wrote {} split to {}", split, split_uri)
-    r2_io.upload(stats_npz, spec.r2.stats_uri())
-    logger.info("uploaded stats to {}", spec.r2.stats_uri())
+    _require_nonempty_train(spec)
+    finalize_lance_fragments(spec, work_dir, progress_callback)
 
 
-def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
+def finalize_from_spec(
+    spec: DatasetSpec,
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
+) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
     Returns without work when the marker already exists at the run prefix —
-    R2 is the source of truth (per ``pipeline/CLAUDE.md``). The branch on
-    ``spec.output_format`` writes the derived artifacts; the marker is
-    uploaded strictly last so an interrupted run never advertises artifacts
-    that have not landed. Caller is responsible for ensuring R2 creds are
-    loaded.
+    R2 is the source of truth (per ``pipeline/CLAUDE.md``). Lance is the only
+    supported ``spec.output_format``; the marker is uploaded strictly last so
+    an interrupted run never advertises artifacts that have not landed. Caller
+    is responsible for ensuring R2 creds are loaded.
 
     :param spec: Validated dataset spec.
     :param work_dir: Writable scratch dir; created if missing; retained
-        after the call (multi-GB on the hdf5 branch).
+        after the call.
+    :param progress_callback: Optional sink for completed shard and upload events.
     :raises ValueError: ``spec.output_format`` is not a supported finalized format.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
@@ -273,47 +187,33 @@ def finalize_from_spec(spec: DatasetSpec, work_dir: Path) -> None:
     except ValueError as exc:
         logger.warning("non-canonical r2 prefix (finalizing anyway): {}", exc)
     work_dir.mkdir(parents=True, exist_ok=True)
-    if spec.output_format is OutputFormat.WDS:
-        finalize_wds(spec, work_dir)
-    elif spec.output_format is OutputFormat.HDF5:
-        finalize_hdf5(spec, work_dir)
-    elif spec.output_format is OutputFormat.LANCE:
-        finalize_lance(spec, work_dir)
+    if spec.output_format is OutputFormat.LANCE:
+        finalize_lance(spec, work_dir, progress_callback)
     else:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
     marker_local = work_dir / DATASET_COMPLETE_FILENAME
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
+    report_finalize_progress(progress_callback, "artifact_uploaded")
     logger.info("wrote dataset.complete to {}", marker_uri)
 
 
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
-    hdf5 reshards into per-split ``.h5`` files, so each non-empty split plus
-    ``stats.npz`` is referenced. wds leaves shards in place under the run
-    prefix, so the prefix dir (carrying the tars) plus ``stats.npz`` is
-    referenced. Empty splits contribute nothing — finalize prunes them.
+    Each non-empty split ``.lance`` dataset plus ``stats.npz`` is referenced;
+    empty splits contribute nothing — finalize prunes them.
 
     :param spec: Validated dataset spec.
-    :returns: Canonical ``r2://`` URIs, splits/prefix first then ``stats.npz``.
+    :returns: Canonical ``r2://`` URIs, split datasets first then ``stats.npz``.
     """
-    if spec.output_format is OutputFormat.HDF5:
-        split_uris = [
-            spec.r2.split_h5_uri(split)
-            for split, (lo, hi) in spec.split_shard_ranges.items()
-            if lo < hi
-        ]
-        return [*split_uris, spec.r2.stats_uri()]
-    if spec.output_format is OutputFormat.LANCE:
-        split_uris = [
-            spec.r2.split_lance_uri(split)
-            for split, (lo, hi) in spec.split_shard_ranges.items()
-            if lo < hi
-        ]
-        return [*split_uris, spec.r2.stats_uri()]
-    return [spec.r2.uri(spec.r2.prefix), spec.r2.stats_uri()]
+    split_uris = [
+        spec.r2.split_lance_uri(split)
+        for split, (lo, hi) in spec.split_shard_ranges.items()
+        if lo < hi
+    ]
+    return [*split_uris, spec.r2.stats_uri()]
 
 
 def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
@@ -321,8 +221,8 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
 
     Names the artifact ``data-{spec.task_name}`` (type ``dataset``) per
     ``storage-provenance-spec.md`` §4, references the finalized R2 objects as
-    ``s3://`` URIs (split ``.h5`` files or the shard prefix, plus
-    ``stats.npz``), and records ``shard_count`` / ``n_samples`` / ``git_sha``
+    ``s3://`` URIs (split ``.lance`` datasets plus ``stats.npz``), and records
+    ``shard_count`` / ``n_samples`` / ``git_sha``
     in ``artifact.metadata`` per §6. References use ``checksum=False`` because
     R2's custom S3 endpoint is not reachable by W&B's default reference
     handler — the URIs record lineage, not a content hash.
@@ -345,6 +245,26 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
     return artifact
 
 
+def _log_finalize_failure(error: BaseException, spec: DatasetSpec) -> None:
+    """Log a failed finalize traceback without exposing the exception text.
+
+    :param error: Exception raised by the finalize body.
+    :param spec: Dataset identity attached to the failure event.
+    """
+    try:
+        _failure_logger.error(
+            "finalize_failed",
+            dataset_prefix=spec.r2.prefix,
+            error_type=type(error).__name__,
+            git_sha=spec.git_sha,
+            run_id=spec.run_id,
+            traceback="".join(format_tb(error.__traceback__)),
+        )
+    except Exception:  # noqa: BLE001 — diagnostics cannot replace the finalize failure
+        with suppress(Exception):
+            logger.warning("structured finalize failure logging failed")
+
+
 def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
     """Log the canonical ``dataset`` artifact to each ``WandbLogger`` in ``loggers``.
 
@@ -361,7 +281,7 @@ def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
         if not isinstance(lg, WandbLogger):
             continue
         try:
-            lg.experiment.log_artifact(build_dataset_artifact(spec))
+            lg.experiment.log_artifact(build_dataset_artifact(spec), aliases=[spec.run_id])
         except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort finalize
             logger.warning(f"_log_dataset_artifact failed on {type(lg).__name__}: {exc}")
 
@@ -372,20 +292,20 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     Loads R2 creds and the spec from ``input_spec.json`` under
     ``cfg.dataset_root_uri``, delegates to
     :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
-    body, then logs the canonical ``dataset`` artifact to any configured
-    ``WandbLogger`` (resuming the data-generation run pinned to ``spec.run_id``
-    so the artifact lands on the producer node of the lineage DAG). The wandb
-    run id is pinned and ``resume=allow`` is forced so finalize attaches to the
-    generation run rather than minting a new one; both are no-ops when
-    ``cfg`` carries no ``logger`` group (the wandb-free default). On any
-    failure the loggers are still closed (status ``"failed"``) before the
-    exception re-raises.
+    body, then logs live progress metrics and the canonical ``dataset``
+    artifact to any configured ``WandbLogger`` (resuming the data-generation
+    run pinned to ``spec.run_id`` so both land on the producer node of the
+    lineage DAG). The wandb run id is pinned and ``resume=allow`` is forced so
+    finalize attaches to the generation run rather than minting a new one;
+    both are no-ops when ``cfg`` carries no ``logger`` group (the wandb-free
+    default). On any failure the traceback and partial progress summary are
+    logged before the loggers close with status ``"failed"`` and the exception re-raises.
 
     :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
         accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
         ``paths.output_dir`` (writable scratch dir; created if missing;
-        retained after the call, multi-GB on the hdf5 branch), and an optional
-        ``logger`` group instantiated for W&B artifact logging.
+        retained after the call), and an optional ``logger`` group instantiated
+        for W&B progress and artifact logging.
     :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
         ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """
@@ -394,13 +314,25 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
     pin_wandb_run_id(cfg, spec.run_id, "data-generation")
     if OmegaConf.select(cfg, "logger.wandb") is not None:
         OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
-    loggers = instantiate_loggers(cfg.get("logger"))
+    loggers: list[Logger] = []
     status = "success"
+    started_at: float | None = None
+    log_summary: Callable[[float], None] | None = None
     try:
-        finalize_from_spec(spec, Path(cfg.paths.output_dir))
+        loggers = instantiate_loggers(cfg.get("logger"))
+        started_at = perf_counter()
+        report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
+        finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
+        log_summary(perf_counter() - started_at)
         _log_dataset_artifact(loggers, spec)
-    except BaseException:
+    except BaseException as error:
         status = "failed"
+        failed_elapsed_seconds = None
+        if log_summary is not None and started_at is not None:
+            failed_elapsed_seconds = perf_counter() - started_at
+        _log_finalize_failure(error, spec)
+        if log_summary is not None and failed_elapsed_seconds is not None:
+            log_summary(failed_elapsed_seconds)
         raise
     finally:
         close_loggers(loggers, status)
@@ -420,4 +352,6 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()

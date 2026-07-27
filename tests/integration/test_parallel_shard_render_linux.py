@@ -9,16 +9,14 @@ calls race the X server and the renderer raises ``CalledProcessError``.
 
 This test drives the configured parallel-dispatch path through the real
 wrapper against the Surge XT VST3, with R2 I/O stubbed local, and asserts
-every shard's HDF5 file lands with the configured sample count. A failure
+every shard's Lance dataset lands with the configured sample count. A failure
 here gates whether per-thread ``DISPLAY`` provisioning (or wrapper edits)
 is needed; a pass closes the open question from the design doc.
 
 It is parametrized over representative ``gui_toggle_cadence`` /
 ``plugin_reload_cadence`` pairs so a real render exercises each structurally
-distinct toggle/reload loop — representative cells of the coverage the retired
-``test-dataset-generation-render-matrix.yml`` docker fan-out provided (it ran
-all valid pairs; the dispatch branches are also covered fast in
-``tests/data/vst/test_writers.py``). The cadence cross-field *validation* (which
+distinct toggle/reload loop. The dispatch branches are covered fast in
+``tests/data/vst/test_writers.py``. The cadence cross-field *validation* (which
 pairs are accepted / rejected, e.g. ``always_on`` requires
 ``plugin_reload_cadence="once"``) is unit-tested in
 ``tests/pipeline/schemas/test_dataset_spec.py`` (#1354).
@@ -31,12 +29,11 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import h5py
+import lance
 import pytest
 
 from synth_setter.cli.generate_dataset import generate
 from synth_setter.data.vst.core import extract_renderer_version
-from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests._vst import PLUGIN_PATH
 
@@ -46,7 +43,7 @@ pytestmark = [
     pytest.mark.skipif(sys.platform != "linux", reason="X11 wrapper is Linux-only"),
 ]
 
-PRESET_PATH = "presets/surge-base.vstpreset"
+PRESET_PATH = "presets/surge-simple.vstpreset"
 
 _NUM_SHARDS = 4
 _SAMPLES_PER_SHARD = 8
@@ -76,8 +73,8 @@ def test_parallel_renders_under_xvfb_wrapper(
     """4 concurrent renders through the real wrapper + real plugin must all complete.
 
     Fails (with the wrapper's ``CalledProcessError``) if the Xvfb / dbus
-    bootstrap is not concurrency-safe; on pass, every shard's HDF5 file
-    contains exactly ``_SAMPLES_PER_SHARD`` rows in the audio dataset.
+    bootstrap is not concurrency-safe; on pass, every shard's Lance dataset
+    contains exactly ``_SAMPLES_PER_SHARD`` rows.
 
     :param monkeypatch: Pytest fixture used to stub R2 calls and partition env.
     :param tmp_path: Pytest tmp dir used as the launcher's repo root.
@@ -88,22 +85,32 @@ def test_parallel_renders_under_xvfb_wrapper(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
-    rclone_srcs: list[Path] = []
+    local_shard_paths: list[Path] = []
 
-    def _fake_rclone(src: str, _dest: str) -> None:
-        rclone_srcs.append(Path(src))
+    def _record_lance_shard_attempt(
+        _spec: object, _shard: object, local_shard_path: Path, **_kwargs: object
+    ) -> None:
+        local_shard_paths.append(local_shard_path)
 
-    monkeypatch.setattr("synth_setter.cli.generate_dataset._rclone_copy", _fake_rclone)
-    monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+        _record_lance_shard_attempt,
+    )
 
     generate(spec, tmp_path, [])
 
-    assert len(rclone_srcs) == _NUM_SHARDS
-    for path in rclone_srcs:
-        assert path.exists(), f"rclone source missing: {path}"
-        with h5py.File(path, "r") as h5:
-            dataset = h5[AUDIO_FIELD]
-            assert dataset.shape[0] == _SAMPLES_PER_SHARD  # type: ignore[attr-defined]
+    assert len(local_shard_paths) == _NUM_SHARDS
+    for path in local_shard_paths:
+        assert path.is_dir(), f"shard dataset missing: {path}"
+        assert lance.dataset(str(path)).count_rows() == _SAMPLES_PER_SHARD
 
 
 def _build_real_surge_spec(
@@ -118,12 +125,9 @@ def _build_real_surge_spec(
     :returns: ``DatasetSpec`` with ``render.parallel=True``, ``_NUM_SHARDS``
         shards, and ``_SAMPLES_PER_SHARD`` samples per shard.
     """
-    # Derive the version here, not at import — `extract_renderer_version` falls
-    # back to loading the plugin (needs X11) when the bundle has no
-    # moduleinfo.json (Surge XT does not), and this runs inside the Xvfb wrapper
-    # at execution time, never during collection. Operators can still pin it.
-    renderer_version = os.environ.get("SYNTH_SETTER_RENDERER_VERSION") or (
-        extract_renderer_version(Path(PLUGIN_PATH))
+    # Resolve the version at runtime because fallback plugin loading requires Xvfb.
+    synth_version = os.environ.get("SYNTH_SETTER_SYNTH_VERSION") or extract_renderer_version(
+        Path(PLUGIN_PATH)
     )
     task_name = f"parallel-xvfb-stress-{gui_toggle_cadence}-{plugin_reload_cadence}"
     run_id = f"{task_name}-20260520T000000000Z"
@@ -133,7 +137,7 @@ def _build_real_surge_spec(
         "created_at": datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC),
         "git_sha": "0" * 40,
         "is_repo_dirty": False,
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [_SAMPLES_PER_SHARD * _NUM_SHARDS, 0, 0],
         "base_seed": 42,
         "r2": {
@@ -141,10 +145,13 @@ def _build_real_surge_spec(
             "prefix": f"data/{task_name}/{run_id}/",
         },
         "render": {
-            "plugin_path": PLUGIN_PATH,
-            "preset_path": PRESET_PATH,
-            "param_spec_name": "surge_simple",
-            "renderer_version": renderer_version,
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": PLUGIN_PATH,
+                "plugin_state_path": PRESET_PATH,
+                "synth_version": synth_version,
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

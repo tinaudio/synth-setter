@@ -86,7 +86,7 @@ made under `--extra cpu` will pin the CPU torch as the default-resolution
 branch and the next bare `uv sync` from a GPU box will fight it.
 
 **Review the lockfile diff in PRs** — especially torch, CUDA, and native
-wheels (`pedalboard`, `librosa`/`soundfile`, `h5py`/`hdf5plugin`). A
+wheels (`pedalboard`, `librosa`/`soundfile`, `pylance`). A
 lockfile change can move a result. The `uv-lock-check.yml` matrix can only
 prove the lock is consistent with `pyproject.toml`, not that the new pins
 are the ones you wanted.
@@ -98,9 +98,11 @@ are the ones you wanted.
 entrypoints (`validate_spec`, `r2_io.ensure_r2_env_loaded`,
 `load_image_config`). The heavy runtime lives in PEP 735 `[dependency-groups]`
 (`torch`/`config`/`compute`/`data`/`audio`/`metrics`/`util`, aggregated under
-`runtime`, folded into `dev`). pip never installs groups, and `uv pip` only with
-an explicit `--group`, so a plain `pip install -e .` yields a light env;
-`default-groups = ["dev"]` keeps a bare `uv sync` installing everything.
+`runtime`, folded into `dev`). Notebook-only viewer dependencies live in the
+`notebooks` group, folded into `dev` but not `runtime`. pip never installs
+groups, and `uv pip` only with an explicit `--group`, so a plain
+`pip install -e .` yields a light env; `default-groups = ["dev"]` keeps a bare
+`uv sync` installing everything.
 `tests/infra/test_lite_dependency_base.py` pins the base to the lite closure.
 
 Lite CI jobs install with a bare `pip install -e .` (no `--no-deps`, no

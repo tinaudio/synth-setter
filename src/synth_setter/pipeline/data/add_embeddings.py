@@ -1,248 +1,888 @@
 #!/usr/bin/env python
-"""Append ``m2l`` + CLAP audio-embedding columns to a finalized Lance dataset.
+"""Append registry-selected audio-embedding columns to a finalized Lance dataset.
 
-The functional core (:func:`embeddings_record_batch`, :func:`add_embeddings`)
-maps a Lance dataset's ``audio`` column to two columns:
+The registry keeps checkpoint loading, Arrow encoding, residency, optional dependencies, and
+index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
+SAME encoders run in separate load-write-release passes.
 
-- ``clap`` — a ``FixedSizeList<float32, CLAP_EMBEDDING_DIM>`` LAION-CLAP audio
-  embedding. Stored as a fixed-size list (not opaque bytes) so Lance can build a
-  vector (IVF_PQ) index over it and serve ``nearest=`` queries.
-- ``m2l`` — a ``fixed_shape_tensor<float32, (C*D, T)>`` music2latent latent. A
-  sequence latent, not a search vector, so it is kept retrievable but
-  un-indexed; this requires a constant ``(channels, latent-dim, time)`` across
-  the dataset.
-
-Both embedders are injected callables, so the core runs without a checkpoint;
-:func:`load_m2l_audio_encoder` / :func:`load_clap_audio_encoder` build the real
-encoders behind lazy ``music2latent`` / ``transformers`` imports.
-
-This is a sanctioned post-finalize augmenter: it commits a new Lance version of
-an existing dataset rather than writing fresh ``data/`` shards, so it does not
-cross the worker/finalize write boundary.
-
-CLI: ``python -m synth_setter.pipeline.data.add_embeddings DATASET.lance``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]``.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import math
+import os
 import sys
-from collections.abc import Callable
-from typing import TypeAlias
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
 
-import click
-import lance
+import hydra
 import numpy as np
 import pyarrow as pa
 import structlog
 from einops import rearrange
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, CLAP_FIELD, M2L_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    CLAP_FIELD,
+    M2L_FIELD,
+    PARAM_ARRAY_FIELD,
+    SAME_L_FIELD,
+    SAME_S_FIELD,
+    T5GEMMA_FIELD,
+)
+from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import read_shard_metadata, tensor_array
+from synth_setter.workspace import operator_workspace
+
+if TYPE_CHECKING:
+    import lance
+    from omegaconf import DictConfig
+
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
 logger = structlog.get_logger(__name__)
+operator_workspace()
 
 DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
-# CLAP's feature extractor rejects any other input rate.
+DEFAULT_M2L_CHECKPOINT: str = ""
+DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
+DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
+DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
+_DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
+    DEFAULT_SAME_L_CHECKPOINT: "same-l",
+    DEFAULT_SAME_S_CHECKPOINT: "same-s",
+}
 CLAP_SAMPLE_RATE: int = 48000
-# Projected audio-embedding width of the default checkpoint; the ``clap`` column's
-# fixed-size-list length, and the dim a vector query must match.
 CLAP_EMBEDDING_DIM: int = 512
-# Per-forward sub-batch caps for the encoders, independent of Lance's read batch:
-# the batch_udf hands an encoder the whole read batch at once, so without these a
-# large dataset OOMs the GPU (a 256-row CLAP forward alone needs ~5 GiB).
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
-# IVF_PQ needs ~256 training vectors (256 PQ centroids); below this the index is
-# skipped and callers fall back to Lance's exact (brute-force) ``nearest`` scan.
+DEFAULT_LANCE_BATCH_SIZE: int = 128
+MAX_PROGRESS_LOGS: int = 20
 MIN_ROWS_FOR_INDEX: int = 256
-# 512 % 16 == 0; each PQ sub-quantizer covers a 32-d slice of the CLAP vector.
 DEFAULT_NUM_SUB_VECTORS: int = 16
-# Cosine matches CLAP's L2-normalized audio embeddings.
 DEFAULT_INDEX_METRIC: str = "cosine"
+DEFAULT_LANCE_LOG: str = "warn"
+PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
+SAME_EMBEDDING_DIM: int = 256
+SAME_SAMPLE_RATE: int = 44100
+SAME_DOWNSAMPLING_RATIO: int = 4096
+SAME_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
+SAME_LATENT_FRAMES: int = 44
+SAME_ENCODE_MAX_BATCH: int = 16
 
-M2LEncodeFn: TypeAlias = Callable[[np.ndarray], np.ndarray]
-ClapEncodeFn: TypeAlias = Callable[[np.ndarray, int], np.ndarray]
+type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
+type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
+type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
+type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
+
+
+@dataclass(frozen=True)
+class IndexSpec:
+    """Declare the default vector-index policy for one embedding column.
+
+    .. attribute :: metric
+
+        Lance distance metric.
+
+    .. attribute :: num_sub_vectors
+
+        PQ sub-vector count.
+
+    .. attribute :: pool
+
+        Pooling applied before indexing, or ``none`` for an existing vector.
+
+    .. attribute :: vector_column
+
+        Companion vector column, or ``None`` to index the embedding column.
+    """
+
+    metric: str = DEFAULT_INDEX_METRIC
+    num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
+    pool: Literal["none", "mean", "attention"] = "none"
+    vector_column: str | None = None
+
+
+@dataclass(frozen=True)
+class EmbeddingSpec:
+    """Declare one selectable embedding's complete write policy.
+
+    .. attribute :: name
+
+        Registry key and config token.
+
+    .. attribute :: column
+
+        Lance column written by the encoder.
+
+    .. attribute :: default_checkpoint
+
+        Checkpoint source used without a keyed config override.
+
+    .. attribute :: requires_extra
+
+        Optional uv extra required before loading, or ``None``.
+
+    .. attribute :: co_resident
+
+        Whether the encoder may share a UDF pass with other selected encoders.
+
+    .. attribute :: index
+
+        Vector-index policy, or ``None`` when indexing is disabled for the embedding.
+
+    .. attribute :: load_encoder
+
+        Checkpoint and device to encoder factory.
+
+    .. attribute :: encode_column
+
+        Source batch, sample rate, and encoder to Arrow array transform.
+
+    .. attribute :: input_field
+
+        Dataset column supplying this embedding's encoder input.
+    """
+
+    name: str
+    column: str
+    default_checkpoint: str
+    requires_extra: str | None
+    co_resident: bool
+    index: IndexSpec | None
+    load_encoder: LoadEncoderFn
+    encode_column: EncodeColumnFn
+    input_field: str = AUDIO_FIELD
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
-    """Average an ``(B, C, T)`` batch's channels into ``(B, T)`` mono float32.
+    """Average ``(B, C, T)`` audio into ``(B, T)`` float32 mono.
 
-    :param audio: ``(B, C, T)`` batch, ``C >= 1`` (on-disk float16). ``float32``
-        upcasts in the reduction so the encoder never sees half-precision.
-    :returns: ``(B, T)`` float32 mono batch.
+    :param audio: Audio with one or more channels.
+    :returns: Float32 mono audio.
     """
     return audio.mean(axis=1, dtype=np.float32)
 
 
-def _clap_fixed_size_list(clap: np.ndarray, dim: int) -> pa.FixedSizeListArray:
-    """Pack a ``(B, dim)`` float32 batch as a ``FixedSizeList<float32, dim>`` array.
+def _fixed_size_list(vectors: np.ndarray, dim: int) -> pa.FixedSizeListArray:
+    """Pack ``(B, dim)`` vectors as a Lance-indexable Arrow array.
 
-    :param clap: ``(B, dim)`` embedding batch.
-    :param dim: Fixed list length (the vector dimensionality).
-    :returns: A Lance-indexable fixed-size-list array.
+    :param vectors: Float-compatible vectors.
+    :param dim: Fixed vector width.
+    :returns: Fixed-size-list float32 array.
     """
-    flat = pa.array(np.ascontiguousarray(clap, dtype=np.float32).reshape(-1), pa.float32())
+    flat = pa.array(np.ascontiguousarray(vectors, dtype=np.float32).reshape(-1), pa.float32())
     return pa.FixedSizeListArray.from_arrays(flat, dim)
 
 
-def embeddings_record_batch(
-    audio: np.ndarray,
-    m2l_encode: M2LEncodeFn,
-    clap_encode: ClapEncodeFn,
+def _finite_embedding(field: str, embedding: np.ndarray) -> np.ndarray:
+    """Reject non-finite values before a permanent column commit.
+
+    :param field: Target column named in failures.
+    :param embedding: Encoder output to validate.
+    :returns: Contiguous float32 embedding.
+    :raises ValueError: The embedding contains NaN or infinity.
+    """
+    contiguous = np.ascontiguousarray(embedding, dtype=np.float32)
+    if not np.isfinite(contiguous).all():
+        raise ValueError(f"{field} embeddings contain non-finite values")
+    return contiguous
+
+
+def _encode_m2l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape m2l tensor column.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Unused source sample rate.
+    :param encoder: m2l encoder over the original channel layout.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    del sample_rate
+    encode = cast("M2LEncodeFn", encoder)
+    latents = _finite_embedding(M2L_FIELD, encode(audio))
+    if latents.ndim < 2 or len(latents) != len(audio):
+        raise ValueError(
+            f"{M2L_FIELD} encoder produced shape {latents.shape}, expected {len(audio)} rows "
+            "with at least one embedding dimension"
+        )
+    return tensor_array(latents, np.dtype("float32"), latents.shape[1:])
+
+
+def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as fixed-width CLAP vectors.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: CLAP encoder over mono audio.
+    :returns: Fixed-size-list float32 array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    encode = cast("ClapEncodeFn", encoder)
+    vectors = _finite_embedding(CLAP_FIELD, encode(_downmix_to_mono(audio), sample_rate))
+    expected_shape = (len(audio), CLAP_EMBEDDING_DIM)
+    if vectors.shape != expected_shape:
+        raise ValueError(
+            f"{CLAP_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
+        )
+    return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
+
+
+def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
+    """Return SAME's padded latent-frame count after resampling to 44.1 kHz.
+
+    :param num_samples: Positive source clip length in samples.
+    :param sample_rate: Positive source sample rate in Hz.
+    :returns: Even latent-frame count after resampling and two-hop padding.
+    :raises ValueError: Either input is non-positive.
+    """
+    if num_samples < 1 or sample_rate < 1:
+        raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
+    resampled = math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
+    return 2 * math.ceil(resampled / SAME_PAD_BLOCK_SAMPLES)
+
+
+def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Prepare ``(B, C, T)`` audio as float32 stereo at 44.1 kHz.
+
+    :param audio: Audio with one or two channels.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Prepared stereo audio.
+    :raises ValueError: Audio is not rank three or has an unsupported channel count.
+    """
+    if audio.ndim != 3 or audio.shape[1] not in (1, 2):
+        raise ValueError(
+            f"expected a (B, C, T) batch with 1 or 2 channels for a stereo encoder, "
+            f"got shape {audio.shape}"
+        )
+    prepared = np.ascontiguousarray(audio, dtype=np.float32)
+    if prepared.shape[1] == 1:
+        prepared = np.repeat(prepared, 2, axis=1)
+    if sample_rate != SAME_SAMPLE_RATE:
+        import torch
+        import torchaudio.functional as audio_fn
+
+        prepared = audio_fn.resample(
+            torch.from_numpy(prepared), sample_rate, SAME_SAMPLE_RATE
+        ).numpy()
+    return prepared
+
+
+def _encode_same_column(field: str, audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape SAME tensor column.
+
+    :param field: SAME target column.
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: SAME encoder over prepared stereo audio.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    prepared = same_encoder_input(audio, sample_rate)
+    encode = cast("SameEncodeFn", encoder)
+    latents = _finite_embedding(field, encode(prepared))
+    expected_shape = (
+        len(audio),
+        SAME_EMBEDDING_DIM,
+        same_num_latent_frames(prepared.shape[-1], SAME_SAMPLE_RATE),
+    )
+    if latents.shape != expected_shape:
+        raise ValueError(f"{field} encoder produced shape {latents.shape}, expected {expected_shape}")
+    return tensor_array(latents, np.dtype("float32"), expected_shape[1:])
+
+
+def _encode_same_s_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode a SAME-S Arrow column through the shared SAME contract.
+
+    :param audio: Source audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: SAME-S encoder.
+    :returns: Fixed-shape tensor array.
+    """
+    return _encode_same_column(SAME_S_FIELD, audio, sample_rate, encoder)
+
+
+def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode a SAME-L Arrow column through the shared SAME contract.
+
+    :param audio: Source audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: SAME-L encoder.
+    :returns: Fixed-shape tensor array.
+    """
+    return _encode_same_column(SAME_L_FIELD, audio, sample_rate, encoder)
+
+
+def _load_m2l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load music2latent through the registry's uniform factory signature.
+
+    :param checkpoint: Unused registry placeholder.
+    :param config: Run config supplying the device.
+    :returns: m2l encoder.
+    """
+    del checkpoint
+    return load_m2l_audio_encoder(config.device)
+
+
+def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load CLAP through the registry's uniform factory signature.
+
+    :param checkpoint: HuggingFace CLAP model id.
+    :param config: Run config supplying the device.
+    :returns: CLAP encoder.
+    """
+    return load_clap_audio_encoder(checkpoint, config.device)
+
+
+def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load SAME through the registry's uniform factory signature.
+
+    :param checkpoint: SAME checkpoint source.
+    :param config: Run config supplying the device.
+    :returns: SAME encoder.
+    """
+    return load_same_audio_encoder(checkpoint, config.device)
+
+
+def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
+
+    :param checkpoint: SA3 checkpoint source.
+    :param config: Run config supplying the device, param spec, and normalizer.
+    :returns: Encoder over encoded param rows.
+    :raises ValueError: The config selects no param spec.
+    """
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+    from synth_setter.data.vst.param_text import resolve_param_text_normalizer
+    from synth_setter.param_spec_name import ParamSpecName
+    from synth_setter.pipeline.data.t5gemma import load_t5gemma_text_encoder
+
+    if config.param_spec_name is None:
+        raise ValueError(f"{T5GEMMA_FIELD} embeddings require param_spec_name")
+    spec = resolve_param_spec(ParamSpecName(config.param_spec_name))
+    normalize = resolve_param_text_normalizer(config.param_text_normalizer)
+    encode_text = load_t5gemma_text_encoder(checkpoint, _resolve_torch_device(config.device))
+
+    def encode(params: np.ndarray) -> np.ndarray:
+        if params.shape[-1] != spec.encoded_width:
+            raise ValueError(
+                f"param rows are {params.shape[-1]} wide but param spec "
+                f"{config.param_spec_name!r} has encoded width {spec.encoded_width}"
+            )
+        return encode_text(normalize(spec, params))
+
+    return encode
+
+
+def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one param batch as a fixed-shape text-embedding tensor column.
+
+    :param params: ``(B, encoded_width)`` param rows.
+    :param sample_rate: Unused source sample rate.
+    :param encoder: Encoder over param rows.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    del sample_rate
+    encode = cast("ParamTextEncodeFn", encoder)
+    embeddings = _finite_embedding(T5GEMMA_FIELD, encode(params))
+    if embeddings.ndim != 3 or len(embeddings) != len(params):
+        raise ValueError(
+            f"{T5GEMMA_FIELD} encoder produced shape {embeddings.shape}, expected "
+            f"{len(params)} rows of (dim, seq) embeddings"
+        )
+    return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
+
+
+# Extras whose distribution name differs from the module they install.
+_EXTRA_IMPORT_NAMES: dict[str, str] = {"same": "stable_audio_tools", "sa3": "stable_audio_3"}
+
+EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
+    "clap": EmbeddingSpec(
+        name="clap",
+        column=CLAP_FIELD,
+        default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
+        requires_extra=None,
+        co_resident=True,
+        index=IndexSpec(pool="none"),
+        load_encoder=_load_clap_spec_encoder,
+        encode_column=_encode_clap_column,
+    ),
+    "m2l": EmbeddingSpec(
+        name="m2l",
+        column=M2L_FIELD,
+        default_checkpoint=DEFAULT_M2L_CHECKPOINT,
+        requires_extra=None,
+        co_resident=True,
+        index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
+        load_encoder=_load_m2l_spec_encoder,
+        encode_column=_encode_m2l_column,
+    ),
+    "same_s": EmbeddingSpec(
+        name="same_s",
+        column=SAME_S_FIELD,
+        default_checkpoint=DEFAULT_SAME_S_CHECKPOINT,
+        requires_extra="same",
+        co_resident=False,
+        index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
+        load_encoder=_load_same_spec_encoder,
+        encode_column=_encode_same_s_column,
+    ),
+    "same_l": EmbeddingSpec(
+        name="same_l",
+        column=SAME_L_FIELD,
+        default_checkpoint=DEFAULT_SAME_L_CHECKPOINT,
+        requires_extra="same",
+        co_resident=False,
+        index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
+        load_encoder=_load_same_spec_encoder,
+        encode_column=_encode_same_l_column,
+    ),
+    # Rows share one caption per param spec today, so an index over identical
+    # vectors would be degenerate; revisit when a values-aware normalizer lands.
+    "t5gemma": EmbeddingSpec(
+        name="t5gemma",
+        column=T5GEMMA_FIELD,
+        default_checkpoint=DEFAULT_T5GEMMA_CHECKPOINT,
+        requires_extra="sa3",
+        co_resident=False,
+        index=None,
+        load_encoder=_load_t5gemma_spec_encoder,
+        encode_column=_encode_t5gemma_column,
+        input_field=PARAM_ARRAY_FIELD,
+    ),
+}
+
+
+def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
+    """Return every dataset column emitted by one embedding policy.
+
+    :param spec: Embedding write and index policy.
+    :returns: Sequence column followed by its optional vector companion.
+    """
+    if spec.index is None or spec.index.vector_column is None:
+        return (spec.column,)
+    return spec.column, spec.index.vector_column
+
+
+def _guard_existing_columns(
+    dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]
+) -> None:
+    """Reject selected columns already present in the dataset.
+
+    :param dataset: Open Lance dataset.
+    :param specs: Selected embedding policies.
+    :raises ValueError: Any selected target column already exists.
+    """
+    target_columns = {column for spec in specs for column in _output_columns(spec)}
+    existing = target_columns & set(dataset.schema.names)
+    if existing:
+        raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
+
+
+def _require_extras(specs: Sequence[EmbeddingSpec]) -> None:
+    """Fail before checkpoint downloads when a selected optional extra is absent.
+
+    :param specs: Selected embedding policies.
+    :raises ImportError: A selected embedding's optional dependency is unavailable.
+    """
+    required = {spec.requires_extra for spec in specs if spec.requires_extra is not None}
+    for extra in sorted(required):
+        module = _EXTRA_IMPORT_NAMES.get(extra, extra)
+        try:
+            available = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            available = False
+        if not available:
+            raise ImportError(
+                f"embedding selection requires the optional `{extra}` extra — "
+                f"install it with `uv sync --extra {extra}`"
+            )
+
+
+def _validate_write_source(
+    dataset: lance.LanceDataset, batch_size: int, input_fields: Sequence[str] = (AUDIO_FIELD,)
+) -> int:
+    """Validate source-column and row-count preconditions for one UDF commit.
+
+    :param dataset: Open Lance dataset.
+    :param batch_size: Requested rows per UDF call.
+    :param input_fields: Source columns the selected policies read.
+    :returns: Positive source row count.
+    :raises ValueError: A source column is absent, the dataset is empty, or batch size is non-
+        positive.
+    """
+    for field in input_fields:
+        if field not in dataset.schema.names:
+            raise ValueError(f"dataset has no {field!r} column to embed")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    total_rows = dataset.count_rows()
+    if total_rows < 1:
+        raise ValueError("dataset has no rows to embed")
+    return total_rows
+
+
+def _delete_resume_cache(resume_cache: Path | None) -> None:
+    """Best-effort delete a consumed UDF resume cache after commit.
+
+    :param resume_cache: Cache path, or ``None`` for a cacheless run.
+    """
+    if resume_cache is None:
+        return
+    try:
+        resume_cache.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "resume_cache_cleanup_failed",
+            resume_cache=str(resume_cache),
+            error=str(exc),
+        )
+
+
+def _resume_cache_for_specs(
+    resume_cache: Path | None,
+    selected_names: tuple[str, ...],
+    specs: Sequence[EmbeddingSpec],
+) -> Path | None:
+    """Give each multi-commit pass an output-schema-specific resume cache.
+
+    :param resume_cache: User-selected cache path.
+    :param selected_names: Full run selection.
+    :param specs: Policies written by this pass.
+    :returns: Unchanged single-pass cache or a pass-specific sibling path.
+    """
+    if resume_cache is None or len(specs) == len(selected_names):
+        return resume_cache
+    suffix = "-".join(spec.name for spec in specs)
+    return resume_cache.with_name(f"{resume_cache.name}.{suffix}")
+
+
+def _load_encoders(
+    specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
+) -> list[Encoder]:
+    """Load selected encoders in policy order.
+
+    :param specs: Policies sharing this UDF pass.
+    :param config: Checkpoint overrides and device selection.
+    :returns: Encoders aligned positionally with ``specs``.
+    """
+    encoders: list[Encoder] = []
+    for spec in specs:
+        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+        encoders.append(spec.load_encoder(checkpoint, config))
+    return encoders
+
+
+def _pooled_vector_column(
+    array: pa.Array, index: IndexSpec
+) -> tuple[str, pa.FixedSizeListArray] | None:
+    """Build a companion vector from an encoded sequence when requested.
+
+    :param array: Encoded Arrow embedding column.
+    :param index: Pooling and target-column policy.
+    :returns: Companion name and mean-pooled vectors, or ``None`` for an existing vector.
+    :raises NotImplementedError: Attention pooling is selected.
+    :raises ValueError: Mean pooling lacks a companion name or receives a non-sequence.
+    """
+    if index.pool == "none":
+        return None
+    if index.pool == "attention":
+        raise NotImplementedError("attention pooling is not implemented")
+    if index.vector_column is None:
+        raise ValueError("mean pooling requires a companion vector_column")
+    values = array.to_numpy_ndarray()
+    if values.ndim != 3:
+        raise ValueError(f"mean pooling requires (B, D, T) embeddings, got {values.shape}")
+    pooled = values.mean(axis=-1, dtype=np.float32)
+    return index.vector_column, _fixed_size_list(pooled, pooled.shape[1])
+
+
+def _decoded_sources(
+    batch: pa.RecordBatch, input_fields: Sequence[str]
+) -> dict[str, np.ndarray]:
+    """Decode each required source column of one batch into a numpy array.
+
+    :param batch: Source batch supplied by Lance.
+    :param input_fields: Column names the selected policies read.
+    :returns: Decoded arrays keyed by field name.
+    """
+    return {field: batch.column(field).to_numpy_ndarray() for field in input_fields}
+
+
+def _encode_columns(
+    sources: Mapping[str, np.ndarray],
     sample_rate: int,
-    *,
-    clap_dim: int = CLAP_EMBEDDING_DIM,
+    specs: Sequence[EmbeddingSpec],
+    encoders: Sequence[Encoder],
+    stage_ms: dict[str, float] | None = None,
 ) -> pa.RecordBatch:
-    """Encode one audio batch into the ``(m2l, clap)`` record batch.
+    """Encode one decoded source batch through every policy in a UDF pass.
 
-    :param audio: ``(B, C, T)`` audio batch (any float dtype).
-    :param m2l_encode: Maps the batch to a ``(B, C*D, T)`` latent batch.
-    :param clap_encode: Maps a mono ``(B, T)`` batch and ``sample_rate`` to ``(B, clap_dim)``.
-    :param sample_rate: Passed through to ``clap_encode``.
-    :param clap_dim: Expected CLAP width; the ``clap`` fixed-size-list length.
-    :returns: A ``B``-row batch with a ``m2l`` fixed-shape-tensor column and a
-        ``clap`` ``FixedSizeList<float32, clap_dim>`` column.
-    :raises ValueError: An encoder returns the wrong row count, ``clap`` is not
-        ``(B, clap_dim)``, or either embedding is non-finite (the columns are
-        permanent — a NaN/inf row from a degenerate clip must not be written).
+    :param sources: Decoded input columns keyed by field name.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param specs: Policies sharing this pass.
+    :param encoders: Encoders aligned with ``specs``.
+    :param stage_ms: Optional destination for per-encoder wall times.
+    :returns: Record batch containing each selected embedding column.
     """
-    rows = len(audio)
-    m2l = np.ascontiguousarray(m2l_encode(audio), dtype=np.float32)
-    clap = np.ascontiguousarray(
-        clap_encode(_downmix_to_mono(audio), sample_rate), dtype=np.float32
-    )
-    if len(m2l) != rows or len(clap) != rows:
-        raise ValueError(
-            f"encoders produced {len(m2l)} m2l and {len(clap)} clap rows, expected {rows}"
-        )
-    if clap.ndim != 2 or clap.shape[1] != clap_dim:
-        raise ValueError(
-            f"clap encoder produced shape {clap.shape}, expected ({rows}, {clap_dim})"
-        )
-    for field, embedding in ((M2L_FIELD, m2l), (CLAP_FIELD, clap)):
-        if not np.isfinite(embedding).all():
-            raise ValueError(f"{field} embeddings contain non-finite values")
-    return pa.record_batch(
-        {
-            M2L_FIELD: tensor_array(m2l, np.dtype("float32"), m2l.shape[1:]),
-            CLAP_FIELD: _clap_fixed_size_list(clap, clap_dim),
-        }
-    )
+    columns: dict[str, pa.Array] = {}
+    for spec, encoder in zip(specs, encoders, strict=True):
+        started_at = time.monotonic()
+        encoded = spec.encode_column(sources[spec.input_field], sample_rate, encoder)
+        columns[spec.column] = encoded
+        if spec.index is not None:
+            pooled = _pooled_vector_column(encoded, spec.index)
+            if pooled is not None:
+                vector_column, vectors = pooled
+                columns[vector_column] = vectors
+        if stage_ms is not None:
+            stage_ms[spec.name] = (time.monotonic() - started_at) * 1000
+    return pa.record_batch(columns)
 
 
-def build_clap_index(
+def _write_columns(
     dataset: lance.LanceDataset,
-    *,
-    num_partitions: int | None = None,
-    num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
-    metric: str = DEFAULT_INDEX_METRIC,
-) -> bool:
-    """Build an IVF_PQ vector index on the ``clap`` column, if the dataset is large enough.
+    specs: Sequence[EmbeddingSpec],
+    sample_rate: int,
+    config: AddEmbeddingsConfig,
+) -> None:
+    """Append one co-resident policy group as a single Lance UDF commit.
 
-    :param dataset: Dataset already carrying a ``clap`` fixed-size-list column.
-    :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
-    :param num_sub_vectors: PQ sub-vector count (must divide the CLAP dim).
-    :param metric: Distance metric for the index.
-    :returns: ``True`` if an index was built, ``False`` if skipped (too few rows
-        to train PQ — exact ``nearest`` still works without an index).
-    :raises ValueError: ``num_sub_vectors`` or ``num_partitions`` is non-positive,
-        or ``num_sub_vectors`` does not divide the ``clap`` column's vector width
-        (Lance's own failures here are a ``ZeroDivisionError`` / opaque PQ error).
+    :param dataset: Open Lance dataset carrying fixed-shape audio.
+    :param specs: Non-empty policy group whose encoders may coexist.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param config: Batch, checkpoint, logging, and resume settings.
+    :raises ValueError: Policies are empty or dataset write preconditions fail.
     """
+    import lance
+
+    if not specs:
+        raise ValueError("no embedding specs given; nothing to write")
+    _guard_existing_columns(dataset, specs)
+    input_fields = sorted({spec.input_field for spec in specs})
+    total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
+    encoders = _load_encoders(specs, config)
+    resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
+
+    logger.info("inferring_embedding_schema", columns=output_columns)
+    sample = next(dataset.to_batches(columns=input_fields, limit=1))
+    sample_output = _encode_columns(_decoded_sources(sample, input_fields), sample_rate, specs, encoders)
+    logger.info("inferred_embedding_schema", columns=output_columns)
+
+    progress_interval = max(
+        config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
+    )
+    next_progress_row = progress_interval
+    rows_processed = 0
+    started_at = time.monotonic()
+    last_progress_at = started_at
+    last_udf_end = started_at
+    stage_ms: dict[str, float] = {}
+
+    @lance.batch_udf(
+        output_schema=sample_output.schema,
+        checkpoint_file=None if resume_cache is None else str(resume_cache),
+    )
+    def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
+        nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
+        udf_started = time.monotonic()
+        sources = _decoded_sources(batch, input_fields)
+        output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+        rows_processed += batch.num_rows
+        now = time.monotonic()
+        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+        time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
+        if config.debug or interval_due or time_due:
+            timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
+            logger.info(
+                "embedding_progress",
+                rows_processed=rows_processed,
+                total_rows=total_rows,
+                percent=round(rows_processed / total_rows * 100, 1),
+                rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
+                batch_rows=batch.num_rows,
+                batch_ms=round((now - udf_started) * 1000, 1),
+                interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
+                **timings,
+            )
+            last_progress_at = now
+        if interval_due:
+            next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
+        last_udf_end = time.monotonic()
+        return output
+
+    logger.info(
+        "embedding_write_started",
+        columns=output_columns,
+        total_rows=total_rows,
+        batch_size=config.batch_size,
+        source_version=dataset.version,
+    )
+    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+    _delete_resume_cache(resume_cache)
+    logger.info(
+        "wrote_embeddings",
+        columns=output_columns,
+        total_rows=total_rows,
+        committed_version=dataset.version,
+    )
+    encoders.clear()
+
+
+def build_index(
+    dataset: lance.LanceDataset,
+    column: str,
+    *,
+    index: IndexSpec,
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Build one declared IVF_PQ index when the dataset has enough rows.
+
+    :param dataset: Dataset carrying the target fixed-size-list column.
+    :param column: Vector column to index.
+    :param index: Registry index defaults.
+    :param config: Per-run index overrides.
+    :returns: Whether an index was built.
+    :raises ValueError: Index parameters are invalid for the target vector width.
+    """
+    num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
+    metric = config.metric or index.metric
     if num_sub_vectors < 1:
         raise ValueError(f"num_sub_vectors must be >= 1, got {num_sub_vectors}")
-    if num_partitions is not None and num_partitions < 1:
-        raise ValueError(f"num_partitions must be >= 1, got {num_partitions}")
-    clap_dim = dataset.schema.field(CLAP_FIELD).type.list_size
-    if clap_dim % num_sub_vectors != 0:
-        raise ValueError(f"num_sub_vectors={num_sub_vectors} does not divide clap dim {clap_dim}")
+    if config.num_partitions is not None and config.num_partitions < 1:
+        raise ValueError(f"num_partitions must be >= 1, got {config.num_partitions}")
+    vector_dim = dataset.schema.field(column).type.list_size
+    if vector_dim % num_sub_vectors != 0:
+        raise ValueError(
+            f"num_sub_vectors={num_sub_vectors} does not divide {column} dim {vector_dim}"
+        )
     rows = dataset.count_rows()
     if rows < MIN_ROWS_FOR_INDEX:
-        logger.warning("clap_index_skipped_too_few_rows", rows=rows, minimum=MIN_ROWS_FOR_INDEX)
+        logger.warning(
+            "embedding_index_skipped_too_few_rows",
+            column=column,
+            rows=rows,
+            minimum=MIN_ROWS_FOR_INDEX,
+        )
         return False
-    partitions = max(1, round(rows**0.5)) if num_partitions is None else num_partitions
+    partitions = (
+        max(1, round(rows**0.5))
+        if config.num_partitions is None
+        else config.num_partitions
+    )
     dataset.create_index(
-        CLAP_FIELD,
+        column,
         index_type="IVF_PQ",
         num_partitions=partitions,
         num_sub_vectors=num_sub_vectors,
         metric=metric,
     )
-    logger.info("clap_index_built", rows=rows, num_partitions=partitions, metric=metric)
+    logger.info(
+        "embedding_index_built",
+        column=column,
+        rows=rows,
+        num_partitions=partitions,
+        metric=metric,
+    )
     return True
 
 
-def add_embeddings(
-    dataset: lance.LanceDataset,
-    m2l_encode: M2LEncodeFn,
-    clap_encode: ClapEncodeFn,
-    sample_rate: int,
-    *,
-    clap_dim: int = CLAP_EMBEDDING_DIM,
-    batch_size: int | None = None,
-    build_index: bool = True,
-    num_partitions: int | None = None,
-    num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS,
-    metric: str = DEFAULT_INDEX_METRIC,
-) -> None:
-    """Append ``m2l`` + ``clap`` columns to ``dataset`` and (optionally) index ``clap``.
+def add_embeddings(config: AddEmbeddingsConfig) -> None:
+    """Append the registry entries selected by ``config.embeddings``.
 
-    Commits a new dataset version; existing columns are untouched and only
-    ``audio`` is read per batch. When ``build_index`` and the dataset has enough
-    rows, an IVF_PQ index is built on ``clap`` so ``nearest=`` uses ANN.
-
-    :param dataset: Open Lance dataset carrying an ``audio`` column.
-    :param m2l_encode: Maps an ``(B, C, T)`` batch to a ``(B, C*D, T)`` latent batch.
-    :param clap_encode: Maps a mono ``(B, T)`` batch and ``sample_rate`` to ``(B, clap_dim)``.
-    :param sample_rate: Passed through to ``clap_encode``.
-    :param clap_dim: CLAP embedding width; the ``clap`` fixed-size-list length.
-    :param batch_size: Rows per UDF call; ``None`` uses the Lance default. Ignored
-        for legacy (v1) Lance datasets, which Lance rewrites whole.
-    :param build_index: Build an IVF_PQ index on ``clap`` after the column lands.
-    :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
-    :param num_sub_vectors: PQ sub-vector count (must divide ``clap_dim``).
-    :param metric: Vector-index distance metric.
-    :raises ValueError: ``dataset`` already has an ``m2l`` or ``clap`` column
-        (re-running on an augmented dataset would hit Lance's opaque "column
-        already exists" error), or lacks the ``audio`` column the UDF reads
-        (an absent source column would otherwise fail opaquely mid-transaction).
+    :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
-    existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
-    if existing:
-        raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
-    if AUDIO_FIELD not in dataset.schema.names:
-        raise ValueError(f"dataset has no {AUDIO_FIELD!r} column to embed")
+    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
-    @lance.batch_udf()
-    def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
-        audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
-        return embeddings_record_batch(
-            audio, m2l_encode, clap_encode, sample_rate, clap_dim=clap_dim
-        )
+    specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
+    dataset = _open_lance_dataset(config.lance_uri)
+    sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    _guard_existing_columns(dataset, specs)
+    _validate_write_source(dataset, config.batch_size)
+    _require_extras(specs)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
 
-    dataset.add_columns(udf, read_columns=[AUDIO_FIELD], batch_size=batch_size)
-    if build_index:
-        build_clap_index(
-            dataset, num_partitions=num_partitions, num_sub_vectors=num_sub_vectors, metric=metric
-        )
+    logger.info(
+        "adding_embeddings",
+        uri=config.lance_uri,
+        columns=output_columns,
+        sample_rate=sample_rate,
+        rows=dataset.count_rows(),
+        batch_size=config.batch_size,
+    )
+    co_resident = [spec for spec in specs if spec.co_resident]
+    solo = [spec for spec in specs if not spec.co_resident]
+    if co_resident:
+        _write_columns(dataset, co_resident, sample_rate, config)
+    for spec in solo:
+        _write_columns(dataset, [spec], sample_rate, config)
+
+    if config.build_index:
+        for spec in specs:
+            if spec.index is not None:
+                vector_column = spec.index.vector_column or spec.column
+                build_index(dataset, vector_column, index=spec.index, config=config)
+    logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
 
-def load_m2l_audio_encoder() -> M2LEncodeFn:
-    """Build a music2latent encode callable over an ``(B, C, T)`` batch.
+def _configure_lance_logging(*, debug: bool) -> None:
+    """Set native Lance logging before its first import.
 
-    The ``music2latent`` import is deferred so this module stays importable (and
-    its core testable with a fake encoder) without loading a checkpoint. No
-    device knob: music2latent owns its own placement.
+    :param debug: Whether to force debug-level native telemetry.
+    """
+    if debug:
+        os.environ["LANCE_LOG"] = "debug"
+    else:
+        os.environ.setdefault("LANCE_LOG", DEFAULT_LANCE_LOG)
 
-    :returns: Encode callable mapping ``(B, C, T)`` to ``(B, C*D, T)`` float32.
+
+def _resolve_torch_device(device: str | None) -> str:
+    """Resolve an explicit device or prefer CUDA, MPS, then CPU.
+
+    :param device: Explicit Torch device, or ``None``.
+    :returns: Resolved Torch device.
+    """
+    import torch
+
+    if device is not None:
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
+    """Load music2latent and return an encoder over ``(B, C, T)`` audio.
+
+    :param device: Torch device, or ``None`` for automatic selection.
+    :returns: Encoder producing ``(B, C*D, T_lat)`` float32 latents.
     """
     from music2latent import EncoderDecoder
 
-    encoder = EncoderDecoder()
+    resolved_device = _resolve_torch_device(device)
+    logger.info("loading_m2l_checkpoint", device=resolved_device)
+    encoder = EncoderDecoder(device=resolved_device)
 
     def encode(audio: np.ndarray) -> np.ndarray:
-        batch, channels = audio.shape[0], audio.shape[1]
+        batch, channels = audio.shape[:2]
         flat = np.ascontiguousarray(rearrange(audio, "b c t -> (b c) t"), dtype=np.float32)
         latents = encoder.encode(flat, max_batch_size=M2L_ENCODE_MAX_BATCH)
         latents = rearrange(latents, "(b c) d t -> b (c d) t", b=batch, c=channels)
@@ -251,56 +891,65 @@ def load_m2l_audio_encoder() -> M2LEncodeFn:
     return encode
 
 
+def _resolve_clap_checkpoint(checkpoint: str) -> str:
+    """Resolve a local or HuggingFace CLAP checkpoint directory.
+
+    :param checkpoint: Local directory or HuggingFace model id.
+    :returns: Local directory accepted by the Transformers loaders.
+    """
+    local = Path(checkpoint).expanduser()
+    if local.is_dir():
+        return str(local)
+
+    from huggingface_hub import snapshot_download
+
+    if checkpoint == DEFAULT_CLAP_CHECKPOINT:
+        cache_dir = embedding_model_dir("clap-htsat-unfused")
+        return snapshot_download(checkpoint, local_dir=str(cache_dir))
+    return snapshot_download(checkpoint)
+
+
 def load_clap_audio_encoder(
     checkpoint: str = DEFAULT_CLAP_CHECKPOINT,
     device: str | None = None,
 ) -> ClapEncodeFn:
-    """Load a CLAP checkpoint and return a mono-batch encode callable.
+    """Load CLAP and return an encoder over mono audio.
 
-    The ``torch`` / ``transformers`` imports are deferred so this module stays
-    importable without loading a model.
-
-    :param checkpoint: HuggingFace CLAP model id; its audio tower sets the embedding width.
-    :param device: Torch device; ``None`` selects cuda when available, else cpu.
-    :returns: Encode callable mapping a mono ``(B, T)`` batch and sample rate to
-        a ``(B, D)`` float32 embedding batch.
+    :param checkpoint: HuggingFace CLAP model id.
+    :param device: Torch device, or ``None`` for automatic selection.
+    :returns: Encoder producing ``(B, CLAP_EMBEDDING_DIM)`` vectors.
     """
     import torch
     import torchaudio.functional as audio_fn
     from transformers import ClapModel, ClapProcessor
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info("loading_clap_checkpoint", checkpoint=checkpoint, device=device)
-    # transformers' own types are too loose for the surface used below, so pyright
-    # is scoped off the two offending calls (the from_pretrained `.to()` chain and
-    # the get_audio_features output access) rather than widened to Any; the
-    # processor's audio kwargs are dict-splatted, which the stub can't object to.
-    model = ClapModel.from_pretrained(checkpoint).to(device).eval()  # pyright: ignore
-    processor = ClapProcessor.from_pretrained(checkpoint)
+    resolved_device = _resolve_torch_device(device)
+    logger.info(
+        "loading_embedding_checkpoint",
+        embedding="clap",
+        checkpoint=checkpoint,
+        device=resolved_device,
+    )
+    checkpoint_dir = _resolve_clap_checkpoint(checkpoint)
+    model = ClapModel.from_pretrained(checkpoint_dir).to(resolved_device).eval()  # pyright: ignore
+    processor = ClapProcessor.from_pretrained(checkpoint_dir)
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray, sample_rate: int) -> np.ndarray:
         wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32))
         if sample_rate != CLAP_SAMPLE_RATE:
             wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
-        # `audio=` (singular) per transformers>=5; the splat also hides the stub's
-        # too-narrow __call__ signature from pyright.
-        clap_kwargs = {
+        processor_kwargs = {
             "audio": list(wav.numpy()),
             "sampling_rate": CLAP_SAMPLE_RATE,
             "return_tensors": "pt",
         }
-        inputs = processor(**clap_kwargs)
-        device_inputs = {key: value.to(device) for key, value in inputs.items()}
-        # transformers>=5 returns a BaseModelOutputWithPooling; the projected
-        # (B, CLAP_EMBEDDING_DIM) audio embedding is its pooler_output.
+        inputs = processor(**processor_kwargs)
+        device_inputs = {key: value.to(resolved_device) for key, value in inputs.items()}
         features = model.get_audio_features(**device_inputs)
         return features.pooler_output.cpu().numpy()  # pyright: ignore
 
     def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
-        # Sub-batch the forward so the whole UDF read batch never hits the GPU at
-        # once; each chunk's result is pulled to CPU before the next runs.
         chunks = [
             _encode_chunk(mono[start : start + CLAP_ENCODE_MAX_BATCH], sample_rate)
             for start in range(0, len(mono), CLAP_ENCODE_MAX_BATCH)
@@ -310,16 +959,83 @@ def load_clap_audio_encoder(
     return encode
 
 
-def _open_lance_dataset(uri: str) -> lance.LanceDataset:
-    """Open a Lance dataset, attaching R2 ``storage_options`` for cloud URIs.
+def _resolve_same_checkpoint_dir(checkpoint: str) -> Path:
+    """Resolve a local, R2, or HuggingFace SAME checkpoint directory.
 
-    Any ``s3://`` URI is treated as the project's R2 (S3-compatible) endpoint and
-    credentialed via :func:`r2_io.r2_storage_options`; generic non-R2 S3 buckets
-    are not a supported input.
-
-    :param uri: Local path, ``r2://bucket/key``, or ``s3://bucket/key`` (R2).
-    :returns: The opened dataset, credentialed when ``uri`` is on R2.
+    :param checkpoint: Checkpoint directory, R2 prefix, or HuggingFace repo id.
+    :returns: Local directory containing SAME model files.
     """
+    if r2_io.is_r2_uri(checkpoint):
+        cache_name = _DEFAULT_SAME_CACHE_NAMES.get(checkpoint)
+        if cache_name is None:
+            cache_key = checkpoint.removeprefix("r2://").strip("/")
+            cache_dir = synth_setter_cache_dir() / "models" / cache_key
+        else:
+            cache_dir = embedding_model_dir(cache_name)
+        r2_io.ensure_r2_env_loaded()
+        r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
+        return cache_dir
+    local = Path(checkpoint)
+    if local.is_dir():
+        return local
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(checkpoint))
+
+
+def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameEncodeFn:
+    """Load SAME and return an encoder over prepared stereo 44.1 kHz audio.
+
+    :param checkpoint: Local directory, R2 mirror, or HuggingFace repo id.
+    :param device: Torch device, or ``None`` for automatic selection.
+    :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
+    :raises ImportError: The optional ``same`` extra is unavailable.
+    """
+    import json
+
+    import torch
+    from safetensors.torch import load_file
+
+    try:
+        from stable_audio_tools.models.factory import create_model_from_config
+    except ImportError as exc:
+        raise ImportError(
+            "loading SAME encoders requires the optional `same` extra — "
+            "install it with `uv sync --extra same`"
+        ) from exc
+
+    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
+    resolved_device = _resolve_torch_device(device)
+    logger.info("loading_same_checkpoint", checkpoint=checkpoint, device=resolved_device)
+    model_config = json.loads((checkpoint_dir / "model_config.json").read_text())
+    model = create_model_from_config(model_config)
+    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"))
+    model = model.to(resolved_device).eval().requires_grad_(False)
+
+    @torch.no_grad()
+    def _encode_chunk(chunk: np.ndarray) -> np.ndarray:
+        wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32)).to(resolved_device)
+        latents: torch.Tensor = model.encode(wav)  # pyright: ignore
+        return latents.float().cpu().numpy()
+
+    def encode(stereo: np.ndarray) -> np.ndarray:
+        chunks = [
+            _encode_chunk(stereo[start : start + SAME_ENCODE_MAX_BATCH])
+            for start in range(0, len(stereo), SAME_ENCODE_MAX_BATCH)
+        ]
+        return np.concatenate(chunks, axis=0)
+
+    return encode
+
+
+def _open_lance_dataset(uri: str) -> lance.LanceDataset:
+    """Open a local or credentialed R2 Lance dataset.
+
+    :param uri: Local path, ``r2://`` URI, or R2-backed ``s3://`` URI.
+    :returns: Open Lance dataset.
+    """
+    import lance
+
     if r2_io.is_r2_uri(uri):
         uri = r2_io.to_s3_uri(uri)
     if uri.startswith("s3://"):
@@ -328,110 +1044,32 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
-@click.command()
-@click.argument("lance_uri", type=str)
-@click.option(
-    "--clap-checkpoint",
-    default=DEFAULT_CLAP_CHECKPOINT,
-    show_default=True,
-    help="HuggingFace CLAP model id.",
+@hydra.main(
+    version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
-@click.option(
-    "--device",
-    default=None,
-    help="Torch device for CLAP (defaults to cuda when available, else cpu).",
-)
-@click.option(
-    "--batch-size",
-    type=int,
-    default=None,
-    help="Rows per UDF call; defaults to the Lance default (ignored for v1 datasets).",
-)
-@click.option(
-    "--build-index/--no-build-index",
-    default=True,
-    show_default=True,
-    help="Build an IVF_PQ vector index on the clap column.",
-)
-@click.option(
-    "--num-partitions",
-    type=int,
-    default=None,
-    help="IVF partition count; defaults to round(sqrt(rows)).",
-)
-@click.option(
-    "--num-sub-vectors",
-    type=int,
-    default=DEFAULT_NUM_SUB_VECTORS,
-    show_default=True,
-    help="PQ sub-vector count (must divide the clap dim).",
-)
-@click.option(
-    "--metric",
-    default=DEFAULT_INDEX_METRIC,
-    show_default=True,
-    help="Vector-index distance metric.",
-)
-def main(
-    lance_uri: str,
-    clap_checkpoint: str,
-    device: str | None,
-    batch_size: int | None,
-    build_index: bool,
-    num_partitions: int | None,
-    num_sub_vectors: int,
-    metric: str,
-) -> None:
-    """Add ``m2l`` + ``clap`` embedding columns to the Lance dataset at LANCE_URI.
+def _hydra_main(cfg: DictConfig) -> None:
+    """Validate Hydra config and run registry-selected embedding augmentation.
 
-    LANCE_URI is a dataset from generate_dataset or finalize_dataset (local path,
-    ``r2://``, or ``s3://``); its audio sample rate is read from the shard
-    metadata in the schema. The ``clap`` column is a vector-searchable
-    fixed-size list; with ``--build-index`` it also gets an IVF_PQ index.
-
-    :param lance_uri: Dataset directory to augment in place.
-    :param clap_checkpoint: HuggingFace CLAP model id.
-    :param device: Torch device for CLAP; ``None`` selects cuda when available, else cpu.
-    :param batch_size: Rows per UDF call; ``None`` uses the Lance default.
-    :param build_index: Build an IVF_PQ index on the clap column after writing it.
-    :param num_partitions: IVF partition count; ``None`` uses ``round(sqrt(rows))``.
-    :param num_sub_vectors: PQ sub-vector count; must divide the clap dim.
-    :param metric: Vector-index distance metric.
+    :param cfg: Hydra-composed endpoint config.
     """
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    _configure_lance_logging(debug=config.debug)
+    logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
-        dataset = _open_lance_dataset(lance_uri)
-        sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
-    # RuntimeError covers missing R2 creds / rclone from the cloud-URI path.
-    except (OSError, ValueError, RuntimeError) as exc:
-        logger.error("open_dataset_failed", uri=lance_uri, error=str(exc))
-        sys.exit(1)
-    existing = {M2L_FIELD, CLAP_FIELD} & set(dataset.schema.names)
-    if existing:
-        logger.error("embeddings_already_present", uri=lance_uri, columns=sorted(existing))
-        sys.exit(1)
-    logger.info(
-        "adding_embeddings", uri=lance_uri, sample_rate=sample_rate, rows=dataset.count_rows()
-    )
-    try:
-        m2l_encode = load_m2l_audio_encoder()
-        clap_encode = load_clap_audio_encoder(clap_checkpoint, device)
-        add_embeddings(
-            dataset,
-            m2l_encode,
-            clap_encode,
-            sample_rate,
-            batch_size=batch_size,
-            build_index=build_index,
-            num_partitions=num_partitions,
-            num_sub_vectors=num_sub_vectors,
-            metric=metric,
-        )
-    # Encoder load (missing dep) or the add/index step (validation, Lance, CUDA)
-    # should exit cleanly with a logged cause, not a raw CLI traceback.
+        add_embeddings(config)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        logger.error("add_embeddings_failed", uri=lance_uri, error=str(exc))
+        logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
         sys.exit(1)
-    logger.info("added_embeddings", uri=lance_uri, columns=[M2L_FIELD, CLAP_FIELD])
+
+
+def main() -> None:
+    """Run the Hydra CLI while allowing keyed overrides on the empty checkpoint map."""
+    for index, override in enumerate(sys.argv[1:], start=1):
+        if override.startswith("checkpoints."):
+            sys.argv[index] = f"+{override}"
+    _hydra_main()
 
 
 if __name__ == "__main__":

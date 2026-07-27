@@ -1,4 +1,3 @@
-import sys
 from functools import partial
 from typing import Optional, Tuple, Union
 
@@ -6,6 +5,7 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import ot_collate_fn, regular_collate_fn
+from synth_setter.data.sample_seed import derive_sample_seed
 from synth_setter.utils import RankedLogger
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -139,8 +139,7 @@ class KSinDataset(torch.utils.data.Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # modulo max int to avoid overflows
-        seed = (self.seed * idx) % sys.maxsize
+        seed = derive_sample_seed(self.seed, idx)
         freq, amp = self._sample_parameters(seed)
         sin_fn = partial(
             make_sin, length=self.signal_length, break_symmetry=self.break_symmetry

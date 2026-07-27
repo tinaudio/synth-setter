@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from synth_setter.param_spec_name import ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -34,7 +35,17 @@ from synth_setter.pipeline.schemas.prefix import (
     make_r2_prefix,
 )
 from synth_setter.pipeline.schemas.r2_location import R2Location
-from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
+from synth_setter.pipeline.schemas.shard_metadata import (
+    DEFAULT_ATTEMPTS_PER_SAMPLE,
+    ShardMetadata,
+)
+from synth_setter.renderer_backend import (
+    FAUST_PLUGIN_NAME,
+    SURGEPY_PLUGIN_NAME,
+    TORCHSYNTH_PLUGIN_NAME,
+    RendererBackend,
+)
+from synth_setter.synth_spec import SynthSpec
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -46,6 +57,7 @@ __all__ = [
     "RenderConfig",
     "ShardSpec",
     "Split",
+    "StorageDType",
 ]
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
@@ -62,68 +74,29 @@ _LEGACY_FLAT_R2_KEYS: dict[str, str] = {
 class OutputFormat(StrEnum):
     """Shard container format; the enum value is the on-disk / JSON token.
 
-    Member values are persisted as R2 / ``input_spec.json`` keys — renaming or
-    removing one requires a data migration.
-
-    .. attribute :: HDF5
-
-        HDF5 container; shards are written as ``.h5`` files.
-
-    .. attribute :: WDS
-
-        WebDataset container; shards are written as ``.tar`` archives.
+    The member value is persisted as an R2 / ``input_spec.json`` key, so
+    renaming it requires a data migration. Lance is the only supported format.
 
     .. attribute :: LANCE
 
         Lance container; shards are written as ``.lance`` dataset directories.
     """
 
-    HDF5 = "hdf5"
-    WDS = "wds"
     LANCE = "lance"
 
     @property
     def extension(self) -> str:
         """Shard filename suffix for this format, leading dot included."""
-        return _OUTPUT_FORMAT_EXTENSIONS[self]
-
-    @property
-    def is_directory(self) -> bool:
-        """Whether a shard is a directory tree (Lance dataset) rather than one file.
-
-        Drives directory-vs-file handling in the worker upload and existence probes.
-        """
-        return self is OutputFormat.LANCE
+        return ".lance"
 
     @classmethod
     def from_extension(cls, suffix: str) -> OutputFormat | None:
         """Return the format whose shards carry ``suffix``, dispatching by file type.
 
-        :param suffix: Filename suffix including the leading dot (e.g. ``.h5``).
+        :param suffix: Filename suffix including the leading dot (e.g. ``.lance``).
         :returns: Matching format, or ``None`` when ``suffix`` is unregistered.
         """
-        return _OUTPUT_FORMAT_BY_EXTENSION.get(suffix)
-
-
-# Source-of-truth suffix per format (leading dot included). A missing row
-# surfaces as KeyError at ``.extension`` rather than a silently-wrong filename.
-_OUTPUT_FORMAT_EXTENSIONS: dict[OutputFormat, str] = {
-    OutputFormat.HDF5: ".h5",
-    OutputFormat.WDS: ".tar",
-    OutputFormat.LANCE: ".lance",
-}
-
-# Reverse map for suffix dispatch, derived from the forward map. The import
-# guard below rejects a shared suffix (last-key-wins would silently misroute).
-_OUTPUT_FORMAT_BY_EXTENSION: dict[str, OutputFormat] = {
-    ext: fmt for fmt, ext in _OUTPUT_FORMAT_EXTENSIONS.items()
-}
-if len(_OUTPUT_FORMAT_BY_EXTENSION) != len(_OUTPUT_FORMAT_EXTENSIONS):
-    raise RuntimeError(
-        "Duplicate extensions in _OUTPUT_FORMAT_EXTENSIONS — "
-        "two output formats map to the same suffix: "
-        f"{_OUTPUT_FORMAT_EXTENSIONS!r}"
-    )
+        return cls.LANCE if suffix == ".lance" else None
 
 
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
@@ -187,6 +160,7 @@ def _current_platform() -> str:
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
 _ParamSampleCadence = Literal["sample", "shard"]
+type StorageDType = Literal["float16", "float32"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:
@@ -200,23 +174,29 @@ def _default_gui_toggle_cadence() -> _GuiToggleCadence:
     return "never" if _current_platform() == "darwin" else "render"
 
 
-# Cap on shard filenames listed in a copy-source mismatch error before eliding.
-_MISMATCH_FILENAMES_SHOWN = 3
-
-
-def _sample_filenames(names: list[str]) -> str:
-    """Render up to ``_MISMATCH_FILENAMES_SHOWN`` names, noting any elided remainder.
-
-    :param names: Filenames to sample for a copy-source mismatch message.
-    :returns: The leading sample, suffixed with ``(+N more)`` when truncated.
-    """
-    shown = names[:_MISMATCH_FILENAMES_SHOWN]
-    elided = len(names) - len(shown)
-    return f"{shown} (+{elided} more)" if elided else f"{shown}"
-
-
 class ShardSpec(BaseModel):
-    """Per-shard identity and pre-computed derived values."""
+    """Per-shard identity and seed position.
+
+    .. attribute :: model_config
+
+        Pydantic model configuration sentinel.
+
+    .. attribute :: shard_id
+
+        Zero-based logical shard index.
+
+    .. attribute :: filename
+
+        Materialized Lance shard filename.
+
+    .. attribute :: seed
+
+        Master seed for the shard's row stream.
+
+    .. attribute :: sample_offset
+
+        Split-local index of the shard's first sample.
+    """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
@@ -224,15 +204,17 @@ class ShardSpec(BaseModel):
         description="Logical shard index (0-based), independent of compute infrastructure."
     )
     filename: str = Field(
-        description=(
-            "Shard filename including the format-specific suffix "
-            "(``shard-NNNNNN.h5`` or ``shard-NNNNNN.tar``)."
-        )
+        description="Shard filename including the ``.lance`` suffix (``shard-NNNNNN.lance``)."
     )
-    seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
+    seed: int = Field(description="Master seed for this shard's sample-index stream.")
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of this shard's first sample.",
+    )
 
 
-class RenderConfig(BaseModel):
+class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
     Carries every parameter the per-shard writer needs to produce audio +
@@ -242,33 +224,33 @@ class RenderConfig(BaseModel):
 
     .. attribute :: base_seed
 
-        Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each
-        shard renders a distinct, reproducible per-sample stream (#884).
+        Split master seed injected from ``ShardSpec.seed`` (#884).
+
+    .. attribute :: sample_offset
+
+        Split-local index of the shard's first sample.
 
     .. attribute :: attempts_per_sample
 
         Loudness-gate retry budget per sampled row before the render fails loudly.
+
+    .. attribute :: plugin_state_path
+
+        Filesystem path to the baseline plugin state.
+        :type: str
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str = Field(
-        description="Filesystem path to the VST3 plugin bundle the worker loads."
+    synth: SynthSpec = Field(
+        description="Synth identity: param spec, artifact version, plugin, and baseline preset."
     )
-    preset_path: str = Field(
+    renderer_backend: RendererBackend = Field(
+        default="pedalboard",
         description=(
-            "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
-            "random parameter override."
-        )
-    )
-    param_spec_name: str = Field(
-        description=(
-            "Key into the in-process param-spec registry; resolved inside the worker, "
-            "not the launcher."
-        )
-    )
-    renderer_version: str = Field(
-        description="Renderer code-path version stamp recorded in shard provenance."
+            "Audio host used to render each sample; Faust compiles checked-in source "
+            "through DawDreamer and torchsynth renders in-process."
+        ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -278,6 +260,14 @@ class RenderConfig(BaseModel):
     )
     min_loudness: float = Field(
         description="Per-sample loudness floor; renders quieter than this are rejected/retried."
+    )
+    audio_dtype: StorageDType = Field(
+        default="float16",
+        description="Physical scalar dtype used for waveform tensors in the dataset.",
+    )
+    mel_spec_dtype: StorageDType = Field(
+        default="float32",
+        description="Physical scalar dtype used for mel-spectrogram tensors in the dataset.",
     )
     samples_per_render_batch: int = Field(
         default=32,
@@ -297,11 +287,14 @@ class RenderConfig(BaseModel):
     base_seed: int = Field(
         default=0,
         description=(
-            "Per-shard master seed; the launcher sets it to ``ShardSpec.seed`` so each "
-            "shard renders a distinct stream. Row ``i`` draws from "
-            "``seed_for_sample(base_seed, i, attempt)``, making every sample reproducible "
-            "regardless of worker, order, or retry history (#884)."
+            "Master seed for the shard's split stream. Row ``sample_offset + i`` draws "
+            "from ``seed_for_sample(base_seed, sample_offset + i, attempt)`` (#884)."
         ),
+    )
+    sample_offset: int = Field(
+        default=0,
+        ge=0,
+        description="Split-local index of the shard's first sample.",
     )
     attempts_per_sample: int = Field(
         default=DEFAULT_ATTEMPTS_PER_SAMPLE,
@@ -322,11 +315,11 @@ class RenderConfig(BaseModel):
         ),
     )
     plugin_reload_cadence: _PluginReloadCadence = Field(
-        default="render",
+        default="once",
         description=(
-            'How often to reload the plugin within a shard: ``"once"`` loads + applies '
-            'the preset once per shard and reuses the cached instance; ``"render"`` '
-            "(default, historical per-#489 behaviour) reloads on every render."
+            'How often to reload the plugin within a shard: ``"once"`` (default, #1999) '
+            "loads + applies the preset once per shard and reuses the cached instance; "
+            '``"render"`` reloads on every render (historical per-#489 behaviour).'
         ),
     )
     gui_toggle_cadence: _GuiToggleCadence = Field(
@@ -341,7 +334,8 @@ class RenderConfig(BaseModel):
             "(SIGTRAP after ~3-4 calls, #714); "
             '``"always_on"`` is permitted on Darwin because it opens the editor '
             "once per shard, not cumulatively. The default factory yields "
-            '``"never"`` on Darwin.'
+            '``"never"`` on Darwin. DawDreamer supports only ``"never"`` because '
+            "its editor call blocks the main thread without a close-event API."
         ),
     )
     param_sample_cadence: _ParamSampleCadence = Field(
@@ -351,11 +345,48 @@ class RenderConfig(BaseModel):
             'draws a fresh patch for every sample; ``"shard"`` draws one patch (the '
             "first sample, via the normal loudness-gated path) and reuses it for the "
             "rest of the shard — one identical patch per shard, a probe for the "
-            "per-patch render variance tracked in #489. The shared patch is the row-0 "
-            "seeded draw (``seed_for_sample(base_seed, 0, attempt)``), so shard cadence "
-            "is reproducible across runs (#884)."
+            "per-patch render variance tracked in #489. The shared patch uses the shard's "
+            "first split-local row seed, so shard cadence is reproducible across runs (#884)."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_removed_renderer_version(cls, data: Any) -> Any:
+        """Discard the removed render-level version without promoting it.
+
+        :param data: Raw render input.
+        :returns: A copy without ``renderer_version``, or a non-mapping input unchanged.
+        """
+        if not isinstance(data, dict):
+            return data
+        normalized = data.copy()
+        normalized.pop("renderer_version", None)
+        return normalized
+
+    @property
+    def param_spec_name(self) -> ValidatedParamSpecName:
+        """Key into the param-spec registry, resolved inside the worker.
+
+        :returns: The spec name this render's synth identity points at.
+        """
+        return self.synth.param_spec_name
+
+    @property
+    def plugin_path(self) -> str:
+        """Plugin bundle path, or the bare backend name for the in-process renderer.
+
+        :returns: The plugin path this render's synth identity declares.
+        """
+        return self.synth.plugin_path
+
+    @property
+    def plugin_state_path(self) -> str:
+        """Baseline preset applied before random parameter override.
+
+        :returns: The preset path this render's synth identity declares.
+        """
+        return self.synth.plugin_state_path
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -372,10 +403,85 @@ class RenderConfig(BaseModel):
             raise ValueError("samples_per_render_batch must be positive")
         if self.samples_per_shard <= 0:
             raise ValueError("samples_per_shard must be positive")
-        if not self.param_spec_name.strip():
-            raise ValueError("param_spec_name must not be blank")
-        if not self.renderer_version.strip():
-            raise ValueError("renderer_version must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
+        """Reject editor cadences that DawDreamer's blocking API cannot implement.
+
+        :return: ``self`` unchanged for Pedalboard or DawDreamer without editor use.
+        :raises ValueError: DawDreamer combined with a cadence other than ``"never"``.
+        """
+        if self.renderer_backend == "dawdreamer" and self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
+                "call blocks the main thread and exposes no close-event API"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_faust_backend(self) -> RenderConfig:
+        """Require registry-only Faust source resolution without external resources.
+
+        :return: ``self`` unchanged for other backends or valid Faust configuration.
+        :raises ValueError: Faust uses a path/state/editor or its sentinel selects another backend.
+        """
+        if self.plugin_path == FAUST_PLUGIN_NAME and self.renderer_backend != "dawdreamer_faust":
+            raise ValueError('plugin_path="faust" requires renderer_backend="dawdreamer_faust"')
+        if self.renderer_backend != "dawdreamer_faust":
+            return self
+        if self.plugin_path != FAUST_PLUGIN_NAME:
+            raise ValueError('dawdreamer_faust requires plugin_path="faust"')
+        if self.plugin_state_path:
+            raise ValueError("dawdreamer_faust does not accept plugin_state_path")
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('dawdreamer_faust requires gui_toggle_cadence="never"')
+        return self
+
+    @model_validator(mode="after")
+    def _validate_surgepy_backend(self) -> RenderConfig:
+        """Require isolated Surge rendering with a registered Surge patch identity.
+
+        :return: ``self`` unchanged for other backends or valid SurgePy configuration.
+        :raises ValueError: If SurgePy uses an incompatible identity or lifecycle cadence.
+        """
+        if self.plugin_path == SURGEPY_PLUGIN_NAME and self.renderer_backend != "surgepy":
+            raise ValueError('plugin_path="surgepy" requires renderer_backend="surgepy"')
+        if self.renderer_backend != "surgepy":
+            return self
+        if self.plugin_path != SURGEPY_PLUGIN_NAME:
+            raise ValueError('surgepy requires plugin_path="surgepy"')
+        if self.param_spec_name not in {"surge_xt", "surge_simple", "surge_4"}:
+            raise ValueError("surgepy requires a Surge parameter spec")
+        if not self.plugin_state_path.casefold().endswith(".fxp"):
+            raise ValueError("surgepy requires an .fxp plugin_state_path")
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('surgepy requires gui_toggle_cadence="never"')
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('surgepy requires plugin_reload_cadence="render"')
+        if self.channels not in (1, 2):
+            raise ValueError("surgepy supports one or two channels")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_torchsynth_backend(self) -> RenderConfig:
+        """Require the in-process backend name and disable plugin editor use.
+
+        :return: ``self`` unchanged for other backends or a valid torchsynth config.
+        :raises ValueError: The backend and bare plugin name disagree, or torchsynth
+            uses an editor cadence other than ``"never"``.
+        """
+        if self.plugin_path == TORCHSYNTH_PLUGIN_NAME and self.renderer_backend != "torchsynth":
+            raise ValueError('plugin_path="torchsynth" requires renderer_backend="torchsynth"')
+        if self.renderer_backend != "torchsynth":
+            return self
+        if self.plugin_path != TORCHSYNTH_PLUGIN_NAME:
+            raise ValueError('torchsynth requires plugin_path="torchsynth"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError(
+                'torchsynth requires gui_toggle_cadence="never": it renders in-process '
+                "and has no plugin editor to toggle"
+            )
         return self
 
     @model_validator(mode="after")
@@ -416,12 +522,31 @@ class RenderConfig(BaseModel):
             )
         return self
 
+    def shard_metadata(self) -> ShardMetadata:
+        """Project this config onto the per-shard sidecar metadata fields.
+
+        Single source of truth for the render-derived attrs the Lance schema
+        metadata exposes — writers and finalize can never drift.
+
+        :returns: Strict ``ShardMetadata`` with every render-derived field filled.
+        """
+        return ShardMetadata(
+            velocity=self.velocity,
+            signal_duration_seconds=self.signal_duration_seconds,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            min_loudness=self.min_loudness,
+            base_seed=self.base_seed,
+            sample_offset=self.sample_offset,
+            attempts_per_sample=self.attempts_per_sample,
+        )
+
 
 # Names paired with ``train_val_test_sizes`` indices in error messages.
 _SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
 
 # Typed alias for split names — narrows the ``str`` parameter on layout helpers
-# (``R2Location.split_h5_uri``, ``DatasetSpec.split_shard_ranges`` keys) so a
+# (``R2Location.split_lance_uri``, ``DatasetSpec.split_shard_ranges`` keys) so a
 # typo lands as a type error rather than a silent miss at runtime.
 Split = Literal["train", "val", "test"]
 
@@ -567,7 +692,7 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: output_format
 
-        Shard container format (``hdf5`` writes ``.h5``, ``wds`` writes ``.tar``).
+        Shard container format; Lance writes ``.lance`` dataset directories.
 
     .. attribute :: train_val_test_sizes
 
@@ -576,24 +701,25 @@ class DatasetSpec(BaseModel):
 
     .. attribute :: train_val_test_seeds
 
-        Reserved for per-sample seeding (#884); must be ``None``.
+        Optional independent master seeds for train, validation, and test streams.
 
     .. attribute :: base_seed
 
-        Seed used to derive per-shard ``ShardSpec.seed`` values.
+        Legacy seed used when independent split masters are absent.
 
     .. attribute :: render
 
         Nested ``RenderConfig`` carrying every per-shard renderer input.
 
-    .. attribute :: copy_dataset_root_uri
-
-        Optional dataset-copy source root URI; ``None`` samples fresh params.
-
     .. attribute :: mask_degenerate_bins
 
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
+
+    .. attribute :: use_shard_queue
+
+        Whether workers claim shard IDs dynamically from the run's Lance
+        shard-claims table in R2 instead of owning a static rank/world slice.
 
     .. attribute :: git_sha
 
@@ -629,9 +755,7 @@ class DatasetSpec(BaseModel):
     # into the enum; an unknown token still raises, matching the prior Literal.
     output_format: OutputFormat = Field(
         strict=False,
-        description=(
-            "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
-        ),
+        description="Shard container format; Lance writes ``.lance`` dataset directories.",
     )
     train_val_test_sizes: tuple[int, int, int] = Field(
         description=(
@@ -639,35 +763,19 @@ class DatasetSpec(BaseModel):
             "``render.samples_per_shard``."
         )
     )
-    # Enforced by _reject_train_val_test_seeds.
     train_val_test_seeds: tuple[int, int, int] | None = Field(
         default=None,
         description=(
-            "Reserved for per-split independent seed streams (distinct train/val/test "
-            "masters); must be ``None`` until implemented — any non-None value raises "
-            "``NotImplementedError``. Per-sample reproducibility itself ships via "
-            "``base_seed`` → ``ShardSpec.seed`` → ``seed_for_sample`` (#884)."
+            "Optional independent master seeds for train, validation, and test streams. "
+            "None preserves legacy base_seed + shard_id derivation for materialized specs."
         ),
     )
     base_seed: int = Field(
-        description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
+        description="Legacy seed for ``base_seed + shard_id`` derivation when split seeds are None."
     )
 
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
-    )
-
-    copy_dataset_root_uri: str | None = Field(
-        default=None,
-        description=(
-            "Optional dataset-copy source root URI: each output shard decodes the "
-            "same-named source shard's ``param_array`` and re-renders those fixed params "
-            "instead of sampling fresh (``None``, the default, samples fresh). A bare "
-            "local path, ``file://`` URI, or ``r2://`` URI — an ``r2://`` source is "
-            "downloaded per shard at copy time, so it need not be synced locally first. "
-            "Re-renders apply the *target's* ``min_loudness`` to the fixed params, so a "
-            "copied patch landing below it raises (#724)."
-        ),
     )
 
     mask_degenerate_bins: bool = Field(
@@ -677,6 +785,16 @@ class DatasetSpec(BaseModel):
             "mel bins instead of raising; ``False`` is the strict production default. "
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
+        ),
+    )
+
+    use_shard_queue: bool = Field(
+        default=False,
+        description=(
+            "Whether workers claim shard IDs dynamically from the run's Lance "
+            "shard-claims table in R2 instead of owning a static rank/world slice; "
+            "the operator populates the table at launch (``False`` keeps static "
+            "partitioning, the default)."
         ),
     )
 
@@ -736,24 +854,11 @@ class DatasetSpec(BaseModel):
         :raises TypeError: ``cfg`` is not mapping-shaped (e.g. a ``ListConfig``,
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
             did not resolve to a mapping — both normalized to one stable type.
-        :raises ValueError: ``cfg`` carries a stale ``datasetsrc`` key; the mask
-            below would silently drop it (the model's ``_promote_legacy_datasetsrc``
-            shim never runs on the masked dict), so a migration error is raised.
         """
         # Lazy import: omegaconf is absent from the minimal-env CI install that
         # runs `validate_spec`, which imports this module but never calls this.
         from omegaconf import OmegaConf
 
-        # `datasetsrc` was flattened to `copy_dataset_root`, then renamed to
-        # `copy_dataset_root_uri`. The mask keeps only model fields, so a stale
-        # Hydra override would vanish silently and disable copy with no signal;
-        # reject either old key with a migration pointer.
-        for stale_key in ("datasetsrc", "copy_dataset_root"):
-            if stale_key in cfg:
-                raise ValueError(
-                    f"{stale_key!r} is no longer a config key; the dataset-copy source is "
-                    "now 'copy_dataset_root_uri'. Use copy_dataset_root_uri=<uri>."
-                )
         spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
@@ -806,82 +911,6 @@ class DatasetSpec(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _promote_legacy_copy_dataset_root(cls, data: Any) -> Any:
-        """Promote legacy ``datasetsrc`` / ``copy_dataset_root`` into ``copy_dataset_root_uri``.
-
-        Back-compat for ``input_spec.json`` files materialized before the
-        dataset-copy source became a root URI. Two pre-rename shapes promote to
-        the current ``copy_dataset_root_uri`` (a bare path is itself a valid URI):
-
-          - the flat ``copy_dataset_root: X`` that preceded the URI rename, and
-          - the nested ``datasetsrc: {copy_dataset_root: X}`` that preceded the
-            flatten (``datasetsrc: null`` is dropped — the field defaults to
-            ``None``).
-
-        A non-null legacy ``datasetsrc`` mapping is held to the removed
-        ``DatasetSrcConfig``'s contract — exactly the ``copy_dataset_root`` key,
-        non-null — so a typo'd or empty mapping raises instead of silently
-        disabling copy (use ``datasetsrc: null`` to disable).
-
-        :param data: Raw validator input (typically a dict; pass-through otherwise).
-        :returns: Same input when no legacy key is present; otherwise a new dict
-            with the legacy value promoted to ``copy_dataset_root_uri``.
-        :raises ValueError: more than one of ``datasetsrc`` / ``copy_dataset_root``
-            / ``copy_dataset_root_uri`` is present (ambiguous); ``datasetsrc`` is
-            neither a mapping nor ``null``; or a non-null ``datasetsrc`` mapping is
-            not exactly a non-null ``copy_dataset_root``.
-        """
-        if not isinstance(data, dict) or (
-            "datasetsrc" not in data and "copy_dataset_root" not in data
-        ):
-            return data
-        data = dict(data)
-        present = [
-            key
-            for key in ("datasetsrc", "copy_dataset_root", "copy_dataset_root_uri")
-            if key in data
-        ]
-        if len(present) > 1:
-            raise ValueError(
-                f"DatasetSpec received multiple dataset-copy source keys {present}; "
-                "pass only 'copy_dataset_root_uri'"
-            )
-        if "copy_dataset_root" in data:
-            data["copy_dataset_root_uri"] = data.pop("copy_dataset_root")
-            return data
-        legacy = data.pop("datasetsrc")
-        if isinstance(legacy, dict):
-            if set(legacy) != {"copy_dataset_root"} or legacy["copy_dataset_root"] is None:
-                raise ValueError(
-                    "legacy 'datasetsrc' mapping must hold exactly a non-null "
-                    "'copy_dataset_root'; use datasetsrc: null to disable copy"
-                )
-            data["copy_dataset_root_uri"] = legacy["copy_dataset_root"]
-        elif legacy is not None:
-            raise ValueError(
-                f"legacy 'datasetsrc' must be a mapping or null, got {type(legacy).__name__}"
-            )
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_train_val_test_seeds(cls, data: Any) -> Any:
-        """Reject any non-None ``train_val_test_seeds`` — reserved for #884, not implemented.
-
-        Runs in ``mode="before"`` so ``NotImplementedError`` propagates as-is
-        instead of being wrapped in a ``ValidationError`` (which is what
-        pydantic does for ``ValueError`` raised inside field validators).
-        """
-        if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
-            raise NotImplementedError(
-                "train_val_test_seeds is reserved for per-split independent seed streams "
-                "and is not yet implemented; omit the field. Per-sample reproducibility "
-                "ships via base_seed (#884)."
-            )
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
     def _strip_computed_field_keys(cls, data: Any) -> Any:
         """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
 
@@ -916,7 +945,7 @@ class DatasetSpec(BaseModel):
             data.pop("run_id")
         return data
 
-    @field_validator("train_val_test_sizes", mode="before")
+    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
     @classmethod
     def _splits_list_to_tuple(cls, value: Any) -> Any:
         """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.
@@ -971,6 +1000,19 @@ class DatasetSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
+    def _split_seeds_must_be_distinct(self) -> DatasetSpec:
+        """Reject seed reuse across independent split streams.
+
+        :returns: This validated spec.
+        :raises ValueError: Two split master seeds are equal.
+        """
+        if self.train_val_test_seeds is not None and len(set(self.train_val_test_seeds)) != len(
+            self.train_val_test_seeds
+        ):
+            raise ValueError("train_val_test_seeds must be distinct")
+        return self
+
+    @model_validator(mode="after")
     def _split_sizes_must_be_multiples_of_samples_per_shard(self) -> DatasetSpec:
         """Each split's sample count must divide cleanly into shards.
 
@@ -993,37 +1035,6 @@ class DatasetSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _copy_dataset_root_uri_must_not_be_blank(self) -> DatasetSpec:
-        """Reject a blank ``copy_dataset_root_uri`` so the per-shard source URI is never empty.
-
-        :returns: ``self`` when ``copy_dataset_root_uri`` is unset or non-blank.
-        :raises ValueError: ``copy_dataset_root_uri`` is empty or whitespace-only.
-        """
-        if self.copy_dataset_root_uri is not None and not self.copy_dataset_root_uri.strip():
-            raise ValueError("copy_dataset_root_uri must not be blank")
-        return self
-
-    @model_validator(mode="after")
-    def _copy_dataset_root_uri_requires_hdf5_output(self) -> DatasetSpec:
-        """Reject a dataset-copy source paired with non-hdf5 output.
-
-        The copy path reads each source shard as an HDF5 ``param_array`` of the
-        same shard filename, so a ``.tar`` output has no readable same-named
-        source. Failing at spec construction surfaces the misconfig at launch
-        rather than per-shard inside the renderer subprocess.
-
-        :returns: ``self`` when ``copy_dataset_root_uri`` is unset or output is hdf5.
-        :raises ValueError: ``copy_dataset_root_uri`` is set with ``output_format != "hdf5"``.
-        """
-        if self.copy_dataset_root_uri is not None and self.output_format != "hdf5":
-            raise ValueError(
-                "copy_dataset_root_uri (dataset copy) supports output_format='hdf5' only; got "
-                f"output_format={self.output_format!r}. The source is read as an HDF5 "
-                "param_array of the same shard filename."
-            )
-        return self
-
-    @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
         expected_ext = self.output_format.extension
@@ -1035,79 +1046,48 @@ class DatasetSpec(BaseModel):
                 )
         return self
 
-    def validate_copy_source(self, source: DatasetSpec) -> None:
-        """Assert ``source`` reproduces this spec for a filename-matched param copy.
+    def render_for_shard(self, shard: ShardSpec) -> RenderConfig:
+        """Inject a shard's stable seed position into the renderer config.
 
-        A dataset-copy run reads ``<copy_dataset_root_uri>/<shard.filename>`` per
-        output shard and re-renders that shard's decoded params, so the copy is
-        faithful only when the source agrees on every value fixing the per-shard
-        contract: ``param_spec_name`` (encoding width), ``samples_per_shard``
-        (rows per shard), ``train_val_test_sizes`` (total rows and the
-        train/val/test split layout), ``output_format`` (the shard extension the
-        copy addresses), and the derived shard-filename set. Every mismatch is
-        aggregated so a misconfigured copy surfaces them all in one launch
-        instead of one render — or one re-run — at a time.
-
-        :param source: Spec of the copy source, parsed from its ``input_spec.json``.
-        :raises ValueError: ``source`` differs from ``self`` on any copy-relevant
-            value; the message enumerates every mismatch.
+        :param shard: Materialized shard belonging to this spec.
+        :returns: Renderer config positioned at the shard's first split-local row.
         """
-        mismatches: list[str] = []
-        if source.render.param_spec_name != self.render.param_spec_name:
-            mismatches.append(
-                f"param_spec_name: source={source.render.param_spec_name!r} != "
-                f"target={self.render.param_spec_name!r}"
-            )
-        if source.render.samples_per_shard != self.render.samples_per_shard:
-            mismatches.append(
-                f"samples_per_shard: source={source.render.samples_per_shard} != "
-                f"target={self.render.samples_per_shard}"
-            )
-        if source.train_val_test_sizes != self.train_val_test_sizes:
-            mismatches.append(
-                f"train_val_test_sizes: source={source.train_val_test_sizes} != "
-                f"target={self.train_val_test_sizes}"
-            )
-        if source.output_format != self.output_format:
-            # The copy addresses source shards by the target's filename; a format
-            # difference means a never-matching extension (e.g. .tar vs .h5).
-            mismatches.append(
-                f"output_format: source={source.output_format.value!r} != "
-                f"target={self.output_format.value!r} (copy reads same-named shards)"
-            )
-        source_filenames = tuple(shard.filename for shard in source.shards)
-        target_filenames = tuple(shard.filename for shard in self.shards)
-        if source_filenames != target_filenames:
-            only_in_source = sorted(set(source_filenames) - set(target_filenames))
-            only_in_target = sorted(set(target_filenames) - set(source_filenames))
-            mismatches.append(
-                f"shard filenames: source has {len(source_filenames)}, "
-                f"target has {len(target_filenames)} "
-                f"(only in source: {_sample_filenames(only_in_source)}; "
-                f"only in target: {_sample_filenames(only_in_target)})"
-            )
-        if mismatches:
-            joined = "\n  - ".join(mismatches)
-            raise ValueError(
-                "dataset-copy source spec does not match the target on copy-relevant "
-                f"values:\n  - {joined}"
-            )
+        return self.render.model_copy(
+            update={"base_seed": shard.seed, "sample_offset": shard.sample_offset}
+        )
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def shards(self) -> tuple[ShardSpec, ...]:
-        """Shard identities derived from total sample counts and ``samples_per_shard``."""
+        """Shard identities derived from split sizes and their seed streams."""
         sps = self.render.samples_per_shard
-        total_shards = sum(self.train_val_test_sizes) // sps
         ext = self.output_format.extension
-        return tuple(
-            ShardSpec(
-                shard_id=i,
-                filename=f"shard-{i:06d}{ext}",
-                seed=self.base_seed + i,
+        if self.train_val_test_seeds is None:
+            total_shards = sum(self.train_val_test_sizes) // sps
+            return tuple(
+                ShardSpec(
+                    shard_id=i,
+                    filename=f"shard-{i:06d}{ext}",
+                    seed=self.base_seed + i,
+                )
+                for i in range(total_shards)
             )
-            for i in range(total_shards)
-        )
+
+        shards: list[ShardSpec] = []
+        for split_size, split_seed in zip(
+            self.train_val_test_sizes, self.train_val_test_seeds, strict=True
+        ):
+            for split_shard_id in range(split_size // sps):
+                shard_id = len(shards)
+                shards.append(
+                    ShardSpec(
+                        shard_id=shard_id,
+                        filename=f"shard-{shard_id:06d}{ext}",
+                        seed=split_seed,
+                        sample_offset=split_shard_id * sps,
+                    )
+                )
+        return tuple(shards)
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
@@ -1142,6 +1122,6 @@ class DatasetSpec(BaseModel):
         ``model_dump_json`` — which evaluates this computed field — does not
         transitively pull ``pedalboard`` into the launcher.
         """
-        from synth_setter.data.vst.param_spec_registry import param_specs
+        from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-        return len(param_specs[self.render.param_spec_name])
+        return resolve_param_spec(self.render.param_spec_name).encoded_width

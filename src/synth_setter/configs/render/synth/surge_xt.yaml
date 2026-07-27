@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: surge_xt
+param_spec_name: surge_xt
+plugin_path: "plugins/Surge XT.vst3"
+plugin_state_path: "presets/surge-base.vstpreset"
+synth_version: "1.3.4"

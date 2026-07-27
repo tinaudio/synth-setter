@@ -1,0 +1,345 @@
+"""Direct tests for :func:`decode_model_output`'s inverse-scale contract."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pytest
+
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    ContinuousParameter,
+    DiscreteLiteralParameter,
+    NoteDurationParameter,
+    ParamSpec,
+    decode_model_output,
+)
+
+LEVEL_MIN_DB = -70.0
+LEVEL_MID_DB = -15.0
+LEVEL_MAX_DB = 40.0
+
+
+def _tiny_spec() -> ParamSpec:
+    return ParamSpec(
+        [
+            ContinuousParameter(name="cutoff"),
+            CategoricalParameter(
+                name="mode",
+                values=["Digital", "Analog"],
+                raw_values=[0.25, 0.75],
+                encoding="onehot",
+            ),
+        ],
+        [
+            DiscreteLiteralParameter(name="pitch", min=21, max=108),
+            NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
+        ],
+    )
+
+
+# Widths: cutoff 1, mode onehot 2, pitch 1, note duration 2 -> 6.
+_ROW = [0.0, -1.0, 1.0, 0.0, 0.2, 0.2]
+
+
+def test_continuous_parameter_encodes_native_range_to_unit_interval() -> None:
+    """Continuous controls encode arbitrary native ranges onto the model domain."""
+    parameter = ContinuousParameter(
+        name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+    )
+
+    assert LEVEL_MIN_DB <= parameter.sample(np.random.default_rng(0)) <= LEVEL_MAX_DB
+    assert parameter.encode(LEVEL_MIN_DB) == pytest.approx(np.array([0.0]))
+    assert parameter.encode(LEVEL_MID_DB) == pytest.approx(np.array([0.5]))
+    assert parameter.encode(LEVEL_MAX_DB) == pytest.approx(np.array([1.0]))
+    assert parameter.decode(np.array([0.0])) == pytest.approx(LEVEL_MIN_DB)
+    assert parameter.decode(np.array([0.5])) == pytest.approx(LEVEL_MID_DB)
+    assert parameter.decode(np.array([1.0])) == pytest.approx(LEVEL_MAX_DB)
+
+
+def test_continuous_parameter_samples_uniform_native_domain() -> None:
+    """Sampling maps the generator's uniform draws to the complete native domain."""
+    actual_rng = np.random.default_rng(19)
+    expected_rng = np.random.default_rng(19)
+    parameter = ContinuousParameter(
+        name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+    )
+
+    actual = np.array([parameter.sample(actual_rng) for _ in range(32)])
+    expected = expected_rng.uniform(LEVEL_MIN_DB, LEVEL_MAX_DB, size=32)
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_continuous_parameter_constant_branch_uses_native_domain() -> None:
+    """An enabled constant samples and encodes within its native range."""
+    parameter = ContinuousParameter(
+        name="level_db",
+        min=LEVEL_MIN_DB,
+        max=LEVEL_MAX_DB,
+        constant_val_p=1.0,
+        constant_val=LEVEL_MID_DB,
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled == LEVEL_MID_DB
+    assert parameter.encode(sampled) == pytest.approx(np.array([0.5]))
+
+
+def test_continuous_parameter_rejects_nonfinite_native_span() -> None:
+    """Native bounds must retain a finite normalization denominator."""
+    with pytest.raises(ValueError, match="span must be finite"):
+        ContinuousParameter(name="overflow", min=-1e308, max=1e308)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"min": -np.inf}, "bounds must be finite"),
+        ({"max": np.inf}, "bounds must be finite"),
+        ({"min": 1.0, "max": 1.0}, "max must be greater than min"),
+        ({"min": 1.0, "max": 0.0}, "max must be greater than min"),
+        ({"constant_val_p": -0.1}, "constant_val_p must be in"),
+        ({"constant_val_p": 1.1}, "constant_val_p must be in"),
+        ({"constant_val_p": 1.0, "constant_val": -1.0}, "constant_val must be within"),
+        ({"constant_val_p": 1.0, "constant_val": 2.0}, "constant_val must be within"),
+    ],
+)
+def test_continuous_parameter_rejects_invalid_native_configuration(
+    overrides: dict[str, float],
+    message: str,
+) -> None:
+    """Invalid ranges and enabled constants fail outside optimized assertions.
+
+    :param overrides: Invalid constructor values under test.
+    :param message: Expected validation-error fragment.
+    """
+    values = {"name": "native", "min": 0.0, "max": 1.0, **overrides}
+
+    with pytest.raises(ValueError, match=message):
+        ContinuousParameter(**values)  # type: ignore[arg-type]
+
+
+def test_continuous_parameter_allows_disabled_constant_outside_native_domain() -> None:
+    """A disabled constant is not part of the sampled native domain."""
+    parameter = ContinuousParameter(
+        name="level_db",
+        min=LEVEL_MIN_DB,
+        max=LEVEL_MAX_DB,
+        constant_val_p=0.0,
+        constant_val=-120.0,
+    )
+
+    assert LEVEL_MIN_DB <= parameter.sample(np.random.default_rng(0)) <= LEVEL_MAX_DB
+
+
+def test_param_spec_sampling_roundtrip_preserves_native_domain() -> None:
+    """The dataset sampling path round-trips renderer-native continuous values."""
+    spec = ParamSpec(
+        [
+            ContinuousParameter(
+                name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+            )
+        ],
+        [
+            DiscreteLiteralParameter(name="pitch", min=21, max=108),
+            NoteDurationParameter(
+                name="note_start_and_end", max_note_duration_seconds=4.0
+            ),
+        ],
+    )
+
+    synth_params, note_params = spec.sample(np.random.default_rng(5))
+    decoded_synth_params, decoded_note_params = spec.decode(
+        spec.encode(synth_params, note_params)
+    )
+
+    assert LEVEL_MIN_DB <= synth_params["level_db"] <= LEVEL_MAX_DB
+    assert decoded_synth_params["level_db"] == pytest.approx(
+        synth_params["level_db"], abs=1e-5
+    )
+    assert decoded_note_params["pitch"] == note_params["pitch"]
+    assert decoded_note_params["note_start_and_end"] == pytest.approx(
+        note_params["note_start_and_end"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_output", "expected"),
+    [
+        (-1.0, LEVEL_MIN_DB),
+        (0.0, LEVEL_MID_DB),
+        (1.0, LEVEL_MAX_DB),
+    ],
+)
+def test_decode_model_output_maps_to_native_continuous_domain(
+    model_output: float, expected: float
+) -> None:
+    """Model-domain values decode to renderer-native values.
+
+    :param model_output: Scalar prediction in the model domain.
+    :param expected: Expected renderer-native value.
+    """
+    spec = ParamSpec(
+        [
+            ContinuousParameter(
+                name="level_db", min=LEVEL_MIN_DB, max=LEVEL_MAX_DB
+            )
+        ],
+        [],
+    )
+
+    synth_params, _ = decode_model_output(np.array([model_output]), spec)
+
+    assert synth_params["level_db"] == pytest.approx(expected)
+
+
+def test_encoded_width_counts_onehot_and_note_columns() -> None:
+    """Encoded width reflects expanded parameter columns, not source parameter count."""
+    spec = _tiny_spec()
+
+    assert spec.encoded_width == 6
+    assert len(spec) == 6
+
+
+class TestEncodedSlices:
+    """The name-to-column-span contract callers need to index an encoded row."""
+
+    def test_spans_cover_every_column_in_encoding_order(self) -> None:
+        """Slices are contiguous from 0 and ordered synth-then-note, matching ``encode``."""
+        spans = [(param.name, sl.start, sl.stop) for param, sl in _tiny_spec().encoded_slices()]
+
+        assert spans == [
+            ("cutoff", 0, 1),
+            ("mode", 1, 3),
+            ("pitch", 3, 4),
+            ("note_start_and_end", 4, 6),
+        ]
+
+    def test_multi_column_parameter_span_is_wider_than_one(self) -> None:
+        """A onehot parameter claims one column per raw value, not a single column."""
+        spans = dict((param.name, sl) for param, sl in _tiny_spec().encoded_slices())
+
+        assert spans["mode"] == slice(1, 3)
+
+    def test_final_stop_equals_encoded_width(self) -> None:
+        """The walk consumes exactly the encoded row — no trailing columns are unclaimed."""
+        spec = _tiny_spec()
+
+        *_, (_, last) = spec.encoded_slices()
+
+        assert last.stop == spec.encoded_width
+
+    def test_slice_indexes_the_column_the_parameter_encoded(self) -> None:
+        """Indexing an encoded row by a parameter's slice returns that parameter's columns."""
+        spec = _tiny_spec()
+        row = spec.encode({"cutoff": 0.5, "mode": 0.75}, {"pitch": 60, "note_start_and_end": (0, 1)})
+        spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+
+        assert row[spans["mode"]].tolist() == [0.0, 1.0]
+
+
+class TestDecodeModelOutput:
+    """The rescale-then-clip contract, pinned independently of any caller."""
+
+    def test_midpoint_prediction_decodes_to_encoded_half(self) -> None:
+        """A 0.0 model output rescales to the encoded midpoint 0.5."""
+        result = decode_model_output(np.array(_ROW, dtype=np.float32), _tiny_spec())
+
+        assert isinstance(result, tuple) and len(result) == 2
+        synth_params, _ = result
+        assert synth_params["cutoff"] == pytest.approx(0.5)
+
+    def test_extreme_predictions_decode_to_unit_bounds(self) -> None:
+        """Model outputs -1 and 1 rescale to the encoded bounds 0 and 1."""
+        low_row = np.array([-1.0, *_ROW[1:]], dtype=np.float32)
+        high_row = np.array([1.0, *_ROW[1:]], dtype=np.float32)
+
+        low, _ = decode_model_output(low_row, _tiny_spec())
+        high, _ = decode_model_output(high_row, _tiny_spec())
+
+        assert low["cutoff"] == pytest.approx(0.0)
+        assert high["cutoff"] == pytest.approx(1.0)
+
+    def test_out_of_range_predictions_clip_to_unit_bounds(self) -> None:
+        """Values outside [-1, 1] clip to the encoded bounds instead of overshooting."""
+        low_row = np.array([-7.5, *_ROW[1:]], dtype=np.float32)
+        high_row = np.array([7.5, *_ROW[1:]], dtype=np.float32)
+
+        low, _ = decode_model_output(low_row, _tiny_spec())
+        high, _ = decode_model_output(high_row, _tiny_spec())
+
+        assert low["cutoff"] == pytest.approx(0.0)
+        assert high["cutoff"] == pytest.approx(1.0)
+
+    def test_categorical_logits_decode_to_nearest_raw_value(self) -> None:
+        """Onehot positions survive the rescale: the larger logit picks the raw_value."""
+        synth_params, _ = decode_model_output(np.array(_ROW, dtype=np.float32), _tiny_spec())
+
+        assert synth_params["mode"] == pytest.approx(0.75)
+
+    def test_note_params_decode_to_native_domain(self) -> None:
+        """Note params come back in their native domains, not the encoded [0, 1]."""
+        row = np.array([*_ROW[:3], 1.0, 0.2, 0.2], dtype=np.float32)
+
+        _, note_params = decode_model_output(row, _tiny_spec())
+
+        assert note_params["pitch"] == 108
+        # 0.2 in [-1, 1] rescales to 0.6, then lerps onto the 4 s duration grid.
+        assert note_params["note_start_and_end"] == pytest.approx((2.4, 2.4))
+
+    def test_input_row_is_not_mutated(self) -> None:
+        """Decoding never mutates the caller's row (callers reuse prediction tensors)."""
+        row = np.array([7.5, *_ROW[1:]], dtype=np.float32)
+        before = row.copy()
+
+        decode_model_output(row, _tiny_spec())
+
+        assert np.array_equal(row, before)
+
+    def test_nan_predictions_pass_through_undetected(self) -> None:
+        """Current contract: NaN survives np.clip and decodes through unchanged.
+
+        Pinned so adding a NaN guard is a deliberate contract change, not a regression.
+        """
+        row = np.array([math.nan, *_ROW[1:]], dtype=np.float32)
+
+        synth_params, _ = decode_model_output(row, _tiny_spec())
+
+        assert math.isnan(synth_params["cutoff"])
+
+    def test_over_long_rows_are_silently_truncated(self) -> None:
+        """Current contract: extra trailing values are ignored by ParamSpec.decode.
+
+        Pinned so adding a width check is a deliberate, visible contract change.
+        """
+        row = np.array([*_ROW, 9.9, 9.9], dtype=np.float32)
+
+        synth_params, _ = decode_model_output(row, _tiny_spec())
+
+        assert synth_params["cutoff"] == pytest.approx(0.5)
+
+    def test_rows_truncated_to_starve_a_scalar_param_fail_loudly(self) -> None:
+        """Current contract: truncation that empties a later scalar's slice raises ValueError.
+
+        The truncated-through categorical itself decodes silently (argmax of the
+        short slice); the loud failure is pitch's empty slice hitting .item().
+        """
+        row = np.array(_ROW[:2], dtype=np.float32)
+
+        with pytest.raises(ValueError):
+            decode_model_output(row, _tiny_spec())
+
+    def test_tail_truncated_rows_corrupt_note_duration_silently(self) -> None:
+        """Current contract: a row missing only tail values decodes without raising.
+
+        The note-duration value comes back malformed (a 1-tuple) — pinned so a
+        future width guard is a deliberate contract change.
+        """
+        row = np.array(_ROW[:5], dtype=np.float32)
+
+        _, note_params = decode_model_output(row, _tiny_spec())
+
+        assert len(note_params["note_start_and_end"]) == 1

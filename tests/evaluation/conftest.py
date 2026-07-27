@@ -84,7 +84,8 @@ def fixture_pred_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     Tensors are deterministic (seeded) so subsequent refactors of the loader path
     surface as test failures, not flakes. Encoded params live on ``[-1, 1]`` to
-    match the CLI's ``(x + 1) / 2`` rescale + ``np.clip(..., 0, 1)`` path.
+    match :func:`~synth_setter.data.vst.param_spec.decode_model_output`'s
+    inverse-scale contract.
     Pred and target params are drawn from distinct RNG seeds so the resulting
     ``params.csv`` ``pred``/``target`` columns are guaranteed to differ row-wise.
 

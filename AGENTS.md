@@ -5,8 +5,8 @@ Canonical agent instructions for synth-setter. Shared by Claude and Codex.
 ## Project
 
 synth-setter: synth inversion, sound matching, preset exploration tools.
-Python 3.11+, PyTorch Lightning, Hydra, distributed data pipeline on
-SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2.
+Python 3.12.13, PyTorch Lightning, Hydra, distributed data pipeline on
+SkyPilot-managed compute (RunPod + Vast + OCI), stored in Cloudflare R2.
 Architecture: [docs/architecture.md](docs/architecture.md).
 
 ## Always
@@ -22,8 +22,8 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   (`agent/hooks/worktree-guard.sh`) warns on Edit/Write inside the primary
   checkout (`WORKTREE_GUARD_MODE`: `warn` default / `block` / `off`); a
   `PostToolUse` hook (`agent/hooks/worktree-post-setup.sh`) automatically
-  runs `make link-plugins && make link-thoughts` in every new worktree after
-  `git worktree add` (fail-safe, exits 0 on any error — see #1343).
+  installs pre-commit/pre-push hooks and links plugins, thoughts, and skills in
+  every new worktree after `git worktree add` (fail-safe, exits 0 on errors).
 - **Each worktree gets its own `.venv`.** The spawn command runs `uv sync`;
   `~/.bashrc` (installed by `.devcontainer/post-create.sh`) then activates
   `./.venv` per directory, overriding the image's shared `/venv/main`. For
@@ -33,8 +33,32 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
+- **Pi provider policy:** project-local Pi sessions and Pi subagents use
+  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
+  models only. Agent `model` arguments use a fully qualified
+  `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
+  the provider-only `openai-codex`. Do not select Anthropic models or launch
+  Anthropic-backed Pi subagents; keep `.pi/settings.json`,
+  `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
+- **Check the RunPod balance before launching jobs** — exhaustion shows up as
+  jobs stuck in STARTING with no visible cause. Run
+  `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"`.
+  The check is fail-open: "passed" can also mean the balance was unverifiable
+  (missing creds / API error); only a raised "insufficient RunPod balance" is a
+  definitive stop. Never echo the raw balance amount into logs or comments.
+
+## File a bug for out-of-scope errors
+
+Hit an error or clearly-wrong behavior **outside your task's scope** — a red
+test on `main`, an unrelated crash, a silently-wrong result, a stale doc, a
+misfiring hook? Don't fix it inline (scope creep) or drop it silently. **File
+a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a
+sub-issue of the relevant Phase — ask which if none fits), then continue your
+task; note what you saw, expected, and how to reproduce, and surface the
+`[#N](…)` in your reply. The higher the impact, the more this matters. If it
+blocks you, ask how to proceed.
 
 ## Writing code
 
@@ -42,6 +66,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   from R2, worker reports). Dataclasses for internal typed containers.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
+- **Lance distributed-write exception:** workers may write only uncommitted
+  fragment data into a split dataset's `data/` directory. Finalize remains the
+  sole writer of Lance manifests, transactions, statistics, audit records, and
+  completion markers; reconciliation artifacts stay under `metadata/workers/`.
 - Run `make format` before committing. Pre-commit (ruff, ruff-format,
   pydoclint, prettier, mdformat, gitlint) is authoritative; suppressing
   rules to make CI green is forbidden — see
@@ -84,6 +112,14 @@ Pure docs edits are exempt; no other exemptions.
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:`
   for unreleased code (no version bump).
+- **`feat:` / `fix:` / `perf:` / `revert:` are release-reserved.** They cut a
+  semantic-release version bump on merge (PR title = squash-merge subject), so
+  use them only when a release is deliberate — typically one `feat:` config/gate
+  PR after a chain of `internal-feat:` logic PRs. Enforcement: a `PreToolUse`
+  hook (`agent/hooks/pr-title-guard.sh`, `PR_TITLE_GUARD`: `block` default /
+  `warn` / `off`) gates `gh pr create` / `gh pr edit` titles, and a commit-msg
+  hook (`release-type-guard` in `.pre-commit-config.yaml`) gates commit
+  subjects. Deliberate release: prefix the command with `RELEASE_INTENT=1`.
 - Scope is skill-bound — see `/github-taxonomy`.
 - **Never `--no-verify` / `-n`.** Pre-commit and gitlint must run. Hooks
   work inside worktrees.
@@ -118,7 +154,7 @@ exempt.
 ## YAML `run:` block scalars are bash
 
 In GitHub Actions workflows (`.github/workflows/*.{yml,yaml}`) and SkyPilot
-task configs (`src/synth_setter/configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
+task configs (`src/synth_setter/configs/skypilot_launch/compute/*.yaml`'s `run:` / `setup:` blocks), comments
 go **above** the step, never inside the block scalar. The block-scalar body
 is bash and stray `'`, `` ` ``, `$`, or `\` inside a comment has caused
 unintended shell expansion. A `PreToolUse` hook
@@ -133,49 +169,35 @@ unintended shell expansion. A `PreToolUse` hook
 - **PR titles stand alone.** Name the specific subject, not just the action:
   reviewers and `git log` readers don't open the issue. `/github-taxonomy`
   has the canonical title rule and examples.
-- **Pre-PR review gate.** Before `gh pr create`, run
-  `/repo-review-full-no-comments` and address every BLOCK/WARN (fix code or
-  document why it's intentional). The skill writes the rendered report to
-  `.agent-reviews/repo-review-full-no-comments.<HEAD-sha>.md` — filename
-  format owned by `agent/_shared/review_sentinel.py`, shared with the gate
-  hook. A `PreToolUse` hook (`agent/hooks/pre-pr-review-gate.sh`) blocks
-  `gh pr create` until the command carries `REVIEW_FULL=<path>` pointing at
-  that file — recommended as a trailing comment so other gh-pr-create hooks
-  still fire:
-  `gh pr create … # REVIEW_FULL=.agent-reviews/repo-review-full-no-comments.<sha>.md`.
-  The encoded SHA must be an ancestor of HEAD and within `REVIEW_MAX_LAG`
-  (default 2) first-parent commits of it — merges from main count as one
-  commit, not the dozens they bring in. Set `REVIEW_MAX_LAG=N` for a
-  justified larger gap. The gate also **blocks while the sentinel still lists
-  `[comment-hygiene:warn|block]` findings** (`REVIEW_COMMENT_GATE`: `block` default /
-  `warn` / `off`) and **while it lists any `[<skill>:block]` finding**
-  (`REVIEW_BLOCK_GATE`: `block` default / `warn` / `off`). For comment-hygiene
-  findings, run `/fix-review-comments` to apply the rewrites, commit, and
-  re-review in one pass; other `[<skill>:block]` findings need the underlying
-  issue fixed and `/repo-review-full-no-comments` re-run to regenerate the
-  sentinel. Set `REVIEW_COMMENT_GATE=off` / `REVIEW_BLOCK_GATE=off` only for a
-  finding you've judged intentional. The gate also **blocks while the PR's
-  inline `--title` is not a conventional commit** (`PR_TITLE_GATE`: `block`
-  default / `warn` / `off`) — best-effort and fails open on any uvx/network
-  error, since the `pr-metadata-gate` workflow re-checks the title regardless.
+- **Pre-PR review is temporarily advisory.** Run
+  `/repo-review-full-no-comments` before `gh pr create` when the review
+  automation is healthy, and address every BLOCK/WARN. The local
+  `pre-pr-review-gate.sh` implementation and tests remain available for repair,
+  but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
+  is unresolved. Server-side tests, metadata checks, branch protection, and
+  Copilot review continue to gate merges.
 - **Readiness gates:** CI green ∧ `mergeable=MERGEABLE` ∧ every review
   comment has an inline reply ∧ no fresh Copilot findings — see
   `/pr-preflight`.
 - **After every push, drive the readiness loop until all four gates hold.**
   "I pushed the fix" is not "the PR is ready." Run `/pr-readiness` to drive the
-  loop: watch CI (`gh pr checks <N> --watch` or `/loop`) and fix red; confirm
-  `mergeable=MERGEABLE`; reply inline on every open review comment via
-  `/pr-review-resolver`; then wait ~60s (allow 15 min) for Copilot's post-push
-  review on **both** `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
+  loop. Probe once, then poll with `pr_readiness_probe.sh --loop <N>` only for
+  `WAIT`; `ACTION_REQUIRED` means stop polling and fix red CI, conflicts, or
+  review threads. Confirm `mergeable=MERGEABLE`; reply inline on every open
+  review comment via `/pr-review-resolver`; then wait ~60s (allow
+  15 min) for Copilot's post-push review on **both**
+  `repos/<OWNER>/<REPO>/pulls/<N>/comments` and
   `repos/<OWNER>/<REPO>/pulls/<N>/reviews`; address any new findings and loop.
   If Copilot is silent past 15 min, manually re-request and repeat at most
   once. Full procedure (commands, endpoints, traps) in
   [`docs/pr-readiness-loop.md`](docs/pr-readiness-loop.md). A `Stop` hook
-  (`agent/hooks/pr-readiness-stop.sh`) enforces this: it blocks ending the turn
-  while gates 1-2 (CI green, `mergeable`) fail for the branch's open PR, and
-  points back here for gates 3-4 (`PR_READINESS_GATE`: `block` default /
-  `warn` / `off`).
-- **Always reply inline** on each open PR review comment (humans + Copilot),
+  (`agent/hooks/pr-readiness-stop.sh`) enforces this: it runs the same probe
+  and blocks ending the turn while gates 1-3 (CI green, `mergeable`, every
+  unresolved review thread replied) fail for the branch's open PR; gate 4
+  (Copilot) stays advisory (`PR_READINESS_GATE`: `block` default / `warn` /
+  `off`).
+- **Always reply inline** on each open PR review comment (humans, Copilot, and
+  the Claude CI review),
   with a fix-commit SHA or justification. Use `/pr-review-resolver`.
 - **Advisory rewakes carry an origin-HEAD stamp.** The `doc-drift`
   PostToolUse hook runs its headless agent in a detached worktree and
@@ -201,6 +223,11 @@ Local skills wrap the review workflow:
   gate uses this).
 - `/fix-review-comments` (applies the sentinel's comment-hygiene findings,
   commits, and re-reviews — the remediation half of the pre-PR comment gate).
+
+Claude Code and Codex invoke the shared Pi-native review launcher. Pi uses
+Tintin's flat `pr-review-worker` fan-out; the shared analysis owns dynamic
+Codex/free-pool allocation, Codex fallback, and transcript audit rows while
+preserving the same finding and sentinel contracts.
 
 See [`agent/skills/repo-review/SKILL.md`](agent/skills/repo-review/SKILL.md)
 and the shared analysis in

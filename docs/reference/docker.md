@@ -17,9 +17,10 @@ ______________________________________________________________________
 - Build-time secrets: none. The repo is public, source is fetched anonymously.
 - Runtime env vars: see § Runtime environment variables below for the full
   enumeration. At minimum, a `.env` file containing:
-  - `RCLONE_CONFIG_R2_TYPE=s3`, `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` (constants)
-  - `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
-    `RCLONE_CONFIG_R2_ENDPOINT` (R2 credentials)
+  - `SYNTH_SETTER_STORAGE_PROVIDER=r2` (optional; this is the default)
+  - `SYNTH_SETTER_STORAGE_ACCESS_KEY_ID`,
+    `SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY`,
+    `SYNTH_SETTER_STORAGE_ENDPOINT_URL` (R2 credentials)
   - `WANDB_API_KEY` (W&B credential)
 
 The target R2 bucket is **not** an env var — it is a required field on
@@ -41,21 +42,21 @@ at `docker run` time — the **single source of truth** for that contract.
 `SYNTH_SETTER_PLUGIN_PATH` is baked at `/usr/lib/vst3/Surge XT.vst3` and
 may be overridden via `-e`.
 
-| Env var                              | Consumer  | Required for       | Notes                                       |
-| ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
-| `RCLONE_CONFIG_R2_TYPE`              | rclone    | any rclone R2 op   | Constant: `s3`; from `.env` or `-e`         |
-| `RCLONE_CONFIG_R2_PROVIDER`          | rclone    | any rclone R2 op   | Constant: `Cloudflare`; from `.env` or `-e` |
-| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
-| `WANDB_API_KEY`                      | wandb SDK | any W&B-logging op | **Secret**; from `.env`                     |
+| Env var                                  | Consumer         | Required for             | Notes                                             |
+| ---------------------------------------- | ---------------- | ------------------------ | ------------------------------------------------- |
+| `SYNTH_SETTER_STORAGE_PROVIDER`          | storage resolver | provider selection       | Optional; defaults to `r2`                        |
+| `SYNTH_SETTER_STORAGE_ACCESS_KEY_ID`     | storage resolver | any synth-setter R2 op   | **Secret**; canonical application input           |
+| `SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY` | storage resolver | any synth-setter R2 op   | **Secret**; canonical application input           |
+| `SYNTH_SETTER_STORAGE_ENDPOINT_URL`      | storage resolver | any synth-setter R2 op   | **Secret**; canonical application input           |
+| `RCLONE_CONFIG_R2_*`                     | rclone backend   | standalone direct rclone | Legacy input; synth-setter projects it internally |
+| `WANDB_API_KEY`                          | wandb SDK        | any W&B-logging op       | **Secret**; from `.env`                           |
 
-rclone's native env-var config automatically builds the `r2` remote
-inside the container from the `RCLONE_CONFIG_R2_*` variables — no
-`rclone.conf` file is read or written. The bucket name is **not** part
-of the rclone remote config: it lives in `DatasetSpec.r2.bucket` and
-`generate_dataset.py` interpolates it into upload paths via
-`spec.r2.rclone_prefix()` (`r2:${spec.r2.bucket}/${spec.r2.prefix}`).
+The storage resolver validates canonical settings and projects rclone's native
+`RCLONE_CONFIG_R2_*` environment block for synth-setter's backend calls. The
+legacy rclone credential names remain accepted for existing deployments, but a
+bare `rclone` process does not run the resolver; configure it separately when
+using rclone outside synth-setter. The bucket is **not** part of the storage
+credential config: it lives in `DatasetSpec.r2.bucket`.
 
 The build uses **no** BuildKit secrets. The repository is public, so
 source fetches (both the tarball and the in-image git clone) happen
@@ -96,10 +97,11 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target               | Source code            | Typical use                                   |
-| -------------------- | ---------------------- | --------------------------------------------- |
-| `dev-snapshot`       | Git clone at `GIT_REF` | CI, cloud, evaluation                         |
-| `devcontainer-tools` | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root dev) |
+| Target                        | Source code            | Typical use                                            |
+| ----------------------------- | ---------------------- | ------------------------------------------------------ |
+| `dev-snapshot`                | Git clone at `GIT_REF` | CI, cloud, evaluation                                  |
+| `devcontainer-tools`          | Git clone at `GIT_REF` | CLI tools, defaults to root (SkyPilot/RunPod dev pods) |
+| `devcontainer-tools-dev-user` | Git clone at `GIT_REF` | `devcontainer-tools` + non-root `dev` (local VS Code)  |
 
 Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 
@@ -109,9 +111,14 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/Antigravity, zellij, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij; defaults to root
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
+  GIT_REF="$(git rev-parse HEAD)" \
+  DOCKER_BUILD_FLAGS="--load"
+
+# devcontainer-tools-dev-user — devcontainer-tools with a non-root `dev` default user, for local VS Code devcontainers
+make docker-build-devcontainer-tools-dev-user \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 ```
@@ -120,16 +127,26 @@ The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js installed system-wide, the `@anthropic-ai/claude-code` and
-`@openai/codex` CLIs installed for the `dev` user via a per-user npm prefix
-(`~/.npm-global`, on PATH) — so later `npm install -g` runs, including
-claude-code's in-app self-update, avoid EACCES on the root-owned tree and aren't
-shadowed by a system-wide copy. It also adds the Google Antigravity (`agy`) CLI
-installed by its upstream `install.sh` into `~/.local/bin` (also on PATH), the zellij
-terminal multiplexer (pinned upstream musl binary, SHA256-verified, in
-`/usr/local/bin`), a non-root
+the npm CLI tree layered onto the Node binary `dev-base` already bakes for its
+own pytest run, the `@anthropic-ai/claude-code`,
+`@openai/codex`, and `@earendil-works/pi-coding-agent` (`pi`) CLIs installed
+for the `dev` user via a per-user npm prefix (`~/.npm-global`, on PATH) — so
+later `npm install -g` runs, including claude-code's in-app self-update, avoid
+EACCES on the root-owned tree and aren't shadowed by a system-wide copy. It
+also installs the pinned, SHA256-verified Infisical CLI for secret injection.
+It also adds the NousResearch `hermes-agent` (`hermes`) CLI, which its
+SHA256-pinned upstream `install.sh` installs into a dedicated per-user venv —
+run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
+doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the
+#1923 bug class); the Google Antigravity (`agy`) CLI installed by its upstream
+`install.sh` into `~/.local/bin` (also on PATH), the zellij terminal
+multiplexer (pinned upstream musl binary, SHA256-verified, in `/usr/local/bin`),
+a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
-`uv pip install` and editable installs work without sudo, and adds a
+`uv pip install` and editable installs work without sudo (the `dev`-owned tools
+above are installed mid-stage, but the stage ends with `USER root` so SkyPilot's
+RunPod backend can bootstrap sshd; the non-root default lives in the
+`devcontainer-tools-dev-user` sibling stage), and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The VS Code terminal defaults to the
@@ -147,7 +164,7 @@ overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
 baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
 without it, the host's gitignored `plugins/` would shadow the baked file and
 VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
-stage via `FROM tinaudio/synth-setter:devcontainer-tools`.
+non-root sibling via `FROM tinaudio/synth-setter:devcontainer-tools-dev-user`.
 
 ### Build variables
 
@@ -208,11 +225,9 @@ docker run --rm --env-file .env synth-setter:dev-snapshot \
   synth-setter-generate-dataset experiment=<name>
 ```
 
-Available console scripts (declared in `pyproject.toml`'s
-`[project.scripts]`): `synth-setter-train`, `synth-setter-eval`,
-`synth-setter-generate-dataset`, `synth-setter-generate-dataset-from-hydra`,
-`synth-setter-finalize-dataset`, `synth-setter-introspect-plugin`,
-`synth-setter-spec-uri`, `synth-setter-add-embeddings`.
+Callers can run any console script declared in `pyproject.toml`'s
+`[project.scripts]` (e.g. `synth-setter-train`, `synth-setter-eval`,
+`synth-setter-generate-dataset`) — that table is the source of truth.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell.
@@ -234,6 +249,43 @@ docker run --rm synth-setter:dev-snapshot \
   python -c "import torch; print(torch.cuda.is_available())"
 ```
 
+### FUSE mounts (`rclone mount`)
+
+The image ships `fuse` (2.x) — the pinned rclone 1.53 execs the bare
+`fusermount` binary, which `fuse` provides and `fuse3` does not (and the two
+conflict on Ubuntu 22.04) — but FUSE also needs the launch path to grant the
+device and the mount capability:
+
+```bash
+docker run --rm -it --device /dev/fuse --cap-add SYS_ADMIN \
+  --env-file .env synth-setter:dev-snapshot bash
+```
+
+The devcontainer variants pass `--device=/dev/fuse --cap-add=SYS_ADMIN` via
+`runArgs` (pinned by `tests/infra/test_fuse_support.py`); the OCI compute
+template already runs `--privileged`, which is a superset. RunPod pods cannot
+express these flags — SkyPilot creates them via `runpod.create_pod`, which
+has no device/capability parameters — so `rclone mount` does not work on
+RunPod workers; use `rclone copy`/`sync` there instead.
+
+Security trade-off: `SYS_ADMIN` is a broad, near-root capability, and the
+`runArgs` grant is default-on for every devcontainer session — opting out
+means removing both flags from the variant's `devcontainer.json`. On hardened
+hosts Docker's seccomp/AppArmor profile can still block `mount(2)` despite
+the flags; add `--security-opt apparmor:unconfined` if the mount fails.
+
+Inside a container launched with the flags:
+
+```bash
+mkdir -p /mnt/r2
+rclone mount r2:<bucket>/<prefix> /mnt/r2 --read-only --vfs-cache-mode full --daemon
+ls /mnt/r2
+```
+
+The repo-wide `--checksum` rule applies to transfer/compare verbs
+(`copy`/`sync`/`check`); `mount` takes no such flag — VFS reads verify
+integrity per-request.
+
 ### `generate_dataset` — VST dataset generation
 
 Generates one or more VST dataset shards (looping over `spec.shards`) via
@@ -242,10 +294,9 @@ Generates one or more VST dataset shards (looping over `spec.shards`) via
 `synth_setter.cli.generate_dataset.generate()` at the audio-rendering boundary,
 wrapping only the generator subprocess.
 
-**Required env vars:** See § Runtime environment variables above. For
-dataset generation you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
-auth) and `WANDB_API_KEY` (if W&B logging is enabled in the dataset
-config).
+**Required env vars:** See § Runtime environment variables above. Dataset
+generation requires the three canonical credential variables and `WANDB_API_KEY`
+if W&B logging is enabled in the dataset config. The provider defaults to R2.
 
 ```bash
 docker run --rm \
@@ -254,10 +305,9 @@ docker run --rm \
   synth-setter-generate-dataset experiment=generate_dataset/smoke-shard
 ```
 
-The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
-vars plus `WANDB_API_KEY`. If you prefer to keep the
-`TYPE`/`PROVIDER` constants out of `.env`, add them inline:
-`-e RCLONE_CONFIG_R2_TYPE=s3 -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare`.
+The example assumes `.env` contains the canonical
+`SYNTH_SETTER_STORAGE_{ACCESS_KEY_ID,SECRET_ACCESS_KEY,ENDPOINT_URL}` variables
+plus `WANDB_API_KEY`. `SYNTH_SETTER_STORAGE_PROVIDER` defaults to `r2`.
 
 ### Workflow artifact bundle (generate_dataset)
 
@@ -328,20 +378,25 @@ dev-snapshot image, pushes to Docker Hub (and mirrors to
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
-as build validation — no push, no smoke tests.
+as build validation, plus in-image smoke tests
+(`tests/docker/test_devcontainer_tools.py`) for the `devcontainer-tools` and
+`devcontainer-tools-dev-user` targets — but no push and no smoke test against
+the pushed SHA-pinned `dev-snapshot` tag.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                                          |
-| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
-| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+| Tag                                                       | Mutable? | Purpose                                                                          |
+| --------------------------------------------------------- | -------- | -------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                            | Yes      | Convenience pointer to the most recent default-branch build                      |
+| `tinaudio/synth-setter:dev-snapshot`                      | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`             | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`                | No       | Immutable, used for smoke tests                                                  |
+| `tinaudio/synth-setter:devcontainer-tools`                | Yes      | Latest devcontainer-tools, root default (SkyPilot/RunPod dev pods)               |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>`          | No       | Immutable root-default pin                                                       |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user`       | Yes      | Non-root `dev` default (consumed by `.devcontainer/`)                            |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
 
 Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
 as a Docker Hub pull mirror.
@@ -418,13 +473,20 @@ docker run --rm -it synth-setter:dev-snapshot bash
 > killed with no output, increase memory allocation.
 
 - **Local:** Docker Desktop settings → 16 GiB recommended
-- **GitHub Actions:** Use `ubuntu-latest-4core` (16 GiB) or larger runner
+- **GitHub Actions:** the standard `ubuntu-latest` runner on this public repo
+  is 4 vCPU / 16 GiB and suffices. `docker-build-validation.yml` additionally:
+  - caps BuildKit stage concurrency (`max-parallelism = 2`) so independent
+    Dockerfile stages don't stack their RAM peaks
+  - frees ~25 GiB of preinstalled runner toolchains before building
 
 ### VST fails to load
 
 Headless X11 issues — check in order:
 
-1. **Xvfb running?** `src/synth_setter/scripts/run-linux-vst-headless.sh` starts it automatically
+1. **Xvfb running?** `src/synth_setter/scripts/run-linux-vst-headless.sh` starts it automatically,
+   retrying the bootstrap with jittered backoff (`XVFB_BOOTSTRAP_ATTEMPTS`, `XVFB_READY_PROBES`,
+   `XVFB_RETRY_JITTER_MAX` — defaults 3 / 50 / 9; caps 9 / 100 / 9). `XVFB_READY_PROBES`
+   controls X readiness after its display number is written, not the preceding display-file wait.
 2. **Missing libraries?** `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
 3. **Software rendering?** Verify `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
 

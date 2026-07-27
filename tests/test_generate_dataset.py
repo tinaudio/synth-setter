@@ -9,8 +9,11 @@ eval's per-split ``metrics.json`` holds bounded audio metrics under the bare
 ``audio/*`` key for ``test`` and the namespaced ``<split>/audio/*`` key for
 ``train``/``val``; and a variant with ``param_sample_cadence=shard`` that
 asserts the ``shuffled_audio/*`` group also appears (under the same per-split
-prefix) when all sample dirs share uniform ``params.csv`` (#489). The
-integration tests auto-skip when ``rclone`` / R2 creds are absent.
+prefix) when all sample dirs share uniform ``params.csv`` (#489); and an
+``integration_r2`` multi-process contention run over the Lance shard-claims
+table in real R2 that proves each claim generation is granted exactly once
+under R2's conditional-put commit protocol. The integration tests auto-skip
+when ``rclone`` / R2 creds are absent.
 
 Keep this module to tests that drive ``from_hydra`` or the real CLI subprocess.
 Config-composition and ``spec_from_cfg`` unit tests live in
@@ -23,27 +26,56 @@ and the arg-builders live in
 
 from __future__ import annotations
 
+import io
 import json
 import math
+import multiprocessing
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import MagicMock, patch
 
-import h5py
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
-from omegaconf import DictConfig, open_dict
+from lance.file import LanceFileReader
+from omegaconf import DictConfig, OmegaConf, open_dict
+from pedalboard.io import AudioFile
 
+from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    PARAM_ARRAY_FIELD,
+)
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
+from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.schemas.render_metrics import (
+    RenderRejectionMetrics,
+    render_metrics_path,
+)
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+from tests._vst import (
+    PLUGIN_PATH,
+)
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
+from tests.helpers.processes import collect_process_results
+from tests.helpers.subprocess_args import find_script_index
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -51,6 +83,9 @@ from tests.helpers.dummy_shards import stub_renderer
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_REAL_PLUGIN_VST3 = (
+    Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
+).resolve()
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -73,49 +108,20 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     assert spec.render.samples_per_shard >= 1
 
 
-def test_cfg_dataset_without_copy_dataset_root_uri_composes_with_no_copy_source(
-    cfg_dataset: DictConfig,
+def test_cfg_dataset_dawdreamer_error_precedes_darwin_guard(
+    cfg_dataset: DictConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A default compose leaves ``spec.copy_dataset_root_uri`` unset (``dataset.yaml`` sets ``null``).
+    """The generation config reports DawDreamer's backend constraint on Darwin.
 
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
+    :param cfg_dataset: Function-scoped dataset generation configuration.
+    :param monkeypatch: Stubs platform detection to exercise the overlapping guards.
     """
-    spec = spec_from_cfg(cfg_dataset)
-    assert spec.copy_dataset_root_uri is None
-
-
-def test_cfg_dataset_with_copy_dataset_root_uri_composes_copy_source_into_spec(
-    cfg_dataset: DictConfig,
-) -> None:
-    """A ``copy_dataset_root_uri`` override flows through ``spec_from_cfg`` into ``DatasetSpec``.
-
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
-    """
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin")
     with open_dict(cfg_dataset):
-        cfg_dataset.copy_dataset_root_uri = "r2://bucket/prefix/task/run"
+        cfg_dataset.render.renderer_backend = "dawdreamer"
+        cfg_dataset.render.gui_toggle_cadence = "render"
 
-    spec = spec_from_cfg(cfg_dataset)
-    assert spec.copy_dataset_root_uri == "r2://bucket/prefix/task/run"
-
-
-def test_cfg_dataset_copy_dataset_root_uri_with_wds_output_is_rejected(
-    cfg_dataset: DictConfig,
-) -> None:
-    """``spec_from_cfg`` rejects a ``copy_dataset_root_uri`` paired with ``output_format='wds'``.
-
-    The copy path reads each source shard as an HDF5 ``param_array``, so the
-    ``DatasetSpec`` validator fails the spec at construction when output is not hdf5.
-
-    :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
-        ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
-    """
-    with open_dict(cfg_dataset):
-        cfg_dataset.copy_dataset_root_uri = "/data/source-dataset"
-        cfg_dataset.output_format = "wds"
-
-    with pytest.raises(ValueError, match="supports output_format='hdf5' only"):
+    with pytest.raises(ValueError, match='DawDreamer requires gui_toggle_cadence="never"'):
         spec_from_cfg(cfg_dataset)
 
 
@@ -136,14 +142,45 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+def test_cfg_dataset_faust_resolves_production_renderer_contract(
+    cfg_dataset_faust: DictConfig,
+) -> None:
+    """The operator config resolves the production brightOrgan renderer contract.
+
+    The real worker subprocess and Lance artifact are exercised in
+    ``tests/data/vst/test_faust_dataset_e2e.py``.
+
+    :param cfg_dataset_faust: Composed production brightOrgan dataset config.
+    """
+    spec = spec_from_cfg(cfg_dataset_faust)
+
+    assert spec.render.renderer_backend == "dawdreamer_faust"
+    assert spec.render.plugin_path == "faust"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.num_params == 13
+
+
+def test_cfg_dataset_default_plugin_reload_cadence_is_once(
+    cfg_dataset_default_cadence: DictConfig,
+) -> None:
+    """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
+
+    Pins #1999 through the ``spec_from_cfg`` entrypoint path: the composed
+    ``surge_simple`` render group (inheriting ``render/vst.yaml``'s surfaced value)
+    resolves ``"once"`` when neither experiment nor CLI overrides it. The
+    schema-level Field default is pinned separately in
+    ``tests/pipeline/schemas/test_dataset_spec.py::test_cadence_defaults_off_darwin``.
+
+    :param cfg_dataset_default_cadence: Function-scoped fixture composing
+        ``dataset.yaml`` with an experiment that sets no cadence keys.
+    """
+    spec = spec_from_cfg(cfg_dataset_default_cadence)
+    assert spec.render.plugin_reload_cadence == "once"
+
+
 @pytest.mark.fake_vst
-@pytest.mark.parametrize(
-    ("output_format", "shard_suffix"),
-    [("hdf5", ".h5"), ("wds", ".tar"), ("lance", ".lance")],
-)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
-    output_format: str,
-    shard_suffix: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -152,19 +189,14 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
 
     Drives the real worker entrypoint end-to-end on the CPU-fast loop: the Surge
     VST3 subprocess is replaced by ``stub_renderer`` (writes a deterministic
-    validation-shaped shard) and ``r2:`` is a local-filesystem rclone remote via
-    ``fake_r2_remote``, so the partition → render → ``rclone copy`` upload →
-    skip-existing probe loop (#750) runs with no real plugin and no real R2.
-    Parametrized over ``output_format`` so every format's config surface
-    runs the same loop with its own shard suffix (#1600). Asserts
-    (1) ``smoke-shard`` partitions into one shard per split, (2) every shard
-    lands under its spec-derived R2 URI with the format's suffix, (3) the Lance
-    leg writes at the pinned ``LANCE_DATA_STORAGE_VERSION`` (#1714), and (4) a
-    second ``from_hydra`` pass renders nothing because the probe finds all
-    shards already present.
+    validation-shaped Lance shard) and ``r2:`` is a local-filesystem rclone remote
+    via ``fake_r2_remote``, so the partition → render → stage → skip-existing probe
+    loop (#750) runs with no real plugin and no real R2. Asserts (1) ``smoke-shard``
+    partitions into one shard per split, (2) every ``.lance`` shard stages a
+    complete attempt (sidecar + stats + ``.valid``) with its fragment data under
+    the assigned split dataset (#1776), and (3) a second ``from_hydra`` pass
+    renders nothing because the probe finds all shards already staged.
 
-    :param output_format: Dataset output format the run is pinned to.
-    :param shard_suffix: File suffix the format's shards must carry.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -175,9 +207,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
-        cfg_dataset.output_format = output_format
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float16"
         # Pin r2.prefix so the spec built here for assertions and the one
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
@@ -185,60 +219,72 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # Disable the default wandb logger: generate() would call wandb.init() and block.
         cfg_dataset.logger = None
 
-    # Local rclone errors on a missing path; real R2 returns None. Wrap to bridge
-    # that gap so the skip probe sees the absent-object contract unchanged.
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
-
-    # Same local-vs-real bridge for the directory (Lance) skip-probe: a local
-    # rclone remote errors on an absent prefix where real R2 lists empty.
-    real_directory_exists = r2_io.r2_directory_exists
-
-    def _fake_r2_directory_exists(r2_uri: str) -> bool:
-        try:
-            return real_directory_exists(r2_uri)
-        except subprocess.CalledProcessError:
-            return False
-
-    monkeypatch.setattr(r2_io, "r2_directory_exists", _fake_r2_directory_exists)
-
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    with patch(
-        "synth_setter.cli.generate_dataset._check_call_streamed",
-        side_effect=render_shard,
+    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
+    recording_logger = SimpleNamespace(
+        finalize=lambda _status: None,
+        log_hyperparams=lambda _payload: None,
+        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
+    )
+
+    def _render_with_rejections(args: list[str]) -> None:
+        render_shard(args)
+        if args and args[0] != "rclone":
+            shard_path = Path(args[find_script_index(args) + 1])
+            render_metrics_path(shard_path).write_text(
+                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+            )
+
+    with (
+        patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=_render_with_rejections,
+        ),
+        patch(
+            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
+            return_value=[recording_logger],
+        ),
     ):
         from_hydra(cfg_dataset)
 
+    shard_rows = [payload for step, payload in metrics_rows if step is not None]
+    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
+    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
+    summary = next(payload for step, payload in metrics_rows if step is None)
+    assert summary["generation/samples_rejected_clipped"] == 6
+    assert summary["generation/samples_rejected_silent"] == 9
+
+    # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    split_of = {
+        shard_id: split
+        for split, (lo, hi) in spec.split_shard_ranges.items()
+        for shard_id in range(lo, hi)
+    }
     for shard in spec.shards:
-        assert shard.filename.endswith(shard_suffix)
-        if spec.output_format.is_directory:
-            # Probe the committed manifest, mirroring the production skip-probe:
-            # asserts the shard landed AND was committed (not orphaned fragments).
-            assert r2_io.r2_directory_exists(f"{spec.r2.shard_uri(shard)}/_versions"), (
-                f"committed shard missing in fake R2: {shard.filename}"
-            )
-            if output_format == "lance":
-                # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
-                shard_key = spec.r2.shard_uri(shard).removeprefix(r2_io.R2_URI_SCHEME)
-                shard_dir = fake_r2_remote / shard_key
-                assert (
-                    lance.dataset(str(shard_dir)).data_storage_version
-                    == LANCE_DATA_STORAGE_VERSION
-                ), f"shard {shard.filename} not written at pinned storage version"
-        else:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in fake R2: {shard.filename}"
+        assert shard.filename.endswith(".lance")
+        # Require one shared attempt identity; independent suffix matches can combine partial attempts — see #1776.
+        staging = run_root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
+        staged_names = [p.name for p in staging.iterdir()]
+        bases_by_suffix = {
+            suffix: {n.removesuffix(suffix) for n in staged_names if n.endswith(suffix)}
+            for suffix in (".fragment.json", ".shard-stats.npz", ".valid", ".rendering")
+        }
+        shared_bases = set.intersection(*bases_by_suffix.values())
+        assert len(shared_bases) == 1, (
+            f"expected one complete staged attempt for {shard.filename}, "
+            f"got files: {sorted(staged_names)}"
+        )
+        split_data = run_root / f"{split_of[shard.shard_id]}.lance" / "data"
+        data_files = list(split_data.glob("*.lance"))
+        assert data_files, f"no fragment data under {split_data} for {shard.filename}"
+        physical_schema = LanceFileReader(str(data_files[0])).metadata().schema
+        assert physical_schema.field("audio").type.value_type == pa.float32()
+        assert physical_schema.field("mel_spec").type.value_type == pa.float16()
 
     renderer_invocations = 0
 
@@ -258,6 +304,361 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
 
 
+@pytest.mark.fake_vst
+def test_from_hydra_badwindow_failure_logs_metric_before_exit(
+    cfg_dataset: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker entrypoint records a fatal X11 warmup failure before exiting.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard experiment.
+    :param monkeypatch: Replaces the shard-storage boundaries.
+    """
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/badwindow-run/"
+        cfg_dataset.logger = None
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    metric_rows: list[dict[str, float]] = []
+    finalized_statuses: list[str] = []
+    recording_logger = SimpleNamespace(
+        finalize=finalized_statuses.append,
+        log_hyperparams=lambda _payload: None,
+        log_metrics=lambda payload, step=None: metric_rows.append(dict(payload)),
+    )
+    error = subprocess.CalledProcessError(
+        1,
+        "generate_vst_dataset.py",
+        output=(
+            b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
+            b"  Major opcode of failed request:  20 (X_GetProperty)\n"
+        ),
+    )
+
+    with (
+        patch(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            side_effect=error,
+        ),
+        patch(
+            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
+            return_value=[recording_logger],
+        ),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        from_hydra(cfg_dataset)
+
+    assert metric_rows == [{"generation/badwindow_detected": 1.0}]
+    assert finalized_statuses == ["failed"]
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+) -> None:
+    """``from_hydra`` with ``use_shard_queue=true`` claims, renders, and completes every shard.
+
+    Drives the real worker entrypoint end-to-end like its static-partition
+    sibling above, but with the run's Lance shard-claims table as the shard
+    source. Nothing is patched around the claims path: the worker resolves the
+    table through the real ``lance_target`` to the sanctioned
+    ``metadata/shard-claims.lance`` key inside the fake R2 root, exactly as it
+    does against real R2. Asserts every claimed shard lands at its
+    spec-derived R2 URI and every claim row ends ``done``.
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
+        and ``tmp_path``-pinned paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (also where ``lance_target`` resolves the claims table).
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/test-run/"
+        # Disable the default wandb logger: generate() would call wandb.init() and block.
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate([shard.shard_id for shard in spec.shards])
+
+    render_shard = stub_renderer(spec)
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+
+    table_dir = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata/shard-claims.lance"
+    assert table_dir.is_dir(), "claims table must live at its sanctioned key in the R2 layout"
+    for shard in spec.shards:
+        assert shard_has_complete_attempt(spec, shard.shard_id)
+    assert claims.claim() is None, "no claimable rows may remain after the run"
+    assert claims.status_counts() == {"done": spec.num_shards}
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+) -> None:
+    """A crashed claim is shielded while its lease lives, then recovered by relaunch.
+
+    Full crash-recovery loop through the real worker entrypoint, no claims
+    seam patched: run 1's renderer fails and the run dies with the claim
+    held; run 2 inside the lease window renders nothing (a poison shard
+    cannot cascade across relaunches); after the lease is aged out, run 3
+    re-claims at the next generation, renders, and completes the shard.
+
+    :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
+        and ``tmp_path``-pinned paths.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (fixture-activation only — referenced via the ARG001 noqa).
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/crash-run/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate([0])
+    render_shard = stub_renderer(spec)
+
+    def _crash_renderer(args: list[str]) -> None:
+        if args and args[0] == "rclone":
+            render_shard(args)
+            return
+        raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_crash_renderer,
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            from_hydra(cfg_dataset)
+    assert claims.status_counts() == {"claimed": 1}
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ) as inside_lease:
+        from_hydra(cfg_dataset)
+    renderer_calls = [c for c in inside_lease.call_args_list if c.args[0][0] != "rclone"]
+    assert renderer_calls == [], "a live lease must shield the crashed claim from relaunch"
+    assert not shard_has_complete_attempt(spec, 0)
+
+    # Age the crashed claim's lease in place of waiting out the real 2 hours.
+    lance.dataset(claims.uri).update({"lease_expiry_s": "0"}, where="status = 'claimed'")
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=render_shard,
+    ):
+        from_hydra(cfg_dataset)
+    assert shard_has_complete_attempt(spec, 0)
+    assert claims.status_counts() == {"done": 1}
+    row = lance.dataset(claims.uri).to_table().to_pylist()[0]
+    assert row["claim_gen"] == 2, "recovery must advance the fencing generation"
+    assert row["attempts"] == 2
+
+
+@pytest.mark.fake_vst
+def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_marker(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A corrupt render fails loudly before staging — no ``.valid`` ever lands (#1776).
+
+    Drives the real worker entrypoint with a stub renderer that writes a shard
+    holding double the spec's rows. Worker-side validation must reject it, the
+    run must fail, and the staging directory must hold no ``.valid`` marker or
+    sidecar (the shard stays "missing" for the next reconciliation pass).
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the single-worker rank/world env and the
+        moduleinfo-only plugin so the renderer-version guard passes.
+    """
+    from synth_setter.pipeline.data.lance_shard import (
+        lance_schema,
+        record_batch_from_arrays,
+        write_lance_dataset,
+    )
+    from tests.helpers.subprocess_args import find_script_index
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.r2.prefix = "fake-r2/invalid-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    def _render_oversized_shard(args: list[str]) -> None:
+        from synth_setter.data.vst.shapes import (
+            DATASET_FIELD_DTYPES,
+            dataset_field_shapes,
+        )
+        from tests.helpers.lance_fixtures import with_preview_columns
+
+        output_file = Path(args[find_script_index(args) + 1])
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        oversized = spec.render.model_copy(
+            update={"samples_per_shard": spec.render.samples_per_shard * 2}
+        )
+        shapes = dataset_field_shapes(oversized, spec.num_params)
+        schema = lance_schema(shapes, oversized.shard_metadata())
+        arrays = {
+            field: np.zeros(shape, dtype=DATASET_FIELD_DTYPES[field])
+            for field, shape in shapes.items()
+        }
+        write_lance_dataset(
+            output_file,
+            schema,
+            [
+                record_batch_from_arrays(
+                    with_preview_columns(arrays, oversized.sample_rate),
+                    schema,
+                    debug=None,
+                )
+            ],
+        )
+        render_metrics_path(output_file).write_text(RenderRejectionMetrics().model_dump_json())
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_oversized_shard,
+    ):
+        with pytest.raises(RuntimeError, match="failed local validation"):
+            from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    staged = [p.name for p in staging_root.rglob("*") if p.is_file()]
+    assert not [name for name in staged if name.endswith((".valid", ".fragment.json"))], (
+        f"invalid render must not stage a complete attempt, found: {staged}"
+    )
+    # The attempt-start marker is the only allowed trace of the failed attempt.
+    assert staged
+    assert all(name.endswith(".rendering") for name in staged)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    tmp_path: Path,
+) -> None:
+    """Claims mode stages one real VST Lance shard that validates from fake R2.
+
+    :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
+        (also where ``lance_target`` resolves the claims table).
+    :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.use_shard_queue = True
+        cfg_dataset.render.synth.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
+    claims.populate(shard.shard_id for shard in spec.shards)
+
+    from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    assert len(list(staging_root.rglob("*.valid"))) == 1
+    assert validate_all_shards_from_r2(spec) == []
+    assert claims.claim() is None
+    assert claims.status_counts() == {"done": spec.num_shards}
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A real VST Lance render stages complete attempts that resume skips.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the real rclone process.
+    :param monkeypatch: Pins the single-worker rank and world size.
+    :param tmp_path: Scratch directory for finalize sidecars and statistics.
+    """
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 1, 1]
+        cfg_dataset.render.synth.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-lance-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    staging_root = (
+        fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
+    )
+    first_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert len(first_attempts) == len(spec.shards)
+
+    from_hydra(cfg_dataset)
+
+    resumed_attempts = sorted(path.name for path in staging_root.rglob("*.valid"))
+    assert resumed_attempts == first_attempts
+
+    assert validate_all_shards_from_r2(spec) == []
+
+
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
@@ -272,29 +673,17 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
 
     :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the single-worker env, the moduleinfo-only plugin, and
-        the local-vs-real R2 skip-probe bridge.
+    :param monkeypatch: Pins the single-worker env and the moduleinfo-only plugin
+        so the renderer-version guard passes.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     with open_dict(cfg_dataset):
-        cfg_dataset.output_format = "hdf5"
-        cfg_dataset.render.plugin_path = str(_TEST_PLUGIN_VST3)
-        cfg_dataset.render.renderer_version = _TEST_PLUGIN_VERSION
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset.render.synth.synth_version = _TEST_PLUGIN_VERSION
         cfg_dataset.r2.prefix = "fake-r2/seed-run/"
         cfg_dataset.logger = None
-
-    # Local rclone errors on a missing object where real R2 returns None; bridge it
-    # so the skip-existing probe sees every shard as absent and renders all of them.
-    real_object_size = r2_io.object_size
-
-    def _fake_r2_object_size(r2_uri: str) -> int | None:
-        try:
-            return real_object_size(r2_uri)
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(r2_io, "object_size", _fake_r2_object_size)
 
     spec = spec_from_cfg(cfg_dataset)
     render_shard = stub_renderer(spec)
@@ -314,6 +703,172 @@ def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     for shard in spec.shards:
         argv = next(a for a in captured if any(shard.filename in tok for tok in a))
         assert argv[argv.index("--base_seed") + 1] == str(shard.seed)
+
+
+def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composed DawDreamer smoke experiment reaches renderer argv and fake R2.
+
+    :param cfg_dataset_dawdreamer: Hydra cfg composed from the DawDreamer smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract and plugin metadata.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.render.synth.plugin_path = str(_TEST_PLUGIN_VST3)
+        cfg_dataset_dawdreamer.render.synth.synth_version = _TEST_PLUGIN_VERSION
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_dawdreamer)
+
+    assert spec.render.renderer_backend == "dawdreamer"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "dawdreamer"
+    shard = spec.shards[0]
+    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
+def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SurgePy identity reaches the operator renderer subprocess contract.
+
+    :param cfg_dataset_dawdreamer: Dataset scaffold changed to the SurgePy backend.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.render.synth.plugin_path = "surgepy"
+        cfg_dataset_dawdreamer.render.synth.plugin_state_path = "presets/surge-base.fxp"
+        cfg_dataset_dawdreamer.render.renderer_backend = "surgepy"
+        cfg_dataset_dawdreamer.render.synth.synth_version = "1.3.master.f7b97c68"
+        cfg_dataset_dawdreamer.render.gui_toggle_cadence = "never"
+        cfg_dataset_dawdreamer.render.plugin_reload_cadence = "render"
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/surgepy-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_dawdreamer)
+
+    assert spec.render.renderer_backend == "surgepy"
+    assert spec.render.plugin_path == "surgepy"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "surgepy"
+    shard = spec.shards[0]
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
+def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composed torchsynth smoke experiment reaches renderer argv and fake R2.
+
+    No plugin-path or version monkeypatching is needed: the bare ``torchsynth``
+    plugin path resolves its version from the installed package.
+
+    :param cfg_dataset_torchsynth: Hydra cfg composed from the torchsynth smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.r2.prefix = "fake-r2/torchsynth-run/"
+        cfg_dataset_torchsynth.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_torchsynth)
+    captured_renderer_argv: list[str] = []
+    render_shard = stub_renderer(spec)
+
+    def _capture(args: list[str]) -> None:
+        if not (args and args[0] == "rclone"):
+            captured_renderer_argv.extend(args)
+        render_shard(args)
+
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_capture,
+    ):
+        from_hydra(cfg_dataset_torchsynth)
+
+    assert spec.render.renderer_backend == "torchsynth"
+    assert spec.render.plugin_path == "torchsynth"
+    backend_index = captured_renderer_argv.index("--renderer_backend")
+    assert captured_renderer_argv[backend_index + 1] == "torchsynth"
+    # Dispatch must survive any worker cwd: the renderer script argv entry is
+    # import-anchored, so it is an absolute path to a real file.
+    script = next(a for a in captured_renderer_argv if a.endswith("generate_vst_dataset.py"))
+    assert Path(script).is_absolute()
+    assert Path(script).is_file()
+    shard = spec.shards[0]
+    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
@@ -390,6 +945,440 @@ def test_main_skips_schema_invalid_cadence_cell_without_failing(
     assert "skipping run" in (result.stdout + result.stderr)
 
 
+def _write_executable(path: Path, body: str) -> None:
+    """Write a small executable used by the worker-command integration test.
+
+    :param path: Executable path to create.
+    :param body: Complete shell-script contents.
+    """
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def _make_stale_worker_checkout(tmp_path: Path) -> Path:
+    """Create the pre-helper checkout shape found in an old worker image.
+
+    :param tmp_path: Scratch root for the worker checkout.
+    :returns: Worker checkout containing only the legacy sync script.
+    """
+    worker_root = tmp_path / "worker"
+    scripts_dir = worker_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "sync_worker_checkout.sh").write_text(
+        '#!/bin/bash\nset -euo pipefail\n[[ -z "${WORKER_GIT_REF:-}" ]] && exit 0\n'
+    )
+    return worker_root
+
+
+def _make_fake_worker_runtime(tmp_path: Path, trace: Path) -> Path:
+    """Create a worker runtime that delegates venv creation to the real ``uv``.
+
+    :param tmp_path: Scratch root for the fake executable directory.
+    :param trace: File receiving install and entrypoint invocations.
+    :returns: Directory to prepend to ``PATH``.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    _write_executable(
+        fake_bin / "uv",
+        "#!/bin/bash\n"
+        f'if [[ "$1" == "venv" ]]; then exec {shlex.quote(real_uv)} "$@"; fi\n'
+        f'printf "install:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
+    )
+    _write_executable(
+        fake_bin / "synth-setter-generate-dataset-from-hydra",
+        f'#!/bin/bash\nprintf "exec:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
+    )
+    return fake_bin
+
+
+def test_main_skypilot_env_file_endpoint_active_at_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generate-dataset CLI carries env-file auth through real dispatch.
+
+    :param tmp_path: Hosts the dotenv source and Hydra output.
+    :param monkeypatch: Isolates storage and external SkyPilot service boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    env_file = tmp_path / "launcher.env"
+    env_file.write_text(
+        "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID=key\n"
+        "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY=secret\n"
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL=https://acct.r2.cloudflarestorage.com\n"
+        "SKYPILOT_API_SERVER_ENDPOINT=https://sky.example.com\n"
+    )
+
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "write_spec_locally",
+        MagicMock(side_effect=lambda _spec, output_dir: Path(output_dir) / "input_spec.json"),
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "upload_spec",
+        MagicMock(return_value="r2://stub-bucket/run/input_spec.json"),
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli.r2_io,
+        "ensure_r2_env_loaded",
+        MagicMock(return_value=None),
+    )
+
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
+    fake_sky = MagicMock()
+
+    def assert_env_file_endpoint_is_active(*_args: object, **_kwargs: object) -> str:
+        assert os.environ["SKYPILOT_API_SERVER_ENDPOINT"] == "https://sky.example.com"
+        return "launch-req"
+
+    fake_sky.jobs.launch.side_effect = assert_env_file_endpoint_is_active
+    fake_sky.stream_and_get.return_value = ([1], MagicMock())
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
+            "skypilot_launch/compute=runpod/smoke",
+            f"skypilot_launch.env_file={env_file}",
+        ],
+    )
+
+    cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    submitted_task = fake_sky.jobs.launch.call_args.args[0]
+    assert submitted_task.run is not None
+    assert f"skypilot_launch.env_file={env_file}" in submitted_task.run
+    fake_sky.jobs.launch.assert_called_once()
+
+
+@pytest.fixture()
+def remote_worker_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Path, Path, Path], subprocess.CompletedProcess[str]]:
+    """Build a launcher that executes its generated worker command locally.
+
+    :param tmp_path: Scratch paths for the generated command.
+    :param monkeypatch: Redirects storage and SkyPilot boundaries.
+    :returns: Callable accepting worker root, worker venv, and fake runtime directory.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    def _dispatch(
+        worker_root: Path, worker_venv: Path, fake_bin: Path
+    ) -> subprocess.CompletedProcess[str]:
+        monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+        monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("VIRTUAL_ENV", str(worker_venv))
+        monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+        monkeypatch.setattr(generate_dataset_cli, "_WORKER_REPO_ROOT", str(worker_root))
+        monkeypatch.setattr(generate_dataset_cli, "_WORKER_VENV", str(worker_venv))
+        monkeypatch.setattr(
+            generate_dataset_cli,
+            "write_spec_locally",
+            lambda _spec, output_dir: Path(output_dir) / "input_spec.json",
+        )
+        monkeypatch.setattr(
+            generate_dataset_cli,
+            "upload_spec",
+            lambda _spec: "r2://test/input_spec.json",
+        )
+        monkeypatch.setattr(
+            generate_dataset_cli.r2_io,
+            "ensure_r2_env_loaded",
+            lambda _env_file: None,
+        )
+
+        completed: list[subprocess.CompletedProcess[str]] = []
+
+        def _execute_worker(sky_cfg: SkypilotLaunchConfig) -> None:
+            assert sky_cfg.cmd is not None
+            command_path = tmp_path / "worker-command.sh"
+            command_path.write_text(sky_cfg.cmd)
+            completed.append(
+                subprocess.run(
+                    ["/bin/bash", "worker-command.sh"],
+                    cwd=tmp_path,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            )
+
+        monkeypatch.setattr(skypilot_launch, "dispatch_via_skypilot", _execute_worker)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/smoke-shard",
+                f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
+                "skypilot_launch/compute=runpod/smoke",
+            ],
+        )
+
+        cast("Callable[[], None]", generate_dataset_cli.main)()
+
+        assert len(completed) == 1
+        return completed[0]
+
+    return _dispatch
+
+
+def _patch_remote_dispatch_boundaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> MagicMock:
+    """Fake the storage, spec-upload, cred, balance, and SkyPilot boundaries for dispatch.
+
+    Leaves ``main`` → ``dispatch_via_skypilot`` real; sets a sub-floor RunPod
+    balance so the preflight must abort the launch.
+
+    :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
+    :param tmp_path: Scratch dir for the compute template.
+    :return: The fake ``sky`` module for submission assertions.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv(
+        "SYNTH_SETTER_STORAGE_ENDPOINT_URL", "https://acct.r2.cloudflarestorage.com"
+    )
+    monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+    monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        generate_dataset_cli,
+        "write_spec_locally",
+        lambda _spec, output_dir: Path(output_dir) / "input_spec.json",
+    )
+    monkeypatch.setattr(
+        generate_dataset_cli, "upload_spec", lambda _spec: "r2://test/input_spec.json"
+    )
+    monkeypatch.setattr(generate_dataset_cli.r2_io, "ensure_r2_env_loaded", lambda _env_file: None)
+    monkeypatch.setattr(skypilot_launch, "_run_cred_bootstrap", lambda **_kwargs: None)
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", lambda _env: "a" * 40)
+    monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 1.0)
+    fake_sky = MagicMock()
+    monkeypatch.setattr(skypilot_launch.sky.jobs, "launch", fake_sky.jobs.launch)
+    monkeypatch.setattr(skypilot_launch.sky, "stream_and_get", fake_sky.stream_and_get)
+    return fake_sky
+
+
+def test_main_remote_dispatch_low_runpod_balance_aborts_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generate-dataset entrypoint aborts a RunPod dispatch on insufficient balance.
+
+    ``HYDRA_FULL_ERROR=1`` is pinned so hydra re-raises the launcher's typed
+    ``RuntimeError`` instead of wrapping it in ``SystemExit(1)`` — the exception
+    type + message pin the balance cause; a pre-dispatch config failure would
+    raise something else.
+
+    :param tmp_path: Scratch dir for the compute template.
+    :param monkeypatch: Redirects storage, SkyPilot, and balance boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+
+    fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
+    monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
+            "skypilot_launch/compute=runpod/smoke",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
+        cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    fake_sky.jobs.launch.assert_not_called()
+
+
+def test_main_remote_dispatch_defaults_worker_ref_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generate-dataset entrypoint pins worker source before submission.
+
+    :param tmp_path: Scratch directory for the compute template.
+    :param monkeypatch: Redirects storage, git preflight, and SkyPilot boundaries.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset_cli
+    import synth_setter.pipeline.skypilot_launch as skypilot_launch
+
+    fake_sky = _patch_remote_dispatch_boundaries(monkeypatch, tmp_path)
+    expected_ref = "a" * 40
+
+    def resolve_default(worker_env: Mapping[str, str]) -> str:
+        assert "WORKER_GIT_REF" not in worker_env
+        return expected_ref
+
+    monkeypatch.setattr(skypilot_launch, "_resolve_worker_git_ref", resolve_default)
+    monkeypatch.setattr(skypilot_launch, "_fetch_runpod_balance", lambda: 100.0)
+    fake_sky.jobs.launch.return_value = "launch-request"
+    fake_sky.stream_and_get.return_value = ([1], MagicMock())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.synth.plugin_path={_TEST_PLUGIN_VST3}",
+            "skypilot_launch/compute=runpod/smoke",
+        ],
+    )
+
+    cast("Callable[[], None]", generate_dataset_cli.main)()
+
+    worker_env = fake_sky.jobs.launch.call_args.args[0].envs
+    assert worker_env["WORKER_GIT_REF"] == expected_ref
+    fake_sky.jobs.launch.assert_called_once()
+
+
+def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_executes(
+    tmp_path: Path,
+    remote_worker_dispatch: Callable[[Path, Path, Path], subprocess.CompletedProcess[str]],
+) -> None:
+    """An unpinned stale worker repairs Python before executing the entrypoint.
+
+    :param tmp_path: Scratch worker checkout and safe worker-venv target.
+    :param remote_worker_dispatch: Locally executes the generated worker command.
+    """
+    worker_root = _make_stale_worker_checkout(tmp_path)
+    worker_venv = tmp_path / "worker-venv"
+    stale_python = worker_venv / "bin/python"
+    stale_python.parent.mkdir(parents=True)
+    _write_executable(stale_python, "#!/bin/bash\nexit 1\n")
+    trace = tmp_path / "worker-trace.log"
+    fake_bin = _make_fake_worker_runtime(tmp_path, trace)
+    result = remote_worker_dispatch(worker_root, worker_venv, fake_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    repaired_version = subprocess.run(  # noqa: S603 -- controlled executable in tmp_path
+        [worker_venv / "bin/python", "-c", "import sys; print(sys.version_info[:3])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert repaired_version == "(3, 12, 13)"
+    install, invocation = trace.read_text().splitlines()
+    assert install == "install:pip install --group runtime -e ."
+    assert invocation.startswith("exec:experiment=generate_dataset/smoke-shard ")
+    assert f"render.synth.plugin_path={_TEST_PLUGIN_VST3}" in invocation
+    assert "skypilot_launch/compute=runpod/smoke" in invocation
+    assert "+created_at=" in invocation
+
+
+def _r2_claims_steal_worker(
+    uri: str,
+    storage_options: dict[str, str],
+    worker_index: int,
+    out: multiprocessing.Queue[list[tuple[int, int]]],
+) -> None:
+    """Hammer claims on the real-R2 table under an always-expired lease.
+
+    Module-level so ``multiprocessing``'s ``spawn`` context can pickle it.
+
+    :param uri: ``s3://`` URI of the shared claims table in real R2.
+    :param storage_options: Lance object-store credentials for the table.
+    :param worker_index: Distinguishes this worker's owner identity.
+    :param out: Receives this worker's ``[(shard_id, claim_gen), ...]`` wins.
+    """
+    from datetime import timedelta
+
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    claims = ShardClaims(
+        uri=uri,
+        storage_options=storage_options,
+        owner=f"proc-{worker_index}",
+        lease=timedelta(seconds=-5),
+    )
+    wins = []
+    for _ in range(4):
+        claimed = claims.claim()
+        if claimed is not None:
+            wins.append((claimed.shard_id, claimed.claim_gen))
+    out.put(wins)
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.slow
+def test_shard_claims_contention_on_real_r2_grants_each_generation_once() -> None:
+    """Concurrent workers stealing claims in real R2 never share a generation.
+
+    The load-bearing assumption behind claims mode is that a Lance
+    conditional ``update`` re-evaluates its predicate when its commit
+    conflicts — on R2's conditional-put commit protocol, not just the local
+    filesystem. Three real OS processes hammer two rows under an
+    always-expired lease; if R2 commits ever let two workers win the same
+    ``(shard_id, claim_gen)``, or dropped a committed win, this fails.
+    Auto-skips without R2; a fresh-prefix guard catches leftovers from a
+    crashed prior run before any worker starts, and the unique prefix is
+    purged in ``finally``. Worker results carry a 600s budget — generous
+    against R2 latency spikes for ~26 tiny commits.
+    """
+    from synth_setter.pipeline.r2_io import lance_target
+    from synth_setter.pipeline.schemas.r2_location import R2Location
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or `rclone lsd r2:` failed)")
+
+    unique_prefix = f"test-runs/test_shard_claims_contention/{uuid.uuid4().hex[:12]}/"
+    location = R2Location(bucket="intermediate-data", prefix=unique_prefix)
+    uri, storage_options = lance_target(location.shard_claims_uri())
+    assert storage_options is not None, "contention run must target real R2, not local mode"
+    assert not r2_io.list_entries(f"r2://{location.bucket}/{unique_prefix}", recursive=True), (
+        "unique prefix must start empty; a leftover here means a prior run leaked"
+    )
+    try:
+        ShardClaims(uri=uri, storage_options=storage_options, owner="operator").populate(range(2))
+
+        results = cast(
+            "list[list[tuple[int, int]]]",
+            collect_process_results(
+                _r2_claims_steal_worker,
+                [(uri, storage_options, index) for index in range(3)],
+            ),
+        )
+
+        all_wins = [win for wins in results for win in wins]
+        assert all_wins, "at least one steal must land for the invariant to be exercised"
+        assert len(set(all_wins)) == len(all_wins), "two workers won the same generation"
+        rows = (
+            lance.dataset(uri, storage_options=storage_options)
+            .to_table(columns=["shard_id", "claim_gen"])
+            .to_pylist()
+        )
+        # >= not ==: a verify-read racing a steal burns an unrecorded generation.
+        assert sum(row["claim_gen"] for row in rows) >= len(all_wins), (
+            "more wins recorded than generations"
+        )
+    finally:
+        r2_io.purge_prefix(location.bucket, location.prefix)
+
+
 @pytest.mark.integration_r2
 @pytest.mark.r2
 @pytest.mark.requires_vst
@@ -422,8 +1411,9 @@ def test_generate_dataset_renders_shards_to_r2(
     try:
         from_hydra(cfg_dataset)
         for shard in spec.shards:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+            assert shard_has_complete_attempt(spec, shard.shard_id), (
+                f"staged attempt missing in R2: {shard.filename}"
+            )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
@@ -468,8 +1458,9 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     try:
         from_hydra(cfg_dataset_obxf)
         for shard in spec.shards:
-            size = r2_io.object_size(spec.r2.shard_uri(shard))
-            assert size is not None and size > 0, f"shard missing in R2: {shard.filename}"
+            assert shard_has_complete_attempt(spec, shard.shard_id), (
+                f"staged attempt missing in R2: {shard.filename}"
+            )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
@@ -484,8 +1475,10 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
     """``render.param_sample_cadence="shard"`` makes every sample in a shard share one patch.
 
     Drives the real ``generate_dataset`` entrypoint (``from_hydra``) end-to-end
-    under shard cadence, then downloads each shard and asserts its ``param_array``
-    rows are all identical — the one-patch-per-shard invariant the #489 variance
+    under shard cadence, then reads each shard's row range from its finalized
+    split dataset in R2 (winner fragments commit in shard order, so a shard's
+    rows sit at a spec-derived offset) and asserts its ``param_array`` rows
+    are all identical — the one-patch-per-shard invariant the #489 variance
     probe relies on. Auto-skips without R2; purges the unique prefix in
     ``finally`` so a failure can't leak shards.
 
@@ -502,18 +1495,43 @@ def test_generate_dataset_shard_cadence_renders_one_identical_patch_per_shard(
 
     spec = spec_from_cfg(cfg_dataset)
     assert spec.render.param_sample_cadence == "shard"
+    storage_options = r2_io.r2_storage_options()
     try:
         from_hydra(cfg_dataset)
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            finalize_lance(spec, Path(raw_work_dir))
+        split_of: dict[int, Split] = {
+            shard_id: split
+            for split, (lo, hi) in spec.split_shard_ranges.items()
+            for shard_id in range(lo, hi)
+        }
         for shard in spec.shards:
-            with r2_io.downloaded_to_tempfile(spec.r2.shard_uri(shard)) as local:
-                with h5py.File(local, "r") as f:
-                    param_dataset = f["param_array"]
-                    assert isinstance(param_dataset, h5py.Dataset)
-                    params = param_dataset[:]
+            split = split_of[shard.shard_id]
+            first_shard_in_split = spec.split_shard_ranges[split][0]
+            offset = (shard.shard_id - first_shard_in_split) * spec.render.samples_per_shard
+            s3_uri = r2_io.to_s3_uri(spec.r2.split_lance_uri(split))
+            table = lance.dataset(s3_uri, storage_options=storage_options).to_table(
+                columns=[AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD, PARAM_ARRAY_FIELD]
+            )
+            row_slice = slice(offset, offset + spec.render.samples_per_shard)
+            params = np.stack(
+                table.column(PARAM_ARRAY_FIELD).to_numpy(zero_copy_only=False)[row_slice]
+            )
             assert params.shape[0] == spec.render.samples_per_shard
             assert np.array_equal(params, np.broadcast_to(params[0], params.shape)), (
                 f"shard {shard.filename} has non-identical param rows under shard cadence"
             )
+
+            audio_rows = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()[row_slice]
+            mp3_rows = table.column(AUDIO_MP3_FIELD).to_pylist()[row_slice]
+            uuid_rows = table.column(AUDIO_UUID_FIELD).to_pylist()[row_slice]
+            assert uuid_rows == [audio_uuid(row) for row in audio_rows]
+            for payload in mp3_rows:
+                with AudioFile(io.BytesIO(payload)) as audio_file:
+                    decoded = audio_file.read(audio_file.frames)
+                    assert int(audio_file.samplerate) == spec.render.sample_rate
+                assert decoded.shape[0] == spec.render.channels
+                assert decoded.shape[1] > 0
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
 
@@ -579,6 +1597,18 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
+
+        eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
+        assert len(eval_configs) == 3
+        for config_path in eval_configs:
+            eval_cfg = OmegaConf.load(config_path)
+            assert eval_cfg.render.synth.param_spec_name == "surge_simple"
+            assert eval_cfg.render.synth.plugin_state_path == "presets/surge-simple.vstpreset"
+            assert eval_cfg.render.synth.synth_version == "1.3.4"
+            assert eval_cfg.render.renderer_backend == "pedalboard"
+            assert eval_cfg.render.plugin_reload_cadence == "render"
+            assert eval_cfg.render.gui_toggle_cadence == "once"
+            assert eval_cfg.render.sample_rate == 44100
 
         # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))
@@ -725,3 +1755,23 @@ def test_oracle_eval_inline_writes_shuffled_audio_metrics_when_params_uniform(
                 )
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{r2_prefix_root}/")
+
+
+def test_cfg_dataset_carries_ram_bounded_num_workers_for_oracle_eval(
+    cfg_dataset: DictConfig,
+) -> None:
+    """Generate composes the VST datamodule's RAM-bounded worker default.
+
+    Unlike ``train`` / ``evaluate``, generate never builds a datamodule: it
+    forwards this value into the oracle-eval subprocess's argv, and the shard
+    render pool sizes itself from ``available_cpus() // 2`` independently. The
+    forwarding helper is private, which this module may not import, so the
+    composed default is the consumable surface a test can pin here — the argv
+    itself is covered by the oracle-eval inline tests above.
+
+    Lance workers are ~1.4 GB each and the previous default of 11 exhausted a
+    32 GB host (#1916).
+
+    :param cfg_dataset: Composed config; read only for ``datamodule.num_workers``.
+    """
+    assert cfg_dataset.datamodule.num_workers == 4

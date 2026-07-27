@@ -5,7 +5,7 @@ name: Generate Dataset Shards
 # `synth_setter.pipeline.ci.validate_shard` before returning. Callers fan out
 # across providers (see test-dataset-generation.yml) and pass per-provider
 # values via inputs. All providers drive `synth-setter-generate-dataset` with
-# a `skypilot_launch.compute_template=...` Hydra override.
+# a `skypilot_launch/compute=...` Hydra group override.
 #
 # Validation is always-on (no opt-in flag): every caller of this workflow
 # gets shard-contract enforcement. This closes the contract-drift gap that
@@ -29,12 +29,11 @@ name: Generate Dataset Shards
 #   * `skypilot-local` — provisions a kind cluster on the runner via
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
 #     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
-#     controller pod fits on kind, then invokes against
-#     `src/synth_setter/configs/compute/local-template.yaml`. The launcher detects
-#     `cloud: kubernetes` and skips its cred bootstrap. Always tears down
-#     kind in `if: always()`.
+#     controller pod fits on kind, then invokes against the `local/kind`
+#     compute option. The launcher detects the kubernetes backend and skips
+#     its cred bootstrap. Always tears down kind in `if: always()`.
 #   * `runpod` / `oci` — in-container invocation against the matching
-#     `src/synth_setter/configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
+#     `skypilot_launch/compute` option. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
 #     is set, the bootstrap is skipped (the remote API server holds creds).
 #
@@ -89,7 +88,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -152,7 +151,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=wds`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter fails the workflow because the docker row expands the variable unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -284,6 +283,10 @@ jobs:
             /usr/local/lib/node_modules
           df -h / || true
 
+      # Reset preloaded Docker state and use separate storage when the runner provides it.
+      - name: Prepare Docker storage capacity
+        uses: ./.github/actions/prepare-docker-storage
+
       # A2 (#1164): pull the worker image in the background so the kind binary
       # install + Python / uv setup can run in parallel. The pull only fills
       # the host Docker cache; nothing downstream of this step reads from it
@@ -332,12 +335,13 @@ jobs:
         if: ${{ inputs.provider == 'skypilot-local' }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
+          version: "0.11.28"
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
@@ -359,12 +363,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.venv-launcher
-          # hashFiles('uv.lock', 'pyproject.toml') is the cache invalidator —
-          # any pin change there busts the key. Literal version tokens removed
-          # so the key cannot drift from the actual pin set.
-          key: launcher-uv-${{ runner.os }}-py311-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          # hashFiles('uv.lock', 'pyproject.toml') invalidates on any pin change.
+          # py3NNPP is a literal pin — bump it with the operational runtime pin.
+          key: launcher-uv-${{ runner.os }}-py31213-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            launcher-uv-${{ runner.os }}-py311-
+            launcher-uv-${{ runner.os }}-py31213-
 
       # Idempotent on cache hit; the `kubernetes` extra of skypilot lives in
       # [project.dependencies], so `--extra cpu` + the default dev group covers
@@ -442,7 +445,7 @@ jobs:
       # cap still bounds a hung launcher so the `if: always()` log-snapshot
       # step runs. NOTE: step-level timeout sends SIGKILL — `finally` blocks
       # are bypassed; operators may need to `sky jobs cancel` manually. See #876.
-      - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
+      - name: Run synth-setter-generate-dataset against local/kind (skypilot-local row)
         id: gen_local
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 40
@@ -462,7 +465,7 @@ jobs:
           set -euo pipefail
           OVERRIDES=(
             "experiment=$CONFIG_PATH"
-            "skypilot_launch.compute_template=src/synth_setter/configs/compute/local-template.yaml"
+            "skypilot_launch/compute=local/kind"
             "skypilot_launch.job_name=$CLUSTER_NAME"
             "skypilot_launch.worker_image_tag=$IMAGE_TAG"
           )
@@ -566,7 +569,7 @@ jobs:
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          TEMPLATE: src/synth_setter/configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
+          COMPUTE_OPTION: ${{ inputs.provider == 'oci' && 'oci/cpu' || 'runpod/smoke' }}
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
@@ -590,7 +593,7 @@ jobs:
             -v "${RUN_METADATA_DIR}:/run-metadata" \
             -e SKYPILOT_API_SERVER_ENDPOINT \
             -e PROVIDER \
-            -e TEMPLATE \
+            -e COMPUTE_OPTION \
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
             -e RUNPOD_API_KEY \
@@ -601,6 +604,10 @@ jobs:
             -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
@@ -620,7 +627,7 @@ jobs:
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               synth-setter-generate-dataset \
                 "experiment=$CONFIG_PATH" \
-                "skypilot_launch.compute_template=$TEMPLATE" \
+                "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE $HYDRA_OVERRIDES_EXTRA \
@@ -704,26 +711,34 @@ jobs:
       # row-count checks. Runs inside the dev-snapshot image (already pulled
       # above for runpod/oci, locally loaded into kind for skypilot-local) so
       # heavy deps need no host-side install. Re-pulling the image when only
-      # kind has it is a no-op against the docker cache. The image bakes deps
-      # from main, so `uv pip install --group data` first picks up data-group
-      # additions the PR introduces — same image-bake-lag workaround as
-      # scripts/sync_worker_checkout.sh; the mounted PR checkout sits at the
-      # image WORKDIR, so uv reads the PR's pyproject into /venv/main.
+      # kind has it is a no-op against the docker cache.
+      #
+      # Crucially, the validator must execute the checked-out PR code rather
+      # than the image-baked synth_setter package. Sync the mounted checkout
+      # into `/venv/main` before `uv run ...validate_shard`, or schema/staging
+      # contract changes can false-fail against stale main-branch code. The
+      # mount stays writable because building the local project updates
+      # `src/synth_setter.egg-info` during the sync.
       - name: Validate all shards from R2
         env:
           SPEC_URI: ${{ steps.spec_uri.outputs.spec_uri }}
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
+            -e UV_PROJECT_ENVIRONMENT=/venv/main \
             "${IMAGE}" \
-            bash -c 'uv pip install --group data && python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
+            bash -c 'cd /home/build/synth-setter && uv sync --frozen --no-default-groups --group data && uv run python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'
 
       # Pull the canonical spec into the debug artifact alongside generate.log
       # / sky_logs so operators don't have to chase R2 to inspect the run.

@@ -9,13 +9,17 @@ the canonical pedalboard-free entrypoint for interpreter-only contexts
 
 ``synth-setter-introspect-plugin --register`` inserts entries here by line anchor
 (``synth_setter.data.vst.registration.registry_with_spec``): keep the import block
-contiguous and each dict's ``<name>: … = {`` / ``}`` lines intact when editing by hand.
+contiguous and each registry dict's assignment / closing brace intact when editing by hand.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import cast
 
+from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.surge_xt_param_spec import (
@@ -23,20 +27,60 @@ from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_SIMPLE_PARAM_SPEC,
     SURGE_XT_PARAM_SPEC,
 )
+from synth_setter.data.vst.torchsynth_param_spec import (
+    TORCHSYNTH_ADSR_PARAM_SPEC,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+    TORCHSYNTH_SIMPLE_PARAM_SPEC,
+)
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SYNTHS
 
-param_specs: dict[str, ParamSpec] = {
-    "surge_xt": SURGE_XT_PARAM_SPEC,
-    "surge_simple": SURGE_SIMPLE_PARAM_SPEC,
-    "surge_4": SURGE_4_PARAM_SPEC,
-    "obxf": OBXF_PARAM_SPEC,
+_param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("faust_bright_organ"): resolve_faust_param_spec(
+        ParamSpecName("faust_bright_organ")
+    ),
+    ParamSpecName("faust_bubble"): resolve_faust_param_spec(ParamSpecName("faust_bubble")),
+    ParamSpecName("faust_church_organ"): resolve_faust_param_spec(
+        ParamSpecName("faust_church_organ")
+    ),
+    ParamSpecName("faust_filter_osc"): resolve_faust_param_spec(ParamSpecName("faust_filter_osc")),
+    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
+    ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
+    ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
+    ParamSpecName("obxf"): OBXF_PARAM_SPEC,
+    ParamSpecName("torchsynth_adsr"): TORCHSYNTH_ADSR_PARAM_SPEC,
+    ParamSpecName("torchsynth_full"): TORCHSYNTH_FULL_PARAM_SPEC,
+    ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,
 }
+param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
-preset_paths: dict[str, str] = {
-    "surge_xt": "presets/surge-base.vstpreset",
-    "surge_simple": "presets/surge-simple.vstpreset",
-    "surge_4": "presets/surge-mini.vstpreset",
-    "obxf": "presets/obxf-base.vstpreset",
-}
+# Projection of the identity table, not a second source: keeping it derived is what
+# stops a preset path drifting between here and ``synth_setter.synth_spec``.
+plugin_state_paths: Mapping[str, str] = MappingProxyType(
+    {synth.name: synth.plugin_state_path for synth in SYNTHS.values()}
+)
+
+
+def resolve_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
+    """Resolve a domain-typed name against the runtime-extensible registry.
+
+    :param param_spec_name: Runtime registry key; dynamically registered names are valid.
+    :returns: The exact registered specification object, without copying it.
+    :raises KeyError: If the name is not registered.
+    """
+    try:
+        return _param_specs[param_spec_name]
+    except KeyError:
+        raise KeyError(param_spec_name) from None
+
+
+def resolve_param_spec_width(param_spec_name: str) -> int:
+    """Resolve a registry name to its complete encoded vector width.
+
+    :param param_spec_name: Runtime registry key.
+    :returns: Encoded synth-and-note width of the registered specification.
+    """
+    return resolve_param_spec(ParamSpecName(param_spec_name)).encoded_width
 
 
 def default_plugin_path() -> str:

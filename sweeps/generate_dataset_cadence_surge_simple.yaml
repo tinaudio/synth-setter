@@ -10,8 +10,7 @@ command:
   - ${interpreter}
   - ${program}
   - experiment=generate_dataset/smoke-shard-with-oracle-eval
-  - render.param_spec_name=surge_simple
-  - render.preset_path=presets/surge-simple.vstpreset
+  - render=surge_simple
   - ${args_no_hyphens}
 name: generate_dataset_cadence_surge_simple
 method: grid

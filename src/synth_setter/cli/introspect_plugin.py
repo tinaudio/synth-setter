@@ -10,12 +10,13 @@ renderable via ``generate_dataset`` (issue #1596).
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 import click
 
@@ -36,14 +37,18 @@ from synth_setter.data.vst.registration import (
     registration_paths,
     registry_with_spec,
     render_config_yaml,
+    synth_group_yaml,
+    synths_with_spec,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
-
-_PluginT = TypeVar("_PluginT")
 
 # Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
 # this cadence keep a slow load distinguishable from a hang.
 _LOAD_HEARTBEAT_SECONDS = 30.0
+# After the soft timeout fires, give the main-thread load a short window to
+# unwind before the watchdog terminates the hung process.
+_LOAD_TIMEOUT_EXIT_GRACE_SECONDS = 5.0
+_LOAD_TIMEOUT_EXIT_CODE = 124
 
 
 @dataclass(frozen=True)
@@ -62,11 +67,22 @@ class _RegisterTarget:
 
        The registry source with the spec already registered, written last so
        a failure on any earlier artifact leaves the registry untouched.
+
+    .. attribute :: synth_source
+
+       Identity-table source to extend once the plugin version is known.
+
+    .. attribute :: recorded_plugin_path
+
+       Plugin path as recorded for render workers, relative to the checkout
+       when it sits inside it.
     """
 
     root: Path
     paths: RegistrationPaths
     registry_source: str
+    synth_source: str
+    recorded_plugin_path: str
 
 
 @click.command()
@@ -84,7 +100,7 @@ class _RegisterTarget:
     help="Factory class to open from a multi-class .vst3 bundle (e.g. 'Six Sines').",
 )
 @click.option(
-    "--preset-path",
+    "--plugin-state-path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="Optional .vstpreset to load before drafting and capture.",
@@ -160,7 +176,7 @@ class _RegisterTarget:
 def main(
     plugin_path: str,
     plugin_name: str | None,
-    preset_path: str | None,
+    plugin_state_path: str | None,
     spec_name: str,
     out_spec: str | None,
     out_preset: str | None,
@@ -176,7 +192,7 @@ def main(
     :param plugin_path: Path to the ``.vst3`` bundle to introspect.
     :param plugin_name: Factory class to open from a multi-class bundle; ``None``
         opens the sole class.
-    :param preset_path: Optional starting ``.vstpreset`` applied before capture.
+    :param plugin_state_path: Optional starting ``.vstpreset`` applied before capture.
     :param spec_name: Registry key; names the emitted constant and default outputs.
     :param out_spec: Draft module destination; defaults from ``spec_name``.
     :param out_preset: Captured preset destination; defaults from ``spec_name``.
@@ -204,10 +220,12 @@ def main(
             "--verify checks the registered checkout wiring; combine it with --register."
         )
     if register:
-        target = _resolve_register_target(spec_name, repo_root, out_spec, out_preset, out_csv)
+        target = _resolve_register_target(
+            spec_name, repo_root, out_spec, out_preset, out_csv, plugin_path
+        )
         paths = target.paths
         spec_dest, preset_dest, csv_dest = paths.spec_module, paths.preset, paths.csv
-        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config)
+        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config, paths.synth_config)
     else:
         target = None
         spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
@@ -223,20 +241,24 @@ def main(
     vst_plugin = _load_plugin_loudly(
         plugin_path, plugin_name, load_plugin, timeout_seconds=load_timeout
     )
-    if preset_path is not None:
-        load_preset(vst_plugin, preset_path)
+    if plugin_state_path is not None:
+        load_preset(vst_plugin, plugin_state_path)
     # Cast: pedalboard's plugin surface is dynamic, so VST3Plugin's stubs don't
     # declare the attributes IntrospectablePlugin pins structurally.
     plugin = cast(IntrospectablePlugin, vst_plugin)
 
     drafted, skipped = draft_synth_params(plugin)
     version = _plugin_version(plugin_path)
+    if target is not None:
+        synth_source = _register_synth_source(target, spec_name, version)
     source = render_param_spec_module(
         spec_name,
         plugin_name=plugin.name,
         params=drafted,
         skipped=skipped,
-        provenance=(f"plugin: {plugin_path} (version {version}), preset: {preset_path or 'none'}"),
+        provenance=(
+            f"plugin: {plugin_path} (version {version}), preset: {plugin_state_path or 'none'}"
+        ),
         registered=register,
     )
     # Capture runs before the spec write: under --force a failed capture must
@@ -253,7 +275,7 @@ def main(
     click.echo(f"Baseline    : {preset_dest}")
     click.echo(f"Param table : {csv_dest}")
     if target is not None:
-        _write_register_wiring(target, spec_name, plugin_path, version)
+        _write_register_wiring(target, spec_name, version, synth_source=synth_source)
         if verify:
             _run_verification(target, spec_name, plugin)
     else:
@@ -270,6 +292,7 @@ def _resolve_register_target(
     out_spec: str | None,
     out_preset: str | None,
     out_csv: str | None,
+    plugin_path: str,
 ) -> _RegisterTarget:
     """Validate the register-mode invocation and pre-compute the checkout wiring.
 
@@ -281,6 +304,8 @@ def _resolve_register_target(
     :param out_spec: Must be unset — ``--register`` owns the layout.
     :param out_preset: Must be unset — ``--register`` owns the layout.
     :param out_csv: Must be unset — ``--register`` owns the layout.
+    :param plugin_path: Plugin path as given on the CLI; recorded relative to the
+        checkout when it sits inside it.
     :returns: The resolved checkout wiring.
     :raises click.UsageError: ``--out-*`` was supplied, no checkout was found,
         or the registry rejects ``spec_name``.
@@ -304,38 +329,71 @@ def _resolve_register_target(
                 "not inside a synth-setter checkout; pass --repo-root <checkout>."
             )
         root = found
-    paths = registration_paths(root, spec_name)
+    recorded_path = checkout_relative_path(plugin_path, root)
     try:
+        paths = registration_paths(root, spec_name)
         updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
+        synth_source = paths.synth_module.read_text(encoding="utf-8")
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
-    return _RegisterTarget(root=root, paths=paths, registry_source=updated)
+    return _RegisterTarget(
+        root=root,
+        paths=paths,
+        registry_source=updated,
+        synth_source=synth_source,
+        recorded_plugin_path=recorded_path,
+    )
+
+
+def _register_synth_source(target: _RegisterTarget, spec_name: str, version: str) -> str:
+    """Validate and render the identity-table update before writing artifacts.
+
+    :param target: Pre-computed checkout wiring.
+    :param spec_name: Registry key for the synth.
+    :param version: Plugin version pinned in synth identity.
+    :returns: Updated identity-table source.
+    :raises click.UsageError: Existing identity wiring conflicts with the plugin.
+    """
+    try:
+        return synths_with_spec(
+            target.synth_source,
+            spec_name,
+            plugin_path=target.recorded_plugin_path,
+            synth_version=version,
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
 
 
 def _write_register_wiring(
-    target: _RegisterTarget, spec_name: str, plugin_path: str, version: str
+    target: _RegisterTarget, spec_name: str, version: str, *, synth_source: str
 ) -> None:
     """Write the render config + registry entries and echo the run instructions.
 
     :param target: Pre-computed checkout wiring.
     :param spec_name: Registry key for the synth.
-    :param plugin_path: Plugin path as given on the CLI; recorded relative to the checkout when it
-        sits inside it.
-    :param version: Plugin version pinned in the render config.
+    :param version: Plugin version pinned in synth identity.
+    :param synth_source: Prevalidated identity-table source to write.
     """
-    recorded_path = checkout_relative_path(plugin_path, target.root)
     render_config = target.paths.render_config
     render_config.parent.mkdir(parents=True, exist_ok=True)
-    render_config.write_text(
-        render_config_yaml(spec_name, plugin_path=recorded_path, renderer_version=version),
+    render_config.write_text(render_config_yaml(spec_name), encoding="utf-8")
+    synth_config = target.paths.synth_config
+    synth_config.parent.mkdir(parents=True, exist_ok=True)
+    synth_config.write_text(
+        synth_group_yaml(
+            spec_name, plugin_path=target.recorded_plugin_path, synth_version=version
+        ),
         encoding="utf-8",
     )
+    target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
     click.echo(f"Render cfg  : {render_config}")
+    click.echo(f"Synth cfg   : {synth_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(
-            f"WARNING: renderer_version is 'unknown' — edit {render_config} to pin the "
+            f"WARNING: synth_version is 'unknown' — edit {synth_config} to pin the "
             "real plugin version before generating; generate_dataset cross-checks it "
             "against the loaded plugin.",
             err=True,
@@ -347,66 +405,103 @@ def _write_register_wiring(
     )
 
 
-def _load_plugin_loudly(
+def _plugin_load_timeout_message(plugin_path: str, timeout_seconds: float, elapsed: float) -> str:
+    """Return the operator-facing plugin-load timeout message.
+
+    :param plugin_path: Path of the ``.vst3`` bundle being loaded.
+    :param timeout_seconds: Declared soft timeout in seconds.
+    :param elapsed: Elapsed wall time when the timeout fired.
+    :returns: Human-readable timeout guidance.
+    """
+    return (
+        f"{plugin_path} did not finish loading within {timeout_seconds:g}s "
+        f"(elapsed {elapsed:.1f}s). Multi-minute initialization is normal for some "
+        "synths — raise --load-timeout, and run GUI-heavy plugins under "
+        "src/synth_setter/scripts/run-linux-vst-headless.sh."
+    )
+
+
+def _exit_due_to_plugin_load_timeout(message: str) -> None:
+    """Print the timeout and terminate a process stuck in native plugin init.
+
+    :param message: Operator-facing timeout guidance.
+    """
+    click.echo(message, err=True)
+    os._exit(_LOAD_TIMEOUT_EXIT_CODE)
+
+
+def _load_plugin_loudly[PluginT](
     plugin_path: str,
     plugin_name: str | None,
-    loader: Callable[[str, str | None], _PluginT],
+    loader: Callable[[str, str | None], PluginT],
     *,
     timeout_seconds: float,
     heartbeat_seconds: float = _LOAD_HEARTBEAT_SECONDS,
-) -> _PluginT:
-    """Run ``loader`` on a daemon thread, echoing elapsed-time heartbeats until it returns.
+    hard_timeout_grace_seconds: float = _LOAD_TIMEOUT_EXIT_GRACE_SECONDS,
+    hard_timeout_handler: Callable[[str], None] = _exit_due_to_plugin_load_timeout,
+) -> PluginT:
+    """Run ``loader`` on the caller thread while a daemon watchdog reports progress.
 
-    Native VST3 init can block for minutes with no output, indistinguishable
-    from a hang — the operator's natural move is Ctrl-C (issue #1676). The
-    heartbeat reports progress to stderr; on timeout the load fails loudly
-    with the elapsed time, and the daemon thread cannot block process exit.
+    Pedalboard requires ``VST3Plugin`` reloads on the process main thread, so
+    the real load happens synchronously in the caller. A daemon watchdog emits
+    elapsed-time heartbeats from the side, marks a soft timeout once the budget
+    expires, and hard-exits the process if native init still has not unwound by
+    the end of the grace window.
 
     :param plugin_path: Path of the ``.vst3`` bundle, echoed in heartbeats.
     :param plugin_name: Factory class forwarded to ``loader``.
     :param loader: The blocking load call (``load_plugin``; injectable in tests).
     :param timeout_seconds: Give up after this long.
     :param heartbeat_seconds: Interval between elapsed-time echoes.
+    :param hard_timeout_grace_seconds: Extra unwind time after the soft timeout fires.
+    :param hard_timeout_handler: Called when the soft timeout + grace window both expire.
     :returns: The loaded plugin.
-    :raises click.UsageError: The load outlasted ``timeout_seconds``, or the
-        loader rejected the bundle with a ``ValueError`` (pedalboard lists the
-        factory classes of a multi-class bundle this way when ``--plugin-name``
-        is absent).
+    :raises click.UsageError: The load outlasted ``timeout_seconds`` but still unwound before
+        the watchdog's hard-exit path, or the loader rejected the bundle with a
+        ``ValueError`` (pedalboard lists the factory classes of a multi-class bundle this way
+        when ``--plugin-name`` is absent).
     :raises RuntimeError: Any other load failure, chained to the original.
     """
     outcome: dict[str, Any] = {}
+    finished = threading.Event()
+    timed_out = threading.Event()
+    timeout_messages: list[str] = []
 
-    def _run() -> None:
-        """Capture the loader's plugin or exception for the main thread."""
-        # Broad catch: the exception is re-raised on the main thread below.
-        try:
-            outcome["plugin"] = loader(plugin_path, plugin_name)
-        except BaseException as exc:  # noqa: BLE001
-            outcome["error"] = exc
-
-    thread = threading.Thread(target=_run, name="plugin-load", daemon=True)
-    started = time.monotonic()
-    thread.start()
-    while True:
-        # Join on the remaining budget so a heartbeat interval cannot block
-        # past the declared timeout.
-        remaining = timeout_seconds - (time.monotonic() - started)
-        thread.join(min(heartbeat_seconds, max(remaining, 0.0)))
-        if not thread.is_alive():
-            break
-        elapsed = time.monotonic() - started
-        if elapsed >= timeout_seconds:
-            raise click.UsageError(
-                f"{plugin_path} did not finish loading within {timeout_seconds:g}s "
-                f"(elapsed {elapsed:.0f}s). Multi-minute initialization is normal for "
-                "some synths — raise --load-timeout, and run GUI-heavy plugins under "
-                "src/synth_setter/scripts/run-linux-vst-headless.sh."
+    def _watchdog() -> None:
+        """Emit heartbeats until ``loader`` finishes or the timeout path wins."""
+        started = time.monotonic()
+        while True:
+            elapsed = time.monotonic() - started
+            remaining = timeout_seconds - elapsed
+            if remaining <= 0.0:
+                message = _plugin_load_timeout_message(plugin_path, timeout_seconds, elapsed)
+                timeout_messages.append(message)
+                timed_out.set()
+                if not finished.wait(timeout=hard_timeout_grace_seconds):
+                    hard_timeout_handler(message)
+                return
+            if finished.wait(timeout=min(heartbeat_seconds, remaining)):
+                return
+            elapsed = time.monotonic() - started
+            if elapsed >= timeout_seconds:
+                continue
+            click.echo(
+                f"still loading {plugin_path}… {elapsed:.0f}s elapsed "
+                "(some plugins take minutes to initialize)",
+                err=True,
             )
-        click.echo(
-            f"still loading {plugin_path}… {elapsed:.0f}s elapsed "
-            "(some plugins take minutes to initialize)",
-            err=True,
-        )
+
+    watchdog = threading.Thread(target=_watchdog, name="plugin-load-watchdog", daemon=True)
+    watchdog.start()
+    try:
+        outcome["plugin"] = loader(plugin_path, plugin_name)
+    except BaseException as exc:  # noqa: BLE001
+        outcome["error"] = exc
+    finally:
+        finished.set()
+        watchdog.join(timeout=max(heartbeat_seconds, hard_timeout_grace_seconds))
+    if timed_out.is_set():
+        raise click.UsageError(timeout_messages[0])
     error = outcome.get("error")
     if isinstance(error, ValueError):
         raise click.UsageError(str(error)) from error

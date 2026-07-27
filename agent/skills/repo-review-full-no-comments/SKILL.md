@@ -2,11 +2,9 @@
 name: repo-review-full-no-comments
 description: |-
   Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN report to the user instead of posting inline comments
-  on GitHub. Spawns one orchestrator agent that runs the pipeline and returns
-  the rendered report. Works against either an open PR or a local branch that
-  has not been pushed yet — use it as a pre-PR gate or whenever GitHub side
-  effects are undesirable. Requires the tinaudio-synth-setter-skills plugin.
+  aggregated BLOCK/WARN report instead of posting inline comments. Routes every
+  host harness through Pi and works against an open PR or local branch. Requires
+  the tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full-no-comments — Multi-Skill Review Without Posting
@@ -18,28 +16,33 @@ Same analysis as `/repo-review-full`, with two differences:
 2. A PR is **not** required. If no PR exists for the current branch, the
    orchestrator reviews the local branch vs. the default branch.
 
-The entire pipeline runs inside **one** spawned orchestrator agent. As the main
-agent you launch that agent and relay its result.
+The foreground dry run posts nothing. On an existing PR, deferred second passes
+may later post only new Codex-verified findings through detached aftercare; this
+preserves the sub-ten-minute response without dropping slow independent review.
+
+The review implementation is Pi-native. Claude Code and Codex invoke the same
+headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## What you (the main agent) do
 
 1. Capture the target argument: if the command was invoked with an explicit
    `<N>`, keep it; otherwise the orchestrator resolves PR-or-local-branch mode
    itself.
-2. Spawn exactly **one** `general-purpose` agent. Its prompt is the entire
-   "## Orchestrator agent brief" section below. Only substitute when an explicit
-   `<N>` was passed — replace `<N>` with that number; otherwise pass the brief
-   verbatim (Step 1 of the brief already resolves PR-or-local-branch mode). Do
-   not otherwise edit the brief. **Never spawn this orchestrator on a Fable
-   model** (any id containing `fable`) — pass an explicit `model` such as
-   `sonnet` or `opus`.
-3. The agent returns the **full rendered Markdown report** ending in a final
+
+2. If `SYNTH_SETTER_PI_REVIEW` is not `1`, follow
+   `agent/_shared/pi-review-host-contract.md` with
+   `repo-review-full-no-comments` as the selected skill. Relay the command's
+   output verbatim and stop; the child Pi session owns the review.
+
+3. If `SYNTH_SETTER_PI_REVIEW=1`, do not invoke the launcher again. Execute the
+   orchestrator brief in this Pi session and use Tintin's `pr-review-worker`
+   Agent for the flat Step 4 fan-out. Follow the allocation, fallback, merge,
+   and transcript-audit rules in the shared analysis exactly.
+
+4. The agent returns the **full rendered Markdown report** ending in a final
    `Sentinel: <path>` line. Print exactly what the orchestrator returned,
    verbatim — that trailing line already surfaces the sentinel path, so do not
    append any narration of your own. Do not re-run the pipeline.
-
-Spawn only this one orchestrator. It launches its own parallel per-skill review
-sub-agents; you never launch those directly.
 
 ## Orchestrator agent brief
 
@@ -48,9 +51,8 @@ sub-agents; you never launch those directly.
 > throughout the steps below and in the shared analysis file means you, this
 > orchestrator agent.
 >
-> **Model policy: no Fable.** Pass an explicit `model` whose id does not contain
-> `fable` (e.g. `sonnet` or `opus`) to every per-skill review sub-agent you
-> spawn.
+> **Model policy.** Use the shared dynamic routing table and supply every
+> worker's model and thinking level explicitly.
 >
 > ### Step 1: Resolve the target (PR or local branch)
 >
@@ -95,7 +97,8 @@ sub-agents; you never launch those directly.
 > - `mergeable`, `mergeStateStatus`, `statusCheckRollup`: **not available** —
 >   Step 2 handles this.
 >
-> If there are zero changed files between `base_sha` and `head_sha`, skip Steps
+> If there are zero changed files between `base_sha` and `head_sha`, set
+> `is_zero_diff=true`, skip Steps
 > 2–6 and go straight to Step 7's **PASS short form**: write the sentinel file
 > and return the rendered PASS report ending in `Sentinel: <path>` (note
 > `PASS — no diff vs ${base_ref}` in the report body). Do not early-return a
@@ -124,7 +127,18 @@ sub-agents; you never launch those directly.
 >   `[<calling-skill>:block]` prefixes inside the `## PR health` bullets (PR mode
 >   only — local-branch mode has no PR-health bullets).
 >
-> - Write the findings JSON to `/tmp/repo-review-full-no-comments-findings.json`.
+> - Before writing findings, create an invocation-isolated path:
+>
+>   ```bash
+>   python3 agent/_shared/review_sentinel.py findings "${TMPDIR:-/tmp}"
+>   ```
+>
+>   Capture the exact printed path and write this invocation's findings JSON only
+>   there. Shell variables do not persist across tool calls, so substitute that
+>   exact path in every later command; never use a shared fixed filename. Bash
+>   tool calls do not share an `EXIT` trap, so remove the path on every
+>   controlled success or failure; an interrupted run leaves only an isolated
+>   file in the platform temporary directory and cannot contaminate another run.
 >
 > - For `pr_number` in the JSON: use the resolved PR number in PR mode, or
 >   `null` in local-branch mode. Do not place branch names in `pr_number`; keep
@@ -142,28 +156,43 @@ sub-agents; you never launch those directly.
 >
 > ### Step 7: Render the findings — write the sentinel file **and** return the report
 >
+> A terminal failure after target resolution bypasses this ordinary renderer.
+> Follow the shared **Terminal failure delivery** section with
+> `--mode no-comments`; the helper writes the canonical blocking HEAD sentinel
+> and returns the exact failure report before exiting nonzero.
+>
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
-> `gh pr review` command. This step has zero GitHub side effects.
+> `gh pr review` command. The foreground step has zero GitHub side effects;
+> `repo-review-aftercare.md` owns the narrowly scoped late-finding exception.
 >
-> Transform the JSON payload at
-> `/tmp/repo-review-full-no-comments-findings.json` into a Markdown report. The
+> Transform the JSON payload at the exact printed findings path into a Markdown
+> report. The
 > report is **both** written to a sentinel file **and** returned as your final
-> message (the main agent prints it for the user). The `pre-pr-review-gate.sh`
-> PreToolUse hook validates the path supplied via `REVIEW_FULL=<path>` on
-> `gh pr create` by parsing this filename.
+> message (the main agent prints it for the user). The retained
+> `pre-pr-review-gate.sh` parser validates this filename after its local
+> PreToolUse registration is restored.
 >
-> **Compute the sentinel path** — the format is owned by
-> `agent/_shared/review_sentinel.py` (single source of truth shared with the
-> gate hook):
+> **Render through the deterministic helper.** Do not hand-write the sentinel
+> path, reconstruct Markdown, or embed the payload in a generated shell program.
+> The helper validates the isolated payload, derives Git/progress state, writes
+> the canonical sentinel atomically, removes only that payload, and prints the
+> exact foreground deliverable:
 >
 > ```bash
-> REVIEW_PATH=$(python3 agent/_shared/review_sentinel.py path "$(git rev-parse HEAD)")
-> mkdir -p "$(dirname "$REVIEW_PATH")"
+> ./.venv/bin/python agent/_shared/pi_review_render.py \
+>   --payload <exact-findings-json-path> \
+>   --target <PR-or-branch-label> --reviewed-head <head-sha> --skill-count <K> \
+>   --next-step <caller-specific-tip> --remove-payload
 > ```
 >
-> The result is of the form
-> `.agent-reviews/repo-review-full-no-comments.<40-char-sha>.md`. **Do not
-> hand-write the filename** — always go through the helper.
+> For the Step 1 zero-diff path, which intentionally has no findings payload,
+> invoke the same helper with `--zero-diff --target <target> --reviewed-head <head-sha>` and omit `--payload`, `--skill-count`, `--next-step`, and
+> `--remove-payload`.
+>
+> Execute the applicable form once and return its stdout verbatim. The result ends with the
+> absolute or repository-relative canonical `Sentinel: <path>` line. The layout
+> below documents helper output; it is not an instruction to generate another
+> report.
 >
 > **Write the report to `$REVIEW_PATH`** using this layout:
 >
@@ -197,7 +226,8 @@ sub-agents; you never launch those directly.
 > placeholder):
 >
 > - PR mode: `Run /repo-review-full <N> to post these as inline review comments.`
-> - Local-branch mode: `Open a PR with REVIEW_FULL=<REVIEW_PATH> in the command. Then run /repo-review-full to post these as inline review comments if desired.`
+> - Local-branch mode: `Open a PR, then run /repo-review-full to post these as inline review comments if desired. Review sentinel: <REVIEW_PATH>.`
+> - If there are any findings or PR-health flags, append: `After remediation and relevant checks, commit and push coherent progress before re-running this review or ending the session. If that is unsafe or impossible, state the blocker instead of retrying unchanged.`
 >
 > Rules for the rendering:
 >
@@ -207,8 +237,15 @@ sub-agents; you never launch those directly.
 > - Preserve the PR-health bullets from `review_body` verbatim — they are
 >   important for human reviewers and easy to lose if you re-summarize.
 >
-> - **PASS short form.** If the JSON has no findings AND no PR-health flags,
->   still write the sentinel file. The gate's size guard rejects files under
+> - **Pi PASS report.** When Pi has no findings or PR-health flags, preserve the
+>   complete `## Pi review audit` section from `review_body` between the PASS
+>   line and `## Summary`; a successful review must not discard its model,
+>   attempt, agent-id, or transcript evidence. The fixed short form below is
+>   only for zero-diff reviews, which skip worker allocation and audit rows.
+>
+> - **PASS short form.** If `is_zero_diff == true`, still write the sentinel
+>   file. A non-zero diff with no findings keeps the complete Pi audit above
+>   instead of using this short form. The gate's size guard rejects files under
 >   200 bytes, and the header + `PASS` line + `Reviewed at:` line are
 >   ~130 bytes — pad with a one-line context summary so the total is ≥200
 >   bytes. Use this exact template (substitute `<target>` and `<sha>`):
@@ -216,17 +253,21 @@ sub-agents; you never launch those directly.
 >   ```markdown
 >   # repo-review-full-no-comments — <target>
 >
->   PASS — no findings across all skills (code-health, comment-hygiene,
->   python-style, shell-style, synth-setter, tdd-impl, ml-test).
+>   PASS — no findings across all skills (code-health, correctness,
+>   comment-hygiene, python-style, shell-style, synth-setter, tdd-impl, ml-test).
 >
 >   ## Summary
 >
 >   - 0 BLOCK, 0 WARN
 >   - Reviewed at: <sha>
+>   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```
 >
 > - The sentinel file is the gate's contract; your returned report is the human
 >   deliverable. Always produce both.
+>
+> On ordinary success, `--remove-payload` removes the exact isolated findings
+> file. Terminal failure delivery remains responsible for its own cleanup.
 >
 > **Return value.** Reply with the full Markdown report (the exact content you
 > wrote to the sentinel) followed by a final line: `Sentinel: <REVIEW_PATH>`.
@@ -235,10 +276,14 @@ sub-agents; you never launch those directly.
 
 ## Notes
 
-- This skill is intentionally side-effect-free on GitHub. If a future caller
-  wants the comments posted after all, they can rerun with `/repo-review-full`
-  — the analysis is deterministic enough that re-running is cheap relative to
-  the value of an explicit "no, don't post" mode.
+- This skill's foreground result is side-effect-free on GitHub. For an existing
+  PR, detached aftercare may post one review containing only new Codex-verified
+  findings from passes deferred at the response deadline. It rechecks the exact
+  head immediately before posting. Local-branch mode remains fully side-effect-free.
+- A non-PASS report starts a remediation loop, not a license to retry the same
+  review. Follow the non-PASS Summary instruction before another review or a
+  handoff. This is advisory so investigation and deliberately uncommitted
+  experiments remain possible.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.

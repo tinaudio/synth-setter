@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -89,8 +90,8 @@ def test_cli_writes_importable_spec_module_and_preset(invoke_cli: InvokeCli) -> 
 
     assert run.exit_code == 0
     spec_path = run.cwd / "fake_synth_param_spec.py"
-    preset_path = run.cwd / "fake_synth-base.vstpreset"
-    assert preset_path.read_bytes() == b"VST3\x01\x00fake-state"
+    plugin_state_path = run.cwd / "fake_synth-base.vstpreset"
+    assert plugin_state_path.read_bytes() == b"VST3\x01\x00fake-state"
 
     spec_text = spec_path.read_text()
     assert "plugin: fake.vst3" in spec_text
@@ -288,7 +289,9 @@ def test_cli_force_keeps_existing_spec_when_capture_fails(
             """
 
     plugin = _CaptureFailsPlugin({"cutoff": IntrospectFakeParameter(float, [0.0, 1.0])})
-    monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin)
+    monkeypatch.setattr(
+        "synth_setter.cli.introspect_plugin.load_plugin", lambda _path, _name=None: plugin
+    )
     monkeypatch.chdir(tmp_path)
     (tmp_path / "fake.vst3").touch()
     existing = tmp_path / "fake_synth_param_spec.py"
@@ -305,19 +308,19 @@ def test_cli_force_keeps_existing_spec_when_capture_fails(
 
 
 def test_cli_loads_starting_preset_before_capture(invoke_cli: InvokeCli, tmp_path: Path) -> None:
-    """``--preset-path`` state is applied before the baseline is captured.
+    """``--plugin-state-path`` state is applied before the baseline is captured.
 
     The fake's ``load_preset`` adopts the file's bytes as ``preset_data``, so
     the captured file carries the loaded bytes only if loading happened first.
 
     :param invoke_cli: Fixture invoking the CLI with plugin loading patched.
-    :param tmp_path: Holds the starting preset passed via ``--preset-path``.
+    :param tmp_path: Holds the starting plugin state passed via ``--plugin-state-path``.
     """
     start = tmp_path / "start.vstpreset"
     start.write_bytes(b"VST3-loaded-state")
 
     run = invoke_cli(
-        "--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--preset-path", str(start)
+        "--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--plugin-state-path", str(start)
     )
 
     assert run.exit_code == 0
@@ -345,7 +348,14 @@ def test_cli_threads_plugin_name_to_the_loader(
         Path("fake.vst3").touch()
         result = runner.invoke(
             main,
-            ["--plugin-path", "fake.vst3", "--spec-name", "fake_synth", "--plugin-name", "Six Sines"],
+            [
+                "--plugin-path",
+                "fake.vst3",
+                "--spec-name",
+                "fake_synth",
+                "--plugin-name",
+                "Six Sines",
+            ],
             catch_exceptions=False,
         )
 
@@ -384,16 +394,18 @@ def test_cli_multi_class_bundle_reports_available_names_without_traceback(
     assert "Traceback" not in result.output
 
 
-def test_slow_plugin_load_echoes_elapsed_heartbeat(
+def test_slow_plugin_load_runs_on_main_thread_and_echoes_elapsed_heartbeat(
     fake_plugin: IntrospectFakePlugin, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A load outlasting the heartbeat interval reports elapsed time to stderr.
+    """A slow load keeps heartbeats useful without moving ``loader`` off the main thread.
 
     :param fake_plugin: Returned by the slow fake loader.
     :param capsys: Captures the heartbeat lines click writes to stderr.
     """
+    loader_threads: list[threading.Thread] = []
 
     def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        loader_threads.append(threading.current_thread())
         time.sleep(0.3)
         return fake_plugin
 
@@ -402,20 +414,36 @@ def test_slow_plugin_load_echoes_elapsed_heartbeat(
     )
 
     assert plugin is fake_plugin
+    assert loader_threads == [threading.main_thread()]
     assert "still loading fake.vst3" in capsys.readouterr().err
 
 
 def test_plugin_load_timeout_fails_loudly_with_elapsed_time() -> None:
     """A load exceeding the timeout raises a usage error naming the remedy flags."""
+    release_loader = threading.Event()
+    timeout_messages: list[str] = []
 
-    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(5.0)
+    def blocks_until_timed_out(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        while not release_loader.wait(timeout=0.01):
+            pass
         return IntrospectFakePlugin({})
+
+    def release_after_timeout(message: str) -> None:
+        timeout_messages.append(message)
+        release_loader.set()
 
     with pytest.raises(click.UsageError, match="--load-timeout"):
         _load_plugin_loudly(
-            "fake.vst3", None, never_returns, timeout_seconds=0.1, heartbeat_seconds=0.02
+            "fake.vst3",
+            None,
+            blocks_until_timed_out,
+            timeout_seconds=0.1,
+            heartbeat_seconds=0.02,
+            hard_timeout_grace_seconds=0.0,
+            hard_timeout_handler=release_after_timeout,
         )
+
+    assert len(timeout_messages) == 1
 
 
 def test_plugin_load_value_error_surfaces_as_usage_error() -> None:
@@ -453,7 +481,7 @@ def test_cli_load_timeout_option_fails_the_run(
     """
 
     def slow_load(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(2.0)
+        time.sleep(0.2)
         return IntrospectFakePlugin({})
 
     monkeypatch.setattr("synth_setter.cli.introspect_plugin.load_plugin", slow_load)
@@ -472,16 +500,24 @@ def test_cli_load_timeout_option_fails_the_run(
 
 def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None:
     """The timeout binds even when a heartbeat interval would reach past it."""
+    release_loader = threading.Event()
 
-    def never_returns(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
-        time.sleep(5.0)
+    def blocks_until_timed_out(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        while not release_loader.wait(timeout=0.01):
+            pass
         return IntrospectFakePlugin({})
 
     started = time.monotonic()
     with pytest.raises(click.UsageError):
         _load_plugin_loudly(
-            "fake.vst3", None, never_returns, timeout_seconds=0.3, heartbeat_seconds=0.25
+            "fake.vst3",
+            None,
+            blocks_until_timed_out,
+            timeout_seconds=0.3,
+            heartbeat_seconds=0.25,
+            hard_timeout_grace_seconds=0.0,
+            hard_timeout_handler=lambda _message: release_loader.set(),
         )
 
-    # Two 0.25s joins would take 0.5s; remaining-aware joins stop at ~0.3s.
+    # Two 0.25s waits would take 0.5s; remaining-aware waits stop at ~0.3s.
     assert time.monotonic() - started < 0.45

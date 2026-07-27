@@ -1,4 +1,3 @@
-import sys
 from functools import partial
 from typing import Optional, Tuple, Union
 
@@ -6,6 +5,7 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import ot_collate_fn, regular_collate_fn
+from synth_setter.data.sample_seed import derive_sample_seed
 from synth_setter.utils import RankedLogger
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -137,7 +137,7 @@ class KOscDataset(torch.utils.data.Dataset):
         # self.freqs = freqs
         # self.amps = amps
 
-    def _sample_parameters(self, seed: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _sample_parameters(self, seed: int) -> torch.Tensor:
         self.generator.manual_seed(seed)
 
         params = torch.empty(1, 3 * self.k, device=torch.device("cpu"))
@@ -153,8 +153,7 @@ class KOscDataset(torch.utils.data.Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # modulo max int to avoid overflows
-        seed = (self.seed * idx) % sys.maxsize
+        seed = derive_sample_seed(self.seed, idx)
 
         if self.debug_num_samples is not None:
             seed = seed % self.debug_num_samples

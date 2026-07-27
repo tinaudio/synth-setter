@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
+from pathlib import Path
 
-from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+import pytest
+from pydantic import SecretStr, ValidationError
+
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier
+from synth_setter.pipeline.schemas.skypilot_launch import (
+    ENV_SKYPILOT_API_SERVER_ENDPOINT,
+    ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
+    SkypilotClientSettings,
+    SkypilotLaunchConfig,
+    skypilot_client_settings_from_sources,
+)
 
 
 class TestDefaults:
     """All fields default to safe local-only values when no input is given."""
 
-    def test_default_compute_template_is_none(self) -> None:
-        """Compute template defaults to None — the "don't dispatch" sentinel."""
-        assert SkypilotLaunchConfig().compute_template is None
+    def test_default_compute_is_none(self) -> None:
+        """Compute defaults to None — the "don't dispatch" sentinel."""
+        assert SkypilotLaunchConfig().compute is None
 
     def test_default_cmd_is_none(self) -> None:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
@@ -23,9 +32,9 @@ class TestDefaults:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1
 
-    def test_default_worker_image_tag_is_dev_snapshot(self) -> None:
-        """Worker image tag defaults to the dev-snapshot rolling tag."""
-        assert SkypilotLaunchConfig().worker_image_tag == "dev-snapshot"
+    def test_default_worker_image_tag_is_devcontainer_tools(self) -> None:
+        """Worker image tag defaults to the tooling image so pods are debuggable."""
+        assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
 
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""
@@ -34,6 +43,18 @@ class TestDefaults:
     def test_default_local_is_false(self) -> None:
         """No dispatch-mode preference by default; honor inherited env."""
         assert SkypilotLaunchConfig().local is False
+
+    def test_default_network_volume_is_none(self) -> None:
+        """Network volume defaults to None — templates without the sentinel need no value."""
+        assert SkypilotLaunchConfig().network_volume is None
+
+    def test_default_tier_is_any(self) -> None:
+        """GPU filtering defaults to passthrough for existing launches."""
+        assert SkypilotLaunchConfig().tier is GpuTier.ANY
+
+    def test_string_tier_is_coerced_at_config_boundary(self) -> None:
+        """Hydra and YAML tier tokens validate into the domain enum."""
+        assert SkypilotLaunchConfig(tier="low").tier is GpuTier.LOW  # type: ignore[arg-type]
 
 
 class TestValidation:
@@ -62,6 +83,20 @@ class TestValidation:
         cfg = SkypilotLaunchConfig(api_server="  https://api.example.com  ")
         assert cfg.api_server == "https://api.example.com"
 
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_blank_network_volume_rejected(self, blank: str) -> None:
+        """Empty or whitespace-only network_volume is rejected to surface typos loudly.
+
+        :param blank: Parametrized blank/whitespace-only network_volume value.
+        """
+        with pytest.raises(ValidationError, match="network_volume must be a non-empty name"):
+            SkypilotLaunchConfig(network_volume=blank)
+
+    def test_network_volume_is_stripped(self) -> None:
+        """Surrounding whitespace is trimmed so the substituted volume name matches exactly."""
+        cfg = SkypilotLaunchConfig(network_volume="  ss-datasets-us-ca-2  ")
+        assert cfg.network_volume == "ss-datasets-us-ca-2"
+
     def test_extra_fields_rejected_naming_the_offender(self) -> None:
         """``extra='forbid'`` catches misspelled Hydra overrides loudly and names the bad field."""
         with pytest.raises(ValidationError, match="compute_templat"):
@@ -71,7 +106,111 @@ class TestValidation:
         """Trust-boundary models are frozen so dispatch can't mutate the config mid-launch."""
         cfg = SkypilotLaunchConfig()
         with pytest.raises(ValidationError):
-            cfg.compute_template = "anything.yaml"  # type: ignore[misc]
+            cfg.job_name = "anything"  # type: ignore[misc]
+
+
+class TestSkypilotClientSettings:
+    """SkyPilot client auth resolves from dotenv without shell exports."""
+
+    def test_env_file_loads_endpoint_and_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dotenv file overrides stale process auth as one validated pair.
+
+        :param tmp_path: Isolates the dotenv source from developer files.
+        :param monkeypatch: Supplies stale process auth and restores it after the test.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
+        monkeypatch.delenv(ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN, raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n"
+            f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_test-token\n"
+        )
+
+        settings = skypilot_client_settings_from_sources(env_file)
+
+        assert settings.api_server_endpoint == "https://sky.example.com"
+        assert settings.service_account_token is not None
+        assert settings.service_account_token.get_secret_value() == "sky_test-token"
+
+    def test_config_endpoint_combines_with_env_file_token(self, tmp_path: Path) -> None:
+        """An explicit endpoint can pair with a dotenv service token.
+
+        :param tmp_path: Pytest temporary directory.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN}=sky_test-token\n")
+
+        settings = skypilot_client_settings_from_sources(
+            env_file,
+            api_server_endpoint="https://config.example.com",
+        )
+
+        assert settings.api_server_endpoint == "https://config.example.com"
+        assert settings.service_account_token is not None
+
+    def test_invalid_config_endpoint_is_rejected(self, tmp_path: Path) -> None:
+        """An explicit launcher override still passes through endpoint validation.
+
+        :param tmp_path: Provides an otherwise empty dotenv source.
+        """
+        env_file = tmp_path / ".env"
+        env_file.touch()
+
+        with pytest.raises(ValidationError, match=r"HTTP\(S\) URL"):
+            skypilot_client_settings_from_sources(
+                env_file,
+                api_server_endpoint="not-a-url",
+            )
+
+    def test_blank_env_file_value_falls_back_to_process_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank dotenv auth does not mask a usable process value.
+
+        :param tmp_path: Pytest temporary directory.
+        :param monkeypatch: Pytest environment fixture.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://process.example.com")
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=\n")
+
+        settings = skypilot_client_settings_from_sources(env_file)
+
+        assert settings.api_server_endpoint == "https://process.example.com"
+
+    def test_service_account_token_without_endpoint_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A token without its target server fails before dispatch.
+
+        :param monkeypatch: Pytest environment isolation fixture.
+        """
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
+        with pytest.raises(ValidationError, match="requires.*API server endpoint"):
+            SkypilotClientSettings(service_account_token=SecretStr("sky_orphan-token"))
+
+    def test_invalid_service_account_token_rejected(self) -> None:
+        """A malformed token fails before any authenticated request."""
+        with pytest.raises(ValidationError, match="must start with 'sky_'"):
+            SkypilotClientSettings(
+                api_server_endpoint="https://sky.example.com",
+                service_account_token=SecretStr("not-a-token"),
+            )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["not-a-url", "ftp://sky.example.com", "https://"],
+        ids=["missing-scheme", "unsupported-scheme", "missing-host"],
+    )
+    def test_invalid_api_server_endpoint_rejected(self, endpoint: str) -> None:
+        """Malformed endpoint values fail at the settings boundary.
+
+        :param endpoint: Invalid endpoint candidate.
+        """
+        with pytest.raises(ValidationError, match="HTTP.*URL"):
+            SkypilotClientSettings(api_server_endpoint=endpoint)
 
 
 class TestModelCopy:
@@ -79,10 +218,10 @@ class TestModelCopy:
 
     def test_model_copy_with_cmd_yields_new_instance(self) -> None:
         """Frozen + model_copy(update=…) is the only way to set cmd post-construction."""
-        original = SkypilotLaunchConfig(compute_template="x.yaml")
+        original = SkypilotLaunchConfig(job_name="stem-x")
         with_cmd = original.model_copy(update={"cmd": "echo hi"})
         assert with_cmd.cmd == "echo hi"
-        assert with_cmd.compute_template == "x.yaml"
+        assert with_cmd.job_name == "stem-x"
         # Original is untouched (frozen invariant).
         assert original.cmd is None
 

@@ -1,28 +1,37 @@
-"""R2 object-store I/O primitives shared across pipeline stages.
+"""Object-store I/O primitives shared across pipeline stages.
 
 Wraps `rclone` with a small set of typed helpers so worker, launcher, and CI
-validation code can share one implementation. Resolution of `r2:` is left to
-the caller's environment — the standard `RCLONE_CONFIG_R2_*` vars must be set
-when any of these functions runs; ``ensure_r2_env_loaded`` is the load + validate
-+ auth-check entry point callers use to set them up.
+validation code can share one implementation. The application reads
+``SYNTH_SETTER_STORAGE_*`` settings and projects them to rclone's current
+``RCLONE_CONFIG_R2_*`` remote dialect at the subprocess boundary.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from dotenv import dotenv_values
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
+from synth_setter.pipeline.schemas.object_storage import (
+    STORAGE_REQUIRED_ENV_KEYS,
+    StorageConfig,
+    storage_settings_from_sources,
+)
 
 __all__ = [
     "R2_URI_SCHEME",
+    "RemoteEntry",
     "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
@@ -30,6 +39,8 @@ __all__ = [
     "from_s3_uri",
     "is_r2_reachable",
     "is_r2_uri",
+    "lance_target",
+    "list_entries",
     "object_size",
     "purge_prefix",
     "r2_directory_exists",
@@ -42,37 +53,111 @@ __all__ = [
     "upload_to_uri",
 ]
 
-# Keys rclone needs to authenticate to R2. The three below are secrets that must
-# come from a .env file or process env — no built-in default.
-_SECRET_R2_ENV_KEYS: tuple[str, ...] = (
-    "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-    "RCLONE_CONFIG_R2_ENDPOINT",
-)
+_CHECKOUT_MARKER = ".project-root"
+_WORKSPACE_ENV = "SYNTH_SETTER_WORKSPACE"
 
-# Structural keys rclone's env-override convention needs to assemble a complete
-# remote definition. Without them `rclone lsd r2:` reports
-# "didn't find section in config file" even when the three secrets above are
-# populated. Defaulted here (not required from callers) so steps that wire only
-# the secrets — e.g. the skypilot-local matrix in `generate-dataset-shards.yaml`
-# — still get a working `r2:` remote. setdefault preserves caller overrides.
-_R2_STRUCTURAL_DEFAULTS: dict[str, str] = {
-    "RCLONE_CONFIG_R2_TYPE": "s3",
-    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-}
 
-# rclone ``--timeout`` is the IO idle timeout, not a wall-clock cap. A whole eval
-# run dir — rendered audio, predictions, metrics — can stream far longer than a
-# single shard, so the directory upload bounds it generously rather than tripping
-# a healthy large transfer at the 5-minute default the single-file helpers use.
+def _default_env_file() -> Path:
+    """Resolve the workspace dotenv path without importing optional launcher deps.
+
+    :returns: ``$SYNTH_SETTER_WORKSPACE/.env`` when set, otherwise the checkout
+        marker root's ``.env`` or the current directory's ``.env`` fallback.
+    """
+    workspace = os.environ.get(_WORKSPACE_ENV, "").strip()
+    if workspace:
+        return Path(workspace).resolve() / ".env"
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / _CHECKOUT_MARKER).is_file():
+            return candidate / ".env"
+    return Path.cwd().resolve() / ".env"
+
+
+_DEFAULT_ENV_FILE = _default_env_file()
+
+# Wall-clock cap for the credential auth ping; rclone's --timeout is IO-idle only.
+_AUTH_PING_TIMEOUT_SECONDS = 45
+_RCLONE_CONFIG_READ_TIMEOUT_SECONDS = 10
+
+# IO idle timeout (not wall-clock); directory uploads need more than the 300s per-file default.
 _UPLOAD_DIR_TIMEOUT = "3h"
+
+
+def _storage_config_from_rclone() -> StorageConfig:
+    """Load the ``r2`` remote from rclone's own resolved configuration.
+
+    Reads ``config dump`` (stable JSON across builds) rather than ``config show``,
+    whose pretty-printed framing differs by version (#2432). Failure messages name
+    the specific cause and never echo credential values.
+
+    :returns: Strict storage config parsed from rclone's resolved remote.
+    :raises RuntimeError: The config cannot be read or lacks required S3 fields.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "config", "dump"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_RCLONE_CONFIG_READ_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("rclone is not installed") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"rclone config dump timed out after {_RCLONE_CONFIG_READ_TIMEOUT_SECONDS}s"
+        ) from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"rclone config dump failed with exit code {result.returncode}")
+
+    try:
+        remotes = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("rclone config dump returned unparsable JSON") from exc
+    if RCLONE_REMOTE not in remotes:
+        raise RuntimeError(f"rclone has no '{RCLONE_REMOTE}' remote configured")
+
+    remote = remotes[RCLONE_REMOTE]
+    try:
+        return StorageConfig(
+            access_key_id=SecretStr(remote.get("access_key_id", "")),
+            secret_access_key=SecretStr(remote.get("secret_access_key", "")),
+            endpoint_url=remote.get("endpoint", ""),
+            region=remote.get("region", "auto"),
+            rclone_type=remote.get("type", "s3"),
+        )
+    except (AttributeError, ValidationError) as exc:
+        raise RuntimeError(
+            f"rclone remote '{RCLONE_REMOTE}' is missing required S3 fields"
+        ) from exc
+
+
+def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
+    """Resolve storage config from application sources, then standard rclone config.
+
+    :param env_file: Optional dotenv path; ``None`` uses the workspace default.
+    :returns: Strict storage configuration from the first complete source.
+    :raises RuntimeError: No source supplies a complete configuration.
+    """
+    resolved_env_file = env_file if env_file is not None else _DEFAULT_ENV_FILE
+    try:
+        return storage_settings_from_sources(resolved_env_file).to_config()
+    except ValidationError:
+        try:
+            return _storage_config_from_rclone()
+        except RuntimeError as rclone_exc:
+            # Chain the rclone failure, not the env one: it is the reason a caller with a
+            # configured remote lands here, and `raise ... from` hides whichever it drops.
+            raise RuntimeError(
+                f"Object storage settings unresolved after dotenv load ({resolved_env_file}). "
+                f"Expected: {', '.join(STORAGE_REQUIRED_ENV_KEYS)} or a configured r2 remote. "
+                f"The rclone fallback failed: {rclone_exc}"
+            ) from rclone_exc
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     """Build an rclone argv with the shared reliability-flag block, then operands.
 
-    Centralizes ``-vv --checksum --contimeout=30s --timeout=<timeout> --retries=3``
-    so every transfer helper retries transient blips identically. ``--timeout`` is
+    ``--timeout`` is
     the IO idle timeout, not a wall-clock cap; only directory uploads widen it past
     the 300s single-file default.
 
@@ -85,7 +170,7 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
     return [
         "rclone",
         verb,
-        "-vv",
+        "-v",
         "--checksum",
         "--contimeout=30s",
         f"--timeout={timeout}",
@@ -95,58 +180,56 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
 
 
 def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
-    """Load ``RCLONE_CONFIG_R2_*`` from ``env_file`` into ``os.environ``; validate.
+    """Load storage settings from dotenv/process env into rclone env; validate.
 
     Three-step pre-flight that callers run once before invoking any other helper
     in this module:
 
-    1. If ``env_file`` is provided and exists on disk, mirror every key
-       prefixed with ``RCLONE_CONFIG_R2_`` from that dotenv file into
-       ``os.environ`` (dotenv values overwrite — matches the launcher's
-       precedence so the same view applies on every entry point).
-    2. Default ``RCLONE_CONFIG_R2_TYPE=s3`` and ``RCLONE_CONFIG_R2_PROVIDER=Cloudflare``
-       into ``os.environ`` if unset. rclone's env-override convention needs both to
-       assemble a complete remote definition; without them ``rclone lsd r2:``
-       reports ``didn't find section in config file``. Caller values win.
-    3. Verify the three secret keys in ``_SECRET_R2_ENV_KEYS`` are present in
-       process env, then run ``rclone lsd r2:`` as an auth ping. Either check
-       failing raises ``RuntimeError`` with an actionable message.
+    1. Resolve canonical or legacy settings from dotenv/process env, falling
+       back to rclone's standard config resolution for the ``r2`` remote.
+       ``env_file=None`` means the default dotenv lookup:
+       ``$SYNTH_SETTER_WORKSPACE/.env``, the checkout marker root's ``.env``,
+       then cwd ``.env``. Blank/whitespace values are skipped so a ``.env``
+       line ``KEY=`` never clobbers a real process-env credential.
+    2. Validate the provider-neutral settings and build an env-free
+       :class:`StorageConfig`.
+    3. Write the canonical projection (:meth:`StorageConfig.storage_env`) and
+       the rclone projection (:meth:`StorageConfig.rclone_env`) back into
+       ``os.environ`` so later env-only readers (e.g. :func:`r2_storage_options`
+       with no arguments) and the auth ping both see the normalized values.
+       A non-zero ping exit also raises.
 
-    No-op on the dotenv step if ``env_file`` is ``None`` or doesn't exist; the
-    defaulting + presence+auth checks still run against whatever ``os.environ``
-    already has.
+    If the resolved dotenv file doesn't exist and process env is incomplete,
+    the same normalization and auth checks apply to standard rclone config.
 
     :param env_file: Optional dotenv file to merge into ``os.environ`` first
-        (typically ``sky_cfg.env_file``).
-    :raises RuntimeError: A required secret key is unset after the load, or
-        ``rclone lsd r2:`` exits non-zero (bad creds, network, etc.).
+        (typically ``sky_cfg.env_file``). ``None`` means the resolved default
+        dotenv path.
+    :raises RuntimeError: A required setting is unset/blank after the load, the
+        rclone executable is unavailable, or ``rclone lsd r2:`` fails.
     """
-    if env_file is not None and env_file.is_file():
-        for key, value in dotenv_values(env_file).items():
-            if key and key.startswith("RCLONE_CONFIG_R2_") and value is not None:
-                os.environ[key] = value
+    config = _storage_config_from_sources(env_file)
+    os.environ.update({**config.storage_env(), **config.rclone_env()})
 
-    for key, default in _R2_STRUCTURAL_DEFAULTS.items():
-        os.environ.setdefault(key, default)
-
-    missing = [k for k in _SECRET_R2_ENV_KEYS if k not in os.environ]
-    if missing:
-        where = str(env_file) if env_file is not None else "<env_file not set>"
-        raise RuntimeError(
-            f"R2 credentials missing from process env after dotenv load: {', '.join(missing)}. "
-            f"Set RCLONE_CONFIG_R2_* in process env (e.g. `docker run -e ...=...`) "
-            f"or populate {where}."
+    # Auth ping — fail fast on bad creds instead of several seconds into the first
+    # real operation. Cheap (<1 RTT): `rclone lsd r2:` lists visible buckets.
+    try:
+        result = subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_AUTH_PING_TIMEOUT_SECONDS,
         )
-
-    # Auth ping — fail fast on bad creds instead of letting the first real
-    # operation fail several seconds in. Cheap (<1 RTT to R2) and unambiguous:
-    # `rclone lsd r2:` lists buckets visible to the configured creds.
-    result = subprocess.run(  # noqa: S603 — args are literal strings
-        ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "rclone executable was not found while validating R2 credentials"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "rclone auth ping timed out while validating the resolved R2 credentials "
+            f"after {_AUTH_PING_TIMEOUT_SECONDS}s"
+        ) from exc
     if result.returncode != 0:
         stderr_excerpt = result.stderr.strip().splitlines()[-1][:200] if result.stderr else ""
         raise RuntimeError(
@@ -156,61 +239,193 @@ def ensure_r2_env_loaded(env_file: Path | None = None) -> None:
 
 
 def is_r2_reachable() -> bool:
-    """Return ``True`` iff every :func:`ensure_r2_env_loaded` precondition holds.
+    """Return whether rclone can reach the configured ``r2:`` remote.
 
-    Tests gate ``@pytest.mark.integration_r2`` cases on this helper. The
-    predicate has to match :func:`ensure_r2_env_loaded`'s contract — if it
-    returns ``True`` only because a user's local rclone config makes
-    ``rclone lsd r2:`` succeed while the secret env keys are unset, the
-    test then calls :func:`ensure_r2_env_loaded` and hits a hard
-    ``RuntimeError`` instead of the intended auto-skip.
+    Canonical or legacy environment settings are projected when available;
+    otherwise rclone resolves the remote through its standard configuration.
 
-    :returns: ``True`` when rclone is on PATH AND all three
-        ``_SECRET_R2_ENV_KEYS`` are present in ``os.environ`` AND a
-        credentialled ``rclone lsd r2:`` exits 0; ``False`` otherwise.
+    :returns: ``True`` when rclone is on PATH and a credentialled
+        ``rclone lsd r2:`` exits 0; ``False`` otherwise.
     """
     if shutil.which("rclone") is None:
         return False
-    if not all(key in os.environ for key in _SECRET_R2_ENV_KEYS):
-        return False
+    try:
+        config = _storage_config_from_sources()
+    except RuntimeError:
+        probe_env = None
+    else:
+        probe_env = {**os.environ, **config.rclone_env()}
     try:
         subprocess.run(  # noqa: S603 — args are literal strings
             ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
+            env=probe_env,
+            timeout=_AUTH_PING_TIMEOUT_SECONDS,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
     return True
 
 
 def r2_storage_options() -> dict[str, str]:
-    """Build Lance's object-store ``storage_options`` for the R2 bucket from env.
+    """Build Lance's object-store ``storage_options`` for the R2 bucket.
 
-    Reads the same ``RCLONE_CONFIG_R2_*`` vars rclone uses (call
-    :func:`ensure_r2_env_loaded` first); S3-compatible stores require both keys.
+    Reads canonical settings, legacy rclone environment names, or the standard
+    rclone config and raises ``RuntimeError`` if no source is complete.
 
-    :returns: ``{access_key_id, secret_access_key, endpoint, region}`` for
-        ``lance.dataset`` / ``lance.write_dataset``.
-    :raises RuntimeError: A required secret key is unset in ``os.environ``.
+    :returns: ``{access_key_id, secret_access_key, endpoint, aws_endpoint, region}``
+        for ``lance.dataset`` / ``lance.write_dataset``.
     """
-    # Treat empty/whitespace as missing: a blank env var would otherwise build a
-    # partial dict that fails opaquely on the first S3/Lance call.
-    missing = [k for k in _SECRET_R2_ENV_KEYS if not os.environ.get(k, "").strip()]
-    if missing:
-        raise RuntimeError(
-            f"R2 credentials missing from process env: {', '.join(missing)}. "
-            "Call ensure_r2_env_loaded() or set RCLONE_CONFIG_R2_* first."
+    return _storage_config_from_sources().lance_storage_options()
+
+
+def lance_target(r2_uri: str) -> tuple[str, dict[str, str] | None]:
+    """Resolve an ``r2://`` URI to the ``(uri, storage_options)`` pair Lance opens.
+
+    Normally returns ``(s3://bucket/key, r2_storage_options())``. When the
+    ``r2:`` remote is env-configured as rclone's ``local`` backend (the local
+    compute mode dev/tests use — see ``fake_r2_remote``), Lance must read the
+    same bytes rclone writes, so the URI resolves to the cwd-relative
+    ``<bucket>/<key>`` path rclone's local backend uses, with no options.
+
+    :param r2_uri: Canonical ``r2://bucket/key`` URI string.
+    :returns: ``(uri_or_path, storage_options)`` for ``lance.dataset`` /
+        ``LanceFragment.create`` / ``LanceDataset.commit``.
+    :raises ValueError: ``r2_uri`` is not an ``r2://`` URI — fails fast on both
+        backends instead of resolving a nonsense cwd-relative local path.
+    """
+    if not is_r2_uri(r2_uri):
+        raise ValueError(f"not an r2:// URI: {r2_uri!r}")
+    if os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower() == "local":
+        return str(Path.cwd() / r2_uri[len(R2_URI_SCHEME) :]), None
+    return to_s3_uri(r2_uri), r2_storage_options()
+
+
+@dataclass(frozen=True)
+class RemoteEntry:
+    """One object from a :func:`list_entries` listing.
+
+    .. attribute :: path
+
+        Object key relative to the listed directory (``/``-joined for nested
+        entries under a recursive listing).
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp (R2 ``LastModified``; local
+        backend: file mtime).
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    path: str
+    mtime: datetime
+    size: int
+
+
+class _RcloneListEntry(BaseModel):
+    """Strict JSON boundary for one ``rclone lsjson`` file record.
+
+    .. attribute :: model_config
+
+        Strict, frozen parsing configuration for external records.
+
+    .. attribute :: path
+
+        Object key relative to the listed prefix.
+
+    .. attribute :: mtime
+
+        Storage-assigned last-modified timestamp.
+
+    .. attribute :: size
+
+        Object size in bytes.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    path: str = Field(alias="Path")
+    mtime: datetime = Field(alias="ModTime")
+    size: int = Field(alias="Size")
+
+
+_RCLONE_LIST_ADAPTER = TypeAdapter(list[_RcloneListEntry])
+
+
+# Listing probes share rclone's retry/contimeout reliability flags with the
+# transfer helpers; ``--checksum`` and ``--timeout`` don't apply to listings.
+_PROBE_RELIABILITY_FLAGS = ("--retries=3", "--contimeout=30s")
+
+
+def _run_listing_probe(args: Sequence[str]) -> str | None:
+    """Run an rclone listing probe, normalizing a missing directory to absent.
+
+    S3 backends list a missing key/prefix as empty output; the local backend
+    exits 3 for a missing directory. Only that local-backend result becomes
+    ``None``: on S3 the same exit code can mean a missing bucket, which is an
+    infrastructure failure rather than an absent key.
+
+    :param args: Full rclone argv for a listing subcommand (``lsf`` / ``lsjson``).
+    :returns: The probe's stdout, or ``None`` when a local-backend target directory is absent.
+    :raises subprocess.CalledProcessError: Any S3 failure, or a local-backend failure other than
+        a missing directory.
+    """
+    result = subprocess.run(  # noqa: S603 — args from validated URIs
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        remote_type = os.environ.get("RCLONE_CONFIG_R2_TYPE", "").strip().lower()
+        if result.returncode == 3 and remote_type == "local":
+            return None
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
         )
-    return {
-        "access_key_id": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
-        "secret_access_key": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
-        "endpoint": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
-        # R2 ignores region, but object-store requires it set for S3-compatible
-        # stores; "auto" is R2's documented placeholder.
-        "region": "auto",
-    }
+    return result.stdout
+
+
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def list_entries(r2_uri: str, *, recursive: bool = False) -> list[RemoteEntry]:  # noqa: DOC502
+    """List files under an ``r2://`` directory with storage-assigned mtimes.
+
+    Uses ``rclone lsjson --files-only`` so the mtime is the storage server's
+    ``LastModified`` — the single-authority timestamp winner selection trusts
+    (design doc §7.6). A missing directory lists as empty rather than raising:
+    absence of staged work is a normal reconciliation answer, not an error.
+
+    :param r2_uri: Directory ``r2://bucket/key/`` URI to list.
+    :param recursive: List nested entries (``-R``) instead of one level.
+    :returns: Entries sorted by ``path``; empty when the directory is absent.
+    :raises subprocess.CalledProcessError: rclone failed for a reason other
+        than a missing directory (auth, network, config).
+    """
+    args = [  # noqa: S607 — rclone resolved by the image's PATH.
+        "rclone",
+        "lsjson",
+        "--files-only",
+        "--use-server-modtime",
+        *_PROBE_RELIABILITY_FLAGS,
+    ]
+    if recursive:
+        args.append("-R")
+    args.append(_to_rclone_path(r2_uri))
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return []
+    records = _RCLONE_LIST_ADAPTER.validate_json(stdout)
+    entries = [
+        RemoteEntry(
+            path=item.path,
+            mtime=item.mtime,
+            size=item.size,
+        )
+        for item in records
+    ]
+    return sorted(entries, key=lambda entry: entry.path)
 
 
 def is_r2_uri(uri: str) -> bool:
@@ -232,7 +447,6 @@ def to_rclone_path(r2_uri: str) -> str:
     return f"{RCLONE_REMOTE}:" + r2_uri[len(R2_URI_SCHEME) :]
 
 
-# Backward-compatible alias for the previously-private translator.
 _to_rclone_path = to_rclone_path
 
 
@@ -268,20 +482,31 @@ def from_s3_uri(s3_uri: str) -> str:
     return R2_URI_SCHEME + s3_uri[len("s3://") :]
 
 
-def download_dir_no_overwrite(r2_uri: str, dest_path: Path) -> None:
-    """Copy every object under an R2 prefix into a local directory, never clobbering.
+def download_dir_no_overwrite(
+    source_uri: str, dest_path: Path, exclude: str | None = None
+) -> None:
+    """Copy an R2 or mounted-file directory into local storage without clobbering.
 
     Unlike :func:`download_to_path` (single object → file), this is a directory
     copy. ``--immutable`` hard-fails if a destination file already exists with a
-    different size/mtime/checksum (rather than silently overwriting or skipping),
-    so re-running against a populated dataset root surfaces drift instead of
-    masking it. Reliability flags mirror the upload helpers so a transient blip
-    retries instead of failing the eval outright.
+    different size/mtime/checksum, so a restart surfaces drift instead of
+    masking it. A ``file://`` source supports hydrating pod-local SSD from a
+    mounted network volume through the same datamodule contract as R2.
 
-    :param r2_uri: ``r2://`` directory prefix; every object beneath it is copied.
+    :param source_uri: ``r2://`` prefix or absolute ``file://`` directory URI.
     :param dest_path: Local destination directory, created by rclone if absent.
+    :param exclude: Optional rclone ``--exclude`` glob; lets materializing
+        hydration copy only the non-Lance sidecars of a dataset root.
+    :raises ValueError: If ``source_uri`` uses neither supported scheme.
     """
-    args = _rclone_argv("copy", "--immutable", _to_rclone_path(r2_uri), str(dest_path))
+    if is_r2_uri(source_uri):
+        source_path = _to_rclone_path(source_uri)
+    elif is_file_uri(source_uri):
+        source_path = str(file_uri_to_path(source_uri))
+    else:
+        raise ValueError(f"dataset source must use r2:// or file://, got {source_uri!r}")
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    args = _rclone_argv("copy", "--immutable", *operands, source_path, str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
@@ -303,8 +528,8 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
 
     Uses `rclone copyto` so the destination filename matches the URI exactly (not the source
     basename). Connection-level timeouts and retries are rclone's job: bounds the TCP connect phase
-    and the per-request timeout, retries the whole copy on transient failure, and emits per-request
-    debug logs so a CI failure leaves actionable evidence in stdout.
+    and the per-request timeout, retries the whole copy on transient failure, and emits errors plus
+    transfer summaries so a CI failure leaves actionable evidence without credential-bearing debug.
     """
     args = _rclone_argv("copyto", str(local_path), _to_rclone_path(r2_uri))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
@@ -372,17 +597,20 @@ def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
     return f"{R2_URI_SCHEME}{bucket}/{prefix}{shard_filename}"
 
 
-def object_size(r2_uri: str) -> int | None:
+# DOC503: the documented CalledProcessError propagates from _run_listing_probe.
+def object_size(r2_uri: str) -> int | None:  # noqa: DOC503
     """Return the size in bytes of the R2 object at ``r2_uri``, or ``None`` if it does not exist.
 
     Uses ``rclone lsf --format=s`` for a size-only single-line listing: integer stdout if the
-    object exists, empty stdout if it does not. A non-zero rclone exit (auth, network, etc.) raises
-    ``subprocess.CalledProcessError`` so callers fail fast on environmental issues rather than
-    silently masking them. ``--checksum`` does not apply to listings.
+    object exists, empty stdout if it does not. A missing parent directory also reads as absent —
+    S3 backends list it empty while the local backend (local compute mode) errors, so both
+    normalize to ``None``. ``--checksum`` does not apply to listings.
 
     A zero-size object exists and returns ``0``. Callers that want to treat zero-size as absent
     (e.g. defending against half-uploaded objects) test ``size and size > 0`` themselves.
 
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason other than a
+        missing directory (auth, network, config) — callers fail fast on environmental issues.
     :raises RuntimeError: stdout is non-empty but not an integer; chained to the
         underlying ``ValueError`` so the probed URI survives the failure path.
     """
@@ -390,12 +618,13 @@ def object_size(r2_uri: str) -> int | None:
         "rclone",
         "lsf",
         "--format=s",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
-    )
-    out = result.stdout.strip()
+    stdout = _run_listing_probe(args)
+    if stdout is None:
+        return None
+    out = stdout.strip()
     if not out:
         return None
     try:
@@ -408,26 +637,28 @@ def object_size(r2_uri: str) -> int | None:
         ) from exc
 
 
-def r2_directory_exists(r2_uri: str) -> bool:
+# DOC502: the documented CalledProcessError propagates from _run_listing_probe.
+def r2_directory_exists(r2_uri: str) -> bool:  # noqa: DOC502
     """Return whether any object exists under the ``r2_uri`` prefix.
 
-    Directory counterpart of :func:`object_size`; a non-zero rclone exit (auth,
-    network) raises ``CalledProcessError`` so an outage isn't read as absent.
+    Directory counterpart of :func:`object_size` — a missing prefix reads as
+    ``False`` on both the S3 and local backends.
 
     :param r2_uri: Canonical ``r2://bucket/prefix`` URI of the directory.
     :returns: ``True`` if the prefix contains at least one object.
+    :raises subprocess.CalledProcessError: rclone exited non-zero for a reason
+        other than a missing directory (auth, network, config).
     """
     # rclone lsf is non-recursive by default, so this lists only the prefix's
     # immediate entries — an O(1) boolean probe, not a full-tree enumeration.
     args = [  # noqa: S607 — rclone resolved by image's PATH
         "rclone",
         "lsf",
+        *_PROBE_RELIABILITY_FLAGS,
         _to_rclone_path(r2_uri),
     ]
-    result = subprocess.run(  # noqa: S603 — args from validated URI
-        args, check=True, capture_output=True, text=True
-    )
-    return bool(result.stdout.strip())
+    stdout = _run_listing_probe(args)
+    return bool(stdout and stdout.strip())
 
 
 def purge_prefix(bucket: str, prefix: str) -> None:

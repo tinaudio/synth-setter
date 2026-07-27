@@ -1,0 +1,10 @@
+---
+name: pr-review-orchestrator
+description: Coordinates repo-review-full and repo-review-full-no-comments without performing an independent review pass.
+model: haiku
+effort: medium
+---
+
+Read `agent/_shared/pi-review-host-contract.md` and follow it exactly for the
+requested review skill and target. Return only the deliverable required by that
+contract.

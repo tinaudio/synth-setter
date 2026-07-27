@@ -7,7 +7,9 @@ tensor decode cannot corrupt both sides identically and pass.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import lance
 import numpy as np
@@ -18,20 +20,26 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
+    DEBUG_FIELD,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
 )
+import synth_setter.pipeline.data.lance_shard as lance_shard
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
     commit_lance_dataset,
     iter_lance_column_rows,
+    fragment_schema_matches,
     lance_fragment,
     lance_schema,
-    record_batch_from_arrays,
+    record_batch_from_arrays as _record_batch_from_arrays,
+    seed_debug_array,
     tensor_array,
     write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from tests.helpers.lance_fixtures import with_preview_columns
 
 # Small shapes: each element gets a unique value, exactly representable as float16 (<= 2048).
 _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
@@ -45,12 +53,32 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,
-    sample_rate=100,
+    sample_rate=8000,
     channels=2,
     min_loudness=-55.0,
     base_seed=42,
     attempts_per_sample=100,
 )
+
+
+def record_batch_from_arrays(
+    arrays: dict[str, np.ndarray],
+    schema: pa.Schema,
+    *,
+    debug: pa.Array | None,
+) -> pa.RecordBatch:
+    """Build a canonical preview-bearing record batch.
+
+    :param arrays: Tensor columns to persist.
+    :param schema: Canonical shard schema.
+    :param debug: Optional row-level seed provenance.
+    :returns: Record batch with previews derived from persisted audio values.
+    """
+    return _record_batch_from_arrays(
+        with_preview_columns(arrays, _METADATA.sample_rate),
+        schema,
+        debug=debug,
+    )
 
 
 def _arange_arrays(offset: int) -> dict[str, np.ndarray]:
@@ -85,13 +113,91 @@ def test_lance_round_trip_two_batches_preserves_values_and_row_order(
     write_lance_dataset(
         shard,
         schema,
-        [record_batch_from_arrays(first, schema), record_batch_from_arrays(second, schema)],
+        [record_batch_from_arrays(first, schema, debug=None), record_batch_from_arrays(second, schema, debug=None)],
     )
 
     decoded = np.stack(list(iter_lance_column_rows(shard, field)), axis=0)
     expected = np.concatenate([first[field], second[field]], axis=0)
     np.testing.assert_array_equal(decoded, expected)
     assert decoded.dtype == DATASET_FIELD_DTYPES[field]
+
+
+def test_lance_schema_exposes_native_json_debug_column() -> None:
+    """The debug column accepts dynamic JSON documents without schema migrations."""
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    assert schema.field(DEBUG_FIELD) == pa.field(DEBUG_FIELD, pa.json_(), nullable=False)
+
+
+def test_seed_debug_array_serializes_seed_and_derivation_inputs() -> None:
+    """Seed debug documents retain dynamic JSON typing and accepted attempts."""
+    debug = seed_debug_array(42, [9], [2], [2728252728602953181], shard_id=7)
+
+    assert debug.type == pa.json_()
+    assert json.loads(debug[0].as_py()) == {
+        "seed": 2728252728602953181,
+        "master_seed": 42,
+        "sample_idx": 9,
+        "attempt": 2,
+        "shard_id": 7,
+        "parameter_source": "sampled",
+    }
+
+
+def test_seed_debug_array_fixed_parameters_omit_unconsumed_seed() -> None:
+    """Fixed-parameter rows do not claim that their sampler seed was consumed."""
+    debug = seed_debug_array(42, [9], [0], [None], shard_id=7, parameter_source="fixed")
+
+    assert json.loads(debug[0].as_py()) == {
+        "master_seed": 42,
+        "sample_idx": 9,
+        "attempt": 0,
+        "shard_id": 7,
+        "parameter_source": "fixed",
+    }
+
+
+def test_seed_debug_array_reused_patch_omits_unconsumed_row_seed() -> None:
+    """Shard-cadence rows omit a seed when parameter sampling was bypassed."""
+    debug = seed_debug_array(42, [10], [0], [None], shard_id=7)
+
+    assert json.loads(debug[0].as_py()) == {
+        "master_seed": 42,
+        "sample_idx": 10,
+        "attempt": 0,
+        "shard_id": 7,
+        "parameter_source": "sampled",
+    }
+
+
+def test_seed_debug_array_mismatched_lengths_raises_value_error() -> None:
+    """Each debug document requires aligned index, attempt, and seed values."""
+    with pytest.raises(
+        ValueError,
+        match="sample_indices, attempts, and sampler_seeds must have equal lengths",
+    ):
+        seed_debug_array(42, [9, 10], [2], [17], shard_id=7)
+
+
+def test_fragment_schema_matches_does_not_mask_debug_nullability_mismatch() -> None:
+    """JSON physical-type normalization preserves other field constraints."""
+    logical = lance_schema(_FIELD_SHAPES, _METADATA)
+    debug_index = logical.get_field_index(DEBUG_FIELD)
+    physical = logical.set(debug_index, pa.field(DEBUG_FIELD, pa.large_binary(), nullable=True))
+
+    assert not fragment_schema_matches(physical, logical)
+
+
+def test_fragment_schema_matches_rejects_unmarked_large_binary_debug_field() -> None:
+    """Only Lance's explicitly marked JSON storage field is normalized."""
+    logical = lance_schema(_FIELD_SHAPES, _METADATA)
+    debug_index = logical.get_field_index(DEBUG_FIELD)
+    physical = logical.set(
+        debug_index,
+        pa.field(DEBUG_FIELD, pa.large_binary(), nullable=False),
+    )
+
+    assert not fragment_schema_matches(physical, logical)
 
 
 def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
@@ -118,7 +224,7 @@ def test_lance_round_trip_noncontiguous_transposed_input_preserves_values(
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
 
-    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema, debug=None)])
 
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     np.testing.assert_array_equal(decoded, transposed_mel)
@@ -132,7 +238,7 @@ def test_iter_lance_column_rows_yields_read_only_views(tmp_path: Path) -> None:
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
     write_lance_dataset(
-        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema, debug=None)]
     )
 
     row = next(iter_lance_column_rows(shard, AUDIO_FIELD))
@@ -153,10 +259,36 @@ def test_write_lance_dataset_pins_data_storage_version(tmp_path: Path) -> None:
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
     shard = tmp_path / "shard-000000.lance"
     write_lance_dataset(
-        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema)]
+        shard, schema, [record_batch_from_arrays(_arange_arrays(offset=0), schema, debug=None)]
     )
 
     assert lance.dataset(str(shard)).data_storage_version == LANCE_DATA_STORAGE_VERSION
+
+
+def test_write_lance_dataset_bounds_data_file_size_for_multipart_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Split Lance data files before R2 multipart uploads can exceed S3's 10k-part ceiling.
+
+    :param monkeypatch: Pytest fixture used to spy on ``lance.write_dataset``.
+    """
+    captured: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(lance, "write_dataset", _spy)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+
+    write_lance_dataset(
+        "s3://bucket/prefix/train.lance",
+        schema,
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema, debug=None)],
+        storage_options={"aws_endpoint": "https://acct.r2.cloudflarestorage.com"},
+    )
+
+    assert captured["max_bytes_per_file"] == LANCE_MAX_BYTES_PER_FILE
+    assert LANCE_MAX_BYTES_PER_FILE < 10_000 * 5 * 1024**2
 
 
 def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Path) -> None:
@@ -170,14 +302,93 @@ def test_lance_fragment_commit_round_trips_values_and_pins_version(tmp_path: Pat
     shard = tmp_path / "shard-000000.lance"
 
     fragments = [
-        lance_fragment(shard, schema, record_batch_from_arrays(first, schema), 0),
-        lance_fragment(shard, schema, record_batch_from_arrays(second, schema), 1),
+        lance_fragment(shard, schema, record_batch_from_arrays(first, schema, debug=None)),
+        lance_fragment(shard, schema, record_batch_from_arrays(second, schema, debug=None)),
     ]
     commit_lance_dataset(shard, schema, fragments)
 
     dataset = lance.dataset(str(shard))
     assert dataset.count_rows() == 2 * _FIELD_SHAPES[AUDIO_FIELD][0]
     assert dataset.data_storage_version == LANCE_DATA_STORAGE_VERSION
+    decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
+    expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
+    np.testing.assert_array_equal(decoded, expected)
+
+
+def test_lance_fragment_into_stale_dataset_fails_instead_of_inheriting_schema(
+    tmp_path: Path,
+) -> None:
+    """A fragment written into a schema-drifted dataset fails loudly at write time.
+
+    Reproduces #2084: Lance append-mode silently stamps an existing committed dataset's schema
+    metadata onto new data files, so a reused prefix holding a stale dataset turns correct worker
+    output into stale-schema fragments.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    stale_metadata = dict(schema.metadata)
+    stale_metadata[b"synth_setter.shard_metadata"] = b'{"stale": true}'
+    shard = tmp_path / "shard-000000.lance"
+    stale_table = pa.Table.from_batches(
+        [record_batch_from_arrays(_arange_arrays(offset=0), schema, debug=None)]
+    ).replace_schema_metadata(stale_metadata)
+    lance.write_dataset(stale_table, shard, data_storage_version=LANCE_DATA_STORAGE_VERSION)
+
+    with pytest.raises(ValueError, match="existing dataset's schema"):
+        lance_fragment(shard, schema, record_batch_from_arrays(_arange_arrays(offset=1000), schema, debug=None))
+
+
+def test_lance_fragment_forwards_native_file_bound_and_storage_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Distributed fragment writes pin the native file bound and storage version.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Captures the Lance distributed-writer arguments.
+    """
+    captured: dict[str, object] = {}
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    sentinel = SimpleNamespace(files=[SimpleNamespace(path="stub.lance")])
+
+    def _capture(*args: object, **kwargs: object) -> list[object]:
+        captured.update(kwargs)
+        return [sentinel]
+
+    reader = SimpleNamespace(metadata=lambda: SimpleNamespace(schema=schema))
+    monkeypatch.setattr(lance.fragment, "write_fragments", _capture)
+    monkeypatch.setattr(lance_shard, "LanceFileReader", lambda *a, **k: reader)
+
+    fragment = lance_fragment(
+        tmp_path / "shard-000000.lance",
+        schema,
+        record_batch_from_arrays(_arange_arrays(offset=0), schema, debug=None),
+    )
+
+    assert fragment is sentinel
+    assert captured["max_bytes_per_file"] == LANCE_MAX_BYTES_PER_FILE
+    assert captured["data_storage_version"] == LANCE_DATA_STORAGE_VERSION
+    assert captured["mode"] == "append"
+
+
+def test_lance_fragment_streams_multiple_batches_into_one_fragment(tmp_path: Path) -> None:
+    """One fragment preserves every batch from a streamed shard source.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    first = _arange_arrays(offset=0)
+    second = _arange_arrays(offset=1000)
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    shard = tmp_path / "shard-000000.lance"
+    batches = (
+        record_batch_from_arrays(first, schema, debug=None),
+        record_batch_from_arrays(second, schema, debug=None),
+    )
+
+    fragment = lance_fragment(shard, schema, iter(batches))
+    commit_lance_dataset(shard, schema, [fragment])
+
+    assert lance.dataset(str(shard)).count_rows() == 4
     decoded = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD)), axis=0)
     expected = np.concatenate([first[MEL_SPEC_FIELD], second[MEL_SPEC_FIELD]], axis=0)
     np.testing.assert_array_equal(decoded, expected)
@@ -203,6 +414,21 @@ def test_tensor_array_empty_batch_raises_value_error() -> None:
         tensor_array(np.zeros((0, 2, 7), dtype=np.float16), np.dtype(np.float16), (2, 7))
 
 
+def test_lance_schema_uses_configured_signal_dtypes() -> None:
+    """Schema construction applies configured audio and mel storage widths."""
+    field_dtypes = {
+        **DATASET_FIELD_DTYPES,
+        AUDIO_FIELD: np.dtype("float32"),
+        MEL_SPEC_FIELD: np.dtype("float16"),
+    }
+
+    schema = lance_schema(_FIELD_SHAPES, _METADATA, field_dtypes=field_dtypes)
+
+    assert schema.field(AUDIO_FIELD).type.value_type == pa.float32()
+    assert schema.field(MEL_SPEC_FIELD).type.value_type == pa.float16()
+    assert schema.field(PARAM_ARRAY_FIELD).type.value_type == pa.float32()
+
+
 def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None:
     """Each column's dtype comes from the schema, not ``DATASET_FIELD_DTYPES``.
 
@@ -224,6 +450,6 @@ def test_record_batch_from_arrays_schema_dtype_wins_over_field_default() -> None
     arrays = _arange_arrays(offset=0)
     arrays[AUDIO_FIELD] = arrays[AUDIO_FIELD].astype(np.float32)
 
-    batch = record_batch_from_arrays(arrays, schema)
+    batch = record_batch_from_arrays(arrays, schema, debug=None)
 
     assert batch.schema.field(AUDIO_FIELD).type.value_type == pa.float32()

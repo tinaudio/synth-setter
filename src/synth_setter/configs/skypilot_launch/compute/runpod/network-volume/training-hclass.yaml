@@ -1,0 +1,15 @@
+# H-class variant of the network-volume training pool: the top training tiers
+# so the scheduler takes whichever the volume's data center stocks
+# (B200 > H200 > H100 by capability, priced accordingly).
+name: runpod-network-volume-training-hclass
+resources:
+  - cloud: runpod
+    accelerators:
+      H100-SXM: 1
+      H200-SXM: 1
+      B200: 1
+    use_spot: false
+    disk_size: 750
+mount_network_volume: /workspace/network-volume
+setup_scripts:
+  - operator-ssh.sh

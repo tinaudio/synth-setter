@@ -48,8 +48,8 @@ RUN case "${TARGETARCH:-}" in \
     esac
 
 # TODO: add appropriate build labels
-# TODO: Consider taking python runtime from `python:3.11-*` stage.
-# This would involving copying`/usr/local`.
+# TODO: Consider taking python runtime from `python:3.12-*` stage.
+# This would involve copying `/usr/local`.
 # TODO: Add diagram of stages and dependencies.
 # TODO(deduplicate package lists)
 # ==========================================
@@ -58,10 +58,9 @@ WORKDIR /home/build/
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
-# Non-interactive configuration of tzdata
+# Keep Debian package configuration noninteractive in every derived builder stage.
 ENV DEBIAN_FRONTEND=noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN=true
-RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc select UTC'; } | debconf-set-selections
+ENV TZ=Etc/UTC
 
 ARG TARGETARCH
 ARG BUILD_MODE
@@ -75,9 +74,11 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
   software-properties-common \
   gcc-12 \
   g++-12 \
@@ -230,9 +231,11 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 FROM ${BASE_IMAGE} AS vst3-synths-fetch
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
     wget
@@ -264,6 +267,50 @@ RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-o
     echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
     tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
     rm /tmp/six-sines.tgz
+
+# ==========================================
+# KR106 source build: upstream release ZIPs require glibc 2.38, so build the
+# VST3 from source on Ubuntu 22.04 and stage the resulting bundle.
+# License: Ultramaster KR-106 is GPL-3.0.
+# ==========================================
+FROM builder-base AS builder-build-ultramaster-kr106
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG TARGETARCH
+ARG ULTRAMASTER_KR106_VERSION=v2.5.13
+ARG ULTRAMASTER_KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    mkdir -p /plugins-staging && \
+    if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 build dependencies on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      libasound2-dev \
+      libcurl4-openssl-dev \
+      libfontconfig1-dev \
+      libfreetype-dev \
+      libgl-dev \
+      libgl1-mesa-dev \
+      libgtk-3-dev \
+      libwebkit2gtk-4.0-dev \
+      libx11-dev \
+      libxcursor-dev \
+      libxinerama-dev \
+      libxrandr-dev \
+      mesa-common-dev \
+      pkg-config
+WORKDIR /home/build/ultramaster-kr106
+RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Ultramaster KR-106 source build on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+    echo "Building Ultramaster KR-106 ${ULTRAMASTER_KR106_VERSION} from git ref ${ULTRAMASTER_KR106_GIT_REF}" && \
+    git init && \
+    git remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git && \
+    git fetch --depth 1 origin "${ULTRAMASTER_KR106_GIT_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    git submodule update --init --recursive --depth 1 && \
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF && \
+    cmake --build build --config Release --target KR106_VST3 --parallel "$(nproc)" && \
+    mkdir -p /plugins-staging && \
+    cp -a "build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3" /plugins-staging/
 
 # ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.
@@ -305,8 +352,11 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev
-COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
+# Keep the managed interpreter outside root's home so the non-root runtime
+# user can read its standard library through /venv/main.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 # HYDRA_FULL_ERROR=1 — full Python traceback instead of Hydra's trimmed output
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONFAULTHANDLER=1 — C/CUDA segfault traceback (pairs with HYDRA_FULL_ERROR)
@@ -317,12 +367,12 @@ ENV HYDRA_FULL_ERROR=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# Runtime venv: a uv-managed CPython 3.11 (matches `requires-python` in
+# Runtime venv: a uv-managed CPython 3.12 (matches `requires-python` in
 # `pyproject.toml`), decoupled from the apt python3 used at build time.
-RUN uv venv --python 3.11 "$VIRTUAL_ENV"
+RUN uv venv --python 3.12.13 "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
-    python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
+    python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.
@@ -356,24 +406,32 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
 # over SSH (rsync, openssh-client) plus a system pip3 (sky shells out to `pip3`
 # directly, which the uv-managed venv at /venv/main does not expose).
+# fuse (2.x) enables `rclone mount`: the pinned rclone 1.53 execs the bare
+# `fusermount` binary, which `fuse` ships but `fuse3` does not (only
+# `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
+# on 22.04, so install only `fuse`. The launch path must also grant
+# --device=/dev/fuse --cap-add=SYS_ADMIN.
+COPY --chmod=755 scripts/docker/run_after_apt_update.sh /usr/local/bin/
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      xvfb \
-      xauth \
-      dbus-x11 \
-      xsettingsd \
-      libgl1-mesa-dri \
-      libgl1-mesa-glx \
-      mesa-utils \
-      openbox \
-      x11-utils \
-      x11-xserver-utils \
-      rclone \
-      rsync \
-      openssh-client \
-      python3-pip; \
+    run_after_apt_update.sh \
+      apt-get install -y --no-install-recommends \
+        dbus-x11 \
+        fuse \
+        libgl1-mesa-dri \
+        libgl1-mesa-glx \
+        mesa-utils \
+        openbox \
+        openssh-client \
+        python3-pip \
+        rclone \
+        rsync \
+        unzip \
+        x11-utils \
+        x11-xserver-utils \
+        xauth \
+        xsettingsd \
+        xvfb; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -406,34 +464,33 @@ RUN case "${TARGETARCH:-}" in \
 
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/data/vst/core.py /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
-    python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
+    python -X faulthandler load_vst3_check.py "/usr/lib/vst3/Surge XT.vst3"
 
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
 
 COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
-
+COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
 # Presence gate for the bundles the image must ship: Surge XT on every arch,
-# OB-Xf on amd64 only (the fetched synths are amd64-only). Load-validation follows.
-RUN for bundle in "Surge XT" "OB-Xf"; do \
-      if [[ "$bundle" == "OB-Xf" && "${TARGETARCH:-}" != "amd64" ]]; then \
+# bundled plugin synths on amd64 only. Load-validation follows.
+RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+      if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
         echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
 
-# Validate each fetched synth loads under headless X11 — one wrapper run per
+# Validate each bundled synth loads under headless X11 — one wrapper run per
 # plugin, since sequential in-process loads crash order-dependently (#1649) —
 # then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
 # Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
 RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
-    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines"; do \
+    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
         python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
@@ -458,9 +515,11 @@ FROM builder-install-synth-setter-deps AS dev-base
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
+# unzip: the in-image pytest run exercises the Makefile install-plugins
+# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
 
 WORKDIR /home/build/synth-setter
 
@@ -485,7 +544,13 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+# The in-image pytest runs the Pi hook suite, which needs a Node that strips
+# TypeScript inline (--experimental-strip-types, Node >= 22.6). npm/npx are not
+# needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
+COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+
+# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
+# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
@@ -498,8 +563,11 @@ RUN pytest -k "not slow" -v
 CMD ["/bin/bash"]
 
 # ==========================================
-# devcontainer-tools: dev-base + CLI tools + non-root user.
-# Published as tinaudio/synth-setter:devcontainer-tools.
+# devcontainer-tools: dev-base + CLI tools, defaulting to root so SkyPilot's
+# RunPod backend can bootstrap sshd. Tools that live under /home/dev are still
+# installed as the dev user mid-stage; the stage ends with USER root.
+# Published as tinaudio/synth-setter:devcontainer-tools; the non-root
+# devcontainer-tools-dev-user stage derives from it.
 # ==========================================
 FROM dev-base AS devcontainer-tools
 
@@ -507,30 +575,54 @@ FROM dev-base AS devcontainer-tools
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap \
       curl \
+      emacs-nox \
+      fd-find \
+      ripgrep \
       tmux \
+      xz-utils \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Node.js (system-wide) ---
-# CLI agents (claude-code, codex) install per-user below: a root-owned /usr/local/bin
-# copy would shadow dev's auto-updated ~/.npm-global copy in PATH, pinning the version.
-COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Secret injection needs Infisical; Cloudsmith's versioned .deb avoids an apt repo.
+# When bumping, download both packages, then run `sha256sum infisical_*.deb` to refresh pins.
+ARG TARGETARCH
+ARG INFISICAL_VERSION=0.38.0
+ARG INFISICAL_SHA256_AMD64=b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f
+ARG INFISICAL_SHA256_ARM64=503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7
+RUN case "${TARGETARCH:-}" in \
+      amd64) infisical_sha=${INFISICAL_SHA256_AMD64} ;; \
+      arm64) infisical_sha=${INFISICAL_SHA256_ARM64} ;; \
+      *) echo "ERROR: unsupported TARGETARCH for infisical: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    package="infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" && \
+    url="https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" && \
+    curl -fsSL "$url" -o "/tmp/${package}" && \
+    echo "${infisical_sha}  /tmp/${package}" | sha256sum -c - && \
+    dpkg -i "/tmp/${package}" && \
+    rm "/tmp/${package}" && \
+    infisical --version
+
+# Install npm and the system Codex CLI; `node` itself comes from `dev-base`.
+ARG CODEX_VERSION=latest
+COPY --from=node:22-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version \
- && npm --version
+ && npm --version \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && codex --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
 # the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
 # verified against a pinned per-arch SHA256 (run `sha256sum` on the release
 # tarballs to refresh these when bumping ZELLIJ_VERSION).
-ARG TARGETARCH
 ARG ZELLIJ_VERSION=v0.44.3
 ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
 ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb
@@ -571,25 +663,52 @@ USER $USERNAME
 
 # Appended, not prepended: root-default devcontainer sessions must not resolve
 # these dev-writable dirs ahead of system binaries.
-ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
+ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin:/home/${USERNAME}/.config/emacs/bin"
 
 # wandb's default staging dir (~/.local/share/wandb) isn't writable at runtime in
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
 
-# dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local);
-# a per-user prefix sends it to a writable one, so the in-app updater can replace
-# claude-code in place. $HOME is unset after USER, so export it per-RUN (not ENV —
-# that leaks to root sessions).
+# Pin Doom because its default branch is a rolling release without stable tags.
+ARG DOOM_EMACS_GIT_SHA=04b2956bafd883e5da7c530f8e0fbd22b1fe7af8
+RUN export HOME="/home/${USERNAME}" \
+ && mkdir -p "$HOME/.config/emacs" "$HOME/.local/bin" \
+ && git -C "$HOME/.config/emacs" init \
+ && git -C "$HOME/.config/emacs" remote add origin https://github.com/doomemacs/doomemacs.git \
+ && git -C "$HOME/.config/emacs" fetch --depth 1 origin "$DOOM_EMACS_GIT_SHA" \
+ && git -C "$HOME/.config/emacs" checkout --detach "$DOOM_EMACS_GIT_SHA" \
+ && git -C "$HOME/.config/emacs" submodule update --init --recursive \
+ && doom install --force --no-env --no-hooks \
+ && test "$(doom version --short)" = "2.2.0"
+
+# dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local),
+# so the user-owned agents use a writable prefix. $HOME is unset after USER, so
+# export it per-RUN rather than through ENV, which leaks to root sessions.
 ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+ARG PI_VERSION=latest
 RUN export HOME="/home/${USERNAME}" \
  && npm config set prefix "/home/${USERNAME}/.npm-global" \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && mkdir -p "/home/${USERNAME}/.npm-global/bin" \
+ && ln -sfn /usr/local/bin/codex "/home/${USERNAME}/.npm-global/bin/codex" \
+ && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force \
  && claude --version \
- && codex --version
+ && codex --version \
+ && pi --version
+
+# Hermes owns a separate per-user venv; pin and verify its upstream installer.
+# Its uv runs as ${USERNAME} and must not inherit UV_PYTHON_INSTALL_DIR: /opt/uv
+# is root-owned, so a managed-interpreter fetch there fails with EACCES.
+ARG HERMES_GIT_REF=v2026.7.7.2
+ARG HERMES_GIT_SHA=9de9c25f620ff7f1ce0fd5457d596052d5159596
+ARG HERMES_INSTALLER_SHA256=a93c65b01ea392e179cf872e182bd01a2b65c0c15f17833e9f9569033ef10e07
+RUN export HOME="/home/${USERNAME}" \
+ && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh \
+ && echo "${HERMES_INSTALLER_SHA256}  /tmp/hermes-install.sh" | sha256sum -c - \
+ && env -u VIRTUAL_ENV -u UV_PYTHON_INSTALL_DIR bash /tmp/hermes-install.sh --branch "${HERMES_GIT_REF}" --commit "${HERMES_GIT_SHA}" --skip-browser \
+ && rm /tmp/hermes-install.sh \
+ && hermes --version
 
 # Antigravity (Google) ships the standalone `agy` binary, not on npm; its
 # installer fetches a SHA512-verified release into ~/.local/bin (upstream
@@ -600,6 +719,17 @@ RUN export HOME="/home/${USERNAME}" \
  && bash /tmp/agy-install.sh \
  && rm /tmp/agy-install.sh \
  && agy --version
+
+# Default the image back to root: SkyPilot's RunPod backend runs the container
+# start command as the image's USER and installs sshd there, which needs root
+# (a non-root default leaves the pod stuck in INIT). Local devcontainers use the
+# devcontainer-tools-dev-user stage below (or devcontainer.json's remoteUser).
+USER root
+
+# devcontainer-tools-dev-user: non-root default for local VS Code devcontainers.
+FROM devcontainer-tools AS devcontainer-tools-dev-user
+ARG USERNAME=dev
+USER $USERNAME
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility

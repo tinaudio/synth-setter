@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from tests.claude_hooks.conftest import GATE_OVERRIDE_ENV_VARS, scrub_gate_overrides
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SETTINGS_PATH = _REPO_ROOT / ".claude" / "settings.json"
 
@@ -121,6 +123,52 @@ def _run_hook_command_raw(command_body: str, raw_stdin: str) -> subprocess.Compl
     )
 
 
+def test_gate_overrides_autouse_scrub_wired_and_environ_clean(
+    request: pytest.FixtureRequest,
+) -> None:
+    """The autouse scrub is in this test's fixture closure and left no override.
+
+    The fixture-closure assertion pins the ``autouse=True`` wiring even in
+    clean environments; the environ check can additionally fail only in a
+    session that actually exports one of the vars.
+
+    :param request: Exposes the active fixture names for the wiring check.
+    """
+    assert "_scrub_gate_overrides" in request.fixturenames
+    leaked = {var: os.environ[var] for var in GATE_OVERRIDE_ENV_VARS if var in os.environ}
+    assert leaked == {}
+
+
+def test_scrub_gate_overrides_with_all_vars_set_removes_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``scrub_gate_overrides`` removes every var in its contracted set.
+
+    Re-populates the vars after the autouse fixture already ran, so the outcome is independent of
+    ambient session state.
+
+    :param monkeypatch: Used to set the vars and handed to the scrubber.
+    """
+    for var in GATE_OVERRIDE_ENV_VARS:
+        monkeypatch.setenv(var, "warn")
+
+    scrub_gate_overrides(monkeypatch)
+
+    assert [var for var in GATE_OVERRIDE_ENV_VARS if var in os.environ] == []
+
+
+def test_gate_override_env_vars_bash_harness_list_matches_python_scrub_list() -> None:
+    """``agent/hooks/test.sh`` unsets exactly the vars the pytest fixture scrubs.
+
+    Drift guard: a gate var added to only one of the two lists would silently
+    stop being scrubbed on the other surface.
+    """
+    harness = (_REPO_ROOT / "agent" / "hooks" / "test.sh").read_text()
+    match = re.search(r"GATE_OVERRIDE_ENV_VARS=\(([^)]*)\)", harness)
+    assert match, "GATE_OVERRIDE_ENV_VARS array not found in agent/hooks/test.sh"
+    assert tuple(match.group(1).split()) == GATE_OVERRIDE_ENV_VARS
+
+
 def test_no_if_at_matcher_entry_level() -> None:
     """Matcher-entry objects must not carry a top-level ``if:`` field.
 
@@ -172,7 +220,6 @@ _EXPECTED_HANDLER_SCOPES: tuple[tuple[str, str], ...] = (
     # ...` (git-level options before the subcommand); the wrapper defers to
     # the Python scanner, which re-scopes to actual commit invocations.
     ("Git-commit-trailer-check", "Bash(git*)"),
-    ("Pre-PR review gate", "Bash(gh pr create *)"),
 )
 
 _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -183,6 +230,7 @@ _EXPECTED_SHARED_HOOK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("Git-commit-trailer-check", "bash agent/hooks/git-commit-trailer-check.sh"),
     ("No-baseline-additions", "bash agent/hooks/no-baseline-additions.sh"),
     ("No-yaml-run-comments", "bash agent/hooks/no-yaml-run-comments.sh"),
+    ("PR checkbox trigger", "bash agent/hooks/pr-checkbox-trigger.sh"),
     ("PR-readiness gate", "bash agent/hooks/pr-readiness-stop.sh"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Worktree guard", "bash agent/hooks/worktree-guard.sh"),
@@ -217,6 +265,13 @@ def test_named_handlers_carry_expected_if_scope(
         f"got {handler.get('if')!r} (missing or wrong scope means this hook fires on "
         "every Bash call)"
     )
+
+
+def test_pre_pr_review_gate_is_not_registered() -> None:
+    """The unstable pre-PR review gate remains suspended from local hook settings."""
+    descriptions = [entry.get("description", "") for entry in _matcher_entries()]
+
+    assert not any("Pre-PR review gate" in description for description in descriptions)
 
 
 @pytest.mark.parametrize(
@@ -335,7 +390,7 @@ def pre_pr_gate_command() -> str:
 
     :returns: The shell command string.
     """
-    return _find_handler("Pre-PR review gate")["command"]
+    return "bash agent/hooks/pre-pr-review-gate.sh"
 
 
 def test_pre_pr_gate_blocks_when_review_path_absent(pre_pr_gate_command: str) -> None:
@@ -612,7 +667,7 @@ def yaml_run_hook_command() -> str:
 
 
 def test_yaml_run_hook_passes_unrelated_file(yaml_run_hook_command: str) -> None:
-    """Edits to files outside workflows/ and src/synth_setter/configs/compute/ fast-path through.
+    """Edits to files outside workflows/ and src/synth_setter/configs/skypilot_launch/compute/ fast-path through.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1233,7 +1288,7 @@ def test_baseline_hook_allows_equal_count_edit(baseline_hook_command: str, tmp_p
 
 
 def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) -> None:
-    """Block a `#`-comment in a ``run: |`` body under ``src/synth_setter/configs/compute/*.yaml``.
+    """Block a `#`-comment in a ``run: |`` body under ``src/synth_setter/configs/skypilot_launch/compute/*.yaml``.
 
     :param yaml_run_hook_command: Hook command body fixture.
     """
@@ -1248,7 +1303,7 @@ def test_yaml_run_hook_blocks_compute_config_path(yaml_run_hook_command: str) ->
         {
             "tool_name": "Write",
             "tool_input": {
-                "file_path": "src/synth_setter/configs/compute/foo.yaml",
+                "file_path": "src/synth_setter/configs/skypilot_launch/compute/foo.yaml",
                 "content": content,
             },
         },
@@ -1740,7 +1795,7 @@ def test_yaml_run_hook_description_documents_both_extensions() -> None:
     """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
 
     The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
-    ``src/synth_setter/configs/compute/*.{yml,yaml}``. A description naming only one extension
+    ``src/synth_setter/configs/skypilot_launch/compute/*.{yml,yaml}``. A description naming only one extension
     per directory misleads users into surprise when the other fires.
     """
     # _find_handler enforces "exactly one matcher entry" — call it first so a

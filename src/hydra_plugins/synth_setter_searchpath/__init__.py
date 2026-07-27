@@ -9,7 +9,7 @@ class SynthSetterSearchPathPlugin(SearchPathPlugin):
 
     Auto-discovered by Hydra under the ``hydra_plugins`` namespace package
     when ``synth_setter`` is on the Python path. Downstream apps can then
-    compose against ``dataset_render/wds`` / ``model/default`` etc.
+    compose against ``render/surge_simple`` / ``model/default`` etc.
     without knowing the on-disk location of the YAMLs.
     """
 

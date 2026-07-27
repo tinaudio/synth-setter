@@ -123,3 +123,60 @@ class LinearAssignmentDistance(Metric):
 
     def compute(self):
         return self.linear_assignment_distance / self.count
+
+
+def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Return best-swap MSE attributed to each target parameter dimension.
+
+    :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+    :param target: Ground-truth vectors, same shape as ``predicted``.
+    :returns: Per-target-dimension mean squared error, shape ``(num_params,)``.
+    :raises ValueError: If shapes differ or inputs are not 2-D.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+
+    sorted_predicted = predicted.sort(dim=1, stable=True).values.float()
+    sorted_target, target_indices = target.sort(dim=1, stable=True)
+    sorted_errors = (sorted_predicted - sorted_target.float()).square()
+    per_target_errors = torch.empty_like(sorted_errors).scatter(1, target_indices, sorted_errors)
+    return per_target_errors.mean(dim=0)
+
+
+class BestSwapParamMSE(Metric):
+    """MSE after the error-minimizing one-to-one swap of predicted and target scalars.
+
+    The optimistic bracket to plain ``param_mse``: invariant to every permutation
+    of parameter values — including sound-changing ones — so it is a floor, never
+    a quality verdict. Read the pair as bounds: ``param_mse`` is pessimistic
+    (penalizes sound-equivalent reorderings), this metric is optimistic (credits
+    non-equivalent ones); a widening gap over training tracks the model producing
+    right values in different arrangements. For squared error the optimal scalar
+    matching is sort-both-and-compare (rearrangement inequality), so no explicit
+    assignment is solved.
+    """
+
+    def __init__(self) -> None:
+        """Register the squared-error accumulator states."""
+        super().__init__()
+        self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
+        """Accumulate per-sample sorted-match squared errors.
+
+        :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+        :param target: Ground-truth vectors, same shape as ``predicted``.
+        """
+        per_param_mse = best_swap_per_param_mse(predicted, target)
+        self.sum_squared_error = self.sum_squared_error + per_param_mse.sum() * predicted.shape[0]
+        self.element_count = self.element_count + predicted.numel()
+
+    def compute(self) -> torch.Tensor:
+        """Return the accumulated mean squared error under optimal swapping.
+
+        :returns: Scalar mean over every accumulated element.
+        """
+        return self.sum_squared_error / self.element_count

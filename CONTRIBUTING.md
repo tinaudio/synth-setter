@@ -10,7 +10,7 @@ For detailed internal standards (aimed at AI-assisted development), see
 
 ### Prerequisites
 
-- **Python 3.11+**
+- **Python 3.12.13**
 - **[uv](https://github.com/astral-sh/uv)** (fast pip replacement) or plain pip
 - **make** (GNU Make)
 - **pre-commit** (`pip install pre-commit`)
@@ -26,7 +26,7 @@ cd synth-setter
 Install the project in editable mode with development dependencies:
 
 ```bash
-make install        # runs: pip install uv && uv pip install --group dev -e .
+make install        # installs uv 0.11.28 and runs uv pip install --group dev -e .
 ```
 
 `make install` does not consume the committed lockfile. For the same wheel

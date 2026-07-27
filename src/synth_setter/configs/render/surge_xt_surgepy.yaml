@@ -1,0 +1,11 @@
+defaults:
+  - surge_xt
+  - _self_
+
+synth:
+  plugin_path: surgepy
+  plugin_state_path: presets/surge-base.fxp
+  synth_version: 1.3.master.f7b97c68
+renderer_backend: surgepy
+plugin_reload_cadence: render
+gui_toggle_cadence: never

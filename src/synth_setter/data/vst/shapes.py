@@ -3,12 +3,13 @@
 Hosts the per-row array names, on-disk dtypes, mel-spectrogram constants, and
 dataset-shape calculators. Kept as a thin sibling module so that the shard
 validator and the writers can import these primitives without pulling in the
-rest of ``generate_vst_dataset.py``'s import surface (h5py, pedalboard, the
+rest of ``generate_vst_dataset.py``'s import surface (pedalboard, the
 VST renderer).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -19,20 +20,26 @@ if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import RenderConfig
 
 AUDIO_FIELD: str = "audio"
+AUDIO_MP3_FIELD: str = "audio_mp3"
+AUDIO_UUID_FIELD: str = "audio_uuid"
+DEBUG_FIELD: str = "debug"
 MEL_SPEC_FIELD: str = "mel_spec"
 PARAM_ARRAY_FIELD: str = "param_array"
 DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+PREVIEW_FIELD_NAMES: tuple[str, ...] = (AUDIO_MP3_FIELD, AUDIO_UUID_FIELD)
+
+AUDIO_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 
 # Optional audio-embedding columns appended post-hoc by the add_embeddings CLI;
 # not in DATASET_FIELD_NAMES because the writers never emit them.
 M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
+SAME_S_FIELD: str = "same_s"
+SAME_L_FIELD: str = "same_l"
+T5GEMMA_FIELD: str = "t5gemma"
 
-# Per-field on-disk dtype, matching what the HDF5 / wds writers emit. Audio is
-# stored as ``float16`` for compressed storage efficiency; mel and params stay
-# ``float32``. Consumers upcast as needed; this map is the single source of
-# truth the validator enforces and the resharder honors when constructing
-# VirtualLayouts.
+# Backward-compatible storage defaults. ``RenderConfig`` overrides signal
+# storage; parameter arrays retain the default dtype.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {
     AUDIO_FIELD: np.dtype("float16"),
     MEL_SPEC_FIELD: np.dtype("float32"),
@@ -149,6 +156,19 @@ def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, i
     :rtype: tuple[int, int]
     """
     return (num_samples, num_params)
+
+
+def dataset_field_dtypes(render: RenderConfig) -> Mapping[str, np.dtype]:
+    """Return the configured physical dtype for each writer-emitted field.
+
+    :param render: Per-shard renderer config supplying signal storage dtypes.
+    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
+    """
+    return {
+        AUDIO_FIELD: np.dtype(render.audio_dtype),
+        MEL_SPEC_FIELD: np.dtype(render.mel_spec_dtype),
+        PARAM_ARRAY_FIELD: DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+    }
 
 
 def dataset_field_shapes(render: RenderConfig, num_params: int) -> dict[str, tuple[int, ...]]:

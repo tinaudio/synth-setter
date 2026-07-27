@@ -1,0 +1,731 @@
+"""Tests for ``synth_setter.utils.resume`` — auto-resume checkpoint discovery."""
+
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
+from omegaconf import DictConfig, OmegaConf
+
+from synth_setter.pipeline import r2_io
+from synth_setter.run_id import make_wandb_run_id
+from synth_setter.utils import resume
+from synth_setter.utils.resume import (
+    discover_local_checkpoint,
+    resolve_resume_mode,
+    run_id_from_recovery_namespace,
+)
+
+
+def _cfg(resume_value: object = None, ckpt_path: str | None = None) -> DictConfig:
+    """Build the minimal cfg slice ``resolve_resume_mode`` reads.
+
+    :param resume_value: Value for ``training.resume``.
+    :param ckpt_path: Value for ``ckpt_path``.
+    :returns: An OmegaConf config with just those keys.
+    """
+    return OmegaConf.create({"training": {"resume": resume_value}, "ckpt_path": ckpt_path})
+
+
+@pytest.mark.parametrize(
+    "disabled", [None, "off", False], ids=["null", "off-string", "yaml-false"]
+)
+def test_resolve_resume_mode_disabled_values_return_none(disabled: object) -> None:
+    """``null``, ``"off"``, and YAML-1.1 ``off``-as-``False`` all disable resume.
+
+    :param disabled: Parametrized disabled ``training.resume`` value.
+    """
+    assert resolve_resume_mode(_cfg(resume_value=disabled)) is None
+
+
+@pytest.mark.parametrize("mode", ["auto", "require"])
+def test_resolve_resume_mode_active_modes_pass_through(mode: str) -> None:
+    """``auto`` and ``require`` are returned verbatim.
+
+    :param mode: Parametrized active resume mode.
+    """
+    assert resolve_resume_mode(_cfg(resume_value=mode)) == mode
+
+
+def test_resolve_resume_mode_unknown_value_raises() -> None:
+    """An unrecognized mode is a config error, not a silent fresh start."""
+    with pytest.raises(ValueError, match="training.resume"):
+        resolve_resume_mode(_cfg(resume_value="best"))
+
+
+def test_resolve_resume_mode_auto_with_explicit_ckpt_path_raises() -> None:
+    """Discovery plus a hand-picked checkpoint is ambiguous intent."""
+    cfg = _cfg(resume_value="auto", ckpt_path="/some/last.ckpt")
+    with pytest.raises(ValueError, match="ckpt_path"):
+        resolve_resume_mode(cfg)
+
+
+def test_resolve_resume_mode_auto_with_empty_ckpt_path_raises() -> None:
+    """An explicit empty checkpoint override is ambiguous auto-resume intent."""
+    cfg = _cfg(resume_value="auto", ckpt_path="")
+
+    with pytest.raises(ValueError, match="ckpt_path"):
+        resolve_resume_mode(cfg)
+
+
+def test_resolve_resume_mode_off_with_explicit_ckpt_path_is_allowed() -> None:
+    """Manual resume (today's flow) stays untouched when resume is disabled."""
+    assert resolve_resume_mode(_cfg(resume_value=None, ckpt_path="/some/last.ckpt")) is None
+
+
+def test_resolve_resume_mode_missing_training_block_returns_none() -> None:
+    """A cfg without a ``training`` block (e.g. eval) means resume is off."""
+    assert resolve_resume_mode(OmegaConf.create({"ckpt_path": None})) is None
+
+
+def _make_run_dir(
+    root: Path,
+    name: str,
+    *,
+    ckpt_mtime: float | None = None,
+    wandb_run_id: str | None = None,
+    offline_wandb: bool = False,
+    hydra_experiment: str | None = None,
+    hydra_managed: bool = True,
+) -> Path:
+    """Create one fake Hydra run dir with a ``checkpoints/last.ckpt``.
+
+    :param root: Parent of all sibling run dirs.
+    :param name: Run dir basename.
+    :param ckpt_mtime: Explicit mtime for ``last.ckpt``; newer wins discovery.
+    :param wandb_run_id: When set, adds a ``wandb/run-<ts>-<id>`` dir so the id
+        is recoverable.
+    :param offline_wandb: Name the wandb dir ``offline-run-*`` instead of ``run-*``.
+    :param hydra_experiment: When set, records this experiment choice in a
+        ``.hydra/hydra.yaml`` so identity is provable without a wandb dir.
+    :param hydra_managed: Create the ``.hydra`` marker for a Hydra-owned run dir.
+    :returns: The created run dir.
+    """
+    run_dir = root / name
+    ckpt = run_dir / "checkpoints" / "last.ckpt"
+    ckpt.parent.mkdir(parents=True)
+    ckpt.write_bytes(b"ckpt")
+    if ckpt_mtime is not None:
+        os.utime(ckpt, (ckpt_mtime, ckpt_mtime))
+    if wandb_run_id is not None:
+        prefix = "offline-run" if offline_wandb else "run"
+        (run_dir / "wandb" / f"{prefix}-20260715_185004-{wandb_run_id}").mkdir(parents=True)
+    hydra_dir = run_dir / ".hydra"
+    if hydra_managed:
+        hydra_dir.mkdir()
+    if hydra_experiment is not None:
+        (hydra_dir / "hydra.yaml").write_text(
+            f"hydra:\n  runtime:\n    choices:\n      experiment: {hydra_experiment}\n"
+        )
+    return run_dir
+
+
+def test_discover_local_picks_newest_sibling_last_ckpt(tmp_path: Path) -> None:
+    """The newest sibling ``last.ckpt`` by mtime wins.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-old", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple")
+    newest = _make_run_dir(
+        tmp_path, "ffn-new", ckpt_mtime=2_000, hydra_experiment="surge/ffn_simple"
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == newest / "checkpoints" / "last.ckpt"
+    assert decision.source == "local"
+
+
+def test_discover_local_excludes_current_output_dir(tmp_path: Path) -> None:
+    """The launching run's own dir never resumes itself.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    current = _make_run_dir(tmp_path, "ffn-current", ckpt_mtime=9_000)
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_recovers_wandb_run_id_from_run_dir(tmp_path: Path) -> None:
+    """The prior launch's W&B run id is read from its ``wandb/run-*`` dirname.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-prior", wandb_run_id="ffn_simple-20260715T225004231Z")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_local_matching_wandb_without_hydra_state_is_skipped(tmp_path: Path) -> None:
+    """A matching W&B directory alone does not make a non-Hydra sibling resumable.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(
+        tmp_path,
+        "unmanaged-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+        hydra_managed=False,
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_skips_sibling_of_a_different_config_id(tmp_path: Path) -> None:
+    """A newer checkpoint from a different experiment must not hijack the resume.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(
+        tmp_path,
+        "flow-prior",
+        ckpt_mtime=9_000,
+        wandb_run_id="flow_simple-20260715T225004231Z",
+    )
+    older_same_config = _make_run_dir(
+        tmp_path,
+        "ffn-prior",
+        ckpt_mtime=1_000,
+        wandb_run_id="ffn_simple-20260714T000000000Z",
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == older_same_config / "checkpoints" / "last.ckpt"
+
+
+def test_discover_local_wandb_less_sibling_with_matching_hydra_state_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """A wandb-less run dir (logger disabled) resumes when its Hydra state matches.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-prior", hydra_experiment="surge/ffn_simple")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id is None
+
+
+def test_discover_local_no_siblings_returns_none(tmp_path: Path) -> None:
+    """An empty run-dir family yields no decision.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_namespace_run_id_strips_uuid_suffix() -> None:
+    """A ``{run_id}-{32-hex}`` recovery namespace yields the embedded run id."""
+    namespace = "ffn_simple-20260715T225004231Z-" + "a" * 32
+    assert run_id_from_recovery_namespace(namespace) == "ffn_simple-20260715T225004231Z"
+
+
+def test_discovery_accepts_a_run_id_generated_by_the_canonical_factory(tmp_path: Path) -> None:
+    """Discovery accepts recovery namespaces built from canonical run IDs.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_id = make_wandb_run_id("ffn_simple")
+    _make_run_dir(tmp_path, "ffn-prior", wandb_run_id=run_id)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert run_id_from_recovery_namespace(f"{run_id}-{'a' * 32}") == run_id
+    assert decision is not None
+    assert decision.wandb_run_id == run_id
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    ["ffn_simple-20260715T225004231Z", "run-abc123"],
+    ids=["no-suffix", "short-hex"],
+)
+def test_namespace_run_id_without_uuid_suffix_returns_none(namespace: str) -> None:
+    """Names without the fixed-width uuid4 suffix carry no recoverable id.
+
+    :param namespace: Parametrized namespace without a valid uuid suffix.
+    """
+    assert run_id_from_recovery_namespace(namespace) is None
+
+
+def test_apply_wandb_resume_continuity_sets_allow_on_wandb_logger() -> None:
+    """A cfg with a wandb logger group gets ``resume: allow`` pinned."""
+    cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "resume": None}}})
+
+    resume.apply_wandb_resume_continuity(cfg)
+
+    assert cfg.logger.wandb.resume == "allow"
+
+
+def test_apply_wandb_resume_continuity_without_wandb_logger_is_noop() -> None:
+    """A logger-free cfg is left untouched."""
+    cfg = OmegaConf.create({"logger": None})
+
+    resume.apply_wandb_resume_continuity(cfg)
+
+    assert cfg.logger is None
+
+
+def test_discover_resume_checkpoint_no_local_and_no_bucket_logs_info(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With no local sibling or R2 config, discovery falls through at INFO level.
+
+    :param tmp_path: Empty run-dir family.
+    :param caplog: Pytest log capture fixture.
+    """
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+    cfg = OmegaConf.create({"paths": {"output_dir": str(current)}, "r2": {"bucket": None}})
+
+    with caplog.at_level(logging.INFO, logger="synth_setter.utils.resume"):
+        decision = resume.discover_resume_checkpoint(cfg, config_id="ffn_simple")
+
+    assert decision is None
+    record = next(record for record in caplog.records if "no mirror prefix" in record.message)
+    assert record.levelno == logging.INFO
+
+
+def test_discover_r2_checkpoint_returns_downloaded_mirror_without_rclone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An R2 mirror produces a usable local resume decision in the unit-tier fallback.
+
+    The fake-R2 integration suite separately verifies the real rclone transfer; this test keeps the
+    same discovery contract covered where that binary is unavailable.
+
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir holding the downloaded checkpoint.
+    """
+    entry = r2_io.RemoteEntry(
+        path="ffn_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt",
+        mtime=datetime(2026, 7, 15),
+        size=10,
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: [entry])
+
+    def _download(_uri: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"checkpoint")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _download)
+
+    decision = resume.discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "resume",
+    )
+
+    assert decision is not None
+    assert decision.source == "r2"
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+    assert decision.ckpt_path.read_bytes() == b"checkpoint"
+
+
+def test_discover_r2_ignores_invalid_and_foreign_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only canonical mirrors for the requested config are resumable.
+
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir reserved for any downloaded checkpoint.
+    """
+    entries = [
+        r2_io.RemoteEntry(path="last.ckpt", mtime=datetime(2026, 7, 15), size=10),
+        r2_io.RemoteEntry(path="not-a-namespace/last.ckpt", mtime=datetime(2026, 7, 15), size=10),
+        r2_io.RemoteEntry(
+            path=("flow_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt"),
+            mtime=datetime(2026, 7, 15),
+            size=10,
+        ),
+    ]
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: entries)
+
+    def _unexpected_download(_uri: str, _destination: Path) -> None:
+        raise AssertionError("rejected entries must not be downloaded")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _unexpected_download)
+
+    assert (
+        resume.discover_r2_checkpoint(
+            prefix="r2://test-bucket/checkpoints/ffn_simple",
+            config_id="ffn_simple",
+            dest_dir=tmp_path / "resume",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "expected_diagnostics"),
+    [
+        (None, None),
+        (
+            [],
+            [
+                "R2 resume checkpoint download "
+                "ffn_simple-20260715T225004231Z-"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt degraded: disk full"
+            ],
+        ),
+    ],
+    ids=["without-diagnostics", "with-diagnostics"],
+)
+def test_discover_r2_download_failure_degrades_with_or_without_diagnostics(
+    diagnostics: list[str] | None,
+    expected_diagnostics: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed mirror download degrades whether diagnostics are requested or not.
+
+    :param diagnostics: Optional diagnostic collector passed to discovery.
+    :param expected_diagnostics: Expected collector state after the failed download.
+    :param monkeypatch: Pytest fixture used to isolate the R2 process boundary.
+    :param tmp_path: Pytest tmp dir reserved for the failed download.
+    """
+    entry = r2_io.RemoteEntry(
+        path="ffn_simple-20260715T225004231Z-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/last.ckpt",
+        mtime=datetime(2026, 7, 15),
+        size=10,
+    )
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(r2_io, "list_entries", lambda *args, **kwargs: [entry])
+
+    def _failed_download(_uri: str, _destination: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(r2_io, "download_to_path", _failed_download)
+
+    decision = resume.discover_r2_checkpoint(
+        prefix="r2://test-bucket/checkpoints/ffn_simple",
+        config_id="ffn_simple",
+        dest_dir=tmp_path / "resume",
+        diagnostics=diagnostics,
+    )
+
+    assert decision is None
+    assert diagnostics == expected_diagnostics
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "expected_diagnostics"),
+    [
+        (None, None),
+        (
+            [],
+            [
+                "R2 resume discovery under r2://test-bucket/checkpoints/ffn_simple "
+                "degraded: no creds"
+            ],
+        ),
+    ],
+    ids=["without-diagnostics", "with-diagnostics"],
+)
+def test_discover_resume_checkpoint_unreachable_r2_returns_none(
+    diagnostics: list[str] | None,
+    expected_diagnostics: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When local misses and R2 creds are unavailable, discovery degrades to None.
+
+    :param diagnostics: Optional diagnostic collector passed to discovery.
+    :param expected_diagnostics: Expected collector state after failed R2 setup.
+    :param monkeypatch: Pytest fixture used to break the R2 tier.
+    :param tmp_path: Empty run-dir family.
+    """
+
+    def _no_creds(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no creds")
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_creds)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+    cfg = OmegaConf.create(
+        {"paths": {"output_dir": str(current)}, "r2": {"bucket": "test-bucket"}}
+    )
+
+    assert (
+        resume.discover_resume_checkpoint(cfg, config_id="ffn_simple", diagnostics=diagnostics)
+        is None
+    )
+    assert diagnostics == expected_diagnostics
+
+
+def test_run_id_from_run_dir_ignores_malformed_newer_wandb_dir(tmp_path: Path) -> None:
+    """A malformed W&B directory cannot hide an earlier valid run ID.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = _make_run_dir(
+        tmp_path,
+        "ffn-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+    )
+    (run_dir / "wandb" / "run-99999999_999999-malformed").mkdir()
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(tmp_path: Path) -> None:
+    """A wandb dir whose name lacks the ``run-<ts>-<id>`` shape yields no run id.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = tmp_path / "ffn-prior"
+    (run_dir / "wandb" / "run-onlyoneseg").mkdir(parents=True)
+    ckpt = run_dir / "checkpoints" / "last.ckpt"
+    ckpt.parent.mkdir(parents=True)
+    ckpt.write_bytes(b"ckpt")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    # A malformed name yields no run id, so identity falls to (absent) Hydra state.
+    assert decision is None
+
+
+def test_discover_local_skips_two_segment_wandb_dir(tmp_path: Path) -> None:
+    """A malformed W&B directory cannot establish a sibling's identity.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior")
+    (prior / "wandb" / "run-onlyoneseg").mkdir(parents=True)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_uses_task_name_when_hydra_has_no_experiment(tmp_path: Path) -> None:
+    """Hydra's recorded task name establishes identity without an experiment choice.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior")
+    hydra_dir = prior / ".hydra"
+    (hydra_dir / "hydra.yaml").write_text(
+        "hydra:\n  runtime:\n    choices:\n      experiment: null\n"
+    )
+    (hydra_dir / "config.yaml").write_text("task_name: ffn_simple\n")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == prior / "checkpoints" / "last.ckpt"
+
+
+def test_config_id_from_hydra_dir_malformed_yaml_returns_none(tmp_path: Path) -> None:
+    """Malformed ``.hydra/hydra.yaml`` state cannot prove identity.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    run_dir = _make_run_dir(tmp_path, "ffn-prior")
+    hydra_dir = run_dir / ".hydra"
+    (hydra_dir / "hydra.yaml").write_text("hydra: [unclosed")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_composed_train_config_ships_resume_keys() -> None:
+    """The real Hydra-composed train config carries both new resume keys, defaulted off."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
+        )
+
+    assert OmegaConf.select(cfg, "training.resume") is None
+    assert "resume" in cfg.logger.wandb
+    assert cfg.logger.wandb.resume is None
+
+
+def test_discover_local_sibling_without_any_identity_evidence_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No wandb dir and no ``.hydra`` state warns that the sibling is unverifiable.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    :param caplog: Pytest log capture fixture.
+    """
+    _make_run_dir(tmp_path, "ffn-prior")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
+def test_discover_local_mismatched_hydra_state_skips_without_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A sibling recorded for another experiment is skipped without warning.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    :param caplog: Pytest log capture fixture.
+    """
+    _make_run_dir(tmp_path, "flow-prior", hydra_experiment="surge/flow_simple")
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def test_discover_local_recovers_run_id_from_offline_wandb_dir(tmp_path: Path) -> None:
+    """Offline-mode ``wandb/offline-run-*`` dirs carry a recoverable run id too.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(
+        tmp_path,
+        "ffn-prior",
+        wandb_run_id="ffn_simple-20260715T225004231Z",
+        offline_wandb=True,
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
+
+
+def test_discover_local_prefix_related_config_id_cannot_cross_match(tmp_path: Path) -> None:
+    """A ``flow-x`` sibling never matches config_id ``flow`` despite the shared prefix.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "flowx-prior", wandb_run_id="flow-x-20260715T225004231Z")
+    current = tmp_path / "flow-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="flow") is None
+
+
+def test_discover_local_checkpoint_rotated_during_scan_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A checkpoint removed between discovery and stat does not abort the scan.
+
+    :param monkeypatch: Pytest fixture used to simulate a concurrent rotation.
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    prior = _make_run_dir(tmp_path, "ffn-prior", hydra_experiment="surge/ffn_simple")
+    checkpoint = prior / "checkpoints" / "last.ckpt"
+    path_stat = Path.stat
+
+    def _rotated_stat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if path == checkpoint:
+            raise OSError("rotated")
+        return path_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _rotated_stat)
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    assert discover_local_checkpoint(current, config_id="ffn_simple") is None
+
+
+def test_discover_local_equal_mtime_tie_breaks_on_path_string(tmp_path: Path) -> None:
+    """Two candidates stamped identically resolve deterministically by path.
+
+    :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    """
+    _make_run_dir(tmp_path, "ffn-a", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple")
+    later_path = _make_run_dir(
+        tmp_path, "ffn-b", ckpt_mtime=1_000, hydra_experiment="surge/ffn_simple"
+    )
+    current = tmp_path / "ffn-current"
+    current.mkdir()
+
+    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+
+    assert decision is not None
+    assert decision.ckpt_path == later_path / "checkpoints" / "last.ckpt"
+
+
+def test_checkpoint_mirror_prefix_prefers_upload_uri_override() -> None:
+    """The override's parent wins over the auto-derived bucket prefix."""
+    cfg = OmegaConf.create(
+        {
+            "r2": {"bucket": "other-bucket"},
+            "training": {"upload_checkpoints_uri": "r2://custom/my/spot/model.ckpt"},
+        }
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://custom/my/spot"
+
+
+def test_checkpoint_mirror_prefix_accepts_key_at_bucket_root() -> None:
+    """A checkpoint key directly under the bucket recovers from the bucket root."""
+    cfg = OmegaConf.create(
+        {
+            "r2": {"bucket": "other-bucket"},
+            "training": {"upload_checkpoints_uri": "r2://bkt/model.ckpt"},
+        }
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://bkt"
+
+
+def test_checkpoint_mirror_prefix_auto_derives_from_bucket() -> None:
+    """Without an override the canonical checkpoints/{config_id} prefix is derived."""
+    cfg = OmegaConf.create({"r2": {"bucket": "bkt"}, "training": {}})
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") == "r2://bkt/checkpoints/ffn_simple"
+
+
+@pytest.mark.parametrize("override", ["r2://", "r2://bucket/", "not-a-uri"])
+def test_checkpoint_mirror_prefix_malformed_override_returns_none(override: str) -> None:
+    """A malformed override degrades to no-prefix instead of aborting the launch.
+
+    :param override: Parametrized malformed ``training.upload_checkpoints_uri``.
+    """
+    cfg = OmegaConf.create(
+        {"r2": {"bucket": "bkt"}, "training": {"upload_checkpoints_uri": override}}
+    )
+
+    assert resume.checkpoint_mirror_prefix(cfg, "ffn_simple") is None

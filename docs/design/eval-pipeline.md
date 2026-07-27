@@ -47,15 +47,15 @@ Topline goal: Run the full evaluation pipeline — predict, render, metrics — 
 
 This pipeline works end-to-end today but is tightly coupled to a university HPC cluster:
 
-| Coupling                   | Where                                                                                                                                                                                                                     | Impact                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Hydra-output-dir data path | `src/synth_setter/configs/datamodule/surge*.yaml` set `dataset_root: ${paths.output_dir}/data` and `predict_file: null` (VSTDataModule resolves null → `dataset_root/test.<shard suffix>`, `.h5` for the default backend) | Defaults land under the per-run Hydra dir; `${paths.data_dir}/{config_id}/{run_id}` convention not yet adopted |
-| SGE directives             | `jobs/predict/*.sh` → `#$ -l gpu=1`                                                                                                                                                                                       | 19 near-identical scripts, one per model variant                                                               |
-| Module system              | `module load gcc`, `module load hdf5-parallel`                                                                                                                                                                            | Not available outside HPC                                                                                      |
-| Conda env                  | `mamba activate perm`                                                                                                                                                                                                     | Specific to cluster user's env                                                                                 |
-| Apptainer container        | `apptainer exec --nv ...`                                                                                                                                                                                                 | Not available on Mac/Linux dev machines                                                                        |
-| Checkpoint retrieval       | `scripts/get-ckpt-from-wandb.sh` (W&B download)                                                                                                                                                                           | Fragile, no R2 option                                                                                          |
-| Data locality              | Datasets assumed at fixed cluster paths                                                                                                                                                                                   | Opt-in R2 download exists (`download_dataset_root_uri`); no default remote source                              |
+| Coupling                   | Where                                                                                                                                                                             | Impact                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Hydra-output-dir data path | `src/synth_setter/configs/datamodule/surge*.yaml` set `dataset_root: ${paths.output_dir}/data` and `predict_file: null` (VSTDataModule resolves null → `dataset_root/test.lance`) | Defaults land under the per-run Hydra dir; `${paths.data_dir}/{config_id}/{run_id}` convention not yet adopted |
+| SGE directives             | `jobs/predict/*.sh` → `#$ -l gpu=1`                                                                                                                                               | 19 near-identical scripts, one per model variant                                                               |
+| Module system              | `module load gcc`, `module load hdf5-parallel`                                                                                                                                    | Not available outside HPC                                                                                      |
+| Conda env                  | `mamba activate perm`                                                                                                                                                             | Specific to cluster user's env                                                                                 |
+| Apptainer container        | `apptainer exec --nv ...`                                                                                                                                                         | Not available on Mac/Linux dev machines                                                                        |
+| Checkpoint retrieval       | `scripts/get-ckpt-from-wandb.sh` (W&B download)                                                                                                                                   | Fragile, no R2 option                                                                                          |
+| Data locality              | Datasets assumed at fixed cluster paths                                                                                                                                           | Opt-in R2 download exists (`download_dataset_root_uri`); no default remote source                              |
 
 Separately, the data pipeline (#74) already uses R2 as the source of truth for generated datasets. Extending R2 to the eval workflow — auto-downloading datasets and uploading eval artifacts — and using W&B for checkpoint storage closes the loop so the full workflow (generate → train → eval) can run from any machine with an internet connection.
 
@@ -80,8 +80,8 @@ the checkpoint, so training composes the experiment without ever resolving a W&B
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml
 defaults:
   - override /datamodule: surge_simple
-  - override /model: surge_flow
-  - override /callbacks: eval_surge
+  - override /model: vst_flow
+  - override /callbacks: eval_vst
 
 experiment_name: flow_simple
 model:
@@ -221,9 +221,9 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 
 ### Consumers
 
-Interactive captured-patch evaluation: `src/synth_setter/tools/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
+Interactive captured-patch evaluation: `src/synth_setter/tools/vst_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/vst-interactive.md`](../guides/vst-interactive.md)).
 
-Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and `cfg.evaluation.{render_vst,compute_metrics}` enabled, `cli/eval.py` shells out to the render and metrics modules itself, so the render and metrics stages are reachable from a single Hydra entrypoint as well as from `surge_xt_interactive.py`.
+Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and `cfg.evaluation.{render_vst,compute_metrics}` enabled, `cli/eval.py` shells out to the render and metrics modules itself, so the render and metrics stages are reachable from a single Hydra entrypoint as well as from `vst_interactive.py`.
 
 ## 5. Stage Definitions
 
@@ -232,7 +232,7 @@ Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and 
 | Property    | Value                                                                                                                                                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} datamodule={datamodule} ckpt_path={ckpt}`                                                                                                                                                 |
-| **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                                                                                                                                                                               |
+| **Input**   | Trained checkpoint (`.ckpt`), test dataset (Lance shard)                                                                                                                                                                                                 |
 | **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                                                                                                                     |
 | **Compute** | GPU — model forward pass                                                                                                                                                                                                                                 |
 | **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/datamodule/{datamodule}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` (+ `src/synth_setter/configs/render/{spec}.yaml` when `evaluation.render_vst=true`) |
@@ -250,38 +250,56 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
 
-| Key                          | Default | Effect when true                                                                                                                                                                                                 |
-| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}`; requires `cfg.render.{param_spec_name, preset_path}` and optional `cfg.render.plugin_path`                 |
-| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                   |
-| `evaluation.rerender_target` | `true`  | Forwards `-t` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                            |
-| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                     |
-| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489) |
+| Key                          | Default | Effect when true                                                                                                                                                                                                                        |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the complete `cfg.render` backend configuration, including the nested synth identity resolved via `SynthSpec.from_render_cfg` |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                                          |
+| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                               |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                            |
+| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)                        |
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
+
+`predict_vst_audio` also accepts a staging layout with **no** `target-audio-*.pt` files when `--rerender_target` is on and target params are staged (the training val-audio probe's layout — training batches carry no raw audio); with no target-audio file and rerendering off, it raises a directed `ValueError` rather than rendering without a target source. When dataset audio is absent the spectrogram falls back to the re-rendered target.
 
 When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too. When the auto-shuffle probe ran, the drawn permutation is also logged as a `shuffle/permutation` `wandb.Table` (from `shuffle_permutation.csv`) — W&B-only, not in the returned dict — so the render-order mapping behind the shuffled metrics is reproducible.
 
 ### 5.2 Render
 
-| Property     | Value                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} --plugin_path {vst} --preset_path {preset}` |
-| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                                             |
-| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`                           |
-| **Compute**  | CPU — VST audio rendering via pedalboard                                                                                 |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                                 |
+| Property     | Value                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} <serialized RenderConfig>` |
+| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                            |
+| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`          |
+| **Compute**  | CPU — selected by `make_audio_renderer` from the dataset's renderer configuration                       |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                      |
 
-The render stage loads each predicted parameter tensor, decodes it using the `ParamSpec`, and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
+The render stage loads each predicted parameter tensor, decodes it via
+`decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and uses
+`make_audio_renderer` for both predicted and target audio. Pedalboard and
+DawDreamer VST load a plugin; `torchsynth` renders in-process; and
+`dawdreamer_faust` compiles the checked-in source registered by
+`param_spec_name`, then sets renderer-native values under exact compiled
+addresses. Faust accepts no source path or preset path. The render process
+is isolated and receives the complete `RenderConfig` for every backend.
 
 **Key behaviors:**
 
+- When `plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer`; no plugin bundle is loaded
+
+- When `plugin_path` is the Faust sentinel, `DawDreamerFaustRenderer` resolves only checked-in source/spec identities, validates the compiled address sequence, and applies a complete native-value patch by exact address
+
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
+
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
+
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
+
 - Plugin path default: `$SYNTH_SETTER_PLUGIN_PATH` when set and non-empty, else `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
-- Preset path default: the registry preset for the selected spec, `preset_paths[param_spec]` — `presets/surge-base.vstpreset` for the default `surge_xt` (overridable via `--preset_path`)
-- Parameters are denormalized from `[-1, 1]` → `[0, 1]` before decoding
+
+- Preset path default for VST backends: the registry state for the selected spec, `plugin_state_paths[param_spec]`; source and in-process backends use an empty state entry
+
+- Parameters are denormalized from the model-output range via `decode_model_output` before rendering
 
 ### 5.3 Metrics
 
@@ -316,14 +334,15 @@ When `datamodule.download_dataset_root_uri` is explicitly provided (via CLI over
 
 ```yaml
 # src/synth_setter/configs/datamodule/vst.yaml — base config; download URI opt-in, no env vars for paths
-_target_: synth_setter.data.surge_datamodule.VSTDataModule
+_target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
-num_workers: 11
+num_workers: 4  # per dataloader — validation doubles the live worker count
+persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
-`surge_simple.yaml` is a thin overlay (`defaults: [vst, _self_]`) that only overrides `param_spec_name`; it inherits the keys above from `vst.yaml`.
+`surge_simple.yaml` is a thin overlay (`defaults: [surge_xt, override synth: surge_simple]`) that swaps only the synth identity group; it inherits the keys above from `surge_xt.yaml`, which in turn inherits them from `vst.yaml`.
 
 To use R2, pass it explicitly:
 
@@ -587,6 +606,8 @@ hands Lightning a resolved local path transparently.
 
 **Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
 
+**Legacy compiled checkpoints:** checkpoints written by `compile: true` runs before in-place compilation (#2241) carry `_orig_mod` key parts and fail strict loading. `evaluate()` wraps every `trainer.{test,validate,predict}` call in `checkpoint_migration_hint`, re-raising such failures with the fix: `synth-setter-migrate-checkpoint <ckpt> <output>` rewrites the state dict to the uncompiled layout (#2259).
+
 ### 7.3 Makefile as CLI Interface
 
 **Decision:** All eval operations are `make` targets — consistent with the existing `make test-fast`, `make format` pattern.
@@ -626,21 +647,21 @@ This section consolidates every configuration and environment behavior change in
 
 #### Current behavior (as-is)
 
-| Concern                   | Current mechanism                                                                                                                      | Where defined                                                                  | Portable? | Problem                                                                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------- | ----------------------------------------------------------------------------- |
-| **Dataset path**          | `dataset_root: ${paths.output_dir}/data`; `predict_file: null` (→ `dataset_root/test.h5`); CLI/experiment overrides for fixed datasets | `src/synth_setter/configs/datamodule/surge_simple.yaml`                        | No        | Defaults to per-run Hydra dir; `${paths.data_dir}` convention not yet adopted |
-| **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID                                                                    | `jobs/predict/*.sh` (19 scripts)                                               | No        | Requires training logs on same machine                                        |
-| **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path                                                                       | `src/synth_setter/configs/eval.yaml` + shell                                   | No        | Local filesystem dependency                                                   |
-| **R2 dataset access**     | Opt-in `download_dataset_root_uri` → `prepare_data()` no-clobber download (default `null`)                                             | `src/synth_setter/data/surge_datamodule.py` (`prepare_data`)                   | Yes       | Off by default; caller must supply the R2 URI                                 |
-| **Checkpoint access**     | `get-ckpt-from-wandb.sh` (local filesystem search by W&B run ID)                                                                       | `jobs/predict/*.sh`                                                            | No        | Only works on the machine where training happened                             |
-| **Checkpoint upload**     | Best checkpoint → R2 at train end, referenced by the `model-{config_id}` artifact (`log_model: False`)                                 | `src/synth_setter/configs/logger/wandb.yaml` + `src/synth_setter/cli/train.py` | Yes       | —                                                                             |
-| **Credentials**           | No `.env` pattern for R2                                                                                                               | —                                                                              | —         | No standardized credential management                                         |
-| **Display handling**      | `renderscript.sh` assumes Linux + Xvfb                                                                                                 | `renderscript.sh`                                                              | No        | Fails on macOS (no Xvfb needed), no auto-detect                               |
-| **Log directory**         | `${paths.root_dir}/logs/` via `PROJECT_ROOT`                                                                                           | `src/synth_setter/configs/paths/default.yaml`                                  | Yes       | Already works                                                                 |
-| **Predict output**        | `${paths.output_dir}/predictions`                                                                                                      | `src/synth_setter/configs/callbacks/prediction_writer.yaml`                    | Yes       | Already works                                                                 |
-| **W&B entity**            | Hardcoded `entity: "benhayes"`                                                                                                         | `src/synth_setter/configs/logger/wandb.yaml`                                   | No        | Wrong for other users                                                         |
-| **SGE scripts**           | 19 near-identical scripts, one per model                                                                                               | `jobs/predict/*.sh`                                                            | No        | Copy-paste errors, cluster-only                                               |
-| **Eval CLI**              | Raw `python -m synth_setter.cli.eval ...` with many args                                                                               | Shell scripts                                                                  | No        | No `make` targets, hard to discover                                           |
+| Concern                   | Current mechanism                                                                                                                         | Where defined                                                                  | Portable? | Problem                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------- | ----------------------------------------------------------------------------- |
+| **Dataset path**          | `dataset_root: ${paths.output_dir}/data`; `predict_file: null` (→ `dataset_root/test.lance`); CLI/experiment overrides for fixed datasets | `src/synth_setter/configs/datamodule/surge_simple.yaml`                        | No        | Defaults to per-run Hydra dir; `${paths.data_dir}` convention not yet adopted |
+| **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID                                                                       | `jobs/predict/*.sh` (19 scripts)                                               | No        | Requires training logs on same machine                                        |
+| **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path                                                                          | `src/synth_setter/configs/eval.yaml` + shell                                   | No        | Local filesystem dependency                                                   |
+| **R2 dataset access**     | Opt-in `download_dataset_root_uri` → `prepare_data()` no-clobber download (default `null`)                                                | `src/synth_setter/data/vst_datamodule.py` (`prepare_data`)                     | Yes       | Off by default; caller must supply the R2 URI                                 |
+| **Checkpoint access**     | `get-ckpt-from-wandb.sh` (local filesystem search by W&B run ID)                                                                          | `jobs/predict/*.sh`                                                            | No        | Only works on the machine where training happened                             |
+| **Checkpoint upload**     | Best checkpoint → R2 at train end, referenced by the `model-{config_id}` artifact (`log_model: False`)                                    | `src/synth_setter/configs/logger/wandb.yaml` + `src/synth_setter/cli/train.py` | Yes       | —                                                                             |
+| **Credentials**           | No `.env` pattern for R2                                                                                                                  | —                                                                              | —         | No standardized credential management                                         |
+| **Display handling**      | `renderscript.sh` assumes Linux + Xvfb                                                                                                    | `renderscript.sh`                                                              | No        | Fails on macOS (no Xvfb needed), no auto-detect                               |
+| **Log directory**         | `${paths.root_dir}/logs/` via `PROJECT_ROOT`                                                                                              | `src/synth_setter/configs/paths/default.yaml`                                  | Yes       | Already works                                                                 |
+| **Predict output**        | `${paths.output_dir}/predictions`                                                                                                         | `src/synth_setter/configs/callbacks/prediction_writer.yaml`                    | Yes       | Already works                                                                 |
+| **W&B entity**            | Hardcoded `entity: "benhayes"`                                                                                                            | `src/synth_setter/configs/logger/wandb.yaml`                                   | No        | Wrong for other users                                                         |
+| **SGE scripts**           | 19 near-identical scripts, one per model                                                                                                  | `jobs/predict/*.sh`                                                            | No        | Copy-paste errors, cluster-only                                               |
+| **Eval CLI**              | Raw `python -m synth_setter.cli.eval ...` with many args                                                                                  | Shell scripts                                                                  | No        | No `make` targets, hard to discover                                           |
 
 #### Proposed behavior (to-be)
 
@@ -915,12 +936,12 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `src/synth_setter/data/surge_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
+- `src/synth_setter/data/vst_datamodule.py` — add optional `download_dataset_root_uri` field, call `r2_io.download_dir_no_overwrite` in `prepare_data()`
 - Data configs carry an explicit `download_dataset_root_uri: null` opt-in line; set via CLI or experiment config
 
-**Files to create:**
+**Verification:**
 
-- `tests/data/test_surge_datamodule.py` — mock rclone, verify copy logic
+- `tests/data/test_lance_map_datamodule.py` runs the real rclone copy against a local-backed remote.
 
 **Key behaviors:**
 
@@ -1029,7 +1050,7 @@ ______________________________________________________________________
 - `tests/test_eval_e2e.py` — fixture-based integration test (`@pytest.mark.slow`)
 - `tests/fixtures/eval/` — checked-in test fixtures:
   - `tiny.ckpt` (~1 MB) — checkpoint trained for 2 epochs on a handful of samples
-  - `fixture-shard.h5` (~5 MB) — small HDF5 shard with 10-50 samples (enough for one predict batch)
+  - `fixture-shard.lance/` (~5 MB) — small Lance shard with 10-50 samples (enough for one predict batch)
   - `audio/sample_0/{pred,target}.wav` (~1 MB) — pre-rendered audio for metrics-only testing without VST plugin
 
 **Key behaviors:**
@@ -1238,13 +1259,13 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 ### Eval Scripts
 
-| File                                                   | Purpose                                                                                                  | Cluster coupling                                                                                       |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `src/synth_setter/cli/eval.py`                         | Hydra entry point for predict/test/validate, with optional render + metrics chaining when `mode=predict` | Data configs default `dataset_root` to the Hydra output dir and `predict_file` to `null` (→ `test.h5`) |
-| `src/synth_setter/evaluation/predict_vst_audio.py`     | VST rendering from predicted parameters                                                                  | Plugin path defaults                                                                                   |
-| `renderscript.sh`                                      | Xvfb wrapper for headless rendering                                                                      | Assumes Linux, no macOS support                                                                        |
-| `src/synth_setter/evaluation/compute_audio_metrics.py` | Parallel metric computation                                                                              | None (already portable)                                                                                |
-| `jobs/predict/*.sh`                                    | 19 SGE job scripts, one per model (deprecated)                                                           | SGE directives, hardcoded paths, `module load`                                                         |
+| File                                                   | Purpose                                                                                                  | Cluster coupling                                                                                          |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `src/synth_setter/cli/eval.py`                         | Hydra entry point for predict/test/validate, with optional render + metrics chaining when `mode=predict` | Data configs default `dataset_root` to the Hydra output dir and `predict_file` to `null` (→ `test.lance`) |
+| `src/synth_setter/evaluation/predict_vst_audio.py`     | VST rendering from predicted parameters                                                                  | Plugin path defaults                                                                                      |
+| `renderscript.sh`                                      | Xvfb wrapper for headless rendering                                                                      | Assumes Linux, no macOS support                                                                           |
+| `src/synth_setter/evaluation/compute_audio_metrics.py` | Parallel metric computation                                                                              | None (already portable)                                                                                   |
+| `jobs/predict/*.sh`                                    | 19 SGE job scripts, one per model (deprecated)                                                           | SGE directives, hardcoded paths, `module load`                                                            |
 
 ### Datamodule Configs
 

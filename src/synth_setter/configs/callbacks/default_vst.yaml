@@ -1,0 +1,20 @@
+defaults:
+  - model_checkpoint
+  - lr_monitor
+  - model_summary
+  - rich_progress_bar
+  - plot_projii
+  - _self_
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}"
+  monitor: "val/param_mse"
+  mode: min
+  save_last: True
+  auto_insert_metric_name: False
+  every_n_train_steps: 5_000
+
+plot_proj_ii:
+  after_val: false
+  every_n_steps: 5_000

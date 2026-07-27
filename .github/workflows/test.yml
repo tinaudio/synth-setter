@@ -11,6 +11,7 @@ on:
       - "scripts/**"
       - "pyproject.toml"
       - "codecov.yml"
+      - "agent/_shared/**"
       - "agent/hooks/**"
       - "agent/skills/**"
       - ".github/workflows/test.yml"
@@ -23,6 +24,7 @@ on:
       - "scripts/**"
       - "pyproject.toml"
       - "codecov.yml"
+      - "agent/_shared/**"
       - "agent/hooks/**"
       - "agent/skills/**"
       - ".github/workflows/test.yml"
@@ -35,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-latest"]
-        python-version: ["3.11"]
+        python-version: ["3.12.13"]
 
     timeout-minutes: 60
 
@@ -43,15 +45,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
+          python-version: ${{ matrix.python-version }}
 
       # --extra cpu routes torch through pytorch-cpu per [tool.uv.sources];
       # --frozen errors on lockfile drift. Ephemeral runner — see #1243.
@@ -69,6 +68,7 @@ jobs:
         run: make test-ci-unit
 
       - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
           flags: unit-cpu,unit-cpu-linux
@@ -81,7 +81,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["macos-latest"]
-        python-version: ["3.11"]
+        python-version: ["3.12.13"]
 
     timeout-minutes: 40
 
@@ -89,15 +89,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
+          python-version: ${{ matrix.python-version }}
 
       # macOS: bare `uv sync --frozen` lets torch resolve from PyPI's
       # MPS-capable wheel — no `--extra cpu` on Apple Silicon (the
@@ -114,6 +111,7 @@ jobs:
         run: make test-ci-unit
 
       - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
           flags: unit-cpu,unit-cpu-macos

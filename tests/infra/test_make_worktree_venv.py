@@ -1,0 +1,219 @@
+"""Make targets resolve Python tools from the checkout-local virtualenv."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).parents[2]
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+LINUX_HEADLESS_TOOLS = (
+    "awk",
+    "dbus-run-session",
+    "mktemp",
+    "openbox-session",
+    "pkill",
+    "ps",
+    "xdpyinfo",
+    "xsettingsd",
+    "Xvfb",
+)
+LINUX_HEADLESS_AVAILABLE = os.uname().sysname == "Linux" and all(
+    shutil.which(tool, path=SYSTEM_PATH) for tool in LINUX_HEADLESS_TOOLS
+)
+LINUX_HEADLESS_SKIP_REASON = (
+    "install the Linux headless tools, then run: ./.venv/bin/pytest "
+    "tests/infra/test_make_worktree_venv.py::"
+    "test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper"
+)
+
+
+def _write_tool(path: Path, origin: str) -> None:
+    """Write a command stub that records which environment supplied it.
+
+    :param path: Executable path to create.
+    :param origin: Value written to ``TOOL_MARKER`` when invoked.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "{origin}" > "$TOOL_MARKER"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+@pytest.mark.parametrize(
+    ("target", "tool"),
+    [("format", "pre-commit"), ("test-fast", "pytest")],
+)
+def test_make_target_with_foreign_environment_uses_checkout_venv(
+    tmp_path: Path, target: str, tool: str
+) -> None:
+    """An inherited environment cannot redirect developer Make targets.
+
+    :param tmp_path: Pytest fixture providing a throwaway checkout.
+    :param target: Make target under test.
+    :param tool: Python environment executable used by the target.
+    """
+    checkout = tmp_path / "checkout $HOME with spaces"
+    checkout.mkdir()
+    shutil.copy(PROJECT_ROOT / "Makefile", checkout / "Makefile")
+    marker = tmp_path / "tool-origin.txt"
+    global_bin = tmp_path / "global-bin"
+    _write_tool(global_bin / tool, "global")
+    _write_tool(checkout / ".venv" / "bin" / tool, "worktree")
+    make = shutil.which("make")
+    assert make is not None
+
+    env = {
+        **os.environ,
+        "PATH": f"{global_bin}:{os.environ['PATH']}",
+        "TOOL_MARKER": str(marker),
+        "VIRTUAL_ENV": "/foreign/checkout/.venv",
+    }
+    subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [make, target], cwd=checkout, env=env, check=True
+    )
+
+    assert marker.read_text(encoding="utf-8") == "worktree\n"
+
+
+def test_test_fast_foreign_path_resolves_worktree_tools_for_python_and_subprocess(
+    tmp_path: Path,
+) -> None:
+    """Prepend .venv/bin so Python and child-process lookup agree.
+
+    :param tmp_path: Pytest fixture providing a throwaway checkout.
+    """
+    checkout = tmp_path / "checkout $HOME with spaces"
+    checkout.mkdir()
+    shutil.copy(PROJECT_ROOT / "Makefile", checkout / "Makefile")
+    local_bin = checkout / ".venv" / "bin"
+    foreign_bin = tmp_path / "foreign-bin"
+    marker = tmp_path / "tool-origin.txt"
+    results = tmp_path / "path-results.txt"
+    _write_tool(local_bin / "path-probe", "worktree")
+    _write_tool(foreign_bin / "path-probe", "foreign")
+    pytest_harness = local_bin / "pytest"
+    pytest_harness.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "import shutil\n"
+        "import subprocess\n"
+        "from pathlib import Path\n"
+        'resolved = shutil.which("path-probe")\n'
+        'subprocess.run(["path-probe"], check=True)\n'
+        'Path(os.environ["PATH_RESULTS"]).write_text(\n'
+        '    f"{resolved}\\n" + Path(os.environ["TOOL_MARKER"]).read_text(),\n'
+        '    encoding="utf-8",\n'
+        ")\n",
+        encoding="utf-8",
+    )
+    pytest_harness.chmod(0o755)
+    make = shutil.which("make")
+    assert make is not None
+    env = {
+        **os.environ,
+        "PATH": f"{foreign_bin}:{SYSTEM_PATH}",
+        "PATH_RESULTS": str(results),
+        "TOOL_MARKER": str(marker),
+    }
+
+    subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [make, "test-fast"], cwd=checkout, env=env, check=True
+    )
+
+    assert results.read_text(encoding="utf-8").splitlines() == [
+        str(local_bin / "path-probe"),
+        "worktree",
+    ]
+
+
+def _full_cpu_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a checkout with the real target and a recording worktree pytest.
+
+    :param tmp_path: Pytest fixture providing an isolated checkout.
+    :returns: Checkout and invocation-log paths.
+    """
+    checkout = tmp_path / "isolated-worktree"
+    wrapper = checkout / "src" / "synth_setter" / "scripts" / "run-linux-vst-headless.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy(PROJECT_ROOT / "Makefile", checkout / "Makefile")
+    shutil.copy(PROJECT_ROOT / wrapper.relative_to(checkout), wrapper)
+
+    log_path = tmp_path / "pytest-invocations.txt"
+    pytest_path = checkout / ".venv" / "bin" / "pytest"
+    pytest_path.parent.mkdir(parents=True)
+    pytest_path.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PYTEST_INVOCATION_LOG"\n',
+        encoding="utf-8",
+    )
+    pytest_path.chmod(0o755)
+    return checkout, log_path
+
+
+def _run_full_cpu(checkout: Path, log_path: Path, uname: str) -> subprocess.CompletedProcess[str]:
+    """Run the real full CPU target without an inherited Python environment.
+
+    :param checkout: Isolated checkout containing the Makefile under test.
+    :param log_path: Path where the worktree pytest harness records invocations.
+    :param uname: Platform lane selected by the Makefile.
+    :returns: Completed Make invocation.
+    """
+    make = shutil.which("make")
+    assert make is not None
+    env = {
+        "HOME": str(checkout),
+        "PATH": SYSTEM_PATH,
+        "PYTEST_INVOCATION_LOG": str(log_path),
+    }
+    return subprocess.run(  # noqa: S603 — resolved make binary and allowlisted target
+        [make, "--no-print-directory", f"UNAME_S={uname}", "test-full-cpu"],
+        cwd=checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+@pytest.mark.infra
+@pytest.mark.skipif(not LINUX_HEADLESS_AVAILABLE, reason=LINUX_HEADLESS_SKIP_REASON)
+def test_full_cpu_linux_stripped_environment_uses_worktree_pytest_through_wrapper(
+    tmp_path: Path,
+) -> None:
+    """Verify the wrapper preserves checkout-local pytest resolution without inherited environment.
+
+    :param tmp_path: Root for the synthetic worktree and invocation log.
+    """
+    checkout, log_path = _full_cpu_checkout(tmp_path)
+
+    result = _run_full_cpu(checkout, log_path, "Linux")
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == ["-n auto -m not gpu and not mps"]
+
+
+@pytest.mark.infra
+def test_full_cpu_darwin_stripped_environment_uses_worktree_pytest_harness(
+    tmp_path: Path,
+) -> None:
+    """Verify both Darwin pytest lanes resolve from the checkout virtualenv.
+
+    :param tmp_path: Root for the synthetic worktree and invocation log.
+    """
+    checkout, log_path = _full_cpu_checkout(tmp_path)
+
+    result = _run_full_cpu(checkout, log_path, "Darwin")
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "-n auto -m not gpu and not mps and not requires_vst",
+        "-m requires_vst and not gpu and not mps",
+    ]

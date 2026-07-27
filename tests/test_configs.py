@@ -1,14 +1,19 @@
 """Tests that Hydra config groups compose without errors."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import hydra
 import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import InterpolationToMissingValueError
 
+from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.resources import configs_dir
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -154,8 +159,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     fixture_cfg = _build_surge_xt_smoke_cfg(
         accelerator="mps", param_spec_name="surge_4", experiment=experiment
     )
-    fixture_d_out = fixture_cfg.model.net.d_out
-    fixture_param_spec = fixture_cfg.callbacks.log_per_param_mse.param_spec
+    fixture_param_spec = fixture_cfg.datamodule.param_spec_name
     GlobalHydra.instance().clear()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -164,8 +168,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             return_hydra_config=False,
             overrides=[
                 f"experiment={test_mps_yaml}",
-                f"model.net.d_out={fixture_d_out}",
-                f"callbacks.log_per_param_mse.param_spec={fixture_param_spec}",
+                f"datamodule.param_spec_name={fixture_param_spec}",
             ],
         )
     GlobalHydra.instance().clear()
@@ -183,6 +186,640 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     )
 
 
+def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
+    """Compose a top-level config with overrides, clearing GlobalHydra around it.
+
+    :param config_name: Top-level config to compose (``train.yaml``, ``eval.yaml``, ...).
+    :param overrides: Hydra CLI-style overrides.
+    :returns: The composed config.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(
+                config_name=config_name, return_hydra_config=False, overrides=list(overrides)
+            )
+    finally:
+        GlobalHydra.instance().clear()
+
+
+@pytest.mark.parametrize(
+    ("profile", "input_shape"),
+    [
+        pytest.param("same_s", (256, 44), id="same-s"),
+        pytest.param("same_l", (256, 44), id="same-l"),
+        pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
+    ],
+)
+def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
+    profile: str, input_shape: tuple[int, int]
+) -> None:
+    """A sequence profile routes its declared fake batch through the encoder.
+
+    :param profile: Conditioning profile under test.
+    :param input_shape: Per-row shape expected from the profile.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            "model=vst_flow",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == profile
+    assert datamodule.embedding_conditioning.input_shape == input_shape
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, *input_shape)
+    pooled = encoder(batch["conditioning"])
+    assert pooled.shape == (2, cfg.model.vector_field.d_model)
+    assert cfg.model.conditioning.column == profile
+
+
+def _compose_t5gemma_cached_train_cfg(
+    model_name: str, model_overrides: Sequence[str]
+) -> DictConfig:
+    """Compose a one-step CPU train cfg reading synthetic T5Gemma batches.
+
+    :param model_name: VST model config selected for the training step.
+    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
+    :returns: The composed config.
+    """
+    return _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            "conditioning=t5gemma",
+            "trainer=cpu",
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            *model_overrides,
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_name", "model_overrides", "expected_output_dim"),
+    [
+        (
+            "vst_flow",
+            [
+                "model.vector_field.d_ff=16",
+                "model.vector_field.d_model=16",
+                "model.vector_field.num_heads=1",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.projection.num_tokens=4",
+            ],
+            16,
+        ),
+        (
+            "vst_ffn",
+            [
+                "model.net.d_model=16",
+                "model.net.n_heads=1",
+                "model.net.n_layers=1",
+            ],
+            300,
+        ),
+    ],
+    ids=["flow", "feed_forward"],
+)
+def test_t5gemma_conditioning_profile_cached_batch_trains(
+    model_name: str,
+    model_overrides: list[str],
+    expected_output_dim: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The T5Gemma profile trains either VST model from its cached Lance tensor.
+
+    :param model_name: VST model config selected for the training step.
+    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
+    :param expected_output_dim: Model-owned cached encoder output width.
+    :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
+    """
+    cfg = _compose_t5gemma_cached_train_cfg(model_name, model_overrides)
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+    monkeypatch.setattr(model, "log", lambda *args, **kwargs: None)
+
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    loss = model.training_step(batch, batch_idx=0)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == "t5gemma"
+    assert datamodule.embedding_conditioning.input_shape == (768, 256)
+    assert batch["conditioning"].shape == (2, 768, 256)
+    assert cfg.model.encoder_output_dim == expected_output_dim
+    assert cfg.model.encoder.d_model == expected_output_dim
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
+def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
+    """A CLAP spec selects generic routing and the vector projection encoder."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            "model=vst_flow",
+            "model/encoder=vector_projection",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.conditioning={column:clap,input_shape:[512]}",
+            "datamodule.conditioning={column:clap,input_shape:[512]}",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert datamodule.embedding_conditioning is not None
+    assert datamodule.embedding_conditioning.column == "clap"
+    assert encoder(torch.randn(2, 512)).shape == (2, 512)
+    assert cfg.model.vector_field.conditioning_dim == 512
+
+
+def _conditioning_profile_names() -> list[str]:
+    """Enumerate the ``conditioning/`` Hydra group options from the config dir.
+
+    :returns: Sorted profile names (yaml stems) currently shipped in the group.
+    """
+    return sorted(
+        entry.name.removesuffix(".yaml")
+        for entry in (configs_dir() / "conditioning").iterdir()
+        if entry.name.endswith(".yaml")
+    )
+
+
+@pytest.mark.parametrize("profile", _conditioning_profile_names())
+@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+def test_embedding_conditioning_profile_encoder_matches_model_output(
+    profile: str, model_name: str
+) -> None:
+    """Every cached profile produces the output width its VST model owns.
+
+    :param profile: Conditioning profile under test.
+    :param model_name: VST architecture consuming the profile.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=surge_xt",
+            f"model={model_name}",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+    input_shape = tuple(cfg.model.conditioning.input_shape)
+
+    encoded = encoder(torch.randn(2, *input_shape))
+
+    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+
+
+@pytest.mark.parametrize("profile", _conditioning_profile_names())
+def test_eval_config_conditioning_profile_composes(profile: str) -> None:
+    """Regression guard for #2304: eval.yaml accepts every ``conditioning=`` profile.
+
+    :param profile: Conditioning profile under test.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
+    )
+
+    # The profile wires one shared column onto both sides; its name need not equal
+    # the profile name (e.g. the ``m2l`` profile selects the ``music2latent`` column).
+    column = cfg.model.conditioning.column
+    assert column
+    assert cfg.datamodule.conditioning.column == column
+
+
+def test_eval_config_conditioning_unset_composes() -> None:
+    """eval.yaml still composes when the ``conditioning`` group is left at null."""
+    cfg = _compose("eval.yaml", ["experiment=surge/flow_simple", "trainer=cpu"])
+
+    assert cfg.datamodule
+    assert cfg.model
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["vst_fake_oracle", "vst_ffn", "vst_flow", "vst_flowmlp", "vst_flowvae"],
+)
+def test_vst_model_group_composes(model_name: str) -> None:
+    """Each synth-neutral VST model group composes successfully.
+
+    :param model_name: Hydra model group selected for the composition.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            f"model={model_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.model._target_.startswith("synth_setter.models.vst_")
+
+
+@pytest.mark.parametrize(
+    ("model_name", "width_path"),
+    [
+        ("vst_fake_oracle", "net.d_out"),
+        ("vst_ffn", "net.d_out"),
+        ("vst_flow", "num_params"),
+        ("vst_flow", "vector_field.projection.num_params"),
+        ("vst_flowmlp", "num_params"),
+        ("vst_flowmlp", "vector_field.n_params"),
+        ("vst_flowvae", "net.decoder.latent_dim"),
+        ("vst_flowvae", "net.encoder.latent_dim"),
+        ("vst_flowvae", "net.latent_dim"),
+    ],
+)
+# One non-default spec suffices: which spec is active doesn't change whether a config
+# path interpolates the resolver. Exact per-spec widths are pinned in
+# tests/data/vst/test_param_spec_registry.py.
+def test_vst_model_width_derives_from_active_param_spec(
+    model_name: str,
+    width_path: str,
+) -> None:
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=obxf",
+            f"model={model_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert OmegaConf.select(cfg.model, width_path) == resolve_param_spec_width("obxf")
+
+
+# Parameterized over the live registry so newly registered synths are covered
+# automatically; one representative width path suffices since path wiring is
+# spec-independent (covered above).
+@pytest.mark.parametrize("param_spec_name", sorted(param_specs))
+def test_vst_model_width_resolves_for_every_registered_spec(param_spec_name: str) -> None:
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            f"datamodule.param_spec_name={param_spec_name}",
+            "model=vst_ffn",
+            "trainer=cpu",
+        ],
+    )
+
+    assert OmegaConf.select(cfg.model, "net.d_out") == resolve_param_spec_width(param_spec_name)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "param_spec", "latent_dim"),
+    [("vae_simple", "surge_simple", 92), ("vae_full", "surge_xt", 300)],
+)
+def test_vst_flowvae_experiment_couples_spec_and_output_width(
+    experiment: str, param_spec: str, latent_dim: int
+) -> None:
+    """Concrete Flow-VAE experiments pair each ParamSpec with its encoded width.
+
+    :param experiment: Surge experiment basename.
+    :param param_spec: Expected concrete ParamSpec.
+    :param latent_dim: Expected network output width.
+    """
+    cfg = _compose("train.yaml", [f"experiment=surge/{experiment}", "trainer=cpu"])
+
+    assert cfg.model.param_spec == param_spec
+    assert cfg.model.net.latent_dim == latent_dim
+
+
+def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
+    """A composed Flow-VAE net predicts at the resolver-derived width, not just configures it.
+
+    Config-value assertions can't catch a decoder or regression flow that ignores
+    ``latent_dim``, so this instantiates the ``obxf`` (187-wide, odd — never a flow-VAE
+    experiment default) composition and forwards a random-weight batch. Flow depth and
+    hidden dims are shrunk for CPU speed; they don't affect output width.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "datamodule.param_spec_name=obxf",
+            "model=vst_flowvae",
+            "trainer=cpu",
+            "+model.net.latent_flow_num_layers=2",
+            "+model.net.latent_flow_hidden_dim=16",
+            "+model.net.regression_flow_num_layers=2",
+            "+model.net.regression_flow_hidden_dim=16",
+        ],
+    )
+
+    net = hydra.utils.instantiate(cfg.model.net)
+    net.eval()
+    with torch.no_grad():
+        out = net(torch.randn(2, 2, 128, 401))
+
+    assert out.x_hat.shape == (2, 187)
+    assert out.y_hat.shape == (2, 2, 128, 401)
+
+
+@pytest.mark.parametrize(
+    (
+        "legacy_name",
+        "target_suffix",
+        "expected_path",
+        "expected_value",
+        "expected_param_spec",
+        "expected_compile",
+        "expected_learning_rate",
+    ),
+    [
+        (
+            "surge_fake_oracle",
+            "vst_fake_oracle_module.VSTFakeOracleModule",
+            "net.d_out",
+            92,
+            None,
+            False,
+            1e-4,
+        ),
+        ("surge_ffn", "vst_ff_module.VSTFeedForwardModule", "net.d_out", 92, None, True, 1e-4),
+        (
+            "surge_flow",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            92,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowmlp",
+            "vst_flow_matching_module.VSTFlowMatchingModule",
+            "num_params",
+            92,
+            None,
+            True,
+            1e-4,
+        ),
+        (
+            "surge_flowvae",
+            "vst_flowvae_module.VSTFlowVAEModule",
+            "net.latent_dim",
+            92,
+            "surge_simple",
+            True,
+            2e-4,
+        ),
+    ],
+)
+def test_legacy_surge_model_group_composes_canonical_defaults(
+    legacy_name: str,
+    target_suffix: str,
+    expected_path: str,
+    expected_value: int,
+    expected_param_spec: str | None,
+    expected_compile: bool,
+    expected_learning_rate: float,
+) -> None:
+    """Each legacy model selection composes the canonical VST defaults.
+
+    :param legacy_name: Legacy Hydra model-group name.
+    :param target_suffix: Canonical VST target expected after composition.
+    :param expected_path: Config field containing the canonical default.
+    :param expected_value: Expected canonical default.
+    :param expected_param_spec: Default ParamSpec, when applicable.
+    :param expected_compile: Expected torch.compile default.
+    :param expected_learning_rate: Expected optimizer learning-rate default.
+    """
+    legacy_cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", f"model={legacy_name}", "trainer=cpu"],
+    )
+    assert legacy_cfg.model._target_.endswith(target_suffix)
+    assert OmegaConf.select(legacy_cfg.model, expected_path) == expected_value
+    assert legacy_cfg.model.compile is expected_compile
+    assert legacy_cfg.model.optimizer.lr == expected_learning_rate
+    assert OmegaConf.select(legacy_cfg.model, "param_spec") == expected_param_spec
+
+
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_vst", "model_checkpoint"), ("eval_vst", "prediction_writer")],
+)
+def test_vst_callback_group_composes(callbacks_name: str, expected_callback: str) -> None:
+    """Each synth-neutral VST callback group composes successfully.
+
+    :param callbacks_name: Hydra callback group selected for the composition.
+    :param expected_callback: Callback key expected in the composed group.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            f"callbacks={callbacks_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert expected_callback in cfg.callbacks
+
+
+@pytest.mark.parametrize(
+    ("callbacks_name", "expected_callback"),
+    [("default_surge", "model_checkpoint"), ("eval_surge", "prediction_writer")],
+)
+def test_legacy_surge_callback_alias_composes_vst_callbacks(
+    callbacks_name: str, expected_callback: str
+) -> None:
+    """Historical callback selections resolve canonical VST callbacks.
+
+    :param callbacks_name: Historical Hydra callback-group name.
+    :param expected_callback: Canonical callback expected after composition.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_ffn",
+            f"callbacks={callbacks_name}",
+            "trainer=cpu",
+        ],
+    )
+
+    assert expected_callback in cfg.callbacks
+
+
+def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
+    """The VST per-parameter callback resolves the active datamodule spec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_mini",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+
+
+def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
+    """The VST per-parameter callback rejects an unset ParamSpec."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=vst",
+            "model=ffn",
+            "callbacks=log_per_param_mse",
+            "trainer=cpu",
+        ],
+    )
+
+    with pytest.raises(InterpolationToMissingValueError, match="param_spec_name"):
+        OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
+
+
+def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
+    """The surge family validates a bounded sample and enables the probe when usable."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple"])
+
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.training.val_audio_probe == "auto"
+
+
+def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
+    """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
+
+    Pins the full-scale surge_4 Lance pipeline contract: the surge_4 render and
+    datamodule groups, Lance output, the 440k/20k/20k split, and the inline
+    finalize that writes ``dataset.complete`` in the same CLI process.
+    """
+    cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
+
+    assert cfg.render.synth.param_spec_name == "surge_4"
+    assert cfg.render.synth.plugin_state_path == "presets/surge-mini.vstpreset"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.output_format == "lance"
+    assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]
+    assert cfg.finalize_inline is True
+
+
+def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
+    """``surge/ffn_4`` trains the FFN at the surge_4 encoded width on Lance data.
+
+    Pins the surge_4 train contract: Lance datamodule keyed to the surge_4 spec,
+    ``d_out`` equal to the spec's encoded width (7), and per-param MSE logging
+    labeled with the surge_4 spec.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_4"])
+
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+    assert cfg.model.net.d_out == 7
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
+    # plot_proj_ii's projection plots don't apply to the surge_4 spec; the
+    # experiment disables it like its ffn_full/ffn_simple siblings.
+    assert cfg.callbacks.plot_proj_ii is None
+
+
+def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
+    """``surge/eval_ffn_4`` evaluates a surge_4 FFN checkpoint in predict mode.
+
+    Pins the surge_4 eval contract: predict mode with VST rendering and metrics,
+    the surge_4 render group, and a mandatory ``ckpt_path``.
+    """
+    cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4", "ckpt_path=dummy.ckpt"])
+
+    assert cfg.mode == "predict"
+    assert cfg.render.synth.param_spec_name == "surge_4"
+    assert cfg.datamodule.param_spec_name == "surge_4"
+    assert cfg.model.net.d_out == 7
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.ckpt_path == "dummy.ckpt"
+    # eval.yaml defaults logger to null; the experiment must re-select the
+    # wandb group or base.yaml's logger.wandb fragment dangles.
+    assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
+    # eval_vst callbacks: the prediction writer must be present.
+    assert "prediction_writer" in cfg.callbacks
+
+
+def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> None:
+    """``surge/flow_simple_440k`` bakes the 440k contract previously spread into launch YAML.
+
+    Pins the one-selector contract (#2196): the immutable 440k dataset root, the
+    surge_simple spec on both datamodule and render, the enabled val audio probe,
+    validation cadence and checkpoint monitor, and the disabled test stage — so
+    ``experiment=surge/flow_simple_440k`` alone reproduces the full 440k run.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple_440k"])
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
+        "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
+    )
+    assert cfg.datamodule.param_spec_name == "surge_simple"
+    assert cfg.render.synth.param_spec_name == "surge_simple"
+    assert cfg.training.val_audio_probe is True
+    assert cfg.trainer.val_check_interval == 2000
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
+    assert cfg.callbacks.model_checkpoint.every_n_train_steps == 1000
+    assert cfg.test is False
+
+
+def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
+    """``surge/ffn_simple_smoke`` bakes the RunPod smoke contract into one experiment.
+
+    Pins the one-selector smoke contract (#2196): the small finalized R2 root a fresh pod can
+    hydrate, single-process loading, the 10-step cap, and a checkpoint cadence that guarantees a
+    file exists at step 10.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_simple_smoke"])
+
+    assert cfg.datamodule.download_dataset_root_uri == (
+        "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+        "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+    )
+    assert cfg.datamodule.num_workers == 0
+    assert cfg.datamodule.param_spec_name == "surge_simple"
+    assert cfg.trainer.max_steps == 10
+    assert cfg.trainer.min_steps == 10
+    assert cfg.callbacks.model_checkpoint.every_n_train_steps == 5
+
+
 def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     """``experiment=surge/ffn_smoke`` bakes in the R2 surge_xt fixture and smoke caps.
 
@@ -194,14 +831,7 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     inherited from ``ffn_full``; and the disabled ``compile`` that keeps the
     fit + test setup from double-compiling.
     """
-    GlobalHydra.instance().clear()
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=False,
-            overrides=["experiment=surge/ffn_smoke"],
-        )
-    GlobalHydra.instance().clear()
+    cfg = _compose("train.yaml", ["experiment=surge/ffn_smoke"])
 
     assert cfg.datamodule.download_dataset_root_uri == (
         "r2://intermediate-data/fixtures/smoke-shard-surge-xt-v1/"

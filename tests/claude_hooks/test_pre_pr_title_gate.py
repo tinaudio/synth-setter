@@ -251,15 +251,19 @@ def test_title_gate_skips_dangling_title_flag(tmp_path: Path) -> None:
     assert not stdin_log.exists()
 
 
-def test_title_gate_skips_unparseable_command(tmp_path: Path) -> None:
-    """A command shlex cannot tokenize (unbalanced quote) fails safe: skip, defer to CI.
+def test_title_gate_unparsable_command_blocks_before_linting(tmp_path: Path) -> None:
+    """A command shlex cannot tokenize (unbalanced quote) blocks; gitlint never runs.
+
+    The classifier fails closed on an unlexable command that mentions
+    ``gh pr create``, so the gate exits 2 before the title sub-gate runs.
 
     :param tmp_path: pytest tmp dir.
     """
     result, stdin_log = _run_title_gate(
         tmp_path, 'gh pr create --title "unterminated', uvx_exit=1, output=_VIOLATION
     )
-    assert result.returncode == 0, (result.returncode, result.stderr)
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "cannot parse" in result.stderr
     assert not stdin_log.exists()
 
 

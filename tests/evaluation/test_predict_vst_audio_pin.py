@@ -1,22 +1,9 @@
-"""Pin tests for ``predict_vst_audio`` CLI — wandb-metrics plan Phase 0.
-
-Locks the per-sample output layout the Phase 2 ``render_predictions`` library
-extraction must preserve: every ``sample_<i>/`` directory must contain
-``pred.wav``, ``target.wav``, ``params.csv`` (``target`` column is NaN when
-``--no-params`` is set; the file is still written), and ``spec.png``
-(unless ``--skip-spectrogram``).
-
-``render_params`` is patched to a deterministic in-process stub so the suite
-stays CPU-only and runs without a Surge XT plugin binary present — matching
-the convention already used by ``tests/evaluation/test_predict_vst_audio.py``.
-The contract being pinned is file *layout*, not audio content.
-"""
+"""Pin the per-sample artifact layout produced by prediction-audio rendering."""
 
 from __future__ import annotations
 
 import os
 
-# Pin headless matplotlib before predict_vst_audio's transitive ``pyplot`` import.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from pathlib import Path  # noqa: E402
@@ -24,140 +11,151 @@ from pathlib import Path  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
-from click.testing import CliRunner  # noqa: E402
+from pydantic_settings import CliApp  # noqa: E402
 
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import main as predict_vst_audio_main  # noqa: E402
+from synth_setter.param_spec_name import ParamSpecName  # noqa: E402
+from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.synth_spec import SynthName, SynthSpec  # noqa: E402
 
-_PARAM_SPEC_NAME = "surge_simple"
+_PARAM_SPEC_NAME = ParamSpecName("surge_simple")
 _CHANNELS = 2
 _SAMPLE_RATE = 8000
 _SIGNAL_DURATION_SECONDS = 0.1
 
 
-def _fake_render(
-    _plugin_path: object,
-    _synth_params: object,
-    _pitch: object,
-    _velocity: object,
-    _note_start_and_end: object,
-    signal_duration_seconds: float,
-    sample_rate: int,
-    channels: int,
-    **_kwargs: object,
-) -> np.ndarray:
-    """Deterministic ``(channels, sample_rate * signal_duration_seconds)`` float32 noise.
+class _FakeRenderer:
+    """Deterministic renderer for artifact-layout tests."""
 
-    Honors the CLI's ``--sample_rate`` / ``--signal_duration_seconds`` / ``--channels``
-    flags so the stub output shape tracks the real ``render_params`` contract.
+    def render(
+        self,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Return finite channel-leading audio with the configured test shape.
 
-    :param _plugin_path: Ignored; mirrors the real ``render_params`` plugin-path arg.
-    :param _synth_params: Ignored; mirrors the synth-param dict.
-    :param _pitch: Ignored; mirrors the MIDI pitch arg.
-    :param _velocity: Ignored; mirrors the MIDI velocity arg.
-    :param _note_start_and_end: Ignored; mirrors the ``(start, end)`` tuple.
-    :param signal_duration_seconds: Render length in seconds.
-    :param sample_rate: Render sample rate in Hz.
-    :param channels: Number of audio channels.
-    :param \\*\\*_kwargs: Ignored; absorbs ``preset_path`` and any future kwargs.
-    :return: ``(channels, int(sample_rate * signal_duration_seconds))`` float32 audio.
+        :param params: Ignored normalized synthesizer parameters.
+        :param midi_note: Ignored MIDI pitch.
+        :param velocity: Ignored MIDI velocity.
+        :param note_start_and_end: Ignored note window.
+        :param warmup: Ignored editor warm-up request.
+        :returns: Deterministic channel-leading audio.
+        """
+        del params, midi_note, velocity, note_start_and_end, warmup
+        num_samples = int(_SAMPLE_RATE * _SIGNAL_DURATION_SECONDS)
+        rng = np.random.default_rng(42)
+        return rng.standard_normal((_CHANNELS, num_samples)).astype(np.float32)
+
+
+def _render_config() -> RenderConfig:
+    """Return the complete config transported through the process CLI.
+
+    :returns: Validated config for the artifact-layout test renderer.
     """
-    num_samples = int(sample_rate * signal_duration_seconds)
-    rng = np.random.default_rng(42)
-    return rng.standard_normal((channels, num_samples)).astype(np.float32)
-
-
-def _invoke_predict_cli(pred_dir: Path, out_dir: Path, *extra: str) -> None:
-    """Invoke the CLI on ``pred_dir`` / ``out_dir`` with the small-fixture flag set.
-
-    :param pred_dir: Directory of ``pred-*.pt`` / ``target-*-*.pt`` tensors.
-    :param out_dir: CLI-created output directory.
-    :param \\*extra: Additional CLI flags appended verbatim.
-    """
-    runner = CliRunner()
-    result = runner.invoke(
-        predict_vst_audio_main,
-        [
-            str(pred_dir),
-            str(out_dir),
-            f"--param_spec={_PARAM_SPEC_NAME}",
-            f"--sample_rate={_SAMPLE_RATE}",
-            f"--channels={_CHANNELS}",
-            f"--signal_duration_seconds={_SIGNAL_DURATION_SECONDS}",
-            *extra,
-        ],
-        catch_exceptions=False,
+    return RenderConfig(
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=_PARAM_SPEC_NAME,
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-simple.vstpreset",
+            synth_version="1.3.4",
+        ),
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        velocity=100,
+        signal_duration_seconds=_SIGNAL_DURATION_SECONDS,
+        min_loudness=-55.0,
+        samples_per_render_batch=2,
+        samples_per_shard=2,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
     )
-    assert result.exit_code == 0, result.output
+
+
+def _invoke_predict_cli(
+    pred_dir: Path,
+    out_dir: Path,
+    operation_flags: tuple[str, ...],
+) -> None:
+    """Invoke the process CLI with a serialized complete render config.
+
+    :param pred_dir: Directory of staged prediction tensors.
+    :param out_dir: Destination artifact directory.
+    :param operation_flags: Operation flags enabled for the invocation.
+    """
+    enabled = set(operation_flags)
+    argv = [str(pred_dir), str(out_dir), *CliApp.serialize(_render_config())]
+    for flag in ("--rerender-target", "--no-params", "--skip-spectrogram"):
+        if flag in enabled:
+            argv.extend([flag, "True"])
+    predict_vst_audio_main(argv)
 
 
 @pytest.fixture(autouse=True)
-def _patch_render_params(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the real VST render with the in-process stub.
+def _patch_renderer_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace native host construction at the shared factory boundary.
 
-    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
+    :param monkeypatch: Pytest fixture used to patch the renderer factory.
     """
-    monkeypatch.setattr(predict_vst_audio, "render_params", _fake_render)
+    monkeypatch.setattr(
+        predict_vst_audio,
+        "make_audio_renderer",
+        lambda _config: _FakeRenderer(),
+    )
 
 
 def test_cli_writes_expected_wav_layout(fixture_pred_dir: Path, tmp_path: Path) -> None:
-    """Every input row produces a ``sample_<i>/`` dir with both ``pred.wav`` and ``target.wav``.
+    """Every input row produces both wavs while suppression flags remain effective.
 
-    Asserts the *negative* effects of the two suppression flags as well: under
-    ``--skip-spectrogram`` no ``spec.png`` appears, and under ``--no-params`` the
-    ``target`` column in ``params.csv`` is NaN (the file itself is still written —
-    pinned by ``test_cli_writes_params_csv``-adjacent contracts).
-
-    :param fixture_pred_dir: Session-scoped pred-tensor dir from ``conftest.py``.
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param fixture_pred_dir: Session-scoped prediction-tensor directory.
+    :param tmp_path: Pytest fixture providing a fresh output directory.
     """
     out_dir = tmp_path / "out"
 
-    _invoke_predict_cli(fixture_pred_dir, out_dir, "--skip-spectrogram", "--no-params")
+    _invoke_predict_cli(fixture_pred_dir, out_dir, ("--skip-spectrogram", "--no-params"))
 
     sample_dirs = sorted(d for d in out_dir.iterdir() if d.is_dir())
     assert [d.name for d in sample_dirs] == ["sample_0", "sample_1"]
     for sample in sample_dirs:
-        assert (sample / "pred.wav").is_file(), f"missing pred.wav under {sample}"
-        assert (sample / "target.wav").is_file(), f"missing target.wav under {sample}"
-        assert not (sample / "spec.png").exists(), (
-            f"--skip-spectrogram should suppress spec.png; found at {sample / 'spec.png'}"
-        )
+        assert (sample / "pred.wav").is_file()
+        assert (sample / "target.wav").is_file()
+        assert not (sample / "spec.png").exists()
         params_df = pd.read_csv(sample / "params.csv", index_col=0)
-        assert bool(params_df["target"].isna().all()), (
-            f"--no-params should leave the target column NaN; got {params_df['target'].tolist()}"
-        )
+        assert bool(params_df["target"].isna().all())
 
 
 def test_cli_writes_params_csv(fixture_pred_dir: Path, tmp_path: Path) -> None:
-    """Default-flag path writes a per-sample ``params.csv`` with the ``pred``/``target`` columns.
+    """The default parameter path writes pred and target columns per sample.
 
-    :param fixture_pred_dir: Session-scoped pred-tensor dir from ``conftest.py``.
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param fixture_pred_dir: Session-scoped prediction-tensor directory.
+    :param tmp_path: Pytest fixture providing a fresh output directory.
     """
     out_dir = tmp_path / "out"
 
-    _invoke_predict_cli(fixture_pred_dir, out_dir, "--skip-spectrogram")
+    _invoke_predict_cli(fixture_pred_dir, out_dir, ("--skip-spectrogram",))
 
     for sample_name in ("sample_0", "sample_1"):
         csv_path = out_dir / sample_name / "params.csv"
-        assert csv_path.is_file(), f"missing params.csv at {csv_path}"
-        df = pd.read_csv(csv_path, index_col=0)
-        assert list(df.columns) == ["pred", "target"]
+        assert csv_path.is_file()
+        assert list(pd.read_csv(csv_path, index_col=0).columns) == ["pred", "target"]
 
 
 def test_cli_writes_spectrogram_when_enabled(fixture_pred_dir: Path, tmp_path: Path) -> None:
-    """``spec.png`` lands per sample when the spectrogram flag is on (default).
+    """The default spectrogram path writes a valid PNG per sample.
 
-    :param fixture_pred_dir: Session-scoped pred-tensor dir from ``conftest.py``.
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param fixture_pred_dir: Session-scoped prediction-tensor directory.
+    :param tmp_path: Pytest fixture providing a fresh output directory.
     """
     out_dir = tmp_path / "out"
 
-    _invoke_predict_cli(fixture_pred_dir, out_dir, "--no-params")
+    _invoke_predict_cli(fixture_pred_dir, out_dir, ("--no-params",))
 
     for sample_name in ("sample_0", "sample_1"):
         png = out_dir / sample_name / "spec.png"
-        assert png.is_file(), f"missing spec.png at {png}"
-        # PNG magic-byte check guards against the file-handle leaking an empty file.
+        assert png.is_file()
         assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"

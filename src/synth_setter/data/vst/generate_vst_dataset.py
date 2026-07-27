@@ -1,37 +1,34 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-import h5py
-import hdf5plugin
 import librosa
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
+from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.audio_preview import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
+)
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.seeding import rng_for_sample
+from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import (
-    AUDIO_FIELD,
     MEL_N_MELS,
-    MEL_SPEC_FIELD,
     MEL_WINDOW,
-    PARAM_ARRAY_FIELD,
-    audio_dataset_shape,
-    mel_dataset_shape,
     mel_hop_length,
     mel_n_fft,
-    param_array_dataset_shape,
 )
+from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
+from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
-from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
-from synth_setter.pipeline.spec_io import join_uri, localized_uri
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
 DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
@@ -43,11 +40,11 @@ class SampleSeed:
 
     .. attribute :: master_seed
 
-        Per-shard master seed (``ShardSpec.seed``), folded into every draw.
+        Split master seed (``ShardSpec.seed``), folded into every draw.
 
     .. attribute :: sample_idx
 
-        Absolute row index, folded into the per-sample seed.
+        Split-local row index, folded into the per-sample seed.
 
     .. attribute :: max_attempts
 
@@ -71,11 +68,26 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
+    audio_dtype: str = "float16"
+    audio_mp3: bytes = field(init=False)
+    audio_uuid: str = field(init=False)
     param_array: np.ndarray = field(init=False)
+    # Concrete sampler seed consumed for this row; fully fixed renders consume none.
+    sampler_seed: int | None = None
     # Loudness-gate attempt the accepted draw came from (#884).
     attempt: int = 0
+    # Per-draw rejection counts carried to the shard writer for aggregation.
+    clipped_rejections: int = 0
+    silent_rejections: int = 0
 
     def __post_init__(self) -> None:
+        persisted_audio = np.ascontiguousarray(self.audio.T, dtype=self.audio_dtype)
+        self.audio_mp3 = encode_audio_to_mp3(
+            persisted_audio,
+            int(self.sample_rate),
+            DEFAULT_MP3_BITRATE_KBPS,
+        )
+        self.audio_uuid = audio_uuid(persisted_audio)
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -94,21 +106,31 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     return spec_db
 
 
+class AudioAmplitudeError(ValueError):
+    """Rendered audio exceeded the dataset storage range."""
+
+
+def _reject_clipped_audio(audio: np.ndarray) -> None:
+    """Reject audio outside the dataset's normalized storage range.
+
+    :param audio: Channel-leading renderer output shaped ``(channels, samples)``.
+    :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
+    """
+    if np.any(np.abs(audio) > 1.0):
+        raise AudioAmplitudeError("rendered audio samples must be within [-1, 1]")
+
+
 def generate_sample(
-    plugin_path: str,
+    renderer: AudioRenderer,
     velocity: int,
-    signal_duration_seconds: float,
-    sample_rate: float,
-    channels: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: NoteParams | None = None,
     *,
-    plugin: VST3Plugin | None = None,
     warmup: bool = False,
     seed: SampleSeed | None = None,
+    audio_dtype: str = "float16",
 ) -> VSTDataSample:
     """Render a single VST sample, retrying silent draws up to the attempt budget.
 
@@ -121,35 +143,46 @@ def generate_sample(
     ``min_loudness``. When only ``fixed_note_params`` (or nothing) is supplied, the
     synth is re-sampled per attempt and the loop is meaningful.
 
-    With ``seed`` set, sampling draws from
-    ``rng_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
+    With ``seed`` set, sampling draws from a generator initialized with
+    ``seed_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
     reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
     from a fresh non-deterministic generator and uses the default attempt budget.
 
-    :param plugin: Forwarded to ``render_params``; when set, the renderer
-        skips ``load_plugin``/``load_preset``.
-    :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
+    :param renderer: Audio host that renders every sample.
+    :param velocity: MIDI velocity applied to each rendered note.
+    :param min_loudness: Minimum integrated loudness required to accept a render.
+    :param param_spec: Parameter specification used to sample synth and note values.
+    :param fixed_synth_params: Optional synth values that replace sampled values.
+    :param fixed_note_params: Optional note values that replace sampled values.
+    :param warmup: Forwarded to the renderer; runs the backend's optional editor
         warm-up on the plugin used for this render (newly loaded or cached).
         Applied at most once per ``generate_sample`` call — the loudness-gate
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
-    :raises RuntimeError: The sampling path stayed silent for the whole attempt budget.
+    :raises AudioAmplitudeError: A ``fixed_synth_params`` render clipped outside
+        [-1, 1]; on the sampling path clipping rejects the draw and retries.
+    :raises RuntimeError: The sampling path produced no accepted render (silent
+        or clipped) for the whole attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    clipped_rejections = 0
+    silent_rejections = 0
     for attempt in range(max_attempts):
+        sampler_seed = None
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
-            rng = (
-                rng_for_sample(seed.master_seed, seed.sample_idx, attempt)
-                if seed is not None
-                else None
-            )
+            if seed is not None:
+                sampler_seed = seed_for_sample(seed.master_seed, seed.sample_idx, attempt)
+                rng = np.random.default_rng(sampler_seed)
+            else:
+                rng = None
             sampled_synth, sampled_note = param_spec.sample(rng)
             synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
@@ -157,22 +190,28 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
-        output = render_params(
-            plugin_path,
-            synth_params,
-            note_params["pitch"],
-            velocity,
-            note_params["note_start_and_end"],
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            preset_path=preset_path,
-            plugin=plugin,
-            warmup=warmup,
-        )
+        try:
+            output = renderer.render(
+                synth_params,
+                note_params["pitch"],
+                velocity,
+                note_params["note_start_and_end"],
+                warmup=warmup,
+            )
+            _reject_clipped_audio(output)
+        except AudioAmplitudeError:
+            # Clipping is a property of the sampled patch: reject the draw like
+            # the loudness gate instead of killing the shard (#2001). With fixed
+            # synth params the patch cannot change, so retrying is futile.
+            if fixed_synth_params is not None:
+                raise
+            warmup = False
+            clipped_rejections += 1
+            logger.debug("rendered audio clipped outside [-1, 1], skipping")
+            continue
         warmup = False
 
-        meter = Meter(sample_rate)
+        meter = Meter(renderer.sample_rate)
         loudness = meter.integrated_loudness(output.T)
         logger.debug(f"loudness: {loudness}")
         if loudness < min_loudness:
@@ -186,20 +225,25 @@ def generate_sample(
                     f"lifts a silent patch above the threshold). Provide a louder "
                     f"patch."
                 )
+            silent_rejections += 1
             logger.debug("loudness too low, skipping")
             continue
 
         logger.debug("making spectrogram")
-        spectrogram = make_spectrogram(output, sample_rate)
+        spectrogram = make_spectrogram(output, renderer.sample_rate)
         return VSTDataSample(
             synth_params=synth_params,
             note_params=note_params,
             audio=output.T,
             mel_spec=spectrogram,
-            sample_rate=sample_rate,
-            channels=channels,
+            sample_rate=renderer.sample_rate,
+            channels=renderer.channels,
             param_spec=param_spec,
+            audio_dtype=audio_dtype,
+            sampler_seed=sampler_seed,
             attempt=attempt,
+            clipped_rejections=clipped_rejections,
+            silent_rejections=silent_rejections,
         )
 
     failed_idx = str(seed.sample_idx) if seed is not None else "<unseeded>"
@@ -209,137 +253,11 @@ def generate_sample(
         else ""
     )
     raise RuntimeError(
-        f"sample {failed_idx} stayed below min_loudness {min_loudness:.2f} dB "
-        f"after {max_attempts} attempts. {seed_hint}Raise the per-sample attempt budget "
+        f"sample {failed_idx} produced no accepted render after {max_attempts} attempts "
+        f"(silent rejections: {silent_rejections}; clipped rejections: "
+        f"{clipped_rejections}). {seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
-
-
-def save_sample(
-    sample: VSTDataSample,
-    audio_dataset: h5py.Dataset,
-    mel_dataset: h5py.Dataset,
-    param_dataset: h5py.Dataset,
-    idx: int,
-) -> None:
-    logger.info(f"Saving sample {idx}...")
-    audio_dataset[idx, :, :] = sample.audio.T
-    mel_dataset[idx, :, :] = sample.mel_spec
-    param_dataset[idx, :] = sample.param_array
-    logger.info(f"Sample {idx} written!")
-
-
-def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
-    num_rows, *_ = dataset.shape
-    for i in range(num_rows):
-        row = dataset[num_rows - i - 1]
-        if not np.all(row == 0):
-            return num_rows - i
-        logger.debug(f"Row {num_rows - i - 1} is empty...")
-
-    return 0
-
-
-def create_dataset_and_get_first_unwritten_idx(
-    h5py_file: h5py.File,
-    name: str,
-    shape: tuple[int, ...],
-    dtype: np.dtype,
-    compression: Any,
-) -> tuple[h5py.Dataset, int]:
-    logger.info(f"Looking for dataset {name}...")
-    if name in h5py_file:
-        logger.info(f"Found dataset {name}, looking for first unwritten row.")
-        dataset = h5py_file[name]
-        return dataset, get_first_unwritten_idx(dataset)
-
-    dataset = h5py_file.create_dataset(name, shape=shape, dtype=dtype, compression=compression)
-    return dataset, 0
-
-
-def create_datasets_and_get_start_idx(
-    hdf5_file: h5py.File,
-    num_samples: int,
-    channels: int,
-    sample_rate: float,
-    signal_duration_seconds: float,
-    num_params: int,
-):
-    audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
-        hdf5_file,
-        AUDIO_FIELD,
-        audio_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
-        dtype=np.float16,
-        compression=hdf5plugin.Blosc2(),
-    )
-    mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
-        hdf5_file,
-        MEL_SPEC_FIELD,
-        mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
-        dtype=np.float32,
-        compression=hdf5plugin.Blosc2(),
-    )
-    param_dataset, param_start_idx = create_dataset_and_get_first_unwritten_idx(
-        hdf5_file,
-        PARAM_ARRAY_FIELD,
-        param_array_dataset_shape(num_samples, num_params),
-        dtype=np.float32,
-        compression=hdf5plugin.Blosc2(),
-    )
-
-    return (
-        audio_dataset,
-        mel_dataset,
-        param_dataset,
-        min(audio_start_idx, mel_start_idx, param_start_idx),
-    )
-
-
-def fixed_params_from_dataset(
-    source_shard: Path,
-    param_spec: ParamSpec,
-) -> tuple[list[dict[str, float]], list[NoteParams]]:
-    """Decode an existing shard's ``param_array`` into fixed synth/note param lists.
-
-    Reads the ``param_array`` dataset from ``source_shard`` and decodes each row
-    via ``param_spec.decode``, yielding the per-row fixed params that reproduce
-    the source dataset under a fresh render. The two returned lists are
-    row-aligned and ready to pass to ``make_hdf5_dataset`` / ``make_wds_dataset``
-    as ``fixed_synth_params_list`` / ``fixed_note_params_list``.
-
-    :param source_shard: Source shard whose ``param_array`` rows are decoded.
-    :param param_spec: Param spec the source was encoded with; its encoded width
-        must equal the source's ``param_array`` column count.
-    :returns: ``(synth_params_list, note_params_list)``, one dict per source row.
-    :raises ValueError: ``source_shard`` lacks a ``param_array`` dataset, that
-        dataset is not 2-D, or its column count does not match ``len(param_spec)``
-        — any of which would make the per-row decode mis-align.
-    """
-    with h5py.File(source_shard, "r") as h5:
-        if PARAM_ARRAY_FIELD not in h5:
-            raise ValueError(
-                f"source shard {source_shard} has no {PARAM_ARRAY_FIELD!r} dataset; "
-                "it is not a parameter-bearing dataset shard."
-            )
-        param_array = h5[PARAM_ARRAY_FIELD][:]
-    if param_array.ndim != 2:
-        raise ValueError(
-            f"source shard {source_shard} {PARAM_ARRAY_FIELD!r} must be 2-D "
-            f"(num_rows, num_params), got shape {param_array.shape}."
-        )
-    if param_array.shape[1] != len(param_spec):
-        raise ValueError(
-            f"source shard {source_shard} param_array has {param_array.shape[1]} columns "
-            f"but param_spec has {len(param_spec)}; the copy source must share the target's "
-            "param_spec_name (same encoding width)."
-        )
-    synth_params_list: list[dict[str, float]] = []
-    note_params_list: list[NoteParams] = []
-    for row in param_array:
-        synth_params, note_params = param_spec.decode(row)
-        synth_params_list.append(synth_params)
-        note_params_list.append(note_params)
-    return synth_params_list, note_params_list
 
 
 class _GenerateCliArgs(RenderConfig, BaseSettings):
@@ -347,15 +265,19 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
 
     Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
     automatically — adding or removing a field on ``RenderConfig`` extends or
-    shrinks the CLI surface without a parallel update here. Adds ``data_file``
-    as the sole positional arg (the destination shard path; suffix selects
-    writer via ``OutputFormat.from_extension``), and an optional
-    ``copy_dataset_root_uri`` that triggers the param-copy path.
+    shrinks the CLI surface without a parallel update here.
 
-    .. attribute :: copy_dataset_root_uri
+    .. attribute :: model_config
 
-        Optional copy source root URI; when set, the same-named source shard's
-        params are decoded and re-rendered instead of sampling fresh ones.
+        Strict pydantic-settings CLI behavior.
+
+    .. attribute :: data_file
+
+        Destination Lance dataset path.
+
+    .. attribute :: shard_id
+
+        Optional launcher-supplied shard identity for row provenance.
     """
 
     model_config = SettingsConfigDict(
@@ -367,85 +289,32 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
-    copy_dataset_root_uri: str | None = None
+    shard_id: int | None = Field(default=None, ge=0)
 
 
 def main() -> None:
     """Entry point — parse CLI args into a ``RenderConfig`` and render one shard.
 
-    The writer is dispatched on ``data_file``'s suffix via
-    ``OutputFormat.from_extension`` (``.h5`` → HDF5, ``.tar`` → wds,
-    ``.lance`` → Lance). An unknown suffix raises ``SystemExit`` rather than
-    silently producing a half-written file in the wrong format.
-
-    When ``--copy_dataset_root_uri`` is set, the params of the same-named source
-    shard under that root URI are decoded into fixed synth/note lists and
-    re-rendered instead of sampling fresh params. The root URI may be a bare
-    path, ``file://`` URI, or ``r2://`` URI (an ``r2://`` shard is downloaded to
-    a tempfile for the decode). The source is read as an HDF5 ``param_array``, so
-    copy is supported for hdf5 output only (a ``.tar`` output has no same-named
-    HDF5 source); a non-hdf5 output with ``--copy_dataset_root_uri`` raises
-    ``SystemExit``.
+    ``data_file`` must carry the ``.lance`` suffix (validated via
+    ``OutputFormat.from_extension``); any other suffix raises ``SystemExit``
+    rather than silently producing a half-written file in the wrong format.
     """
-    # Import lazily so that the writer module's webdataset dep only loads when
-    # this CLI entrypoint is invoked, not when callers merely import this
-    # module to reach VSTDataSample / generate_sample. (h5py is already a
-    # module-level import here, so it is not what the lazy load avoids.)
-    from synth_setter.data.vst.param_spec_registry import param_specs
-    from synth_setter.data.vst.writers import (
-        make_hdf5_dataset,
-        make_lance_dataset,
-        make_wds_dataset,
-    )
+    # Import lazily so importing this module for VSTDataSample/generate_sample
+    # doesn't pay the heavy ``lance`` import.
+    from synth_setter.data.vst.writers import make_lance_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "copy_dataset_root_uri"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "shard_id"}))
+    ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
-    fmt = OutputFormat.from_extension(suffix)
-    if fmt is None:
-        raise SystemExit(
-            f"data_file must end in one of {sorted(f.extension for f in OutputFormat)}, "
-            f"got {suffix!r}"
-        )
+    if OutputFormat.from_extension(suffix) is not OutputFormat.LANCE:
+        raise SystemExit(f"data_file must end in .lance, got {suffix!r}")
 
-    fixed_synth_params_list = None
-    fixed_note_params_list = None
-    if args.copy_dataset_root_uri is not None:
-        if fmt is not OutputFormat.HDF5:
-            raise SystemExit(
-                "--copy_dataset_root_uri supports hdf5 output only; the source params are "
-                f"read from a same-named HDF5 shard, but data_file suffix is {suffix!r}."
-            )
-        # Same shard filename under the copy root URI names the source HDF5 shard;
-        # localized_uri downloads it locally first when the root is an r2:// URI.
-        source_shard_uri = join_uri(args.copy_dataset_root_uri, Path(args.data_file).name)
-        with localized_uri(source_shard_uri) as source_shard:
-            fixed_synth_params_list, fixed_note_params_list = fixed_params_from_dataset(
-                source_shard, param_specs[render_cfg.param_spec_name]
-            )
-
-    if fmt is OutputFormat.HDF5:
-        make_hdf5_dataset(
-            args.data_file,
-            render_cfg,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-        )
-    elif fmt is OutputFormat.WDS:
-        make_wds_dataset(
-            args.data_file,
-            render_cfg,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-        )
-    else:
-        make_lance_dataset(
-            args.data_file,
-            render_cfg,
-            fixed_synth_params_list=fixed_synth_params_list,
-            fixed_note_params_list=fixed_note_params_list,
-        )
+    metrics_path = render_metrics_path(args.data_file)
+    metrics_path.unlink(missing_ok=True)
+    metrics = make_lance_dataset(args.data_file, render_cfg, shard_id=args.shard_id)
+    metrics_path.write_text(metrics.model_dump_json())
 
 
 if __name__ == "__main__":

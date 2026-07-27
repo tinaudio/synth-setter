@@ -1,0 +1,8 @@
+_target_: synth_setter.models.components.pretrained_ast.PretrainedASTEncoder
+d_model: 768
+n_conditioning_outputs: 8
+n_pool_heads: 8
+checkpoint: MIT/ast-finetuned-audioset-10-10-0.4593
+pretrained: true
+freeze: false
+spec_shape: [128, 401]

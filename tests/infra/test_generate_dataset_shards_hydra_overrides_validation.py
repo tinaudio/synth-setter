@@ -158,7 +158,7 @@ def test_validation_runs_before_docker_step(generate_steps: list[dict]) -> None:
     [
         "",
         "render.gui_toggle_cadence=always_on",
-        "render.gui_toggle_cadence=always_on output_format=wds",
+        "render.gui_toggle_cadence=always_on output_format=lance",
         "skypilot_launch.num_workers=4",
         "key=value-with-dash",
         "path=foo/bar/baz",
@@ -238,7 +238,7 @@ def test_workflow_bash_validation_rejects_multiline_payloads(value: str) -> None
     [
         "",
         "render.gui_toggle_cadence=always_on",
-        "render.gui_toggle_cadence=always_on output_format=wds",
+        "render.gui_toggle_cadence=always_on output_format=lance",
     ],
 )
 def test_workflow_bash_validation_accepts_safe_inputs(value: str) -> None:

@@ -1,0 +1,26 @@
+# SkyPilot launch config for a manually-dispatched evaluation run on RunPod.
+#
+# Consumed by `synth-setter-skypilot-launch <this file>` — the only input
+# .github/workflows/eval.yml takes. Fields mirror SkypilotLaunchConfig;
+# relative paths resolve against the working directory (run from the repo
+# root). Copy this file to evaluate a different experiment / checkpoint.
+#
+# The wandb_checkpoint overlay pins ckpt_path to the published model-<id>
+# W&B artifact via the `${wandb:…}` resolver, and run-linux-vst-headless.sh
+# wraps the CLI in Xvfb for predict-mode VST rendering. Worker provenance
+# mirrors train-runpod.yaml (WORKER_GIT_REF checkout sync + launcher-injected
+# IMAGE_TAG).
+
+compute: runpod/smoke
+worker_image_tag: devcontainer-tools
+env_file: .env
+# tail=false detaches after submission; follow with `sky jobs logs --name <job>`.
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec src/synth_setter/scripts/run-linux-vst-headless.sh
+  synth-setter-eval
+  "experiment=${EXPERIMENT:-surge/wandb_checkpoint/ffn_simple}"
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/}"
+  hydra.run.dir=/home/build/synth-setter/eval-run

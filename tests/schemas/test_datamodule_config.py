@@ -16,6 +16,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
+from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import configs_dir
 from synth_setter.schemas.datamodule_config import DataModuleConfig
 from synth_setter.schemas.paths_config import PathsConfig
@@ -71,18 +72,50 @@ class TestSurgeDatamoduleOverlays:
         assert subtree["param_spec_name"] == "surge_simple"
         assert subtree["_target_"].endswith("VSTDataModule")
 
-    def test_surge_inherits_vst_base_with_default_spec(self) -> None:
-        """The plain ``surge`` overlay adds no overrides, so it keeps the ``vst`` base verbatim."""
+    def test_surge_declares_param_spec_name_surge_xt(self) -> None:
+        """``surge`` sets ``param_spec_name: surge_xt`` over the abstract ``vst`` base."""
         subtree = compose_subtree("datamodule", "surge")
         assert subtree["param_spec_name"] == "surge_xt"
         assert subtree["_target_"].endswith("VSTDataModule")
 
-    def test_surge_debug_sets_repeat_first_batch_and_keeps_default_spec(self) -> None:
-        """``surge_debug`` flips ``repeat_first_batch`` and keeps the ``vst`` default spec."""
+    def test_surge_debug_sets_repeat_first_batch_and_declares_spec(self) -> None:
+        """``surge_debug`` flips ``repeat_first_batch`` and declares ``surge_xt`` explicitly."""
         subtree = compose_subtree("datamodule", "surge_debug")
         assert subtree["repeat_first_batch"] is True
         assert subtree["param_spec_name"] == "surge_xt"
         assert subtree["_target_"].endswith("VSTDataModule")
+
+
+class TestParamSpecNameIsExplicit:
+    """``param_spec_name`` must be chosen deliberately, never inherited from a base default."""
+
+    def test_vst_base_leaves_param_spec_name_mandatory(self) -> None:
+        """The abstract ``vst`` base carries the ``???`` sentinel, not a synth default."""
+        subtree = compose_subtree("datamodule", "vst")
+        assert subtree["param_spec_name"] == "???"
+
+    # The abstract ``vst`` base is excluded: its mandatory sentinel is pinned above.
+    @pytest.mark.parametrize(
+        "datamodule_name",
+        [name for name in _all_datamodule_config_names() if name != "vst"],
+    )
+    def test_vst_family_config_resolves_param_spec_name_to_registered_spec(
+        self, datamodule_name: str
+    ) -> None:
+        """Every concrete VST-family config composes to a registered ``param_spec_name``.
+
+        Guards new configs that inherit ``vst`` without declaring a spec: they
+        compose to the literal ``"???"`` and fail here instead of at run time.
+
+        :param datamodule_name: Parametrized YAML stem under ``configs/datamodule/``.
+        """
+        subtree = compose_subtree("datamodule", datamodule_name)
+        if "param_spec_name" not in subtree:
+            pytest.skip("not a VST-family datamodule")
+        assert subtree["param_spec_name"] in param_specs, (
+            f"datamodule/{datamodule_name}.yaml must declare an explicit, registered "
+            f"param_spec_name; composed to {subtree['param_spec_name']!r}"
+        )
 
 
 class TestPathsConfigResolvedInterpolation:

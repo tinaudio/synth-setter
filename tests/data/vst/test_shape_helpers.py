@@ -1,11 +1,10 @@
 """Unit tests for the shape primitives in ``synth_setter.data.vst.shapes``.
 
-The writer and the (planned) shard-validator inner-shape checks share these
-helpers, so each test pins one shape against the legacy inline calculation
-that lived in ``create_datasets_and_get_start_idx`` / ``make_spectrogram`` on
-``main`` before this PR. If anyone changes a constant (n_mels, fps, ...),
-multiple tests here should fail loudly rather than the writer and validator
-silently drifting apart.
+The Lance writer and the shard-validator inner-shape checks share these
+helpers, so each test pins one shape against the ``dataset_field_shapes`` /
+``make_spectrogram`` calculation. If anyone changes a constant (n_mels, fps,
+...), multiple tests here should fail loudly rather than the writer and
+validator silently drifting apart.
 """
 
 import numpy as np
@@ -28,6 +27,8 @@ from synth_setter.data.vst.shapes import (
     mel_n_frames,
     param_array_dataset_shape,
 )
+from synth_setter.synth_spec import SynthName, SynthSpec
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
@@ -111,10 +112,13 @@ def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
 def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
     """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
     render = RenderConfig(
-        plugin_path="/fake/Plugin.vst3",
-        preset_path="presets/fake.vstpreset",
-        param_spec_name="surge_simple",
-        renderer_version="1.0.0-test",
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="/fake/Plugin.vst3",
+            plugin_state_path="presets/fake.vstpreset",
+            synth_version="1.0.0-test",
+        ),
         sample_rate=44100,
         channels=2,
         velocity=100,

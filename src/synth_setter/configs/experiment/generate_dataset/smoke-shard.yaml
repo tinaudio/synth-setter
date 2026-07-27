@@ -11,8 +11,7 @@ defaults:
 
 task_name: smoke-shard
 
-# 12-sample renders have constant mel bins; mask so finalize stays green
-# if dask's FP noise stops hiding them on the hdf5 path.
+# 12-sample renders have constant mel bins; mask so finalize stays green.
 mask_degenerate_bins: true
 
 train_val_test_sizes: [4, 4, 4]

@@ -9,7 +9,7 @@ name: Validate Dataset Shards
 # Two jobs:
 #   * validate-spec   — structural checks on the spec (synth_setter.pipeline.ci.validate_spec).
 #   * validate-shard  — iterates spec.shards and validates each downloaded
-#                       HDF5 (synth_setter.pipeline.ci.validate_shard).
+#                       Lance shard (synth_setter.pipeline.ci.validate_shard).
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -54,7 +54,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       # `pip install -e .` installs the project + its light base only — pip
       # never installs PEP 735 dependency-groups, so the heavy runtime stays
@@ -101,13 +101,13 @@ jobs:
         uses: actions/checkout@v6
 
       # validate_shard.py iterates spec.shards and pulls each from R2 via
-      # synth_setter.pipeline.r2_io. Run in dev-snapshot so h5py is available without a
-      # host-side install.
+      # synth_setter.pipeline.r2_io. Run in dev-snapshot so the Lance reader
+      # (pylance) is available without a host-side install.
       - name: Pull dev-snapshot image
         run: docker pull "${IMAGE}"
 
       # rclone runs inside the container; setup-r2 only exports the
-      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      # setup-r2 exports canonical storage env plus the current rclone projection.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -115,18 +115,28 @@ jobs:
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
 
+      # Sync the mounted checkout into `/venv/main` before running the
+      # validator so this reusable always executes the caller's checked-out
+      # synth_setter code, not the package baked into dev-snapshot. The mount
+      # stays writable because building the local project updates
+      # `src/synth_setter.egg-info` during the sync.
       - name: Validate every shard via R2
         env:
           SPEC_URI: ${{ inputs.spec_uri }}
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
+            -e UV_PROJECT_ENVIRONMENT=/venv/main \
             "${IMAGE}" \
-            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"
+            bash -c 'cd /home/build/synth-setter && uv sync --frozen --no-default-groups --group data && uv run python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"'

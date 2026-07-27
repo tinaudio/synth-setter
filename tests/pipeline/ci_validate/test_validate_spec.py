@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import pytest
+
 from synth_setter.pipeline.ci.validate_spec import (
     _REQUIRED_RENDER_FIELDS,
+    _REQUIRED_SYNTH_FIELDS,
     _REQUIRED_TOP_LEVEL_FIELDS,
     validate_structure,
     validate_test_values,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthSpec
 
 
-def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
+def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> dict:
     """Build a minimal valid spec dict mirroring DatasetSpec.model_dump output."""
-    ext = ".h5" if output_format == "hdf5" else ".tar"
+    ext = ".lance" if output_format == "lance" else f".{output_format}"
     spec: dict = {
         "task_name": "test",
         "run_id": "test-20260328T120000000Z",
@@ -24,8 +28,8 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "train_val_test_sizes": [32, 32, 32],
         "train_val_test_seeds": None,
         "base_seed": 42,
-        "copy_dataset_root_uri": None,
         "mask_degenerate_bins": False,
+        "use_shard_queue": False,
         "num_params": 92,
         "num_shards": 3,
         "r2": {
@@ -34,19 +38,26 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "prefix": "data/test/test-20260328T120000000Z/",
         },
         "render": {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "preset_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            },
+            "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
+            "audio_dtype": "float16",
+            "mel_spec_dtype": "float32",
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
             "max_retries": 0,
             "base_seed": 0,
+            "sample_offset": 0,
             "attempts_per_sample": 100,
             "parallel": False,
             "plugin_reload_cadence": "render",
@@ -54,7 +65,13 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "param_sample_cadence": "sample",
         },
         "shards": [
-            {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
+            {
+                "shard_id": i,
+                "filename": f"shard-{i:06d}{ext}",
+                "seed": 42 + i,
+                "sample_offset": 0,
+            }
+            for i in range(3)
         ],
         # Computed field; mirrors DatasetSpec.split_shard_ranges output for
         # train_val_test_sizes=[32, 32, 32] and samples_per_shard=32.
@@ -79,6 +96,14 @@ class TestValidateStructure:
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
 
+    def test_defaulted_storage_dtypes_may_be_omitted(self) -> None:
+        """Specs may omit fields supplied by RenderConfig defaults."""
+        spec = _make_valid_spec()
+        del spec["render"]["audio_dtype"]
+        del spec["render"]["mel_spec_dtype"]
+
+        assert validate_structure(spec) == []
+
     def test_missing_field_returns_error(self) -> None:
         """Spec missing a required field returns a 'missing' error."""
         spec = _make_valid_spec()
@@ -92,10 +117,16 @@ class TestValidateStructure:
         spec = _make_valid_spec(git_sha="not-a-sha")
         assert any("git_sha" in e for e in validate_structure(spec))
 
-    def test_empty_renderer_version_returns_error(self) -> None:
-        """Empty render.renderer_version returns a renderer_version error."""
-        spec = _make_valid_spec(render={"renderer_version": ""})
-        assert any("renderer_version" in e for e in validate_structure(spec))
+    @pytest.mark.parametrize("value", ["", "  ", 1.3, None])
+    def test_invalid_synth_version_returns_specific_error(self, value: object) -> None:
+        """The version must be a nonblank string.
+
+        :param value: Invalid serialized version value.
+        """
+        spec = _make_valid_spec()
+        spec["render"]["synth"]["synth_version"] = value
+
+        assert "render.synth.synth_version must be a non-empty string" in validate_structure(spec)
 
     def test_empty_shards_returns_error(self) -> None:
         """Empty shards list returns a shards error."""
@@ -128,8 +159,26 @@ class TestValidateStructure:
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
-        """Required render set is derived from RenderConfig, not hand-mirrored."""
-        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields)
+        """Only backward-compatible storage fields may be omitted."""
+        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
+            "audio_dtype",
+            "mel_spec_dtype",
+            # Checked shape-aware so the nested identity can be validated.
+            "synth",
+        }
+
+    def test_required_synth_fields_match_synth_spec_model(self) -> None:
+        """Structural validation derives synth identity fields from the schema."""
+        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields)
+
+    def test_other_defaulted_render_field_remains_required(self) -> None:
+        """Platform-dependent defaults must be materialized in persisted specs."""
+        spec = _make_valid_spec()
+        del spec["render"]["gui_toggle_cadence"]
+
+        errors = validate_structure(spec)
+
+        assert any("gui_toggle_cadence" in error for error in errors)
 
 
 class TestValidateTestValues:
@@ -139,28 +188,20 @@ class TestValidateTestValues:
         """Spec matching generate_dataset/ci-materialize-test.yaml expectations passes."""
         spec = _make_valid_spec()
         assert validate_test_values(spec) == []
-        assert all(s["filename"].endswith(".h5") for s in spec["shards"])
+        assert all(s["filename"].endswith(".lance") for s in spec["shards"])
 
     def test_wrong_shard_count_returns_error(self) -> None:
         """Spec with 2 shards instead of 3 returns a shard count error."""
-        spec = _make_valid_spec(
-            shards=[
-                {"shard_id": 0, "filename": "shard-000000.h5", "seed": 42},
-                {"shard_id": 1, "filename": "shard-000001.h5", "seed": 43},
-            ]
-        )
+        spec = _make_valid_spec()
+        spec["shards"] = spec["shards"][:2]
         errors = validate_test_values(spec)
         assert any("3 shards" in e for e in errors)
 
     def test_wrong_seeds_returns_error(self) -> None:
         """Spec with wrong seeds returns a seed error."""
-        spec = _make_valid_spec(
-            shards=[
-                {"shard_id": 0, "filename": "shard-000000.h5", "seed": 1},
-                {"shard_id": 1, "filename": "shard-000001.h5", "seed": 2},
-                {"shard_id": 2, "filename": "shard-000002.h5", "seed": 3},
-            ]
-        )
+        spec = _make_valid_spec()
+        for shard, seed in zip(spec["shards"], (1, 2, 3), strict=True):
+            shard["seed"] = seed
         errors = validate_test_values(spec)
         assert any("seed" in e for e in errors)
 
@@ -169,3 +210,38 @@ class TestValidateTestValues:
         spec = _make_valid_spec(output_format="parquet")
         errors = validate_test_values(spec)
         assert any("output_format" in e and "parquet" in e for e in errors)
+
+
+class TestSynthIdentityShape:
+    """Synth identity must use the canonical nested shape."""
+
+    @pytest.mark.parametrize("field", sorted(SynthSpec.model_fields))
+    def test_a_spec_missing_a_required_synth_field_is_rejected(self, field: str) -> None:
+        """Every schema-required identity field is enforced structurally.
+
+        :param field: Required identity field removed from the payload.
+        """
+        spec = _make_valid_spec()
+        del spec["render"]["synth"][field]
+
+        errors = validate_structure(spec)
+
+        assert any("missing required synth fields" in error and field in error for error in errors)
+
+    def test_a_spec_with_no_nested_identity_is_rejected(self) -> None:
+        """A missing nested synth mapping is a structural error."""
+        spec = _make_valid_spec()
+        del spec["render"]["synth"]
+
+        errors = validate_structure(spec)
+
+        assert any("render.synth must be a mapping" in error for error in errors)
+
+    def test_test_values_flag_a_wrong_param_spec_in_the_nested_shape(self) -> None:
+        """A nested identity naming the wrong spec is still caught."""
+        spec = _make_valid_spec()
+        render = dict(spec["render"])
+        render["synth"] = {**render["synth"], "param_spec_name": "surge_xt"}  # type: ignore[dict-item]
+        spec["render"] = render
+
+        assert any("param_spec_name" in e for e in validate_test_values(spec))

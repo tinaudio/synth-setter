@@ -1,0 +1,20 @@
+# @package _global_
+
+# One real Surge XT shard through DawDreamer. Intended as the minimal operator
+# experiment for validating the alternative audio host before larger runs.
+
+defaults:
+  - override /datamodule: surge
+  - override /render: surge_xt
+  - _self_
+
+task_name: surge-xt-dawdreamer-smoke
+
+train_val_test_sizes: [1, 0, 0]
+
+render:
+  renderer_backend: dawdreamer
+  samples_per_render_batch: 1
+  samples_per_shard: 1
+  plugin_reload_cadence: once
+  gui_toggle_cadence: never

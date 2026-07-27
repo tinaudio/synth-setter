@@ -1,29 +1,42 @@
-"""Tests that ``RenderConfig`` fields are surfaced in ``surge_xt.yaml`` and overridable.
-
-Verifies that:
-- Plain ``render.<field>=...`` Hydra CLI overrides (no ``+``) are accepted when
-  ``surge_xt.yaml`` surfaces the field — Hydra struct mode rejects unknown keys,
-  so a passing compose proves the field is present in the composed tree (#489).
-- A no-override compose yields the values hard-coded in ``surge_xt.yaml`` on
-  every platform (not the ``RenderConfig`` model's platform-dependent defaults).
-- ``render=obxf`` composes into a valid ``RenderConfig`` pinning OB-Xf's identity.
-"""
+"""Tests for the generic VST render base and concrete synth render groups."""
 
 from __future__ import annotations
 
 import pytest
 from hydra import compose, initialize_config_module
+from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 
-# Off-default values for each field surfaced in ``render/surge_xt.yaml``.  Each
-# value must differ from the YAML default so the assertion distinguishes "override
-# landed" from "coincidentally matched the default".
+_GENERIC_RENDER_FIELDS = {
+    "audio_dtype",
+    "channels",
+    "gui_toggle_cadence",
+    "max_retries",
+    "mel_spec_dtype",
+    "min_loudness",
+    "parallel",
+    "param_sample_cadence",
+    "plugin_reload_cadence",
+    "renderer_backend",
+    "sample_rate",
+    "samples_per_render_batch",
+    "samples_per_shard",
+    "signal_duration_seconds",
+    "velocity",
+}
+
+# Each value differs from the VST base default so the assertion distinguishes an
+# applied override from a value that merely matches the default.
 _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
+    "audio_dtype": "float32",
+    "mel_spec_dtype": "float16",
     "samples_per_render_batch": 16,
     "max_retries": 3,
     "parallel": True,
-    "plugin_reload_cadence": "once",
+    "plugin_reload_cadence": "render",
     "gui_toggle_cadence": "never",
     "param_sample_cadence": "shard",
 }
@@ -31,6 +44,63 @@ _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
 # An experiment that sets none of ``_SURFACED_RENDER_DEFAULTS``, so a successful
 # plain override proves the key comes from the base render config, not the experiment.
 _NO_CADENCE_EXPERIMENT = "experiment=generate_dataset/ci-materialize-test"
+
+
+def _compose_render_group(group: str) -> DictConfig:
+    """Compose one render group through Hydra.
+
+    :param group: Render group name below ``configs/render``.
+    :returns: The composed ``render`` node.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return compose(config_name=f"render/{group}").render
+
+
+def test_vst_render_group_contains_only_generic_render_fields() -> None:
+    """``render=vst`` provides generic knobs without selecting a synth identity."""
+    cfg = _compose_render_group("vst")
+
+    assert set(cfg) == _GENERIC_RENDER_FIELDS
+
+
+def test_vst_render_group_accepts_appended_synth_identity() -> None:
+    """A generic VST eval scaffold composes with caller-supplied synth identity."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval",
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "render=vst",
+                "+render/synth=obxf",
+            ],
+        )
+
+    assert cfg.render.synth.param_spec_name == "obxf"
+    assert cfg.render.synth.plugin_state_path == "presets/obxf-base.vstpreset"
+    assert cfg.render.synth.plugin_path == "plugins/OB-Xf.vst3"
+    assert cfg.render.synth.synth_version == "1.0.3"
+    assert cfg.render.plugin_reload_cadence == "once"
+
+
+def test_render_config_names_plugin_state_path_as_the_pedalboard_state_input() -> None:
+    """Render configuration exposes the pedalboard state file as plugin_state_path."""
+    config = RenderConfig(
+        synth=SynthSpec(
+            name=SynthName("surge_xt"),
+            param_spec_name=ParamSpecName("surge_xt"),
+            plugin_path="plugin.vst3",
+            plugin_state_path="state.vstpreset",
+            synth_version="1.0.0",
+        ),
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-55.0,
+        samples_per_shard=1,
+    )
+
+    assert config.plugin_state_path == "state.vstpreset"
 
 
 def _spec_from_dataset_overrides(overrides: list[str]) -> DatasetSpec:
@@ -51,8 +121,8 @@ def test_base_render_config_accepts_plain_override_for_surfaced_default(
     """A plain ``render.<field>=`` override composes against a no-cadence experiment.
 
     Struct mode rejects ``render.<field>=`` (without ``+``) when the key is absent
-    from the composed tree, so this passing proves ``render/surge_xt.yaml`` surfaces
-    the field's default; the override value round-trips onto the spec.
+    from the composed tree, so this passing proves ``render/vst.yaml`` surfaces the
+    field's default; the override value round-trips onto the spec.
 
     :param field: RenderConfig field surfaced in the base render config.
     :param override_value: Off-default value passed on the Hydra CLI for that field.
@@ -62,19 +132,78 @@ def test_base_render_config_accepts_plain_override_for_surfaced_default(
 
 
 def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
-    """A no-override compose yields the values surfaced in ``surge_xt.yaml`` on all platforms.
+    """A no-override compose yields the values inherited from ``vst.yaml`` on all platforms.
 
     Pins the values written to the YAML (not the ``RenderConfig`` model's
     ``default_factory`` values, which are platform-dependent). ``gui_toggle_cadence``
     is ``"once"`` — safe on Darwin where ``"render"`` is rejected (#714).
     """
     spec = _spec_from_dataset_overrides([])
+    assert spec.render.audio_dtype == "float16"
+    assert spec.render.mel_spec_dtype == "float32"
     assert spec.render.samples_per_render_batch == 32
     assert spec.render.max_retries == 0
     assert spec.render.parallel is False
-    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.plugin_reload_cadence == "once"
     assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
+
+
+@pytest.mark.parametrize(
+    ("name", "num_params"),
+    [("torchsynth_adsr", 8), ("torchsynth_simple", 19), ("torchsynth_full", 79)],
+)
+def test_render_torchsynth_composes_into_valid_render_config(name: str, num_params: int) -> None:
+    """Each ``render=torchsynth_*`` group composes into a valid in-process ``RenderConfig``.
+
+    :param name: Render group / param-spec registry key under test.
+    :param num_params: Expected encoded parameter width.
+    """
+    spec = _spec_from_dataset_overrides([f"render={name}"])
+
+    assert spec.render.param_spec_name == name
+    assert spec.render.renderer_backend == "torchsynth"
+    assert spec.render.plugin_path == "torchsynth"
+    assert spec.render.plugin_state_path == ""
+    assert spec.render.synth.synth_version == "1.0.2"
+    assert spec.render.audio_dtype == "float16"
+    assert spec.render.mel_spec_dtype == "float32"
+    assert spec.render.gui_toggle_cadence == "never"
+    # One shared voice per shard: rebuilding it per render would dominate render time.
+    assert spec.render.plugin_reload_cadence == "once"
+    assert spec.num_params == num_params
+
+
+@pytest.mark.parametrize(
+    ("name", "num_params", "channels"),
+    [
+        ("faust_bright_organ", 13, 2),
+        ("faust_bubble", 10, 2),
+        ("faust_church_organ", 16, 2),
+        ("faust_filter_osc", 6, 1),
+    ],
+)
+def test_render_faust_composes_into_valid_render_config(
+    name: str,
+    num_params: int,
+    channels: int,
+) -> None:
+    """Each Faust group resolves checked-in source/spec identity without paths.
+
+    :param name: Render group and Faust registry identity.
+    :param num_params: Expected encoded synth-and-note width.
+    :param channels: Native source output channel count.
+    """
+    spec = _spec_from_dataset_overrides([f"render={name}"])
+
+    assert spec.render.param_spec_name == name
+    assert spec.render.renderer_backend == "dawdreamer_faust"
+    assert spec.render.plugin_path == "faust"
+    assert spec.render.plugin_state_path == ""
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.channels == channels
+    assert spec.num_params == num_params
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:
@@ -82,9 +211,69 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     spec = _spec_from_dataset_overrides(["render=obxf"])
 
     assert spec.render.param_spec_name == "obxf"
-    assert spec.render.renderer_version == "1.0.3"
+    assert spec.render.synth.synth_version == "1.0.3"
     assert spec.render.plugin_path == "plugins/OB-Xf.vst3"
-    assert spec.render.preset_path == "presets/obxf-base.vstpreset"
+    assert spec.render.plugin_state_path == "presets/obxf-base.vstpreset"
     assert spec.num_params == 187
-    # Inherited from the surge_xt base group, proving defaults: [surge_xt] is live.
-    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.plugin_reload_cadence == "once"
+
+
+@pytest.mark.parametrize(
+    ("group", "param_spec_name", "plugin_state_path"),
+    [
+        ("surge_4_surgepy", "surge_4", "presets/surge-mini.fxp"),
+        ("surge_simple_surgepy", "surge_simple", "presets/surge-simple.fxp"),
+        ("surge_xt_surgepy", "surge_xt", "presets/surge-base.fxp"),
+    ],
+)
+@pytest.mark.requires_surgepy
+def test_surgepy_render_groups_compose_to_validated_isolated_configs(
+    group: str,
+    param_spec_name: str,
+    plugin_state_path: str,
+) -> None:
+    """Shipped SurgePy groups satisfy the strict runtime lifecycle contract.
+
+    :param group: SurgePy render group.
+    :param param_spec_name: Expected Surge parameter specification.
+    :param plugin_state_path: Expected FXP patch resource.
+    """
+    import surgepy
+
+    config = RenderConfig.model_validate(
+        OmegaConf.to_container(_compose_render_group(group), resolve=True)
+    )
+
+    assert config.synth.synth_version == surgepy.getVersion()
+    assert config.renderer_backend == "surgepy"
+    assert config.plugin_path == "surgepy"
+    assert config.param_spec_name == param_spec_name
+    assert config.plugin_state_path == plugin_state_path
+    assert config.gui_toggle_cadence == "never"
+    assert config.plugin_reload_cadence == "render"
+
+
+@pytest.mark.parametrize(
+    ("group", "param_spec_name", "plugin_state_path"),
+    [
+        ("surge_4", "surge_4", "presets/surge-mini.vstpreset"),
+        ("surge_simple", "surge_simple", "presets/surge-simple.vstpreset"),
+    ],
+)
+def test_surge_subset_render_groups_keep_surge_xt_identity(
+    group: str, param_spec_name: str, plugin_state_path: str
+) -> None:
+    """Surge subset groups override only their spec and preset identity.
+
+    :param group: Surge subset render group.
+    :param param_spec_name: Expected subset ParamSpec registry key.
+    :param plugin_state_path: Expected subset preset path.
+    """
+    cfg = _compose_render_group(group)
+    surge_xt = _compose_render_group("surge_xt")
+
+    assert cfg.synth.param_spec_name == param_spec_name
+    assert cfg.synth.plugin_state_path == plugin_state_path
+    assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
+    assert cfg.synth.synth_version == surge_xt.synth.synth_version
+    assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence

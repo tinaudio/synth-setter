@@ -7,7 +7,7 @@ name: CPU Slow Tests
 # so any leftover VST-marked tests are deselected here; absent that filter, the
 # `pytest_collection_modifyitems` hook in `tests/conftest.py` still auto-skips
 # them when no plugin is present.
-# Triggered post-merge on main (and via manual dispatch).
+# PRs omit live R2; push/main and dispatch retain it (#2458).
 on:
   workflow_dispatch:
   push:
@@ -15,13 +15,18 @@ on:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
-  # Self-trigger so PRs that touch the workflow (or its invariant test)
-  # exercise it pre-merge instead of waiting for the post-merge push run
-  # to surface regressions — see #1206.
   pull_request:
     paths:
+      - ".github/actions/install-rclone/**"
+      - ".github/actions/upload-coverage/**"
       - ".github/workflows/cpu-slow.yml"
-      - "tests/infra/test_cpu_slow_workflow_r2_creds.py"
+      - "Makefile"
+      - "docker/**"
+      - "pyproject.toml"
+      - "scripts/ci/**"
+      - "src/synth_setter/**"
+      - "tests/**"
+      - "uv.lock"
 
 concurrency:
   group: cpu-slow-${{ github.ref }}
@@ -55,14 +60,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
+      # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
+      # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.11.28"
           enable-cache: true
 
       # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
@@ -72,9 +85,16 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # rclone binary + `RCLONE_CONFIG_R2_*` let `integration_r2`-marked tests
-      # reach real R2 instead of skipping via `is_r2_reachable()` — see #1185.
+      # PRs need the binary for secret-free local/file-URI tests but never
+      # configure the R2 remote or receive production storage credentials.
+      - name: Install rclone for PR tests
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/install-rclone
+
+      # Push and dispatch retain the live-R2 coverage added in #1185. PRs
+      # exclude integration_r2 explicitly and never configure storage secrets.
       - name: Set up R2
+        if: github.event_name != 'pull_request'
         uses: ./.github/actions/setup-r2
         with:
           access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
@@ -84,9 +104,16 @@ jobs:
 
       # Marker filter + coverage flags live in `make test-ci-slow` — see #1353.
       - name: Run slow (non-GPU, non-MPS, non-VST) tests
+        if: github.event_name != 'pull_request'
         env:
           HYDRA_FULL_ERROR: "1"
         run: make test-ci-slow
+
+      - name: Run slow PR tests
+        if: github.event_name == 'pull_request'
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: make test-ci-slow-pr
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`
       # in Codecov — the fast suite skips these PyTorch forward passes.

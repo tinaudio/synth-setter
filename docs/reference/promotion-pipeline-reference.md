@@ -243,10 +243,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
 
       - name: Install dependencies
         run: uv pip install --system wandb

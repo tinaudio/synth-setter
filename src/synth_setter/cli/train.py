@@ -1,19 +1,31 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
+import signal
+from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import hydra
 import lightning as L
 import torch
 import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
+from synth_setter.evaluation.audio_probe import run_audio_probe
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.run_id import make_wandb_run_id
+from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -23,12 +35,18 @@ from synth_setter.utils import (
     log_hyperparameters,
     log_wandb_provenance,
     pin_wandb_run_id,
+    record_input_lineage,
     register_resolvers,
     resolve_git_sha,
     resolve_run_config_id,
     task_wrapper,
-    use_input_artifacts,
     watch_gradients,
+)
+from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
+from synth_setter.utils.resume import (
+    apply_wandb_resume_continuity,
+    discover_resume_checkpoint,
+    resolve_resume_mode,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -40,24 +58,24 @@ register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
+_SHELL_SIGNAL_EXIT_OFFSET = 128
 
-def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
-    """Build the consumed-artifact lineage edges for a training run (spec §5).
 
-    Training consumes the dataset it trains on. The edge is opt-in:
-    ``consumed_dataset_config_id`` is null by default and yields no edges, so a
-    run without the field set records no lineage and never calls
-    ``use_artifact``.
+def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
+    """Build the dataset lineage edge declared by the datamodule provenance.
 
-    :param cfg: Hydra-composed cfg; reads ``consumed_dataset_config_id`` and
-        ``consumed_artifact_alias`` (default ``latest``).
-    :returns: ``[("data-{id}", alias)]`` when the dataset id is set, else ``[]``.
+    :param cfg: Hydra-composed cfg carrying local or remote datamodule roots.
+    :returns: The pair ``(refs, unresolved)`` — one W&B dataset-artifact ref when a root carries a
+        readable frozen input spec, else a description of the configured root whose edge could not
+        be derived (#2424).
     """
-    dataset_id = cfg.get("consumed_dataset_config_id")
-    if not dataset_id:
-        return []
-    alias = cfg.get("consumed_artifact_alias") or "latest"
-    return [(f"data-{dataset_id}", alias)]
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
+    ref = dataset_artifact_ref(dataset_root, download_uri)
+    if ref is not None:
+        return [ref], []
+    unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    return [], ([unresolved] if unresolved else [])
 
 
 def _derive_checkpoint_uri(cfg: DictConfig) -> str:
@@ -77,6 +95,216 @@ def _derive_checkpoint_uri(cfg: DictConfig) -> str:
     if override:
         return str(override)
     return f"r2://{cfg.r2.bucket}/checkpoints/{resolve_run_config_id(cfg)}/model.ckpt"
+
+
+def _make_launch_namespace(run_id: str) -> str:
+    """Return a collision-resistant namespace for one training launch.
+
+    :param run_id: Canonical W&B run ID retained as the human-readable prefix.
+    :returns: The run ID plus a random UUID used for launch-scoped R2 artifacts.
+    """
+    return f"{run_id}-{uuid4().hex}"
+
+
+def _checkpoint_prefix_uri(cfg: DictConfig, launch_namespace: str) -> str:
+    """Return the ``r2://`` directory that mid-run checkpoints upload under.
+
+    The parent of :func:`_derive_checkpoint_uri`, plus the launch namespace, so
+    concurrent runs of one config cannot overwrite each other's ``last.ckpt``.
+
+    :param cfg: Hydra-composed train cfg forwarded to :func:`_derive_checkpoint_uri`.
+    :param launch_namespace: Collision-resistant identifier for one training launch.
+    :returns: The run-scoped ``r2://`` prefix (no trailing slash).
+    :raises ValueError: If a ``training.upload_checkpoints_uri`` override has no
+        key segment (e.g. ``r2://bucket``), which would collapse to a bad prefix.
+    """
+    uri = _derive_checkpoint_uri(cfg)
+    if uri.endswith("/"):
+        raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
+    prefix = uri.rsplit("/", 1)[0]
+    if not prefix.startswith("r2://") or prefix == "r2://":
+        raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
+    return f"{prefix}/{launch_namespace}"
+
+
+def _configure_checkpoint_durability(
+    cfg: DictConfig, callbacks: list[Callback], launch_namespace: str
+) -> None:
+    """Validate and configure opt-in crash-durable checkpoint mirroring.
+
+    :param cfg: Hydra config carrying the opt-in durability flag and destination.
+    :param callbacks: Callback list mutated in place; ModelCheckpoint enables crash saves.
+    :param launch_namespace: Collision-resistant identifier for one training launch.
+    :raises ValueError: If durability is enabled without exactly one checkpoint writer.
+    """
+    if not OmegaConf.select(cfg, "training.upload_checkpoints_during_training"):
+        return
+    model_checkpoints = [cb for cb in callbacks if isinstance(cb, ModelCheckpoint)]
+    if len(model_checkpoints) != 1:
+        raise ValueError(
+            "training.upload_checkpoints_during_training requires exactly one "
+            f"ModelCheckpoint; found {len(model_checkpoints)}"
+        )
+    prefix_uri = _checkpoint_prefix_uri(cfg, launch_namespace)
+    r2_io.ensure_r2_env_loaded()
+    model_checkpoint = model_checkpoints[0]
+    model_checkpoint.save_last = True
+    model_checkpoint.save_on_exception = True
+    callbacks.append(CheckpointUploader(prefix_uri, model_checkpoint))
+
+
+def _derive_probe_uri(cfg: DictConfig, launch_namespace: str) -> str:
+    """Return the launch-scoped ``r2://`` prefix for val-audio-probe snapshots.
+
+    :param cfg: Hydra-composed train cfg; reads ``r2.bucket`` and the run config ID.
+    :param launch_namespace: Collision-resistant identifier for one training launch.
+    :returns: The ``r2://`` snapshot prefix for this launch.
+    """
+    return f"r2://{cfg.r2.bucket}/probes/{resolve_run_config_id(cfg)}/{launch_namespace}"
+
+
+def _skip_auto_probe(reason: str) -> None:
+    """Warn why ``val_audio_probe: auto`` leaves the probe unwired.
+
+    :param reason: Missing prerequisite, phrased for the run log.
+    """
+    log.warning(f"val audio probe: {reason}; probe disabled (auto mode).")
+
+
+def _skip_auto_probe_or_raise(auto: bool, reason: str, error: str) -> None:
+    """Skip an auto-mode probe or reject an explicit-mode configuration.
+
+    :param auto: Whether the configured mode is ``"auto"``.
+    :param reason: Missing prerequisite, phrased for the run log.
+    :param error: Configuration error for explicit mode.
+    :raises ValueError: If explicit mode lacks the prerequisite.
+    """
+    if auto:
+        _skip_auto_probe(reason)
+        return
+    raise ValueError(error)
+
+
+def _validate_probe_spec_match(cfg: DictConfig) -> None:
+    """Reject a render spec that cannot decode the model's predictions.
+
+    :param cfg: Hydra config carrying the render and datamodule specs.
+    :raises ValueError: If a VST datamodule's spec differs from the render spec.
+    """
+    render_synth = SynthSpec.from_render_cfg(OmegaConf.select(cfg, "render"))
+    render_spec = None if render_synth is None else render_synth.param_spec_name
+    datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
+    if datamodule_spec is None or datamodule_spec == render_spec:
+        return
+
+    render_desc = "unset" if render_spec is None else repr(render_spec)
+    raise ValueError(
+        "the val audio probe must decode predictions with the model's spec, "
+        f"but render.param_spec_name is {render_desc} while "
+        f"datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
+        f"group (e.g. `render={datamodule_spec}`)."
+    )
+
+
+def _probe_render_settings(cfg: DictConfig) -> RenderConfig:
+    """Validate the composed render group for the audio-probe subprocess.
+
+    :param cfg: Hydra config carrying the composed render group.
+    :returns: The shared render configuration consumed by the renderer factory.
+    :raises TypeError: The Hydra render group does not resolve to a mapping.
+    :raises ValueError: The render group declares no synth identity.
+    """
+    values = OmegaConf.to_container(cfg.render, resolve=True)
+    if not isinstance(values, dict):
+        raise TypeError("cfg.render must resolve to a mapping")
+    synth = SynthSpec.from_render_cfg(cfg.render)
+    if synth is None:
+        raise ValueError("render group names no param spec; the audio probe cannot decode")
+    for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
+        values.pop(legacy_key, None)
+    values["synth"] = synth.model_dump()
+    return RenderConfig.model_validate(values)
+
+
+def _configure_val_audio_probe(
+    cfg: DictConfig, callbacks: list[Callback], launch_namespace: str
+) -> None:
+    """Append the validation audio probe when its mode and prerequisites allow.
+
+    Wired here rather than through the ``callbacks`` config group because the probe
+    needs ``cfg.render`` and the Python-resolved run config id, neither of which a
+    callback YAML can interpolate. An absent mode remains disabled for legacy config objects.
+
+    :param cfg: Hydra config carrying the probe mode, ``render`` group, and ``r2.bucket``.
+    :param callbacks: Callback list mutated in place.
+    :param launch_namespace: Collision-resistant identifier for one training launch.
+    :raises ValueError: If any condition holds:
+
+        - A present mode is not ``true``, ``false``, or ``"auto"``.
+        - The render spec cannot decode the model's predictions.
+        - The sample count is not a positive integer.
+        - Mode ``true`` lacks a render group or validation is disabled.
+
+        Mode ``"auto"`` skips the probe for the final condition.
+    :raises RuntimeError: Propagated from the R2 pre-flight under mode ``true``.
+    :raises OSError: Propagated from the R2 pre-flight under mode ``true``.
+    """
+    training = cfg.get("training")
+    if training is None or "val_audio_probe" not in training:
+        return
+    mode = OmegaConf.select(cfg, "training.val_audio_probe")
+    if mode is False:
+        return
+    auto = mode == "auto"
+    explicit = mode is True
+    if not auto and not explicit:
+        raise ValueError(f"training.val_audio_probe must be true, false, or 'auto'; got {mode!r}.")
+    if cfg.get("render") is None:
+        _skip_auto_probe_or_raise(
+            auto,
+            "no render group composed",
+            "training.val_audio_probe=true requires a render config group "
+            "(e.g. `render=surge_xt`); cfg.render is unset.",
+        )
+        return
+    # A composed render group states intent, so spec mismatches raise under auto too.
+    _validate_probe_spec_match(cfg)
+    # A validation-hooked probe wired into a validation-disabled run would silently
+    # stage nothing forever.
+    if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
+        _skip_auto_probe_or_raise(
+            auto,
+            "validation is disabled (trainer.limit_val_batches=0)",
+            "training.val_audio_probe=true requires validation to run, but "
+            "trainer.limit_val_batches is 0. Override it (e.g. "
+            "`trainer.limit_val_batches=1.0`) to enable the probe.",
+        )
+        return
+    num_samples = OmegaConf.select(cfg, "training.val_audio_probe_samples", default=5)
+    # bool is an int subclass, so `true` would otherwise pass as 1.
+    if isinstance(num_samples, bool) or not isinstance(num_samples, int) or num_samples < 1:
+        raise ValueError(
+            f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
+        )
+    settings = _probe_render_settings(cfg)
+    try:
+        r2_io.ensure_r2_env_loaded()
+    except (RuntimeError, OSError) as exc:
+        if auto:
+            _skip_auto_probe(f"R2 unavailable ({exc})")
+            return
+        raise
+    callbacks.append(
+        ValAudioProbe(
+            probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
+            probe_fn=partial(
+                run_audio_probe,
+                settings=settings,
+                upload_uri=_derive_probe_uri(cfg, launch_namespace),
+            ),
+            num_samples=num_samples,
+        )
+    )
 
 
 def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None:
@@ -114,7 +342,41 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None
     return uri
 
 
-def build_model_artifact(cfg: DictConfig, ckpt_uri: str | None = None) -> wandb.Artifact:
+def _checkpoint_metadata(trainer: Trainer, best_model_path: str, ckpt_uri: str) -> dict[str, Any]:
+    """Describe the checkpoint the model artifact's R2 reference points at.
+
+    W&B cannot reach R2's custom endpoint, so the ``checksum=False`` reference
+    renders as a 0-byte entry carrying no size, epoch, or score (#2424); this
+    metadata is the only way to identify the referenced checkpoint without
+    leaving W&B. Each key whose source is unavailable is omitted rather than
+    recorded as ``None``.
+
+    :param trainer: The finished trainer; supplies epoch/step and the checkpoint callback.
+    :param best_model_path: Local path of the checkpoint that was uploaded.
+    :param ckpt_uri: The ``r2://`` URI it was uploaded to.
+    :returns: ``artifact.metadata`` entries describing the referenced checkpoint.
+    """
+    metadata: dict[str, Any] = {
+        "ckpt_uri": ckpt_uri,
+        "epoch": trainer.current_epoch,
+        "global_step": trainer.global_step,
+    }
+    try:
+        metadata["ckpt_bytes"] = Path(best_model_path).stat().st_size
+    except OSError as exc:
+        log.warning(f"Checkpoint size unavailable for {best_model_path}: {exc}")
+    monitor = getattr(trainer.checkpoint_callback, "monitor", None)
+    score = getattr(trainer.checkpoint_callback, "best_model_score", None)
+    if monitor is not None:
+        metadata["monitor"] = monitor
+    if score is not None:
+        metadata["monitor_score"] = float(score)
+    return metadata
+
+
+def build_model_artifact(
+    cfg: DictConfig, ckpt_uri: str | None = None, ckpt_metadata: dict[str, Any] | None = None
+) -> wandb.Artifact:
     """Build the canonical ``model`` W&B artifact for a training run.
 
     Names the artifact ``model-{config_id}`` (type ``model``) per
@@ -130,12 +392,14 @@ def build_model_artifact(cfg: DictConfig, ckpt_uri: str | None = None) -> wandb.
     :param cfg: Hydra-composed train cfg; ``task_name``/experiment determine the name.
     :param ckpt_uri: The ``r2://`` URI the checkpoint was uploaded to, or ``None``
         for a lineage-only artifact.
+    :param ckpt_metadata: :func:`_checkpoint_metadata` entries identifying the
+        referenced checkpoint, merged into the artifact metadata.
     :returns: An unlogged ``wandb.Artifact`` ready for ``log_artifact``.
     """
     artifact = wandb.Artifact(
         name=f"model-{resolve_run_config_id(cfg)}",
         type="model",
-        metadata={"git_sha": resolve_git_sha()},
+        metadata={"git_sha": resolve_git_sha(), **(ckpt_metadata or {})},
     )
     if ckpt_uri:
         artifact.add_reference(r2_io.to_s3_uri(ckpt_uri), checksum=False)
@@ -155,7 +419,12 @@ def _has_wandb_logger(loggers: list[Logger]) -> bool:
     return any(isinstance(lg, WandbLogger) for lg in loggers)
 
 
-def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | None) -> None:
+def _log_model_artifact(
+    loggers: list[Logger],
+    cfg: DictConfig,
+    ckpt_uri: str | None,
+    ckpt_metadata: dict[str, Any] | None = None,
+) -> None:
     """Log the canonical ``model`` artifact to each ``WandbLogger`` in ``loggers``.
 
     A wandb failure warns and is swallowed so artifact logging never aborts a
@@ -166,14 +435,53 @@ def _log_model_artifact(loggers: list[Logger], cfg: DictConfig, ckpt_uri: str | 
     :param cfg: Train cfg forwarded to :func:`build_model_artifact`.
     :param ckpt_uri: The uploaded checkpoint URI to reference, or ``None`` for
         a lineage-only artifact.
+    :param ckpt_metadata: :func:`_checkpoint_metadata` entries identifying the
+        referenced checkpoint.
     """
     for lg in loggers:
         if not isinstance(lg, WandbLogger):
             continue
         try:
-            lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri))
+            lg.experiment.log_artifact(build_model_artifact(cfg, ckpt_uri, ckpt_metadata))
         except Exception as exc:  # noqa: BLE001 — wandb artifact failure must not abort training
             log.warning(f"_log_model_artifact failed on {type(lg).__name__}: {exc}")
+
+
+def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
+    """Discover the ``training.resume`` checkpoint and point ``cfg.ckpt_path`` at it.
+
+    On a hit with a recoverable W&B run id, also marks the wandb logger for
+    run continuity (``apply_wandb_resume_continuity``) so the reused id
+    continues the original run page. Propagates invalid resume-config errors.
+
+    :param cfg: Hydra-composed train cfg, mutated in place on a discovery hit.
+    :param config_id: Run identity keying discovery and error messages.
+    :returns: The recovered W&B run id, or ``None`` when resume is disabled,
+        nothing was found, or the checkpoint's launch had no wandb run.
+    :raises RuntimeError: When ``training.resume=require`` finds no checkpoint.
+    """
+    mode = resolve_resume_mode(cfg)
+    if mode is None:
+        return None
+    diagnostics: list[str] = []
+    decision = discover_resume_checkpoint(cfg, config_id, diagnostics=diagnostics)
+    if decision is None:
+        if mode == "require":
+            diagnostic_detail = f" R2 recovery degraded: {diagnostics[-1]}." if diagnostics else ""
+            raise RuntimeError(
+                f"training.resume=require found no checkpoint for config_id {config_id!r} "
+                f"in local run dirs or R2 mirrors.{diagnostic_detail}"
+            )
+        log.info("training.resume=auto found no checkpoint for %r; starting fresh.", config_id)
+        return None
+    cfg.ckpt_path = str(decision.ckpt_path)
+    log.info(
+        f"Auto-resume: {decision.source} checkpoint {decision.ckpt_path} "
+        f"(recovered wandb run id: {decision.wandb_run_id})"
+    )
+    if decision.wandb_run_id:
+        apply_wandb_resume_continuity(cfg)
+    return decision.wandb_run_id
 
 
 @task_wrapper
@@ -185,6 +493,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
+    :raises SystemExit: With status 143 after Lightning handles SIGTERM during fit.
     """
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
@@ -195,18 +504,25 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     except Exception:  # noqa: BLE001 — resolution failures must not abort training
         _cfg_yaml = OmegaConf.to_yaml(cfg)
     log.debug("Resolved Hydra config:\n%s", _cfg_yaml)
+    # Before any instantiation work: a require-mode miss or a resume/ckpt_path
+    # config error must fail the launch fast.
+    config_id = resolve_run_config_id(cfg)
+    recovered_run_id = _apply_auto_resume(cfg, config_id)
+    run_id = recovered_run_id or make_wandb_run_id(config_id)
+    launch_namespace = _make_launch_namespace(run_id)
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
-
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
+    _configure_checkpoint_durability(cfg, callbacks, launch_namespace)
+    _configure_val_audio_probe(cfg, callbacks, launch_namespace)
 
     log.info("Instantiating loggers...")
-    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "training")
+    pin_wandb_run_id(cfg, run_id, "training")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
@@ -234,16 +550,22 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # its input artifact in the W&B DAG (storage-provenance-spec §5). A test-only run
     # (train: False, test: True) consumes the dataset too, so gate on either.
     if cfg.get("train") or cfg.get("test"):
-        use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+        record_input_lineage(logger, *_consumed_artifact_refs(cfg))
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.get("ckpt_path"),
-            weights_only=False,
-        )
+        try:
+            with checkpoint_migration_hint(cfg.get("ckpt_path")):
+                trainer.fit(
+                    model=model,
+                    datamodule=datamodule,
+                    ckpt_path=cfg.get("ckpt_path"),
+                    weights_only=False,
+                )
+        except SystemExit:
+            if trainer.received_sigterm:
+                raise SystemExit(_SHELL_SIGNAL_EXIT_OFFSET + signal.SIGTERM) from None
+            raise
 
     train_metrics = trainer.callback_metrics
 
@@ -269,7 +591,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if trainer.is_global_zero and _has_wandb_logger(logger):
         best_model_path = getattr(trainer.checkpoint_callback, "best_model_path", "") or ""
         ckpt_uri = _upload_best_checkpoint(cfg, best_model_path)
-        _log_model_artifact(logger, cfg, ckpt_uri)
+        ckpt_metadata = (
+            _checkpoint_metadata(trainer, best_model_path, ckpt_uri) if ckpt_uri else None
+        )
+        _log_model_artifact(logger, cfg, ckpt_uri, ckpt_metadata)
 
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}

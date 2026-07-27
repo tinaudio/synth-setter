@@ -37,18 +37,21 @@ def fake_r2_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
 
 def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dict[str, Any]:
-    """Return DatasetSpec kwargs that build a 48-shard hdf5 spec by default."""
+    """Return DatasetSpec kwargs that build a 48-shard lance spec by default."""
     return {
         "task_name": "ci-smoke-test",
-        "output_format": "hdf5",
+        "output_format": "lance",
         "train_val_test_sizes": [440000, 20000, 20000],
         "base_seed": 42,
         "r2": {"bucket": "intermediate-data"},
         "render": {
-            "plugin_path": plugin_path,
-            "preset_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": plugin_path,
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,

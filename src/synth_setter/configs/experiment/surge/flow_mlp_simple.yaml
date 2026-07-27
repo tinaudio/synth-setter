@@ -2,14 +2,11 @@
 
 defaults:
   - /experiment/surge/base
-  - override /model: surge_flowmlp
+  - override /model: vst_flowmlp
   - _self_
 
 experiment_name: surge-simple-onehot
 run_name: flowmlp
-
-model:
-  num_params: 92
 
 callbacks:
   plot_proj_ii: null

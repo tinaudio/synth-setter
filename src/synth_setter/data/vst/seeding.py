@@ -17,8 +17,8 @@ _SEED_BYTES = 8  # 64-bit seed; np.random.default_rng accepts [0, 2**64).
 def seed_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> int:
     """Derive a stable 64-bit seed from ``(master_seed, sample_idx, attempt)``.
 
-    :param master_seed: Per-shard master seed (``ShardSpec.seed``).
-    :param sample_idx: Absolute row index within the shard.
+    :param master_seed: Dataset or split master seed.
+    :param sample_idx: Stable logical row index within that seed stream.
     :param attempt: Retry attempt, folded into the seed so retries stay deterministic.
     :returns: A seed in ``[0, 2**64)``.
     """
@@ -31,8 +31,8 @@ def seed_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> int:
 def rng_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> np.random.Generator:
     """Build a ``numpy`` ``Generator`` seeded by :func:`seed_for_sample`.
 
-    :param master_seed: Per-shard master seed.
-    :param sample_idx: Absolute row index within the shard.
+    :param master_seed: Dataset or split master seed.
+    :param sample_idx: Stable logical row index within that seed stream.
     :param attempt: Retry attempt for the row.
     :returns: A fresh generator deterministic in ``(master_seed, sample_idx, attempt)``.
     """

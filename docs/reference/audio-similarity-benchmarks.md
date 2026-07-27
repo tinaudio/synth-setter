@@ -17,7 +17,7 @@ mkdocs site under `/dev/bench/`, and publishes via
 
 The slow VST tests in
 [`tests/data/vst/test_generate_vst_dataset.py`](../../tests/data/vst/test_generate_vst_dataset.py)
-exercise `make_hdf5_dataset` round-trips and assert that two independent renders
+exercise `make_lance_dataset` round-trips and assert that two independent renders
 of the same parameters land within phase-robust tolerances. Per-run
 metric values typically come in well below the assertion thresholds, so
 the assertions only catch _gross_ regressions (silence, wrong patch).
@@ -58,15 +58,15 @@ safety net; the chart is the early warning.
 The chart's left-hand legend lets you toggle individual metric series on
 and off; the dropdown at the top selects the dashboard ("bucket").
 
-## Two dashboards
+## Three dashboards
 
-The workflow publishes two independent dashboards, each representing a
+The workflow publishes three independent dashboards, each representing a
 different question.
 
 ### `VST noise floor (1 preset N renders)`
 
 Sourced from `test_datasets_from_hardcoded_params_are_identical`. Both
-stages of `make_hdf5_dataset` run with the same hardcoded
+stages of `make_lance_dataset` run with the same hardcoded
 `_HARDCODED_*_PARAMS` patch via `_patched_sample`, so all
 `2 × num_samples` renders use _identical_ inputs. The per-pair metrics
 plus an all-pairs cross-comparison expose every-other-render variance —
@@ -98,9 +98,30 @@ This view is _broader_ in patch coverage but noisier between runs (each
 run picks a different random sample), so trend signal is lower per
 point but covers more of the patch space than the hardcoded fixture.
 
+### `Surge host parity and throughput`
+
+Sourced from `test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks`.
+Pedalboard, DawDreamer, and SurgePy each render 30 rows from the same native
+Surge patch, normalized parameter vector, and MIDI event through the production
+Lance writer and reader. Every backend pair is checked with MSS, wMFCC, SOT,
+RMS-envelope cosine, and persisted-mel RMSE.
+
+Bucket name: `Surge host parity and throughput`<br>
+JSON file: `surge-host-parity.json`<br>
+Metric name prefix: `surge-host-parity/`
+
+The workflow also retains an evaluator-friendly `surge-host-parity-comparison`
+artifact for 14 days. Trusted main-branch runs copy the same directory with
+checksums to
+`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. It contains
+180 evaluator-layout WAV files, 90 persisted mel arrays, 90 mel PNG previews,
+normalized parameters,
+per-sample metrics, worst-case metrics, thresholds, and provenance. Pull requests
+never receive R2 credentials.
+
 ## Metric series
 
-Both buckets emit the per-row "round-trip" series (five distance metrics
+The two noise-floor buckets emit the per-row "round-trip" series (five distance metrics
 plus the two non-distance sentinels `num-samples` and
 `wall-clock-seconds-per-render`):
 
@@ -221,10 +242,10 @@ To add a third bucket (e.g. `VST noise floor (sustained note)`):
 1. Add a test that calls `_assert_round_trip_matches(..., benchmark_name_prefix="vst-noise-floor-sustained-note")`.
 2. Add a Surface step entry that copies
    `vst-noise-floor-sustained-note.json` out of the volume.
-3. Add a third publish step that reads that file with a matching
+3. Add another publish step that reads that file with a matching
    `name:`.
 
-The two existing dashboards share `benchmark-data-dir-path: dev/bench`
+The existing dashboards share `benchmark-data-dir-path: dev/bench`
 so they all write to the same `data.js`; the chart UI just adds a new
 selectable bucket.
 

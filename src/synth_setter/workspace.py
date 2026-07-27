@@ -52,7 +52,7 @@ def operator_workspace() -> Path:
 
     :returns: Absolute, resolved workspace path.
     """
-    override = os.environ.get(_WORKSPACE_ENV)
+    override = os.environ.get(_WORKSPACE_ENV, "").strip()
     if override:
         workspace = Path(override).resolve()
     else:

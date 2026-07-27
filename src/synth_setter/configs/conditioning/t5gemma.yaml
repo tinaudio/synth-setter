@@ -1,0 +1,18 @@
+# @package _global_
+
+# Frozen offline T5Gemma parameter-text embeddings from the `t5gemma` Lance column.
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: t5gemma
+    input_shape: [768, 256]
+  encoder:
+    embed_dim: 768
+    max_seq_len: 256
+
+datamodule:
+  conditioning:
+    column: t5gemma
+    input_shape: [768, 256]

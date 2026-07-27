@@ -1,5 +1,4 @@
+# Spec-identity override; generic render knobs inherit from surge_xt.
 defaults:
   - surge_xt
-
-param_spec_name: surge_simple
-preset_path: presets/surge-simple.vstpreset
+  - override synth: surge_simple

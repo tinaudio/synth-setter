@@ -21,16 +21,30 @@ from synth_setter.data.vst.registration import (
     checkout_relative_path,
     find_repo_root,
     registration_paths,
+    preset_repo_path,
     registry_with_spec,
+    synth_group_yaml,
+    synths_with_spec,
     render_config_yaml,
 )
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
 REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
+_RESERVED_RENDER_CONFIG_NAMES = (
+    "obxf",
+    "surge_4",
+    "surge_simple",
+    "surge_xt",
+    "torchsynth_adsr",
+    "torchsynth_full",
+    "torchsynth_simple",
+    "vst",
+    "VST",
+)
 
 
 def _dict_keys(source: str, name: str) -> list[str]:
-    """Extract the literal string keys of module-level dict ``name`` from ``source``.
+    """Extract string or ``ParamSpecName`` keys from module-level dict ``name``.
 
     :param source: Python module source.
     :param name: Name of the module-level dict assignment to read.
@@ -43,23 +57,29 @@ def _dict_keys(source: str, name: str) -> list[str]:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         if any(isinstance(t, ast.Name) and t.id == name for t in targets):
             assert isinstance(node.value, ast.Dict)
-            return [ast.literal_eval(k) for k in node.value.keys if k is not None]
+            keys: list[str] = []
+            for key in node.value.keys:
+                if key is None:
+                    continue
+                if isinstance(key, ast.Call):
+                    assert isinstance(key.func, ast.Name) and key.func.id == "ParamSpecName"
+                    key = key.args[0]
+                keys.append(ast.literal_eval(key))
+            return keys
     raise AssertionError(f"no module-level dict named {name} in source")
 
 
-def test_registry_with_spec_adds_key_to_both_dicts() -> None:
-    """The transform registers the spec in ``param_specs`` and ``preset_paths``."""
+def test_registry_with_spec_adds_the_param_spec_key() -> None:
+    """The transform registers the spec in ``_param_specs``.
+
+    ``plugin_state_paths`` is derived from ``synth_spec.SYNTHS`` and is no longer
+    written here — ``synths_with_spec`` owns the preset path.
+    """
     result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
 
-    assert "fake_synth" in _dict_keys(result, "param_specs")
-    assert "fake_synth" in _dict_keys(result, "preset_paths")
+    assert "fake_synth" in _dict_keys(result, "_param_specs")
 
 
-def test_registry_with_spec_maps_preset_to_conventional_path() -> None:
-    """The ``preset_paths`` entry points at ``presets/<name>-base.vstpreset``."""
-    result = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
-
-    assert '"fake_synth": "presets/fake_synth-base.vstpreset",' in result
 
 
 def test_registry_with_spec_imports_the_generated_module() -> None:
@@ -117,10 +137,165 @@ def test_registry_with_spec_already_registered_identically_is_a_noop() -> None:
     assert registry_with_spec(once, "fake_synth") == once
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC\n",
+            "",
+        ),
+        (
+            '    ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,\n',
+            "",
+        ),
+        (
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC",
+            "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC",
+        ),
+        (
+            'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC',
+            'ParamSpecName("fake_synth"): SURGE_XT_PARAM_SPEC',
+        ),
+    ],
+)
+def test_registry_with_spec_partial_or_conflicting_wiring_raises(old: str, new: str) -> None:
+    """A missing or conflicting generated component raises ValueError.
+
+    :param old: Exact generated component to remove or replace.
+    :param new: Replacement component, or empty text for a missing component.
+    """
+    registered = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
+    malformed = registered.replace(old, new)
+    assert malformed != registered
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
 def test_registry_with_spec_conflicting_existing_key_raises() -> None:
     """A spec name already registered by hand (surge_xt) is rejected."""
     with pytest.raises(ValueError, match="surge_xt"):
         registry_with_spec(REGISTRY_SOURCE, "surge_xt")
+
+
+def test_registry_with_spec_all_components_conflicting_raises() -> None:
+    """Conflicts in every generated component cannot masquerade as a new spec."""
+    registered = registry_with_spec(REGISTRY_SOURCE, "fake_synth")
+    malformed = (
+        registered.replace(
+            "from synth_setter.data.vst.fake_synth_param_spec import FAKE_SYNTH_PARAM_SPEC",
+            "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC",
+        )
+        .replace(
+            '    ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC,',
+            '    ParamSpecName("fake_synth"): SURGE_XT_PARAM_SPEC,',
+        )
+        .replace(
+            '    "fake_synth": "presets/fake_synth-base.vstpreset",',
+            '    "fake_synth": "presets/other.vstpreset",',
+        )
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_conflicting_commented_import_raises() -> None:
+    """An inline comment cannot hide an import that rebinds the generated constant."""
+    malformed = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC  # conflict",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_single_quoted_conflicting_keys_raise() -> None:
+    """Python-equivalent quoting cannot hide existing registry keys."""
+    malformed = REGISTRY_SOURCE.replace(
+        '    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,',
+        "    ParamSpecName('fake_synth'): SURGE_4_PARAM_SPEC,\n"
+        '    ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,',
+    ).replace(
+        '    "surge_xt": "presets/surge-base.vstpreset",',
+        "    'fake_synth': 'presets/other.vstpreset',\n"
+        '    "surge_xt": "presets/surge-base.vstpreset",',
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(malformed, "fake_synth")
+
+
+def test_registry_with_spec_ignores_function_local_import() -> None:
+    """A nested constant binding does not conflict with module registry wiring."""
+    source = (
+        REGISTRY_SOURCE
+        + "\ndef helper():\n"
+        + "    from synth_setter.data.vst.other_param_spec import FAKE_SYNTH_PARAM_SPEC\n"
+    )
+
+    result = registry_with_spec(source, "fake_synth")
+
+    assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC' in result
+
+
+def test_registry_with_spec_conflicting_import_alias_raises() -> None:
+    """An alias binding the generated constant is conflicting wiring."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
+
+
+def test_registry_with_spec_ignores_harmless_import_alias() -> None:
+    """Aliasing the generated symbol away does not bind its registry constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "from synth_setter.data.vst.other_param_spec import "
+        "FAKE_SYNTH_PARAM_SPEC as OTHER_PARAM_SPEC",
+    )
+
+    result = registry_with_spec(source, "fake_synth")
+
+    assert 'ParamSpecName("fake_synth"): FAKE_SYNTH_PARAM_SPEC' in result
+
+
+def test_registry_with_spec_conditional_import_alias_raises() -> None:
+    """A module-scope conditional can still bind the generated constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "if True:\n"
+        "    from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
+
+
+def test_registry_with_spec_exception_handler_import_alias_raises() -> None:
+    """An exception handler at module scope can bind the generated constant."""
+    source = REGISTRY_SOURCE.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n\n"
+        "try:\n"
+        "    pass\n"
+        "except Exception:\n"
+        "    from synth_setter.data.vst.other_param_spec import "
+        "SURGE_4_PARAM_SPEC as FAKE_SYNTH_PARAM_SPEC",
+    )
+
+    with pytest.raises(ValueError, match="different wiring"):
+        registry_with_spec(source, "fake_synth")
 
 
 def test_registry_with_spec_unrecognized_source_raises() -> None:
@@ -129,34 +304,46 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_pins_synth_identity_over_surge_xt_defaults() -> None:
-    """The emitted config inherits surge_xt knobs and overrides the identity fields."""
-    text = render_config_yaml(
-        "fake_synth", plugin_path="plugins/fake.vst3", renderer_version="9.9.9"
-    )
+def test_render_config_yaml_selects_the_synth_group_over_vst_defaults() -> None:
+    """The emitted config inherits generic VST knobs and selects its synth group."""
+    cfg = yaml.safe_load(render_config_yaml("fake_synth"))
 
-    cfg = yaml.safe_load(text)
-    assert cfg["defaults"] == ["surge_xt"]
-    assert cfg["plugin_path"] == "plugins/fake.vst3"
-    assert cfg["preset_path"] == "presets/fake_synth-base.vstpreset"
-    assert cfg["param_spec_name"] == "fake_synth"
-    assert cfg["renderer_version"] == "9.9.9"
+    assert cfg == {"defaults": ["vst", {"synth": "fake_synth"}, "_self_"]}
 
 
-def test_render_config_yaml_quotes_arbitrary_plugin_path() -> None:
+def test_synth_group_yaml_quotes_arbitrary_plugin_path() -> None:
     """A plugin path with YAML-hostile characters round-trips through safe_load."""
     hostile = '/tmp/odd: "name" #1.vst3'  # noqa: S108 — literal fixture path, never opened
 
-    text = render_config_yaml("fake_synth", plugin_path=hostile, renderer_version="1.0")
+    text = synth_group_yaml("fake_synth", plugin_path=hostile, synth_version="9.9.9")
 
     assert yaml.safe_load(text)["plugin_path"] == hostile
 
 
-def test_render_config_yaml_preserves_reserved_word_spec_name_as_string() -> None:
+def test_synth_group_yaml_owns_the_synth_version() -> None:
+    """The generated identity group owns the artifact version pin."""
+    text = synth_group_yaml(
+        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
+
+    assert yaml.safe_load(text)["synth_version"] == "9.9.9"
+
+
+def test_synth_group_yaml_preserves_reserved_word_spec_name_as_string() -> None:
     """A spec name that is a YAML 1.1 boolean literal stays a string after parsing."""
-    text = render_config_yaml("on", plugin_path="plugins/on.vst3", renderer_version="1.0")
+    text = synth_group_yaml("on", plugin_path="plugins/fake.vst3", synth_version="1.0")
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
+
+
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: str) -> None:
+    """A shipped render-group name cannot compose itself.
+
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        render_config_yaml(spec_name)
 
 
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
@@ -220,6 +407,19 @@ def test_checkout_relative_path_relative_input_resolves_against_cwd(
     assert checkout_relative_path("plugins/Dexed.vst3", tmp_path) == "plugins/Dexed.vst3"
 
 
+@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
+def test_registration_paths_reserved_render_name_raises_value_error(
+    tmp_path: Path, spec_name: str
+) -> None:
+    """A shipped render-group name cannot become synth artifacts.
+
+    :param tmp_path: Stands in for the checkout root.
+    :param spec_name: Exact or case-variant reserved group name.
+    """
+    with pytest.raises(ValueError, match="reserved for a render config"):
+        registration_paths(tmp_path, spec_name)
+
+
 def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:
     """Destinations follow the spec-module / preset / csv / render-config convention.
 
@@ -254,3 +454,147 @@ def test_find_repo_root_outside_a_checkout_returns_none(tmp_path: Path) -> None:
     :param tmp_path: A bare directory that is not a checkout.
     """
     assert find_repo_root(tmp_path) is None
+
+
+_SYNTH_SPEC_SOURCE = '''"""Doc."""
+
+from types import MappingProxyType
+
+_synth_rows: dict[str, tuple[str, str, str, str]] = {
+    "surge_xt": (
+        "surge_xt",
+        "plugins/Surge XT.vst3",
+        "presets/surge-base.vstpreset",
+        "1.3.4",
+    ),
+}
+
+SYNTHS = MappingProxyType({})
+'''
+
+
+def test_synths_with_spec_adds_one_row_for_a_new_synth() -> None:
+    """A newly registered synth gains a versioned identity row in the table."""
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
+
+    assert '    "fake_synth": (' in result
+    assert '        "plugins/fake.vst3",' in result
+    assert '        "9.9.9",' in result
+
+
+def test_synths_with_spec_row_is_formatter_stable() -> None:
+    """Generated rows retain their structural anchor after ruff-format."""
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
+
+    formatted = subprocess.run(
+        [sys.executable, "-m", "ruff", "format", "--stdin-filename", "synth_spec.py", "-"],
+        input=result,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    assert formatted == result
+
+
+def test_synths_with_spec_records_the_conventional_preset_path() -> None:
+    """The row's preset matches what registration writes to disk."""
+    result = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
+
+    assert preset_repo_path("fake_synth") in result
+
+
+def test_synths_with_spec_reapplied_identically_is_a_noop() -> None:
+    """``--force`` re-runs converge instead of duplicating or raising."""
+    once = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
+
+    twice = synths_with_spec(
+        once, "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
+
+    assert twice == once
+
+
+def test_synths_with_spec_conflicting_wiring_raises() -> None:
+    """Re-registering a name against different wiring is refused."""
+    once = synths_with_spec(
+        _SYNTH_SPEC_SOURCE,
+        "fake_synth",
+        plugin_path="plugins/fake.vst3",
+        synth_version="9.9.9",
+    )
+
+    with pytest.raises(ValueError, match="already registered"):
+        synths_with_spec(
+            once,
+            "fake_synth",
+            plugin_path="plugins/other.vst3",
+            synth_version="9.9.9",
+        )
+
+
+def test_synths_with_spec_nonliteral_existing_row_reports_conflict() -> None:
+    """Dynamic existing wiring receives the same actionable conflict error."""
+    source = _SYNTH_SPEC_SOURCE.replace(
+        '''    "surge_xt": (
+        "surge_xt",
+        "plugins/Surge XT.vst3",
+        "presets/surge-base.vstpreset",
+        "1.3.4",
+    ),''',
+        '    "surge_xt": existing_wiring,',
+    )
+
+    with pytest.raises(ValueError, match="already registered"):
+        synths_with_spec(
+            source,
+            "surge_xt",
+            plugin_path="plugins/Surge XT.vst3",
+            synth_version="1.3.4",
+        )
+
+
+def test_synths_with_spec_without_the_table_anchor_raises() -> None:
+    """A table whose dict anchor is gone fails loudly rather than silently no-op."""
+    with pytest.raises(ValueError, match="_synth_rows"):
+        synths_with_spec(
+            '"""Doc."""\n',
+            "fake_synth",
+            plugin_path="plugins/fake.vst3",
+            synth_version="9.9.9",
+        )
+
+
+def test_synth_group_yaml_states_the_full_identity() -> None:
+    """The generated group carries every field ``SynthSpec`` requires."""
+    yaml_text = synth_group_yaml(
+        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
+    )
+
+    assert yaml.safe_load(yaml_text) == {
+        "name": "fake_synth",
+        "param_spec_name": "fake_synth",
+        "plugin_path": "plugins/fake.vst3",
+        "plugin_state_path": preset_repo_path("fake_synth"),
+        "synth_version": "9.9.9",
+    }

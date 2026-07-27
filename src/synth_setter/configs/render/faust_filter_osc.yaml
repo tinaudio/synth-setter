@@ -1,0 +1,7 @@
+# Spec-identity override; generic render knobs inherit from faust_bright_organ.
+defaults:
+  - faust_bright_organ
+  - override synth: faust_filter_osc
+  - _self_
+
+channels: 1

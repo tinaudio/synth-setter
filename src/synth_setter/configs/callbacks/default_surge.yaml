@@ -1,29 +1,4 @@
+# Archived run configs keep their stable callbacks=default_surge contract.
 defaults:
-  - model_checkpoint
-  - lr_monitor
-  # - early_stopping
-  - model_summary
-  - rich_progress_bar
-  # - plot_loss
-  # - plot_pos_enc
-  # - plot_proj
-  - plot_projii
+  - default_vst
   - _self_
-
-model_checkpoint:
-  dirpath: ${paths.output_dir}/checkpoints
-  filename: "epoch_{epoch:03d}"
-  monitor: "val/param_mse"
-  mode: min
-  save_last: True
-  auto_insert_metric_name: False
-  every_n_train_steps: 5_000
-
-# early_stopping:
-#   monitor: "val/chamfer"
-#   patience: 50
-#   mode: "min"
-
-plot_proj_ii:
-  after_val: false
-  every_n_steps: 5_000

@@ -43,13 +43,13 @@ variable "synth_setter_git_ref" {
 
 variable "python_version" {
   type        = string
-  default     = "3.11"
+  default     = "3.12.13"
   description = "Python interpreter version installed and pinned via uv."
 }
 
 variable "uv_version" {
   type        = string
-  default     = "0.11.2"
+  default     = "0.11.28"
   description = "uv version installed via Astral's versioned installer (https://astral.sh/uv/<version>/install.sh). Keep in sync with docker/ubuntu22_04/Dockerfile (`ghcr.io/astral-sh/uv:<version>`) so Tart and Docker dev-base resolve identical wheels via `uv sync --frozen`."
 }
 

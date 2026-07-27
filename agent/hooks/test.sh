@@ -14,6 +14,12 @@
 # from the settings.json wiring perspective.
 set -euo pipefail
 
+# Ambient gate overrides (agent sessions export e.g. REVIEW_COMMENT_GATE=warn)
+# would flip cases that assert the hooks' defaults; each case sets its own.
+readonly GATE_OVERRIDE_ENV_VARS=(PR_READINESS_GATE PR_TITLE_GATE REVIEW_BLOCK_GATE
+                                 REVIEW_COMMENT_GATE REVIEW_MAX_LAG WORKTREE_GUARD_MODE)
+unset "${GATE_OVERRIDE_ENV_VARS[@]}"
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
@@ -33,7 +39,10 @@ cp agent/hooks/_lib.sh \
    agent/hooks/pr-readiness-stop.sh \
    agent/hooks/worktree-post-setup.sh \
    "$SANDBOX/agent/hooks/"
-cp agent/_shared/review_sentinel.py "$SANDBOX/agent/_shared/"
+cp agent/_shared/review_sentinel.py \
+   agent/_shared/pr_command_classifier.py \
+   agent/_shared/pr_readiness_probe.sh \
+   "$SANDBOX/agent/_shared/"
 cd "$SANDBOX"
 git init -q
 git config user.email test@test
@@ -69,25 +78,67 @@ fi
 echo "# STUB headless agent output"
 echo "# prompt was: $*"
 EOF
-# `gh` stub: $GH_STUB_PR governs `gh pr view`'s number output. When
-# $GH_STUB_LOG is set, every invocation appends its argv there so tests can
-# assert explicit-branch arg passing (`gh pr view <branch>`).
-# pr-readiness-stop.sh adds two more knobs: $GH_STUB_CHECKS_EXIT is the exit
-# code for `gh pr checks` (0 = green; non-zero = failing/pending), and
-# $GH_STUB_MERGEABLE is the value `gh pr view --json mergeable` reports.
+# GH_STUB_PR/LOG configure PR lookup and argv capture.
+# PR-readiness GH_STUB_* variables configure simulated GitHub responses.
 cat > "$STUBS/gh" <<'EOF'
 #!/usr/bin/env bash
 if [[ -n "${GH_STUB_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$GH_STUB_LOG"
 fi
 if [[ "$1" == "pr" && "$2" == "checks" ]]; then
+  if [[ "$*" == *"--json"* ]]; then
+    if [[ "${GH_STUB_CHECKS_UNSUPPORTED:-0}" == "1" ]]; then
+      echo "unknown flag: --json" >&2
+      exit 1
+    elif [[ -n "${GH_STUB_CHECKS_MESSAGE:-}" ]]; then
+      printf '%s\n' "$GH_STUB_CHECKS_MESSAGE"
+    elif [[ -n "${GH_STUB_CHECKS_JSON:-}" ]]; then
+      printf '%s\n' "$GH_STUB_CHECKS_JSON"
+    elif [[ "${GH_STUB_CHECKS_EXIT:-0}" == "0" ]]; then
+      printf '%s%s\n' \
+        '[{"bucket":"pass","link":"https://example.test/pass",' \
+        '"name":"tests","state":"SUCCESS"}]'
+    else
+      printf '%s%s\n' \
+        '[{"bucket":"fail","link":"https://example.test/fail",' \
+        '"name":"tests","state":"FAILURE"}]'
+    fi
+  fi
   exit "${GH_STUB_CHECKS_EXIT:-0}"
 fi
-if [[ "$1" == "pr" && "$2" == "view" ]]; then
-  if [[ "$*" == *"mergeable"* ]]; then
-    echo "${GH_STUB_MERGEABLE:-MERGEABLE}"
-    exit 0
+if [[ "$1" == "api" && "$2" == "graphql" ]]; then
+  # --paginate concatenates one JSON doc per page; emit a second doc when
+  # $GH_STUB_REVIEW_THREADS_PAGE2 is set so pagination handling is testable.
+  printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":%s}}}}}\n' \
+    "${GH_STUB_REVIEW_THREADS:-[]}"
+  if [[ -n "${GH_STUB_REVIEW_THREADS_PAGE2:-}" ]]; then
+    printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":%s}}}}}\n' \
+      "${GH_STUB_REVIEW_THREADS_PAGE2}"
   fi
+  exit 0
+fi
+if [[ "$1" == "api" && "$2" == *"/pulls/"* ]]; then
+  case "$2" in
+    *"/comments"*) printf '%s\n' "${GH_STUB_PULL_COMMENTS:-[]}" ;;
+    *"/reviews"*) printf '%s\n' "${GH_STUB_PULL_REVIEWS:-[]}" ;;
+    *) printf '[]\n' ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"statusCheckRollup"* ]]; then
+  printf '{"statusCheckRollup":%s}\n' "${GH_STUB_STATUS_ROLLUP_JSON:-[]}"
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" && "$*" == *"headRefOid"* ]]; then
+  if [[ "${GH_STUB_PR_VIEW_JSON_EXIT:-0}" != "0" ]]; then
+    echo "stub: pr view failure" >&2
+    exit "${GH_STUB_PR_VIEW_JSON_EXIT}"
+  fi
+  printf '{"state":"%s","mergeable":"%s","headRefOid":"%s","author":{"login":"%s"},"url":"https://github.com/testorg/testrepo/pull/42"}\n' \
+    "${GH_STUB_PR_STATE:-OPEN}" "${GH_STUB_MERGEABLE:-MERGEABLE}" "${GH_STUB_HEAD:-abc1234def567890}" "${GH_STUB_PR_AUTHOR:-pr-author}"
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
   if [[ -n "${GH_STUB_PR:-}" ]]; then
     echo "${GH_STUB_PR}"
     exit 0
@@ -97,7 +148,21 @@ if [[ "$1" == "pr" && "$2" == "view" ]]; then
 fi
 exit 0
 EOF
-chmod +x "$STUBS/claude" "$STUBS/gh"
+# `codex` stub: mirrors the claude stub's argv capture so run_agent_prompt's
+# model-pin tests can assert the resolved `codex exec --model <tier>` flag.
+cat > "$STUBS/codex" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${CODEX_STUB_SLEEP_SECS:-}" ]]; then
+  sleep "$CODEX_STUB_SLEEP_SECS"
+fi
+if [[ "${CODEX_STUB_FAIL:-0}" == "1" ]]; then
+  echo "simulated headless codex agent failure" >&2
+  exit 3
+fi
+echo "# STUB headless codex output"
+echo "# args were: $*"
+EOF
+chmod +x "$STUBS/claude" "$STUBS/gh" "$STUBS/codex"
 export PATH="$STUBS:$PATH"
 
 # ---------------------------------------------------------------------------
@@ -180,6 +245,20 @@ assert() {
 last_exit_line() {
   printf '%s\n' "$1" | tail -1
 }
+
+# ===========================================================================
+# harness hermeticity
+# ===========================================================================
+
+T_harness_gate_override_env_scrubbed() {
+  # Canary for the startup unset, not a hook test: it can only fail when the
+  # calling session actually exports an override (as agent sessions do).
+  local var
+  for var in "${GATE_OVERRIDE_ENV_VARS[@]}"; do
+    [[ -z "${!var:-}" ]] || { echo "ambient ${var}=${!var} leaked into the harness"; return 1; }
+  done
+}
+it "harness: ambient gate override env vars are scrubbed at startup" T_harness_gate_override_env_scrubbed
 
 # ===========================================================================
 # doc-drift.sh
@@ -326,6 +405,44 @@ T_doc_drift_gh_pr_view_uses_explicit_branch() {
   }
 }
 it "doc-drift: gh pr view is called with the captured branch as an explicit arg" T_doc_drift_gh_pr_view_uses_explicit_branch
+
+# ===========================================================================
+# run_agent_prompt — headless review model pin (see #1919)
+# Headless hook reviews must run on the pinned non-correctness review tier
+# from #1906 (sonnet / gpt-5.6-terra), not the session default. Each case sources
+# _lib.sh and invokes run_agent_prompt directly so the stubs record the exact
+# argv handed to the headless CLI.
+# ===========================================================================
+
+T_run_agent_prompt_claude_pins_review_model() {
+  local out
+  out=$(AGENT_HEADLESS=claude bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model sonnet"* ]] || { echo "claude headless cmd must pin --model sonnet: $out"; return 1; }
+}
+it "run_agent_prompt: claude headless review pins --model sonnet (the #1906 non-correctness tier)" T_run_agent_prompt_claude_pins_review_model
+
+T_run_agent_prompt_claude_env_override() {
+  local out
+  out=$(AGENT_HEADLESS=claude CLAUDE_REVIEW_MODEL=opus bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model opus"* ]] || { echo "CLAUDE_REVIEW_MODEL override must win: $out"; return 1; }
+  [[ "$out" != *"--model sonnet"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
+}
+it "run_agent_prompt: CLAUDE_REVIEW_MODEL overrides the pinned claude tier" T_run_agent_prompt_claude_env_override
+
+T_run_agent_prompt_codex_pins_review_model() {
+  local out
+  out=$(AGENT_HEADLESS=codex bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model gpt-5.6-terra"* ]] || { echo "codex headless cmd must pin --model gpt-5.6-terra: $out"; return 1; }
+}
+it "run_agent_prompt: codex headless review pins --model gpt-5.6-terra (the #1906 non-correctness tier)" T_run_agent_prompt_codex_pins_review_model
+
+T_run_agent_prompt_codex_env_override() {
+  local out
+  out=$(AGENT_HEADLESS=codex CODEX_REVIEW_MODEL=gpt-5.6-sol bash -c 'source agent/hooks/_lib.sh; run_agent_prompt "probe" 2>/dev/null')
+  [[ "$out" == *"--model gpt-5.6-sol"* ]] || { echo "CODEX_REVIEW_MODEL override must win: $out"; return 1; }
+  [[ "$out" != *"--model gpt-5.6-terra"* ]] || { echo "override must not fall back to the default: $out"; return 1; }
+}
+it "run_agent_prompt: CODEX_REVIEW_MODEL overrides the pinned codex tier" T_run_agent_prompt_codex_env_override
 
 # ===========================================================================
 # pre-pr-review-gate.sh
@@ -1093,6 +1210,39 @@ T_session_start_banner_in_linked_worktree() {
 }
 it "session-start-banner: in linked worktree → stdout reports 'isolated worktree (OK)'" T_session_start_banner_in_linked_worktree
 
+T_session_start_banner_self_heals_missing_worktree_links() {
+  local out wt make_log
+  reset_sandbox
+  mkdir -p "$SANDBOX/plugins" "$SANDBOX/thoughts"
+  wt="$TEST_DIR/banner-heal-wt"
+  git worktree add -q -b banner-heal-branch "$wt" >/dev/null 2>&1
+  make_log="$TEST_DIR/banner-make-calls-$$.txt"
+  cat > "$STUBS/make" <<MAKE_STUB
+#!/usr/bin/env bash
+echo "CWD=\$(pwd)" >> "$make_log"
+echo "ARGS=\$*" >> "$make_log"
+MAKE_STUB
+  chmod +x "$STUBS/make"
+  out=$(cd "$wt" && bash "$SANDBOX/agent/hooks/session-start-cwd-banner.sh" </dev/null 2>&1; echo "EXIT:$?")
+  rm -f "$STUBS/make"
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "expected EXIT:0, got: $out"; return 1
+  }
+  grep -q "CWD=$wt" "$make_log" 2>/dev/null || {
+    echo "session-start should self-heal in $wt; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-plugins" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-plugins; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-thoughts" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-thoughts; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+  grep -q "ARGS=link-skills" "$make_log" 2>/dev/null || {
+    echo "session-start should run make link-skills; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
+}
+it "session-start-banner: linked worktree missing plugins/thoughts → self-heals with make link-*" T_session_start_banner_self_heals_missing_worktree_links
+
 T_session_start_banner_silent_outside_repo() {
   local out scratch
   scratch=$(mktemp -d "$TEST_DIR/banner-no-git-XXXX")
@@ -1350,6 +1500,51 @@ T_readiness_blocks_on_unknown_mergeable() {
 }
 it "pr-readiness-stop: mergeable=UNKNOWN is not a pass (gate 2) → exit 2" T_readiness_blocks_on_unknown_mergeable
 
+T_readiness_blocks_on_pending_ci_with_wait_guidance() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-pending")
+  out=$(cd "$wt" && echo '' \
+    | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"
+    echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || {
+    echo "expected EXIT:2 on WAIT, got: $out"
+    return 1
+  }
+  grep -q "continue monitoring" "$stderr_file" || {
+    echo "WAIT guidance should continue monitoring"
+    return 1
+  }
+}
+it "pr-readiness-stop: WAIT → exit 2 with monitoring guidance" \
+  T_readiness_blocks_on_pending_ci_with_wait_guidance
+
+T_readiness_conflict_rejects_passive_polling() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-action")
+  out=$(cd "$wt" && echo '' \
+    | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"
+    echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || {
+    echo "expected EXIT:2 on action, got: $out"
+    return 1
+  }
+  grep -q "Do not keep polling" "$stderr_file" || {
+    echo "ACTION guidance should reject passive polling"
+    return 1
+  }
+}
+it "pr-readiness-stop: ACTION_REQUIRED → remediation guidance" \
+  T_readiness_conflict_rejects_passive_polling
+
 T_readiness_passes_when_gates_hold() {
   local out stderr_file wt
   stderr_file="$TEST_DIR/rd_stderr.txt"
@@ -1413,6 +1608,542 @@ T_readiness_drains_large_stdin() {
 }
 it "pr-readiness-stop: off mode drains stdin before exiting (no SIGPIPE risk)" T_readiness_drains_large_stdin
 
+readiness_thread() {
+  # Usage: readiness_thread <isResolved> <totalCount> <firstAuthor> <lastAuthor>
+  # → one-element reviewThreads nodes array in the probe's query shape.
+  printf '[{"isResolved":%s,"first":{"totalCount":%s,"nodes":[{"author":{"login":"%s"},"path":"src/foo.py","line":10,"originalLine":10,"body":"needs a fix"}]},"last":{"nodes":[{"author":{"login":"%s"}}]}}]' \
+    "$1" "$2" "$3" "$4"
+}
+
+T_readiness_blocks_on_unresolved_thread() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 1 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-gate3")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on unresolved thread, got: $out"; return 1; }
+  # The probe's own tests pin the gate-3 formatting; here assert only that the
+  # hook embeds the probe report and keeps the skill pointer.
+  grep -q "Gate 3" "$stderr_file" || { echo "stderr should embed the probe report; got: $(cat "$stderr_file")"; return 1; }
+  grep -q "/pr-readiness" "$stderr_file" || { echo "stderr should point to /pr-readiness"; return 1; }
+}
+it "pr-readiness-stop: unresolved review thread (gate 3) → exit 2 embedding the probe report" T_readiness_blocks_on_unresolved_thread
+
+T_readiness_passes_when_thread_replied() {
+  local out stderr_file wt
+  stderr_file="$TEST_DIR/rd_stderr.txt"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 2 reviewer pr-author)
+  export GH_STUB_REVIEW_THREADS
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-gate3-replied")
+  out=$(cd "$wt" && echo '' | bash "$SANDBOX/agent/hooks/pr-readiness-stop.sh" 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 when author replied, got: $out $(cat "$stderr_file")"; return 1; }
+  [[ -z "$(cat "$stderr_file")" ]] || { echo "replied case should be silent; got: $(cat "$stderr_file")"; return 1; }
+}
+it "pr-readiness-stop: unresolved thread already replied by PR author → exit 0, silent" T_readiness_passes_when_thread_replied
+
+T_readiness_missing_probe_fails_open() {
+  local out lonely wt
+  lonely="$TEST_DIR/lonely-hook"
+  mkdir -p "$lonely/agent/hooks"
+  cp "$SANDBOX/agent/hooks/pr-readiness-stop.sh" "$SANDBOX/agent/hooks/_lib.sh" "$lonely/agent/hooks/"
+  export GH_STUB_PR=42 GH_STUB_CHECKS_EXIT=1
+  unset PR_READINESS_HEADLESS CI
+  wt=$(readiness_linked_worktree "rd-no-probe")
+  out=$(cd "$wt" && echo '' | bash "$lonely/agent/hooks/pr-readiness-stop.sh" 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || {
+    echo "missing probe must fail open (exit 0), got: $out"
+    return 1
+  }
+}
+it "pr-readiness-stop: probe script missing → exit 0 (fail-open, never a hard error)" T_readiness_missing_probe_fails_open
+
+# pr_readiness_probe.sh — four-gate probe (exit 0/1/2; gate 4 advisory-only)
+
+run_probe() {
+  # Usage: run_probe [args...] — captures stdout+stderr and appends EXIT:N.
+  bash "$SANDBOX/agent/_shared/pr_readiness_probe.sh" "$@" 2>&1
+  echo "EXIT:$?"
+}
+
+readiness_check() {
+  # Usage: readiness_check <bucket> <name> <state> <link>
+  printf '[{"bucket":"%s","name":"%s","state":"%s","link":"%s"}]\n' \
+    "$1" "$2" "$3" "$4"
+}
+
+assert_probe_exit() {
+  local out="$1" expected="$2"
+  [[ "$(last_exit_line "$out")" == "EXIT:${expected}" ]] || {
+    echo "expected EXIT:${expected}, got: $out"
+    return 1
+  }
+}
+
+T_probe_all_gates_pass() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -q "Gate 1" <<<"$out" || { echo "output should report Gate 1; got: $out"; return 1; }
+  grep -q "Gate 2" <<<"$out" || { echo "output should report Gate 2; got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "output should report Gate 3; got: $out"; return 1; }
+  grep -q "READY" <<<"$out" || { echo "output should end READY; got: $out"; return 1; }
+}
+it "probe: green CI + MERGEABLE + no threads → exit 0, reports gates + READY" T_probe_all_gates_pass
+
+T_probe_missing_arg_usage_error() {
+  local out
+  out=$(run_probe)
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 without a PR number, got: $out"; return 1; }
+  grep -qi "usage" <<<"$out" || { echo "should print usage; got: $out"; return 1; }
+}
+it "probe: missing PR-number argument → exit 2 with usage" T_probe_missing_arg_usage_error
+
+T_probe_red_ci_fails_gate1() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    fail unit-tests FAILURE https://example.test/log/7)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should require action; got: $out"
+    return 1
+  }
+  grep -q "unit-tests (FAILURE) — https://example.test/log/7" \
+    <<<"$out" || {
+    echo "should report the failed check and URL; got: $out"
+    return 1
+  }
+}
+it "probe: failed CI → exit 1 with actionable check details" \
+  T_probe_red_ci_fails_gate1
+
+T_probe_pending_ci_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending unit-tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: pending-only CI → exit 8 WAIT" T_probe_pending_ci_waits
+
+T_probe_old_gh_falls_back_to_status_rollup() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[{"__typename":"CheckRun","name":"unit-tests","status":"FAILURE","conclusion":"FAILURE","detailsUrl":"https://example.test/log/9"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "unit-tests (FAILURE) — https://example.test/log/9" <<<"$out" || {
+    echo "should normalize statusCheckRollup; got: $out"
+    return 1
+  }
+}
+it "probe: gh without checks --json → statusCheckRollup fallback" \
+  T_probe_old_gh_falls_back_to_status_rollup
+
+T_probe_old_gh_null_conclusion_waits() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[{"__typename":"CheckRun","name":"unit-tests","status":"IN_PROGRESS","conclusion":null,"detailsUrl":"https://example.test/log/10"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "null conclusion should remain pending; got: $out"
+    return 1
+  }
+}
+it "probe: old gh + null conclusion → WAIT" \
+  T_probe_old_gh_null_conclusion_waits
+
+T_probe_checks_not_registered_yet_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_CHECKS_MESSAGE="no checks reported on the 'feature' branch"
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: no checks registered yet → exit 8 WAIT" \
+  T_probe_checks_not_registered_yet_waits
+
+T_probe_pending_ci_with_conflict_requires_action() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending unit-tests IN_PROGRESS https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should require action; got: $out"
+    return 1
+  }
+  grep -q "CONFLICTING" <<<"$out" || {
+    echo "should name the conflict; got: $out"
+    return 1
+  }
+}
+it "probe: pending CI + conflict → exit 1 ACTION_REQUIRED" \
+  T_probe_pending_ci_with_conflict_requires_action
+
+T_probe_unknown_mergeability_waits() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=UNKNOWN
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pass tests SUCCESS https://example.test/pass)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 8 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should report WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: mergeable=UNKNOWN → exit 8 WAIT" \
+  T_probe_unknown_mergeability_waits
+
+T_probe_loop_mode_stops_on_action() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pass tests SUCCESS https://example.test/pass)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "ACTION_REQUIRED" <<<"$out" || {
+    echo "should preserve the action state; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on ACTION_REQUIRED" \
+  T_probe_loop_mode_stops_on_action
+
+T_probe_loop_mode_retries_wait() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_CHECKS_JSON=$(readiness_check \
+    pending tests QUEUED https://example.test/log/8)
+  export GH_STUB_CHECKS_JSON
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "WAIT" <<<"$out" || {
+    echo "should preserve WAIT; got: $out"
+    return 1
+  }
+}
+it "probe: --loop retries only WAIT" T_probe_loop_mode_retries_wait
+
+T_probe_conflicting_fails_gate2() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=CONFLICTING
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 on CONFLICTING, got: $out"; return 1; }
+  grep -q "Gate 2" <<<"$out" || { echo "should name Gate 2; got: $out"; return 1; }
+  grep -q "CONFLICTING" <<<"$out" || { echo "should report the mergeable value; got: $out"; return 1; }
+}
+it "probe: mergeable=CONFLICTING → exit 1 naming Gate 2 with the value" T_probe_conflicting_fails_gate2
+
+T_probe_single_comment_thread_fails_gate3() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 1 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 on unresolved thread, got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "should name Gate 3; got: $out"; return 1; }
+  grep -q "src/foo.py" <<<"$out" || { echo "should list the thread path; got: $out"; return 1; }
+  grep -q "reviewer" <<<"$out" || { echo "should list the thread author; got: $out"; return 1; }
+}
+it "probe: unresolved thread with no reply → exit 1 listing path + author (gate 3)" T_probe_single_comment_thread_fails_gate3
+
+T_probe_self_review_single_comment_fails_gate3() {
+  # A sentinel finding self-posted by the PR author still awaits until replied.
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 1 pr-author pr-author)
+  export GH_STUB_REVIEW_THREADS
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 for unreplied self-review thread, got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "should name Gate 3; got: $out"; return 1; }
+}
+it "probe: self-authored finding with no reply → exit 1 (gate 3, the sentinel-review shape)" T_probe_self_review_single_comment_fails_gate3
+
+T_probe_replied_thread_passes_gate3() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 2 reviewer pr-author)
+  export GH_STUB_REVIEW_THREADS
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 when PR author replied last, got: $out"; return 1; }
+}
+it "probe: unresolved thread whose last comment is the PR author's reply → exit 0" T_probe_replied_thread_passes_gate3
+
+T_probe_reviewer_followup_fails_gate3() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 3 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 when reviewer answered back, got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "should name Gate 3; got: $out"; return 1; }
+}
+it "probe: reviewer followed up after the reply → exit 1 (thread awaits again)" T_probe_reviewer_followup_fails_gate3
+
+T_probe_resolved_thread_ignored() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  GH_STUB_REVIEW_THREADS=$(readiness_thread true 1 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 for a resolved thread, got: $out"; return 1; }
+}
+it "probe: resolved thread → exit 0 (gate 3 ignores resolved threads)" T_probe_resolved_thread_ignored
+
+T_probe_gate4_reports_missing_copilot_activity() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "gate 4 is advisory and must not fail the probe, got: $out"; return 1; }
+  grep -qi "copilot" <<<"$out" || { echo "should carry a Copilot advisory line; got: $out"; return 1; }
+  grep -q "Gate 4" <<<"$out" || { echo "should name Gate 4; got: $out"; return 1; }
+}
+it "probe: no Copilot activity on head → exit 0 with a Gate 4 advisory line" T_probe_gate4_reports_missing_copilot_activity
+
+T_probe_gate4_reports_copilot_reviewed_head() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_HEAD=abc1234def567890
+  export GH_STUB_PULL_COMMENTS='[{"user":{"login":"copilot-pull-request-reviewer[bot]"},"commit_id":"abc1234def567890"}]'
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  grep -qi "copilot" <<<"$out" || { echo "should mention Copilot; got: $out"; return 1; }
+  grep -q "abc1234" <<<"$out" || { echo "should reference the reviewed head sha; got: $out"; return 1; }
+}
+it "probe: Copilot has commented on head → Gate 4 advisory says head is reviewed" T_probe_gate4_reports_copilot_reviewed_head
+
+T_probe_awaiting_thread_on_second_page_fails_gate3() {
+  # >100 threads span pages; an awaiting thread on page 2 must still fail.
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_PR_AUTHOR=pr-author
+  GH_STUB_REVIEW_THREADS=$(readiness_thread false 2 reviewer pr-author)
+  GH_STUB_REVIEW_THREADS_PAGE2=$(readiness_thread false 1 reviewer reviewer)
+  export GH_STUB_REVIEW_THREADS GH_STUB_REVIEW_THREADS_PAGE2
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:1" ]] || { echo "expected EXIT:1 from a page-2 thread, got: $out"; return 1; }
+  grep -q "Gate 3" <<<"$out" || { echo "should name Gate 3; got: $out"; return 1; }
+}
+it "probe: awaiting thread on a later --paginate page → exit 1 (gate 3)" T_probe_awaiting_thread_on_second_page_fails_gate3
+
+T_probe_merged_pr_short_circuits_ready() {
+  # Auto-merge can land mid-poll; the probe must terminate the loop as READY
+  # even though a merged PR reports mergeable=UNKNOWN and gates would "fail".
+  local out
+  export GH_STUB_PR_STATE=MERGED GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=UNKNOWN
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 for a merged PR, got: $out"; return 1; }
+  grep -q "READY" <<<"$out" || { echo "should report READY for a merged PR; got: $out"; return 1; }
+  grep -q "MERGED" <<<"$out" || { echo "should name the PR state; got: $out"; return 1; }
+}
+it "probe: MERGED PR → exit 0 READY before evaluating gates (auto-merge mid-poll)" T_probe_merged_pr_short_circuits_ready
+
+T_probe_gates_only_skips_copilot_advisory() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE
+  out=$(run_probe --gates-only 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  if grep -q "Gate 4" <<<"$out"; then
+    echo "--gates-only must skip the Gate 4 advisory lookup; got: $out"
+    return 1
+  fi
+  grep -q "READY" <<<"$out" || { echo "should still report READY; got: $out"; return 1; }
+}
+it "probe: --gates-only → exit 0 without the Gate 4 Copilot lookup" T_probe_gates_only_skips_copilot_advisory
+
+T_probe_pr_view_failure_is_env_error() {
+  local out
+  export GH_STUB_PR_VIEW_JSON_EXIT=1
+  out=$(run_probe 42)
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2 on gh metadata failure, got: $out"; return 1; }
+}
+it "probe: gh pr view failure → exit 2 (error, never a silent pass or gate verdict)" T_probe_pr_view_failure_is_env_error
+
+T_probe_loop_mode_stops_on_env_error() {
+  local out
+  export GH_STUB_PR_VIEW_JSON_EXIT=1
+  out=$(run_probe --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "ERROR" <<<"$out" || {
+    echo "should preserve the error state; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on ERROR" T_probe_loop_mode_stops_on_env_error
+
+T_probe_loop_mode_stops_on_unknown_option() {
+  local out
+  out=$(run_probe --loop --looop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling on an unknown option" \
+  T_probe_loop_mode_stops_on_unknown_option
+
+T_probe_loop_mode_stops_when_unknown_option_precedes_loop() {
+  local out
+  out=$(run_probe --looop --loop 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: unknown option before --loop still stops polling" \
+  T_probe_loop_mode_stops_when_unknown_option_precedes_loop
+
+T_probe_loop_mode_stops_on_missing_pr() {
+  local out
+  out=$(run_probe --loop)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "usage:" <<<"$out" || {
+    echo "should preserve usage output; got: $out"
+    return 1
+  }
+}
+it "probe: --loop stops polling when the PR number is missing" \
+  T_probe_loop_mode_stops_on_missing_pr
+
+# Import the real extension so runtime selection proves the required behavior.
+node_imports_pi_readiness_extension() {
+  EXTENSION_PATH="$REPO_ROOT/.pi/extensions/pr-readiness-stop.ts" \
+    "$1" --experimental-strip-types --input-type=module \
+    >/dev/null 2>&1 <<'NODE'
+import { pathToFileURL } from "node:url";
+
+await import(pathToFileURL(process.env.EXTENSION_PATH).href);
+NODE
+}
+
+# Select the first candidate that can execute the Pi readiness adapter.
+select_pi_node() {
+  local candidate node_dir
+  local -a node_dirs
+  IFS=: read -r -a node_dirs <<<"${HOOK_TEST_NODE_PATH:-${PATH}}"
+  for node_dir in "${node_dirs[@]}"; do
+    [[ -n "${node_dir}" ]] || node_dir="."
+    candidate="${node_dir}/node"
+    [[ -x "${candidate}" ]] || continue
+    if node_imports_pi_readiness_extension "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s\n' \
+    'ERROR: no compatible Node found. Install Node with --experimental-strip-types support' \
+    'or set HOOK_TEST_NODE_PATH to a PATH-style list containing one.' >&2
+  return 1
+}
+
+PI_NODE="$(select_pi_node)"
+readonly PI_NODE
+
+run_pi_readiness_adapter() {
+  local executions="$1" mode="${2:-tui}"
+  EXTENSION_PATH="$REPO_ROOT/.pi/extensions/pr-readiness-stop.ts" \
+    EXECUTIONS="$executions" PI_MODE="$mode" \
+    "${PI_NODE}" --experimental-strip-types --input-type=module <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const extension = (await import(pathToFileURL(process.env.EXTENSION_PATH).href)).default;
+const calls = [];
+const handlers = {};
+const notifications = [];
+const sent = [];
+const executions = JSON.parse(process.env.EXECUTIONS);
+const pi = {
+  on(name, handler) { handlers[name] = handler; },
+  async exec(command, args, options) {
+    calls.push({ command, args, options });
+    return executions.shift();
+  },
+  sendUserMessage(message) { sent.push(message); },
+};
+extension(pi);
+const count = executions.length;
+for (let index = 0; index < count; index += 1) {
+  const ui = { notify(message, level) { notifications.push({ message, level }); } };
+  await handlers.agent_settled({}, { cwd: "/repo", mode: process.env.PI_MODE, ui });
+}
+console.log(JSON.stringify({ calls, events: Object.keys(handlers), notifications, sent }));
+NODE
+}
+
+T_pi_readiness_reprompts_once_per_report() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"},{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]')
+  [[ "$(jq '.events == ["agent_settled"] and .sent == ["ACTION_REQUIRED: fix CI"]' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_pass_rearms_nudge() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"WAIT: CI pending"},{"code":0,"stderr":""},{"code":2,"stderr":"WAIT: CI pending"}]')
+  [[ "$(jq '.sent == ["WAIT: CI pending", "WAIT: CI pending"]' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_print_mode_does_not_reprompt() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":2,"stderr":"ACTION_REQUIRED: fix CI"}]' print)
+  [[ "$(jq '.sent == []' <<<"$out")" == "true" ]]
+}
+T_pi_readiness_warn_mode_notifies_without_reprompt() {
+  local out
+  out=$(run_pi_readiness_adapter \
+    '[{"code":0,"stderr":"WARNING: PR needs attention"}]')
+  [[ "$(jq '.sent == [] and .notifications == [{"message":"WARNING: PR needs attention","level":"warning"}]' <<<"$out")" == "true" ]]
+}
+
+T_pi_readiness_uses_repo_absolute_hook_path() {
+  local out
+  out=$(run_pi_readiness_adapter '[{"code":0,"stderr":""}]')
+  [[ "$(jq '.calls[0].args[0] | startswith("/") and endswith("/agent/hooks/pr-readiness-stop.sh")' <<<"$out")" == "true" ]]
+}
+
+it "Pi readiness: settled blocking report re-prompts once" \
+  T_pi_readiness_reprompts_once_per_report
+it "Pi readiness: passing result re-arms future nudge" \
+  T_pi_readiness_pass_rearms_nudge
+it "Pi readiness: print mode does not re-prompt" \
+  T_pi_readiness_print_mode_does_not_reprompt
+it "Pi readiness: warn mode displays an advisory" \
+  T_pi_readiness_warn_mode_notifies_without_reprompt
+it "Pi readiness: hook path is repository-absolute" \
+  T_pi_readiness_uses_repo_absolute_hook_path
+
+T_codex_readiness_notify_uses_shared_hook() {
+  grep -Fxq 'notify = ["bash", "agent/hooks/pr-readiness-stop.sh"]' \
+    "$REPO_ROOT/.codex/config.toml"
+}
+it "Codex readiness: notify delegates to shared hook" \
+  T_codex_readiness_notify_uses_shared_hook
+
 # ===========================================================================
 # worktree-post-setup
 # ===========================================================================
@@ -1449,8 +2180,11 @@ MAKE_STUB
   grep -q "ARGS=link-skills" "$make_log" 2>/dev/null || {
     echo "make link-skills not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
   }
+  grep -q "ARGS=install-git-hooks" "$make_log" 2>/dev/null || {
+    echo "make install-git-hooks not called; log: $(cat "$make_log" 2>/dev/null)"; return 1
+  }
 }
-it "worktree-post-setup: valid path → make link-plugins + link-thoughts + link-skills run in that directory" T_wt_post_setup_runs_make_in_new_worktree
+it "worktree-post-setup: valid path → links assets and installs git hooks" T_wt_post_setup_runs_make_in_new_worktree
 
 T_wt_post_setup_exits_0_on_missing_path() {
   local out

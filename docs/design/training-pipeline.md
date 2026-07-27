@@ -80,7 +80,7 @@ ______________________________________________________________________
 # src/synth_setter/configs/experiment/surge/flow_simple.yaml (proposed)
 defaults:
   - override /datamodule: surge_simple
-  - override /model: surge_flow
+  - override /model: vst_flow
   - override /callbacks: default
 
 experiment_name: flow_simple
@@ -107,22 +107,26 @@ make train EXPERIMENT=surge/flow_simple
 python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/train/.../checkpoints/last.ckpt
 ```
 
+Resuming from a checkpoint written by a `compile: true` run before in-place compilation (#2241) fails strict loading on its `_orig_mod` keys; the error names the fix — run `synth-setter-migrate-checkpoint <ckpt> <output>` first (#2259).
+
 ### RunPod training (target state)
 
 ```bash
-# Launch a single long-running training pod
+# Launch a single long-running training pod; the shipped config opts into mid-run durability
 make runpod-train EXPERIMENT=surge/flow_simple
 
-# If the pod dies, resume from the W&B model artifact:
-make resume EXPERIMENT=surge/flow_simple RUN_ID=<train_wandb_run_id>
+# A successful run can resume from its train-end W&B model artifact:
+make resume EXPERIMENT=surge/flow_simple RUN_ID=train-run-id
 
-# Or specify a W&B artifact alias directly:
+# Or specify that train-end artifact directly:
 python -m synth_setter.cli.train \
   experiment=surge/flow_simple \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). On main, checkpoint durability is W&B-only (see Section 6.2).
+The global training default remains off for local and arbitrary DDP runs. Both shipped single-GPU RunPod train configs explicitly forward `training.upload_checkpoints_during_training=true`; use the launch-scoped R2 recovery procedure in Section 6.2 after a pod death.
+
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). The current entrypoint also supports opt-in launch-scoped crash checkpoints as described in Section 6.2.
 
 ### Docker
 
@@ -157,7 +161,7 @@ ______________________________________________________________________
 - **Checkpoint durability is the recovery mechanism.** No reconciliation layer.
 - **Reuse Lightning semantics.** Resume behavior should stay native to Lightning.
 - **Storage conventions are shared.** Training uses the same storage / provenance rules as data and eval.
-- **W&B for metrics, lineage, and checkpoint durability.**
+- **W&B for metrics and lineage; R2 for checkpoint durability.**
 
 ### What This System Deliberately Avoids
 
@@ -169,13 +173,13 @@ ______________________________________________________________________
 
 ### Success Metrics
 
-| Metric            | Target                                                       | How to Measure                                              |
-| ----------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| Resume durability | Best checkpoint survives pod death in R2                     | Resume from the `model-{config_id}` artifact's R2 reference |
-| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                             |
-| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                              |
-| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                                          |
-| Crash recovery UX | One documented command to resume                             | Runbook                                                     |
+| Metric            | Target                                                       | How to Measure                                          |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| Resume durability | Opt-in `last.ckpt` survives a pre-train-end pod death in R2  | Download the launch-scoped recovery object and continue |
+| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                         |
+| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                          |
+| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                                      |
+| Crash recovery UX | One documented command to resume                             | Runbook                                                 |
 
 ### Non-Goals
 
@@ -238,13 +242,13 @@ ______________________________________________________________________
 
 ### 5.2 R2 Checkpoint Durability
 
-| Property     | Value                                                                                                                                     |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**  | At train end, on global-zero, best-effort — `_upload_best_checkpoint` uploads the best checkpoint to R2; the model artifact references it |
-| **Input**    | `best.ckpt`                                                                                                                               |
-| **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` + a `model-{config_id}` artifact referencing it as an `s3://` URI                   |
-| **Compute**  | One rclone upload at train end                                                                                                            |
-| **Contract** | Degrades to a lineage-only artifact when R2 is unreachable or no checkpoint was written; training is never aborted                        |
+| Property     | Value                                                                                                                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**  | At train end, `_upload_best_checkpoint` uploads the best checkpoint. With `upload_checkpoints_during_training=true`, `CheckpointUploader` also mirrors completed rank-0 saves and the exception checkpoint. |
+| **Input**    | Train-end `best.ckpt`; opt-in `last.ckpt` revisions                                                                                                                                                         |
+| **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` plus its W&B reference; opt-in `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt` recovery object                             |
+| **Compute**  | One rclone upload at train end; opt-in synchronous uploads on checkpoint cadence                                                                                                                            |
+| **Contract** | Train-end upload is best-effort. Opt-in mid-run durability requires R2 at startup and fails before training when preflight cannot reach it; later transient upload failures do not abort training.          |
 
 ### 5.3 Resume
 
@@ -281,15 +285,17 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 └── config.yaml               # Frozen experiment config
 ```
 
-The best checkpoint is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact (see §6.2, §7.5); intermediate checkpoints stay local. The per-run path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) writes to; the train-end best-checkpoint upload uses the per-`config_id` path `checkpoints/{config_id}/model.ckpt`.
+The best checkpoint is uploaded to R2 at train end and referenced by the `model-{config_id}` artifact (see §6.2, §7.5). Intermediate checkpoints stay local by default; opt-in durability mirrors `last.ckpt` to a launch-scoped recovery object. The per-run path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) writes to; the current train-end and crash-recovery paths are detailed in §6.2.
 
 ### 6.1 Dataset Access
 
-Storage backend is selected by datamodule group: `datamodule=surge` reads `train/val/test.h5`
-via `VSTDataModule`; `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
+Datasets are Lance: `datamodule=surge_lance` reads `train/val/test.lance` dataset directories —
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
-(`src/synth_setter/data/lance_datamodule.py`), a subclass that overrides the `dataset_cls` /
-`shard_suffix` extension points. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
+(`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceMapDataset`
+instances with standard PyTorch batching, shuffling, worker persistence, and Lightning DDP
+sampler replacement. `lance_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
+remains available for native sequential streaming with `batch_size=None`; both native factories
+accept `storage_options` for direct R2 reads. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
 
 ```yaml
@@ -303,11 +309,14 @@ Behavior:
 
 - Local-only by default
 - If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
+- If `download_dataset_txids` or `download_dataset_row_limit` is set, each split is instead rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); txids pin source snapshots when supplied, otherwise row-limited hydration uses the latest snapshots, and only non-Lance sidecars still download via `download_dir_no_overwrite`
+- No-txid hydration is intentionally non-reproducible and reserved for disposable smoke/tuning runs; splits resolve independently without an atomic cross-split snapshot, while resumable or reproducible runs must supply per-split txids
+- Unpinned cache hits fail closed when the source cannot be reopened and identity-checked; local data is never treated as current after an unverifiable remote read
 - No hidden default R2 fetch
 
 ### 6.2 Checkpoint Durability via R2
 
-`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). Intermediate checkpoints are not synced.
+`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). When `training.upload_checkpoints_during_training` is set (default off), a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write under `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt`. The UUID isolates concurrent launches even if their timestamp-based W&B run IDs collide. Enabling this mode requires exactly one `ModelCheckpoint`; configuration fails before training otherwise. Uploads are synchronous on the training thread, so this mode targets single-device or coarse-cadence runs.
 
 ```yaml
 # src/synth_setter/configs/logger/wandb.yaml
@@ -319,12 +328,41 @@ wandb:
 
 This gives us:
 
-- **Durability** — the best checkpoint survives pod death in R2 (intermediate checkpoints are not persisted)
+- **Durability** — the best checkpoint survives in R2; opt-in mid-run mirroring also preserves the latest `last.ckpt` after a crash
 - **Lineage** — the artifact is linked to the run, dataset, config, and git SHA
 - **Resume** — the `${wandb:...}` resolver rclone-downloads the referenced checkpoint from R2 to resume from any machine
 - **Registry** — browsable in the W&B model registry
 
-> **Known limitation:** the R2 object lives at a per-`config_id` path and is overwritten each run, so an older artifact version (`:vN` for N < latest) resolves to the current object. (Per-version immutability would fold the run id into the path — deferred, YAGNI.)
+The train-end `model.ckpt` remains a per-`config_id` object and is overwritten by later runs. Mid-run recovery objects are launch-scoped and do not overwrite one another; their exact URI is emitted as `Mid-run checkpoint uploaded to ...` in the training log.
+
+To recover a crashed launch, copy the URI from that log line. If pod logs are unavailable, list the deterministic config/run prefix; multiple results mean the same W&B run ID was reused, so select the launch by object time and run context:
+
+```bash
+export R2_BUCKET=intermediate-data
+export CONFIG_ID=flow-simple
+export WANDB_RUN_ID=flow-simple-20260715T000000000Z
+rclone lsf --checksum --recursive --files-only \
+  --include "${WANDB_RUN_ID}-*/last.ckpt" \
+  "r2:${R2_BUCKET}/checkpoints/${CONFIG_ID}"
+```
+
+Materialize the selected object locally through the checksum-enabled R2 helper:
+
+```bash
+export RECOVERY_URI='r2://intermediate-data/checkpoints/flow-simple/<listed-key>'
+uv run python -c 'import os; from pathlib import Path; from synth_setter.pipeline.r2_io import download_to_path, ensure_r2_env_loaded; ensure_r2_env_loaded(); download_to_path(os.environ["RECOVERY_URI"], Path("last.ckpt"))'
+uv run synth-setter-train experiment=surge/flow_simple ckpt_path="$PWD/last.ckpt"
+```
+
+Use the same model, datamodule, and experiment overrides as the failed launch. The crash e2e test exercises upload, real rclone-backed download, Lightning restore, and continued training progress.
+
+**Auto-resume.** `training.resume=auto` automates this recovery (default off); `require` additionally errors when nothing is found, for unattended relaunch loops. At launch, discovery (`utils/resume.py`):
+
+- scans sibling local run dirs, then the launch-scoped R2 mirrors above (honoring a `training.upload_checkpoints_uri` override), and points `ckpt_path` at the newest `last.ckpt`;
+- requires identity evidence from every candidate: local runs need a canonical `{config_id}-{timestamp}` W&B run id (online or offline dir) or matching recorded `.hydra` state, while R2 mirror namespaces must embed that canonical run id;
+- reuses the recovered W&B run id (`resume=allow`) so one logical training stays on one run page.
+
+Boundaries: resume always targets `last.ckpt`, never a monitor-best checkpoint (a best-checkpoint resume would rewind `global_step` and replay scheduler state) — which is also why the train-end `model-{config_id}` artifact is deliberately not a discovery tier: it only exists after a *completed* run and references the monitor-best checkpoint, so continuing from it is a warm start, served by the explicit `ckpt_path='${wandb:...}'` flow in §6.3. An explicit `ckpt_path` bypasses discovery, and combining it with an active `training.resume` is a fail-fast config error. Hydra **multirun** sweeps get a fresh sweep dir per invocation, so the local tier finds no siblings there — the R2 mirror tier is the recovery path for sweeps.
 
 ### 6.3 Resume From W&B
 
@@ -337,6 +375,10 @@ Resolution behavior:
 - resume semantics stay entirely inside Lightning
 
 A `make resume` target resolves the W&B artifact from experiment and run ID to avoid manual path assembly.
+
+### 6.4 Validation Audio Probe
+
+`training.val_audio_probe` (default `"auto"`: wired whenever a `render` group is composed, validation runs, and R2 is reachable, with an INFO reason when it stays unwired; `true` requires those and fails fast when they don't hold — see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`; `false` disables) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
 
 ### 6.5 W&B Lineage
 
@@ -387,7 +429,7 @@ ______________________________________________________________________
 
 **Decision:** the best checkpoint is uploaded to R2 at train end and referenced by the W&B `model-{config_id}` artifact. `log_model: False` keeps checkpoint files out of W&B.
 
-**Rationale:** W&B's 5 GB total storage cannot hold every checkpoint file. Storing only an `s3://` reference (~0 bytes in W&B) keeps lineage and resume working while the bytes live in R2. Only the best checkpoint is persisted, at train end — intermediate checkpoints are not synced, so this is durability for the final result, not crash resilience.
+**Rationale:** W&B's 5 GB total storage cannot hold every checkpoint file. Storing only an `s3://` reference (~0 bytes in W&B) keeps lineage and resume working while the bytes live in R2. The best checkpoint is always persisted at train end; opt-in launch-scoped `last.ckpt` mirrors add crash recovery without consuming W&B storage.
 
 ### 7.3 Single-Pod RunPod Launcher
 
@@ -405,7 +447,7 @@ ______________________________________________________________________
 
 **Decision:** the best checkpoint lives in R2; the W&B artifact holds only an `s3://` reference and the run lineage.
 
-**Rationale:** uploading checkpoint files to W&B (`log_model: "all"`) would exhaust the 5 GB storage budget. Referencing R2 keeps lineage and resume intact at near-zero W&B storage cost. Only the best checkpoint is mirrored at train end — GC is implicit (the per-`config_id` path is overwritten each run), and dual-copy cost is one upload, not a per-interval stream.
+**Rationale:** uploading checkpoint files to W&B (`log_model: "all"`) would exhaust the 5 GB storage budget. Referencing R2 keeps lineage and resume intact at near-zero W&B storage cost. The best checkpoint is mirrored at train end. Optional mid-run durability adds a synchronous upload stream under a unique launch namespace; retention of those recovery objects is an operator responsibility.
 
 ### 7.6 No Automatic Promotion
 
@@ -508,13 +550,13 @@ ______________________________________________________________________
 
 ## 11. Open Questions & Risks
 
-| #   | Question / Risk                                              | Impact                   | Status                                                                       |
-| --- | ------------------------------------------------------------ | ------------------------ | ---------------------------------------------------------------------------- |
-| 1   | Should RunPod pods auto-terminate after training exits?      | Cloud cost / orphan pods | Open                                                                         |
-| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~   | ~~Storage growth~~       | Resolved — only the best checkpoint is mirrored to R2 at train end           |
-| 3   | Is single-GPU sufficient for next-generation models?         | Future scaling           | Accepted for now                                                             |
-| 4   | ~~How should stale checkpoints be garbage-collected in R2?~~ | ~~Storage cost~~         | Resolved — the per-`config_id` path is overwritten each run (no separate GC) |
-| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~            | ~~Cost~~                 | Resolved — bytes live in R2; W&B holds only an `s3://` reference             |
+| #   | Question / Risk                                                           | Impact                   | Status                                                                         |
+| --- | ------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| 1   | Should RunPod pods auto-terminate after training exits?                   | Cloud cost / orphan pods | Open                                                                           |
+| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~                | ~~Storage growth~~       | Resolved — best at train end; opt-in launch-scoped `last.ckpt` during training |
+| 3   | Is single-GPU sufficient for next-generation models?                      | Future scaling           | Accepted for now                                                               |
+| 4   | How should stale mid-run recovery checkpoints be garbage-collected in R2? | Storage cost             | Open — launch-scoped recovery objects require an explicit retention policy     |
+| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~                         | ~~Cost~~                 | Resolved — bytes live in R2; W&B holds only an `s3://` reference               |
 
 ______________________________________________________________________
 
@@ -535,7 +577,7 @@ ______________________________________________________________________
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                          |
 | **`train_wandb_run_id`** | W&B run ID for a specific training run. Default format: `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
-| **durable checkpoint**   | A checkpoint persisted outside the training pod as a W&B model artifact.                                                                                                                          |
+| **durable checkpoint**   | A checkpoint persisted outside the training pod: a W&B-referenced train-end model or a launch-scoped R2 crash-recovery object.                                                                    |
 | **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).                                |
 | **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                                                            |
 
@@ -553,11 +595,11 @@ ______________________________________________________________________
 
 | Checkpoint              | Keep locally          | Persisted to cloud                                                   |
 | ----------------------- | --------------------- | -------------------------------------------------------------------- |
-| `last.ckpt`             | Yes                   | No                                                                   |
+| `last.ckpt`             | Yes                   | Opt-in — mirrored to a launch-scoped R2 recovery object              |
 | `best.ckpt`             | Yes                   | Yes — uploaded to R2, referenced by the `model-{config_id}` artifact |
 | Intermediate step ckpts | Per checkpoint config | No                                                                   |
 
-> No checkpoint files are uploaded to W&B (`log_model: False`). Only the best checkpoint is mirrored to R2, at train end.
+> No checkpoint files are uploaded to W&B (`log_model: False`). The best checkpoint is mirrored to R2 at train end; `training.upload_checkpoints_during_training=true` additionally mirrors `last.ckpt` for crash recovery.
 
 ## Appendix D: Implementation Recipes
 

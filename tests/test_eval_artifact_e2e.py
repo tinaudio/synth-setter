@@ -27,7 +27,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli.eval import evaluate
-from synth_setter.data.vst import param_specs
 from synth_setter.workspace import operator_workspace
 from tests.helpers.wandb_offline import read_run_binary
 
@@ -47,7 +46,7 @@ def _compose_offline_wandb_eval_cfg(
 
     :param tmp_path: Pinned as ``paths.output_dir`` / ``paths.log_dir``; the
         offline run's ``wandb/`` dir lands beneath it via the logger's save_dir.
-    :param dataset_root: Holds ``{train,val,test}.h5`` + ``stats.npz``.
+    :param dataset_root: Holds ``{train,val,test}.lance`` + ``stats.npz``.
     :param upload_uri: ``r2://`` prefix the output dir is mirrored to and the
         artifact references as ``s3://``.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
@@ -62,8 +61,7 @@ def _compose_offline_wandb_eval_cfg(
                 # The experiment defaults to mode=predict; the artifact path is mode-agnostic
                 # and test-mode gives a deterministic zero param_mse without rendering.
                 "mode=test",
-                f"model.net.d_out={len(param_specs['surge_4'])}",
-                "callbacks.log_per_param_mse.param_spec=surge_4",
+                "datamodule.param_spec_name=surge_4",
             ],
         )
     with open_dict(cfg):
@@ -71,7 +69,7 @@ def _compose_offline_wandb_eval_cfg(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.predict_file = str(dataset_root / "test.h5")
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
@@ -116,9 +114,9 @@ def test_evaluate_logs_eval_results_artifact_to_offline_wandb_run(
     leaves no artifact record in the binary and trips here.
 
     :param tmp_path: Hydra ``output_dir`` and the offline run's save_dir.
-    :param surge_xt_smoke_datasets: Source ``{train,val,test}.h5`` + ``stats.npz``.
-    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, dummy R2 secrets,
-        and the local rclone backend + cwd for the ``r2://`` upload.
+    :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env, dummy canonical
+        storage settings, and the local rclone backend + cwd for the ``r2://`` upload.
     """
     if shutil.which("rclone") is None:
         pytest.skip("rclone binary not available on PATH")
@@ -127,15 +125,15 @@ def test_evaluate_logs_eval_results_artifact_to_offline_wandb_run(
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("WANDB_MODE", "offline")
     monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
-    # Dummy secrets satisfy ensure_r2_env_loaded's presence check; the local rclone
-    # backend resolves r2: without dialing Cloudflare. Chdir into a remote root so a
-    # URI r2://<bucket>/<key> materializes at <remote_root>/<bucket>/<key>; done here
-    # (not via fake_r2_remote) so the dataset fixture's relative-path generation runs
-    # against the repo cwd first.
-    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "test-secret-key")
-    monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "http://localhost:0")
+    # Dummy canonical settings satisfy ensure_r2_env_loaded's trust boundary while
+    # the local rclone backend resolves r2: without dialing Cloudflare. Chdir into
+    # a remote root so r2://<bucket>/<key> materializes at <remote_root>/<bucket>/<key>;
+    # done here (not via fake_r2_remote) so the dataset fixture's relative-path
+    # generation runs against the repo cwd first.
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     wandb.teardown()
 
     # Compose before the chdir so Hydra + operator_workspace() resolve against the

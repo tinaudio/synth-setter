@@ -6,6 +6,7 @@ wandb:
   save_dir: "${paths.output_dir}"
   offline: False
   id: null # pass correct id to resume experiment!
+  resume: null # training.resume sets "allow" when it recovers a prior run id
   anonymous: null # enable anonymous logging
   project: "${oc.env:WANDB_PROJECT,synth-setter}"
   # No checkpoint files to W&B (5 GB total quota); the train-end model-{config_id}

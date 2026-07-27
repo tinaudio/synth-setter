@@ -1,16 +1,16 @@
 # @package _global_
 
 # Smoke-test experiment for Surge XT. Uses the cpu trainer so the same config
-# works for both Mac (where `src/synth_setter/tools/surge_xt_interactive.py` is normally run)
+# works for both Mac (where `src/synth_setter/tools/vst_interactive.py` is normally run)
 # and Linux CI smoke-tests. Mirrors the bake-ins in `cfg_surge_xt_global`
 # (tests/conftest.py) — one training step, one device, single-sample batches,
 # no logger, no test stage.
 
 defaults:
-  - override /model: surge_ffn
+  - override /model: vst_ffn
   - override /datamodule: surge
   - override /trainer: cpu
-  - override /callbacks: [default_surge, eval_surge]
+  - override /callbacks: [default_vst, eval_vst]
   - _self_
 
 run_name: ffn
@@ -26,12 +26,6 @@ test: false
 model:
   compile: false
   scheduler: null
-  net:
-    # Mandatory override — must equal the encoded width of the param_spec used by the run.
-    # Set this to ``len(param_specs[<spec-name>])`` via the CLI override (e.g.
-    # ``model.net.d_out=92`` for ``surge_simple`` or ``model.net.d_out=300`` for ``surge_xt``).
-    # ``src/synth_setter/tools/surge_xt_interactive.py`` injects this automatically from ``--param-spec-name``.
-    d_out: ???
 
 datamodule:
   batch_size: 1

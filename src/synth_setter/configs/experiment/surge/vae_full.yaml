@@ -3,13 +3,8 @@
 defaults:
   - /experiment/surge/base
   - override /datamodule: surge
-  - override /model: surge_flowvae
+  - override /model: vst_flowvae
   - _self_
-
-model:
-  net:
-    latent_dim: 300
-  param_spec: surge_xt
 
 experiment_name: surge-full-onehot
 run_name: vae

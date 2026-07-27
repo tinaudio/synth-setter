@@ -37,6 +37,21 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> list[Callback]:
     return callbacks
 
 
+def _finalize_loggers(loggers: list[Logger], status: str) -> None:
+    """Finalize logger objects without changing process-global W&B state.
+
+    :param loggers: Logger objects owned by the current lifecycle.
+    :param status: Completion status forwarded to each logger.
+    """
+    for logger in loggers:
+        try:
+            logger.finalize(status)
+        except BaseException as exc:  # noqa: BLE001 — cleanup must remain best-effort
+            log.warning(
+                f"logger finalize failed on {type(logger).__name__} ({type(exc).__name__})"
+            )
+
+
 def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     """Instantiate loggers from config.
 
@@ -44,6 +59,7 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     :returns: A list of instantiated loggers.
     :rtype: list[Logger]
     :raises TypeError: If ``logger_cfg`` is not a :class:`DictConfig`.
+    :raises BaseException: Re-raises a logger constructor failure after closing earlier loggers.
     """
     logger: list[Logger] = []
 
@@ -54,10 +70,28 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     if not isinstance(logger_cfg, DictConfig):
         raise TypeError("Logger config must be a DictConfig!")
 
-    for _, lg_conf in logger_cfg.items():
-        if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
-            log.info(f"Instantiating logger <{lg_conf._target_}>")
-            logger.append(hydra.utils.instantiate(lg_conf))
+    wandb_run_before: object | None = None
+    if find_spec("wandb"):
+        import wandb
+
+        wandb_run_before = wandb.run
+
+    try:
+        for _, lg_conf in logger_cfg.items():
+            if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
+                log.info(f"Instantiating logger <{lg_conf._target_}>")
+                logger.append(hydra.utils.instantiate(lg_conf))
+    except BaseException:
+        _finalize_loggers(logger, "failed")
+        if find_spec("wandb"):
+            import wandb
+
+            if wandb.run is not None and wandb.run is not wandb_run_before:
+                try:
+                    wandb.finish()
+                except Exception as exc:  # noqa: BLE001 — cleanup must remain best-effort
+                    log.warning(f"wandb.finish() failed ({type(exc).__name__})")
+        raise
 
     return logger
 
@@ -74,11 +108,7 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
     :param status: ``"success"`` or ``"failed"``; forwarded verbatim to each
         logger's ``finalize`` contract.
     """
-    for lg in loggers:
-        try:
-            lg.finalize(status)
-        except Exception as exc:  # noqa: BLE001 — finalize errors must not mask the original raise
-            log.warning(f"logger finalize failed on {type(lg).__name__}: {exc}")
+    _finalize_loggers(loggers, status)
     if not find_spec("wandb"):
         return
     import wandb
@@ -88,4 +118,4 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
         try:
             wandb.finish()
         except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
-            log.warning(f"wandb.finish() failed: {exc}")
+            log.warning(f"wandb.finish() failed ({type(exc).__name__})")

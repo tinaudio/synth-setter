@@ -1,0 +1,18 @@
+# @package _global_
+
+# CLAP conditioning on the `clap` Lance column. A pooled global vector (not a
+# sequence), so vector_projection projects it rather than the pooling embedpool.
+defaults:
+  - override /model/encoder: vector_projection
+
+model:
+  conditioning:
+    column: clap
+    input_shape: [512]
+  encoder:
+    input_dim: 512
+
+datamodule:
+  conditioning:
+    column: clap
+    input_shape: [512]

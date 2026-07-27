@@ -1,0 +1,19 @@
+# @package _global_
+
+# music2latent conditioning on the `m2l` column add_embeddings writes — not the
+# `music2latent` column the bare `conditioning=m2l` legacy string maps to.
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: m2l
+    input_shape: [128, 42]
+  encoder:
+    embed_dim: 128
+    max_seq_len: 42
+
+datamodule:
+  conditioning:
+    column: m2l
+    input_shape: [128, 42]

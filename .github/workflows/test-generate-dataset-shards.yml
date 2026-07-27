@@ -17,12 +17,19 @@ on:
   pull_request:
     paths:
       - "tests/test_generate_dataset.py"
+      - "tests/helpers/processes.py"
       - "tests/conftest.py"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/data/vst/generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/pipeline/ci/validate_shard.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
+      - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
 permissions:
@@ -37,8 +44,8 @@ concurrency:
 jobs:
   generate-dataset-shards:
     name: Generate dataset shards -> real R2 (Docker + VST)
-    runs-on: ubuntu-latest-4core
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Fork PRs can't see repo secrets; the rclone auth ping would fail and
     # burn runner minutes. Same gating pattern as test-local-launcher-roundtrip.yml.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -48,11 +55,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Reset preloaded Docker state and use separate storage when the runner provides it.
+      - name: Prepare Docker storage capacity
+        uses: ./.github/actions/prepare-docker-storage
+
       - name: Pull image
         run: docker pull "$IMAGE"
 
       # rclone runs inside the container; the in-runner env only supplies the
-      # `RCLONE_CONFIG_R2_*` values the `docker run -e <VAR>` lines forward.
+      # setup-r2 exports canonical storage env plus the current rclone projection.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -74,6 +85,10 @@ jobs:
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            -e SYNTH_SETTER_STORAGE_PROVIDER \
+            -e SYNTH_SETTER_STORAGE_ACCESS_KEY_ID \
+            -e SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY \
+            -e SYNTH_SETTER_STORAGE_ENDPOINT_URL \
             -e RCLONE_CONFIG_R2_TYPE \
             -e RCLONE_CONFIG_R2_PROVIDER \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \

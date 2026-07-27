@@ -1,0 +1,4 @@
+name: ss-datasets-us-ca-2
+type: runpod-network-volume
+infra: runpod/US/US-CA-2
+size: 750GB

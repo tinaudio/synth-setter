@@ -1,0 +1,25 @@
+# @package _global_
+
+# 10-step junk run exercising the full RunPod dispatch path at minimal GPU
+# cost (#2196). Self-contained: pins a small finalized R2 root (~5 GiB) a
+# fresh pod can hydrate; num_workers=0 keeps 10-step startup deterministic.
+
+defaults:
+  - /experiment/surge/ffn_simple
+  - _self_
+
+run_name: ffn_smoke
+
+datamodule:
+  download_dataset_root_uri: r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
+  num_workers: 0
+
+trainer:
+  min_steps: 10
+  max_steps: 10
+
+callbacks:
+  model_checkpoint:
+    # Guarantees a checkpoint file exists at step 10 even though no epoch
+    # completes; the published model artifact is junk — do not evaluate it.
+    every_n_train_steps: 5

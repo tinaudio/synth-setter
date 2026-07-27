@@ -16,6 +16,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOOK_PATH = _REPO_ROOT / "agent" / "hooks" / "pre-pr-review-gate.sh"
 _SENTINEL_PY = _REPO_ROOT / "agent" / "_shared" / "review_sentinel.py"
@@ -229,3 +231,205 @@ def test_gate_with_unresolvable_head_stays_strict(tmp_path: Path) -> None:
     result = _run_gate(primary, command)
     assert result.returncode == 2, (result.returncode, result.stdout)
     assert "does not point at a file" in result.stderr
+
+
+@pytest.fixture(scope="module", name="gate_repo")
+def gate_repo_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build one hermetic repo shared by the read-only classification tests.
+
+    :param tmp_path_factory: pytest factory for the module-scoped tmp dir.
+    :returns: The primary-checkout root the gate runs from.
+    """
+    primary, _worktree, _tip = _make_repo_with_worktree(tmp_path_factory.mktemp("gate"))
+    return primary
+
+
+# End-to-end mirror of the classifier unit tests in
+# test_pr_command_classifier.py — keep new bypass variants in sync there.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title x --body y",
+        "/usr/bin/gh pr create --title x --body y",
+        "./gh pr create --title x --body y",
+        "gh \\\npr create --title x --body y",
+        "echo preflight\ngh pr create --title x --body y",
+        "gh -R tinaudio/synth-setter pr create --title x --body y",
+        "! gh pr create --title x --body y",
+        "if false; then :; else gh pr create --title x --body y; fi",
+        "bash <<EOF\ngh pr create --title x --body y\nEOF",
+        "`gh pr create --title x --body y`",
+        "OUT=`gh pr create --title x --body y`",
+        "/usr/bin/env gh pr create --title x --body y",
+        "/usr/bin/time gh pr create --title x --body y",
+        "/usr/bin/sudo gh pr create --title x --body y",
+        "builtin exec gh pr create --title x --body y",
+        "builtin command gh pr create --title x --body y",
+        "nice -n 5 gh pr create --title x --body y",
+        "sudo -u root gh pr create --title x --body y",
+        "sudo -- gh pr create --title x --body y",
+        "exec gh pr create --title x --body y",
+        "command gh pr create --title x --body y",
+        "env gh pr create --title x --body y",
+        "env FOO=bar gh pr create --title x --body y",
+        "FOO=bar gh pr create --title x --body y",
+    ],
+)
+def test_gate_blocks_direct_pr_create_missing_review_path(gate_repo: Path, command: str) -> None:
+    """A real PR creation without ``REVIEW_FULL=`` is blocked (exit 2).
+
+    Benign prefixes, absolute paths, and command substitution must not hide the invocation from the
+    sentinel checks.
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param command: PR-creation command missing the review path.
+    """
+    result = _run_gate(gate_repo, command)
+
+    assert result.returncode == 2, (command, result.returncode, result.stderr)
+    assert "missing REVIEW_FULL" in result.stderr
+
+
+# End-to-end mirror of the classifier unit tests in
+# test_pr_command_classifier.py — keep new bypass variants in sync there.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'gh pr create --title x --body y'",
+        "bash -lc 'gh pr create --title x --body y'",
+        "bash -c 'exec gh pr create --title x --body y'",
+        "bash -c 'echo preflight; gh pr create --title x --body y'",
+        "bash -c 'if true; then gh pr create --title x --body y; fi'",
+        "bash -c 'FOO=bar gh pr create --title x --body y'",
+        "bash -c $'gh pr create --title x --body y'",
+        "bash -c 'eval gh pr create --title x --body y'",
+        "bash -c -- 'gh pr create --title x --body y'",
+        "bash -c '{ gh pr create --title x --body y; }'",
+        "bash --command 'gh pr create --title x --body y'",
+        "bash --command='gh pr create --title x --body y'",
+        "sh -c 'gh pr create --title x --body y'",
+        "dash -c 'gh pr create --title x --body y'",
+        "ksh -c 'gh pr create --title x --body y'",
+        "zsh -c 'gh pr create --title x --body y'",
+        "env bash -c 'gh pr create --title x --body y'",
+        "sudo bash -c 'gh pr create --title x --body y'",
+        "env -S \"bash -c 'gh pr create --title x --body y'\"",
+        'bash <<< "gh pr create --title x --body y"',
+        "bash <<<'gh pr create --title x --body y'",
+        'eval "gh pr create --title x --body y"',
+        "echo 'gh pr create --title x --body y' | bash",
+        "env --split-string='gh pr create --title x --body y'",
+    ],
+)
+def test_gate_blocks_shell_wrapped_pr_create(gate_repo: Path, command: str) -> None:
+    """PR creation smuggled through a shell wrapper is blocked outright (exit 2).
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param command: Command that runs ``gh pr create`` via a shell.
+    """
+    result = _run_gate(gate_repo, command)
+
+    assert result.returncode == 2, (command, result.returncode, result.stderr)
+    assert "must run directly" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'docs mention gh pr create somewhere'",
+        'git commit -m "see gh pr create above"',
+        "grep -n 'gh pr create' agent/hooks/pre-pr-review-gate.sh",
+        "echo about to run gh pr create later",
+        "gh pr view 123",
+    ],
+)
+def test_gate_ignores_command_merely_mentioning_pr_create(gate_repo: Path, command: str) -> None:
+    """Prose mentions of ``gh pr create`` pass through ungated (exit 0).
+
+    Pins the false-positive fix: over-blocking here would gate every command
+    that quotes, greps, or documents the PR recipe.
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param command: Command that mentions but does not run ``gh pr create``.
+    """
+    result = _run_gate(gate_repo, command)
+
+    assert result.returncode == 0, (command, result.returncode, result.stderr)
+
+
+def _broken_python3_env(tmp_path: Path) -> dict[str, str]:
+    """Build an env overlay whose ``python3`` always fails (exit 3).
+
+    :param tmp_path: Directory the stub interpreter is written to.
+    :returns: Env overlay prepending the stub's dir to ``PATH``.
+    """
+    bin_dir = tmp_path / "broken-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "python3"
+    stub.write_text("#!/usr/bin/env bash\necho 'stub interpreter down' >&2\nexit 3\n")
+    stub.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_gate_classifier_failure_blocks_command_mentioning_pr_create(
+    gate_repo: Path, tmp_path: Path
+) -> None:
+    """A classifier that cannot run fails closed on the gated surface (exit 2).
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param tmp_path: pytest tmp dir for the broken python3 stub.
+    """
+    command = "gh pr create --title x --body y"
+    result = _run_gate(gate_repo, command, env=_broken_python3_env(tmp_path))
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "internal classifier error" in result.stderr
+
+
+def test_gate_classifier_failure_ignores_unrelated_command(
+    gate_repo: Path, tmp_path: Path
+) -> None:
+    """A classifier that cannot run stays out of unrelated commands' way (exit 0).
+
+    The command carries the ``gh``/``pr``/``create`` substrings so it clears
+    the fast pre-check and actually reaches the classifier-failure branch, but
+    lacks the ``gh pr create`` adjacency the block grep keys on — so the
+    fail-open arm, not the fail-closed arm, must run.
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    :param tmp_path: pytest tmp dir for the broken python3 stub.
+    """
+    command = "echo gh; echo pr; echo create"
+    result = _run_gate(gate_repo, command, env=_broken_python3_env(tmp_path))
+
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_gate_blocks_unparsable_pr_create_mention(gate_repo: Path) -> None:
+    """A command mentioning ``gh pr create`` that defeats the lexer blocks (exit 2).
+
+    Parse failures on the gated surface must fail closed, not fall open.
+
+    :param gate_repo: Primary-checkout root the gate runs from.
+    """
+    result = _run_gate(gate_repo, 'gh pr create --title "unterminated')
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
+def test_gate_rejects_env_split_string_shell_wrapper_with_valid_review(tmp_path: Path) -> None:
+    """A valid review file cannot authorize a shell-wrapped PR command.
+
+    :param tmp_path: pytest tmp dir for the synthetic repo.
+    """
+    primary, _worktree, _tip = _make_repo_with_worktree(tmp_path)
+    sentinel = _write_sentinel(primary, _git("rev-parse", "HEAD", cwd=primary))
+    command = (
+        "env -S \"bash -c 'gh pr create --title x --body y'\""
+        f"  # REVIEW_FULL={sentinel.relative_to(primary)}"
+    )
+
+    result = _run_gate(primary, command)
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "must run directly" in result.stderr
