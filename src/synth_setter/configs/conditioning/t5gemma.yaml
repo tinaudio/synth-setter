@@ -9,8 +9,10 @@ model:
     column: t5gemma
     input_shape: [768, 256]
   encoder:
+    d_model: ${oc.select:model.vector_field.d_model,${param_spec_width:${datamodule.param_spec_name}}}
     embed_dim: 768
     max_seq_len: 256
+    num_heads: ${oc.select:model.vector_field.num_heads,1}
 
 datamodule:
   conditioning:

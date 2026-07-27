@@ -11,6 +11,7 @@ model:
     input_shape: [512]
   encoder:
     input_dim: 512
+    d_model: ${oc.select:model.vector_field.d_model,${param_spec_width:${datamodule.param_spec_name}}}
 
 datamodule:
   conditioning:

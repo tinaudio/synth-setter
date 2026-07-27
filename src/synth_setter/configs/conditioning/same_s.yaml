@@ -11,8 +11,10 @@ model:
     column: same_s
     input_shape: [256, 44]
   encoder:
+    d_model: ${oc.select:model.vector_field.d_model,${param_spec_width:${datamodule.param_spec_name}}}
     embed_dim: 256
     max_seq_len: 44
+    num_heads: ${oc.select:model.vector_field.num_heads,1}
 
 datamodule:
   conditioning:

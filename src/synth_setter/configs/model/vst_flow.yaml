@@ -5,8 +5,6 @@ defaults:
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
 
 conditioning: mel
-encoder_num_heads: ${model.vector_field.num_heads}
-encoder_output_dim: ${model.vector_field.d_model}
 warmup_steps: 0
 scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR

@@ -330,7 +330,6 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     assert datamodule.embedding_conditioning.column == "t5gemma"
     assert datamodule.embedding_conditioning.input_shape == (768, 256)
     assert batch["conditioning"].shape == (2, 768, 256)
-    assert cfg.model.encoder_output_dim == expected_output_dim
     assert cfg.model.encoder.d_model == expected_output_dim
     assert loss.ndim == 0
     assert torch.isfinite(loss)
@@ -374,14 +373,18 @@ def _conditioning_profile_names() -> list[str]:
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())
-@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+@pytest.mark.parametrize(
+    ("model_name", "expected_output_dim"),
+    [("vst_ffn", 300), ("vst_flow", 512), ("vst_flowmlp", 768)],
+)
 def test_embedding_conditioning_profile_encoder_matches_model_output(
-    profile: str, model_name: str
+    profile: str, model_name: str, expected_output_dim: int
 ) -> None:
     """Every cached profile produces the output width its VST model owns.
 
     :param profile: Conditioning profile under test.
     :param model_name: VST architecture consuming the profile.
+    :param expected_output_dim: Model-owned encoder output width.
     """
     cfg = _compose(
         "train.yaml",
@@ -399,7 +402,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
 
     encoded = encoder(torch.randn(2, *input_shape))
 
-    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+    assert encoded.shape == (2, expected_output_dim)
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())
