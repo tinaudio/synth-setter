@@ -7,9 +7,11 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 
+from synth_setter.data.vst.clap_introspect import SURGE_XT_CLAP_PATH
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
 from synth_setter.data.vst.shapes import AUDIO_FIELD, PARAM_ARRAY_FIELD
@@ -22,12 +24,13 @@ from synth_setter.evaluation.compute_audio_metrics import (
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.tools import build_param_map
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_SYNTH_VERSION,
     TEST_SYNTH,
+    TEST_SYNTH_VERSION,
 )
 from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_NOTE_PARAMS,
@@ -70,10 +73,29 @@ def _dawdreamer_experiment_config() -> RenderConfig:
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
-def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
-    """The committed DawDreamer identities match the preset-loaded plugin."""
+@pytest.mark.parametrize(
+    ("parameter_map_path", "preset_path"),
+    [
+        ("src/synth_setter/data/vst/surge_4_param_map.json", "presets/surge-mini.vstpreset"),
+        (
+            "src/synth_setter/data/vst/surge_simple_param_map.json",
+            "presets/surge-simple.vstpreset",
+        ),
+        ("src/synth_setter/data/vst/surge_xt_param_map.json", "presets/surge-base.vstpreset"),
+    ],
+    ids=("surge-4", "surge-simple", "surge-xt"),
+)
+def test_dawdreamer_parameter_map_matches_live_plugin(
+    parameter_map_path: str,
+    preset_path: str,
+) -> None:
+    """Each committed DawDreamer map matches its settled preset identities.
+
+    :param parameter_map_path: Joint parameter map under test.
+    :param preset_path: VST preset paired with the map.
+    """
     if TEST_SYNTH != "surge_xt":
-        pytest.skip("DawDreamer parameter map fixture uses the Surge XT plugin")
+        pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
 
     config = _dawdreamer_experiment_config()
     DawDreamerRenderer(
@@ -81,8 +103,165 @@ def test_dawdreamer_parameter_map_matches_live_plugin() -> None:
         sample_rate=config.sample_rate,
         channels=config.channels,
         signal_duration_seconds=config.signal_duration_seconds,
+        plugin_state_path=str(Path(preset_path).resolve()),
+        parameter_map=load_param_map(Path(parameter_map_path)),
+    )
+
+
+def _invoke_map_command(runner: CliRunner, args: tuple[str, ...]) -> None:
+    """Run one parameter-map command and surface its captured output on failure.
+
+    :param runner: Isolated Click command runner.
+    :param args: Command arguments after the program name.
+    """
+    result = runner.invoke(build_param_map.main, list(args), catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+
+def _dump_real_vst_hosts(runner: CliRunner, dumps: dict[str, Path]) -> None:
+    """Dump the preset through Pedalboard and DawDreamer.
+
+    :param runner: Isolated Click command runner.
+    :param dumps: Host dump destinations.
+    """
+    _invoke_map_command(
+        runner,
+        (
+            "dump-pedalboard",
+            "--plugin",
+            str(PLUGIN_PATH),
+            "--preset",
+            str(TEST_PRESET_PATH),
+            "--preset-resource",
+            "presets/surge-base.vstpreset",
+            "--out",
+            str(dumps["pedalboard"]),
+        ),
+    )
+    _invoke_map_command(
+        runner,
+        (
+            "dump-dawdreamer",
+            "--plugin",
+            str(PLUGIN_PATH),
+            "--plugin-name",
+            "Surge XT",
+            "--plugin-version",
+            str(TEST_SYNTH_VERSION),
+            "--preset",
+            str(TEST_PRESET_PATH),
+            "--preset-resource",
+            "presets/surge-base.vstpreset",
+            "--out",
+            str(dumps["dawdreamer"]),
+        ),
+    )
+
+
+def _dump_real_native_hosts(runner: CliRunner, dumps: dict[str, Path]) -> None:
+    """Dump the preset through CLAP and SurgePy introspection.
+
+    :param runner: Isolated Click command runner.
+    :param dumps: Host dump destinations.
+    """
+    _invoke_map_command(
+        runner,
+        (
+            "dump-clap",
+            "--plugin",
+            str(SURGE_XT_CLAP_PATH),
+            "--out",
+            str(dumps["clap"]),
+        ),
+    )
+    _invoke_map_command(
+        runner,
+        (
+            "dump-surgepy",
+            "--preset",
+            "presets/surge-base.fxp",
+            "--preset-resource",
+            "presets/surge-base.fxp",
+            "--out",
+            str(dumps["surgepy"]),
+        ),
+    )
+
+
+def _dump_real_host_parameters(tmp_path: Path, runner: CliRunner) -> dict[str, Path]:
+    """Dump the real Surge preset through all parameter-map hosts.
+
+    :param tmp_path: Temporary host-dump destination.
+    :param runner: Isolated Click command runner.
+    :returns: Dump paths keyed by host name.
+    """
+    dumps = {
+        "clap": tmp_path / "clap.json",
+        "dawdreamer": tmp_path / "dawdreamer.json",
+        "pedalboard": tmp_path / "pedalboard.json",
+        "surgepy": tmp_path / "surgepy.json",
+    }
+    _dump_real_vst_hosts(runner, dumps)
+    _dump_real_native_hosts(runner, dumps)
+    return dumps
+
+
+def _build_real_host_map(tmp_path: Path) -> Path:
+    """Build one joint parameter map from real host dumps.
+
+    :param tmp_path: Temporary host-dump and map destination.
+    :returns: Generated map path.
+    """
+    runner = CliRunner()
+    dumps = _dump_real_host_parameters(tmp_path, runner)
+    output_map = tmp_path / "surge_xt_param_map.json"
+    _invoke_map_command(
+        runner,
+        (
+            "build",
+            "--pedalboard-dump",
+            str(dumps["pedalboard"]),
+            "--clap-dump",
+            str(dumps["clap"]),
+            "--dawdreamer-dump",
+            str(dumps["dawdreamer"]),
+            "--surgepy-dump",
+            str(dumps["surgepy"]),
+            "--param-spec-name",
+            "surge_xt",
+            "--out",
+            str(output_map),
+        ),
+    )
+    return output_map
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@pytest.mark.requires_surgepy
+def test_dawdreamer_dump_build_roundtrip_loads_real_settled_map(tmp_path: Path) -> None:
+    """Real host dumps build a map accepted by the settled DawDreamer renderer.
+
+    :param tmp_path: Temporary host-dump and map destinations.
+    """
+    if TEST_SYNTH != "surge_xt":
+        pytest.skip("DawDreamer parameter map fixtures use the Surge XT plugin")
+    if not SURGE_XT_CLAP_PATH.exists():
+        pytest.skip(f"Surge XT CLAP not found at {SURGE_XT_CLAP_PATH}")
+    output_map = _build_real_host_map(tmp_path)
+    config = _dawdreamer_experiment_config()
+    generated_map = load_param_map(output_map)
+    DawDreamerRenderer(
+        plugin_path=str(Path(PLUGIN_PATH).resolve()),
+        sample_rate=config.sample_rate,
+        channels=config.channels,
+        signal_duration_seconds=config.signal_duration_seconds,
         plugin_state_path=str(Path(TEST_PRESET_PATH).resolve()),
-        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
+        parameter_map=generated_map,
+    )
+    assert all(
+        identity.dawdreamer.name == identity.pedalboard.name
+        for identity in generated_map.params.values()
     )
 
 

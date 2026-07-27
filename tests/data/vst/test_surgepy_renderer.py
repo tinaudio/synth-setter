@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -12,7 +13,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     _reject_clipped_audio,
 )
 from synth_setter.data.vst.param_map import load_param_map
-from synth_setter.data.vst.renderers import SurgePyRenderer
+from synth_setter.data.vst.renderers import SurgePyRenderer, _sample_index_at_or_after
 from synth_setter.data.vst.surgepy_runtime import surge_component_state
 
 
@@ -55,9 +56,7 @@ def test_surgepy_renderer_real_patch_produces_finite_non_silent_audio() -> None:
         channels=2,
         signal_duration_seconds=1.0,
         plugin_state_path="presets/surge-base.fxp",
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
 
     audio = renderer.render(
@@ -152,9 +151,7 @@ def test_surgepy_renderer_matches_surge_native_normalization() -> None:
         channels=2,
         signal_duration_seconds=0.1,
         plugin_state_path="presets/surge-base.fxp",
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
     # Continuous cutoff spans [-60, 70] dB-scaled native units; integer octave and
     # Boolean mute round through Surge's legacy automation grid.
@@ -207,6 +204,210 @@ def test_surgepy_renderer_rejects_undersized_native_output_buffer() -> None:
 
 @pytest.mark.slow
 @pytest.mark.requires_surgepy
+def test_surgepy_renderer_non_block_aligned_note_has_no_early_audio() -> None:
+    """A requested note cannot sound before its sample-accurate start time."""
+    renderer = _simple_renderer()
+    note_start_sample = 336
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start_sample / renderer.sample_rate, 656 / renderer.sample_rate),
+    )
+
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == note_start_sample
+
+
+def test_surgepy_renderer_exact_sample_boundary_precedes_next_float() -> None:
+    """A quotient-constructed boundary precedes its next float by one sample."""
+    sample_rate = 44_100
+    boundary_sample = 13
+    boundary = boundary_sample / sample_rate
+
+    assert _sample_index_at_or_after(boundary, sample_rate) == boundary_sample
+    assert _sample_index_at_or_after(np.nextafter(boundary, np.inf), sample_rate) == 14
+    block_boundary = 64 / sample_rate
+    assert _sample_index_at_or_after(block_boundary, sample_rate) == 64
+    assert _sample_index_at_or_after(np.nextafter(block_boundary, np.inf), sample_rate) == 65
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_start_just_after_sample_boundary_rounds_up() -> None:
+    """A genuinely post-boundary note starts on the following sample."""
+    renderer = _simple_renderer()
+    boundary_sample = 336
+    note_start = np.nextafter(
+        boundary_sample / renderer.sample_rate,
+        np.inf,
+    )
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start, 656 / renderer.sample_rate),
+    )
+
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == boundary_sample + 1
+
+
+@pytest.mark.parametrize(
+    ("note_end", "second_block_value"),
+    [
+        pytest.param(64 / 44_100, -1.0, id="exact-boundary-released"),
+        pytest.param(
+            np.nextafter(64 / 44_100, np.inf),
+            1.0,
+            id="after-boundary-active",
+        ),
+    ],
+)
+def test_surgepy_renderer_note_duration_respects_block_boundary(
+    note_end: float,
+    second_block_value: float,
+) -> None:
+    """Exact and post-boundary note ends release in different blocks.
+
+    :param note_end: Requested note end in seconds.
+    :param second_block_value: Expected fake playing-state marker.
+    """
+    block_size = 64
+    state = {"is_playing": False}
+    synth = Mock()
+    synth.getBlockSize.return_value = block_size
+    synth.createMultiBlock.return_value = np.zeros((2, 128), dtype=np.float32)
+    synth.playNote.side_effect = lambda *_: state.__setitem__("is_playing", True)
+    synth.releaseNote.side_effect = lambda *_: state.__setitem__("is_playing", False)
+
+    def process_blocks(output: np.ndarray, startBlock: int, nBlocks: int) -> None:
+        """Mark each rendered block with its note state.
+
+        :param output: Stereo destination buffer.
+        :param startBlock: First destination block.
+        :param nBlocks: Number of blocks to process.
+        """
+        value = 1.0 if state["is_playing"] else -1.0
+        left = startBlock * block_size
+        output[:, left : left + nBlocks * block_size] = value
+
+    synth.processMultiBlock.side_effect = process_blocks
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 44_100
+    renderer.synth = synth
+
+    audio = renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=128,
+        start=0.0,
+        end=note_end,
+    )
+
+    np.testing.assert_array_equal(audio[:, :64], np.ones((2, 64)))
+    np.testing.assert_array_equal(
+        audio[:, 64:],
+        np.full((2, 64), second_block_value),
+    )
+
+
+def test_surgepy_renderer_note_after_retained_samples_returns_silence() -> None:
+    """A valid fractional-duration note may start beyond the retained samples."""
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 10
+    renderer.synth = Mock()
+    renderer.synth.getBlockSize.return_value = 64
+    renderer.synth.createMultiBlock.return_value = np.zeros((2, 64), dtype=np.float32)
+
+    audio = renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=4,
+        start=0.41,
+        end=0.44,
+    )
+
+    np.testing.assert_array_equal(audio, np.zeros((2, 4), dtype=np.float32))
+    assert renderer.synth.method_calls == []
+
+
+def test_surgepy_renderer_non_block_aligned_note_preserves_first_native_sample() -> None:
+    """Sub-block alignment delays, rather than discards, the native note attack."""
+
+    block_size = 64
+    state = {"is_playing": False, "note_age": 0}
+    synth = Mock()
+    synth.getBlockSize.return_value = block_size
+    synth.createMultiBlock.side_effect = lambda capacity: np.zeros(
+        (2, capacity * block_size), dtype=np.float32
+    )
+    synth.playNote.side_effect = lambda *_: state.__setitem__("is_playing", True)
+    synth.releaseNote.side_effect = lambda *_: state.__setitem__("is_playing", False)
+    synth.allNotesOff.side_effect = lambda: state.__setitem__("is_playing", False)
+
+    def process_blocks(
+        output: np.ndarray,
+        startBlock: int = 0,
+        nBlocks: int = -1,
+    ) -> None:
+        """Emit increasing note-age samples into active native blocks.
+
+        :param output: Stereo destination buffer.
+        :param startBlock: First destination block.
+        :param nBlocks: Number of blocks to process.
+        """
+        for block in range(nBlocks):
+            left = (startBlock + block) * block_size
+            if state["is_playing"]:
+                first_sample = state["note_age"] + 1
+                values = np.arange(
+                    first_sample,
+                    first_sample + block_size,
+                    dtype=np.float32,
+                )
+                output[:, left : left + block_size] = values
+                state["note_age"] += block_size
+
+    synth.processMultiBlock.side_effect = process_blocks
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 44_100
+    renderer.synth = synth
+
+    audio = renderer._render_note_blocks(
+        midi_note=60,
+        velocity=100,
+        samples=1_024,
+        start=336 / 44_100,
+        end=656 / 44_100,
+    )
+
+    expected_attack = np.tile(np.arange(1, 65, dtype=np.float32), (2, 1))
+    np.testing.assert_array_equal(audio[:, 336:400], expected_attack)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_surgepy_renderer_final_partial_block_note_is_audible() -> None:
+    """A valid note in the final partial block cannot collapse to silence."""
+    renderer = _simple_renderer()
+    note_start_sample = 4_401
+
+    audio = renderer.render(
+        {},
+        60,
+        100,
+        (note_start_sample / renderer.sample_rate, 4_409 / renderer.sample_rate),
+    )
+
+    audible = np.flatnonzero(np.max(np.abs(audio), axis=0) > 1e-8)
+    assert audible[0] == note_start_sample
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_short_note_window_spans_a_processing_block() -> None:
     """Sub-block MIDI windows cannot collapse before native processing."""
     renderer = SurgePyRenderer(
@@ -240,9 +441,7 @@ def test_surgepy_renderer_rechecks_patch_hash_before_each_render(tmp_path: Path)
         channels=2,
         signal_duration_seconds=0.1,
         plugin_state_path=str(patch_path),
-        parameter_map=load_param_map(
-            Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-        ),
+        parameter_map=load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json")),
     )
     patch_path.write_bytes(patch_path.read_bytes() + b"changed")
 

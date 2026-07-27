@@ -6,9 +6,12 @@ import platform
 import sys
 from importlib import import_module
 from importlib.metadata import version as distribution_version
+from typing import Protocol
 
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
+# Surge's observed two-stage identity publication needs several callbacks across block sizes.
+_PRESET_SETTLE_CYCLES = 8
 _SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {
     ("Darwin", "arm64"),
@@ -16,6 +19,35 @@ _SUPPORTED_TARGETS = {
     ("Linux", "x86_64"),
     ("Windows", "AMD64"),
 }
+
+
+class DawDreamerEngine(Protocol):
+    """Engine operation needed to settle asynchronous VST preset state."""
+
+    def render(self, duration: float) -> object:
+        """Process audio for a duration.
+
+        :param duration: Processing duration in seconds.
+        :returns: Backend-specific render status.
+        """
+        ...
+
+
+def settle_dawdreamer_preset(
+    engine: DawDreamerEngine,
+    *,
+    sample_rate: float,
+    block_size: int,
+) -> None:
+    """Activate preset-dependent parameter identities before parameter writes.
+
+    :param engine: DawDreamer engine whose graph contains the preset-loaded plugin.
+    :param sample_rate: Engine sample rate in Hz.
+    :param block_size: Engine processing block size in samples.
+    """
+    block_duration = block_size / sample_rate
+    for _ in range(_PRESET_SETTLE_CYCLES):
+        engine.render(block_duration)
 
 
 def ensure_dawdreamer_runtime(

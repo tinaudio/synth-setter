@@ -647,7 +647,7 @@
       },
       "dawdreamer": {
         "index": 259,
-        "name": "A Osc 1 Shape"
+        "name": "A Osc 1 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 225,
@@ -669,7 +669,7 @@
       },
       "dawdreamer": {
         "index": 262,
-        "name": "A Osc 1 Sub Mix"
+        "name": "A Osc 1 Width"
       },
       "surgepy": {
         "synth_side_id": 228,
@@ -779,7 +779,7 @@
       },
       "dawdreamer": {
         "index": 260,
-        "name": "A Osc 1 Width 1"
+        "name": "A Osc 1 Pulse"
       },
       "surgepy": {
         "synth_side_id": 226,
@@ -801,7 +801,7 @@
       },
       "dawdreamer": {
         "index": 261,
-        "name": "A Osc 1 Width 2"
+        "name": "A Osc 1 Triangle"
       },
       "surgepy": {
         "synth_side_id": 227,
@@ -911,7 +911,7 @@
       },
       "dawdreamer": {
         "index": 271,
-        "name": "A Osc 2 Shape"
+        "name": "A Osc 2 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 237,
@@ -933,7 +933,7 @@
       },
       "dawdreamer": {
         "index": 274,
-        "name": "A Osc 2 Sub Mix"
+        "name": "A Osc 2 Width"
       },
       "surgepy": {
         "synth_side_id": 240,
@@ -1043,7 +1043,7 @@
       },
       "dawdreamer": {
         "index": 272,
-        "name": "A Osc 2 Width 1"
+        "name": "A Osc 2 Pulse"
       },
       "surgepy": {
         "synth_side_id": 238,
@@ -1065,7 +1065,7 @@
       },
       "dawdreamer": {
         "index": 273,
-        "name": "A Osc 2 Width 2"
+        "name": "A Osc 2 Triangle"
       },
       "surgepy": {
         "synth_side_id": 239,
@@ -1175,7 +1175,7 @@
       },
       "dawdreamer": {
         "index": 283,
-        "name": "A Osc 3 Shape"
+        "name": "A Osc 3 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 249,
@@ -1197,7 +1197,7 @@
       },
       "dawdreamer": {
         "index": 286,
-        "name": "A Osc 3 Sub Mix"
+        "name": "A Osc 3 Width"
       },
       "surgepy": {
         "synth_side_id": 252,
@@ -1307,7 +1307,7 @@
       },
       "dawdreamer": {
         "index": 284,
-        "name": "A Osc 3 Width 1"
+        "name": "A Osc 3 Pulse"
       },
       "surgepy": {
         "synth_side_id": 250,
@@ -1329,7 +1329,7 @@
       },
       "dawdreamer": {
         "index": 285,
-        "name": "A Osc 3 Width 2"
+        "name": "A Osc 3 Triangle"
       },
       "surgepy": {
         "synth_side_id": 251,
@@ -2957,7 +2957,7 @@
       },
       "dawdreamer": {
         "index": 20,
-        "name": "FX A1 Param 1"
+        "name": "FX A1 Delay - Time"
       },
       "surgepy": {
         "synth_side_id": 12,
@@ -2979,7 +2979,7 @@
       },
       "dawdreamer": {
         "index": 21,
-        "name": "FX A1 Param 2"
+        "name": "FX A1 Modulation - Rate"
       },
       "surgepy": {
         "synth_side_id": 13,
@@ -3001,7 +3001,7 @@
       },
       "dawdreamer": {
         "index": 22,
-        "name": "FX A1 Param 3"
+        "name": "FX A1 Modulation - Depth"
       },
       "surgepy": {
         "synth_side_id": 14,
@@ -3023,7 +3023,7 @@
       },
       "dawdreamer": {
         "index": 23,
-        "name": "FX A1 Param 4"
+        "name": "FX A1 Delay - Feedback"
       },
       "surgepy": {
         "synth_side_id": 15,
@@ -3045,7 +3045,7 @@
       },
       "dawdreamer": {
         "index": 24,
-        "name": "FX A1 Param 5"
+        "name": "FX A1 EQ - Low Cut"
       },
       "surgepy": {
         "synth_side_id": 16,
@@ -3067,7 +3067,7 @@
       },
       "dawdreamer": {
         "index": 25,
-        "name": "FX A1 Param 6"
+        "name": "FX A1 EQ - High Cut"
       },
       "surgepy": {
         "synth_side_id": 17,
@@ -3089,7 +3089,7 @@
       },
       "dawdreamer": {
         "index": 26,
-        "name": "FX A1 Param 7"
+        "name": "FX A1 Output - Mix"
       },
       "surgepy": {
         "synth_side_id": 18,
@@ -3111,7 +3111,7 @@
       },
       "dawdreamer": {
         "index": 27,
-        "name": "FX A1 Param 8"
+        "name": "FX A1 Output - Width"
       },
       "surgepy": {
         "synth_side_id": 19,
@@ -3133,7 +3133,7 @@
       },
       "dawdreamer": {
         "index": 33,
-        "name": "FX A2 Param 1"
+        "name": "FX A2 Delay Time - Left"
       },
       "surgepy": {
         "synth_side_id": 25,
@@ -3155,7 +3155,7 @@
       },
       "dawdreamer": {
         "index": 34,
-        "name": "FX A2 Param 2"
+        "name": "FX A2 Delay Time - Right"
       },
       "surgepy": {
         "synth_side_id": 26,
@@ -3177,7 +3177,7 @@
       },
       "dawdreamer": {
         "index": 35,
-        "name": "FX A2 Param 3"
+        "name": "FX A2 Feedback/EQ - Feedback"
       },
       "surgepy": {
         "synth_side_id": 27,
@@ -3199,7 +3199,7 @@
       },
       "dawdreamer": {
         "index": 36,
-        "name": "FX A2 Param 4"
+        "name": "FX A2 Feedback/EQ - Crossfeed"
       },
       "surgepy": {
         "synth_side_id": 28,
@@ -3221,7 +3221,7 @@
       },
       "dawdreamer": {
         "index": 37,
-        "name": "FX A2 Param 5"
+        "name": "FX A2 Feedback/EQ - Low Cut"
       },
       "surgepy": {
         "synth_side_id": 29,
@@ -3243,7 +3243,7 @@
       },
       "dawdreamer": {
         "index": 38,
-        "name": "FX A2 Param 6"
+        "name": "FX A2 Feedback/EQ - High Cut"
       },
       "surgepy": {
         "synth_side_id": 30,
@@ -3265,7 +3265,7 @@
       },
       "dawdreamer": {
         "index": 39,
-        "name": "FX A2 Param 7"
+        "name": "FX A2 Modulation - Rate"
       },
       "surgepy": {
         "synth_side_id": 31,
@@ -3287,7 +3287,7 @@
       },
       "dawdreamer": {
         "index": 40,
-        "name": "FX A2 Param 8"
+        "name": "FX A2 Modulation - Depth"
       },
       "surgepy": {
         "synth_side_id": 32,
@@ -3309,7 +3309,7 @@
       },
       "dawdreamer": {
         "index": 41,
-        "name": "FX A2 Param 9"
+        "name": "FX A2 Input - Channel"
       },
       "surgepy": {
         "synth_side_id": 33,
@@ -3331,7 +3331,7 @@
       },
       "dawdreamer": {
         "index": 43,
-        "name": "FX A2 Param 11"
+        "name": "FX A2 Output - Mix"
       },
       "surgepy": {
         "synth_side_id": 35,
@@ -3353,7 +3353,7 @@
       },
       "dawdreamer": {
         "index": 44,
-        "name": "FX A2 Param 12"
+        "name": "FX A2 Output - Width"
       },
       "surgepy": {
         "synth_side_id": 36,
@@ -3375,7 +3375,7 @@
       },
       "dawdreamer": {
         "index": 124,
-        "name": "FX A3 Param 1"
+        "name": "FX A3 Pre-Delay - Pre-Delay"
       },
       "surgepy": {
         "synth_side_id": 116,
@@ -3397,7 +3397,7 @@
       },
       "dawdreamer": {
         "index": 125,
-        "name": "FX A3 Param 2"
+        "name": "FX A3 Reverb - Room Size"
       },
       "surgepy": {
         "synth_side_id": 117,
@@ -3419,7 +3419,7 @@
       },
       "dawdreamer": {
         "index": 126,
-        "name": "FX A3 Param 3"
+        "name": "FX A3 Reverb - Decay Time"
       },
       "surgepy": {
         "synth_side_id": 118,
@@ -3441,7 +3441,7 @@
       },
       "dawdreamer": {
         "index": 127,
-        "name": "FX A3 Param 4"
+        "name": "FX A3 Reverb - Diffusion"
       },
       "surgepy": {
         "synth_side_id": 119,
@@ -3463,7 +3463,7 @@
       },
       "dawdreamer": {
         "index": 128,
-        "name": "FX A3 Param 5"
+        "name": "FX A3 Reverb - Buildup"
       },
       "surgepy": {
         "synth_side_id": 120,
@@ -3485,7 +3485,7 @@
       },
       "dawdreamer": {
         "index": 129,
-        "name": "FX A3 Param 6"
+        "name": "FX A3 Reverb - Modulation"
       },
       "surgepy": {
         "synth_side_id": 121,
@@ -3507,7 +3507,7 @@
       },
       "dawdreamer": {
         "index": 130,
-        "name": "FX A3 Param 7"
+        "name": "FX A3 EQ - LF Damping"
       },
       "surgepy": {
         "synth_side_id": 122,
@@ -3529,7 +3529,7 @@
       },
       "dawdreamer": {
         "index": 131,
-        "name": "FX A3 Param 8"
+        "name": "FX A3 EQ - HF Damping"
       },
       "surgepy": {
         "synth_side_id": 123,
@@ -3551,7 +3551,7 @@
       },
       "dawdreamer": {
         "index": 132,
-        "name": "FX A3 Param 9"
+        "name": "FX A3 Output - Width"
       },
       "surgepy": {
         "synth_side_id": 124,
@@ -3573,7 +3573,7 @@
       },
       "dawdreamer": {
         "index": 133,
-        "name": "FX A3 Param 10"
+        "name": "FX A3 Output - Mix"
       },
       "surgepy": {
         "synth_side_id": 125,

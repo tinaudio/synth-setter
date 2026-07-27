@@ -23,18 +23,19 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
 
+from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
-from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_ROW,
-    KEYBOARD_DURATION_BOUNDS,
-    PARAM_INDEX,
-)
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
     SurgePySynth,
     import_surgepy,
     iter_surgepy_named_params,
+)
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_ROW,
+    KEYBOARD_DURATION_BOUNDS,
+    PARAM_INDEX,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
@@ -47,6 +48,20 @@ DAWDREAMER_BLOCK_SIZE = 2048
 # Surge's legacy automation scale is load-bearing for saved host parameter values.
 _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
+
+
+def _sample_index_at_or_after(time_seconds: float, sample_rate: float) -> int:
+    """Quantize a time without shifting quotient-constructed sample boundaries.
+
+    :param time_seconds: Requested event time in seconds.
+    :param sample_rate: Samples per second.
+    :returns: First sample at or after the requested time.
+    """
+    sample_position = time_seconds * sample_rate
+    nearest_sample = round(sample_position)
+    if time_seconds == nearest_sample / sample_rate:
+        return nearest_sample
+    return math.ceil(sample_position)
 
 
 class _DawDreamerParameterDescription(TypedDict):
@@ -136,9 +151,7 @@ class _DawDreamerFaustProcessor(Protocol):
         """
         ...
 
-    def add_midi_note(
-        self, pitch: int, velocity: int, start: float, duration: float
-    ) -> None:
+    def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
         """Schedule one MIDI note.
 
         :param pitch: MIDI note number.
@@ -187,9 +200,7 @@ def _validate_rendered_audio(
     :raises ValueError: If shape or finiteness is invalid.
     """
     if audio.shape != (channels, samples):
-        raise ValueError(
-            f"rendered audio shape {audio.shape} != expected {(channels, samples)}"
-        )
+        raise ValueError(f"rendered audio shape {audio.shape} != expected {(channels, samples)}")
     if not np.isfinite(audio).all():
         raise ValueError("rendered audio must contain only finite samples")
     return audio
@@ -406,15 +417,12 @@ class SurgePyRenderer(AudioRenderer):
             return float(normalized_value > 0.5)
         if value_type == "int":
             span = maximum - minimum
-            surge_scaled = (
-                int(
-                    (normalized_value - _SURGE_INT_NORMALIZED_OFFSET)
-                    * span
-                    / _SURGE_INT_NORMALIZED_SCALE
-                    + 0.5
-                )
-                + int(minimum)
-            )
+            surge_scaled = int(
+                (normalized_value - _SURGE_INT_NORMALIZED_OFFSET)
+                * span
+                / _SURGE_INT_NORMALIZED_SCALE
+                + 0.5
+            ) + int(minimum)
             return float(min(max(surge_scaled, int(minimum)), int(maximum)))
         raise ValueError(f"unsupported SurgePy parameter type {value_type!r}")
 
@@ -473,15 +481,18 @@ class SurgePyRenderer(AudioRenderer):
         :param samples: Exact output sample count after block trimming.
         :param start: Requested note start in seconds.
         :param end: Requested note end in seconds.
-        :returns: Native stereo output trimmed to ``samples``.
+        :returns: Stereo output aligned to the requested start within ``samples``.
         """
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
+        if start_sample >= samples:
+            return np.zeros((2, samples), dtype=np.float32)
         block_size = self.synth.getBlockSize()
-        num_blocks = math.ceil(samples / block_size)
-        start_block = math.floor(start * self.sample_rate / block_size)
-        end_block = min(
-            num_blocks,
-            max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
-        )
+        num_blocks = (samples + block_size - 1) // block_size
+        start_block = start_sample // block_size
+        end_sample = _sample_index_at_or_after(end, self.sample_rate)
+        note_samples = max(1, end_sample - start_sample)
+        note_blocks = (note_samples + block_size - 1) // block_size
+        end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)
         try:
             self._process_blocks(audio, start_block=0, num_blocks=start_block)
@@ -499,7 +510,14 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        return np.asarray(audio[:, :samples], dtype=np.float32)
+        rendered = np.asarray(audio, dtype=np.float32)
+        aligned = np.zeros((2, samples), dtype=np.float32)
+        source_start = start_block * block_size
+        aligned[:, start_sample:] = rendered[
+            :,
+            source_start : source_start + samples - start_sample,
+        ]
+        return aligned
 
     def render(
         self,
@@ -847,7 +865,18 @@ class DawDreamerRenderer(AudioRenderer):
         """Create and validate one preset-loaded plugin graph."""
         self._create_graph()
         self._load_preset()
+        self._settle_preset()
         self._validate_parameter_map()
+
+    def _settle_preset(self) -> None:
+        """Process empty blocks until preset-dependent identities become active."""
+        if self.plugin_state_path is None:
+            return
+        settle_dawdreamer_preset(
+            self.engine,
+            sample_rate=self.sample_rate,
+            block_size=self.block_size,
+        )
 
     def _create_graph(self) -> None:
         """Create a fresh engine, plugin processor, graph, and parameter dispatch."""
